@@ -8,6 +8,22 @@
 //   - SSE streaming is parsed line-by-line with bufio.Scanner to avoid buffering the entire response.
 //   - ToolCall index tracking uses a map[int]*ToolCall because SSE deltas arrive out of order.
 //   - Usage is always read from the final SSE chunk, per OpenAI-compatible API convention.
+//
+// TODO: Phase 5-6 — Provider 接口抽象
+//   当前 Client 硬编码 OpenAI-compatible 协议。为支持 Anthropic（完全不兼容）和
+//   DeepSeek（reasoning_content 扩展），需要抽取 Provider 接口：
+//     type Provider interface {
+//         Name() string
+//         Endpoint() string
+//         BuildRequest(*ChatRequest) ([]byte, error)
+//         ParseStreamChunk([]byte) (*StreamDelta, error)
+//         BuildHeaders() map[string]string
+//     }
+//   参见 doc/chapters/09-llm-api-comparison.html 各厂商差异分析。
+//   实现分步走：
+//     Phase 3-4: Delta 结构体增加 ReasoningContent 字段（DeepSeek R1 思维链）
+//     Phase 5:   抽取 Provider 接口 + OpenAIProvider 基线实现
+//     Phase 6:   AnthropicProvider + DeepSeekProvider + Embeddings API
 package llm
 
 import (
@@ -65,6 +81,15 @@ type FunctionDefinition struct {
 
 // ChatRequest is the request body POSTed to /chat/completions.
 // When Stream=true, the response is SSE; otherwise it's a single JSON object.
+//
+// TODO: Phase 5-6 — 扩展为完整 OpenAI 参数集
+//   当前仅包含核心参数，后续 Provider 抽象时需支持：
+//   - max_completion_tokens (新版替代 max_tokens)
+//   - top_p, frequency_penalty, presence_penalty, seed
+//   - response_format (JSON Schema 结构化输出)
+//   - parallel_tool_calls (并行工具调用开关)
+//   - stream_options (include_usage)
+//   参见 doc/chapters/09-llm-api-comparison.html §2.1 完整参数列表。
 type ChatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -93,6 +118,11 @@ type Choice struct {
 
 // Delta is a single SSE delta chunk. Content accumulates text tokens;
 // ToolCalls accumulate function call fragments.
+//
+// TODO: Phase 3-4 — 增加 ReasoningContent 字段
+//   DeepSeek R1 / Qwen3 等推理模型在 delta 中返回 reasoning_content（思维链内容），
+//   与 content 并列。当前 Delta 未包含此字段，后续扩展时需向后兼容。
+//   参见 doc/chapters/09-llm-api-comparison.html §4.2。
 type Delta struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
@@ -146,6 +176,7 @@ func (c *Client) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	// TODO: Phase 5-6 — Provider 抽象后 URL 由 Provider.Endpoint() 决定
 	httpReq, err := http.NewRequest("POST", c.Endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -190,6 +221,8 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		return "", Usage{}, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	// TODO: Phase 5-6 — Provider 抽象后 URL 由 Provider.Endpoint() 决定，
+	//   Anthropic 使用 /v1/messages 而非 /v1/chat/completions。
 	httpReq, err := http.NewRequest("POST", c.Endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, nil, fmt.Errorf("create request: %w", err)

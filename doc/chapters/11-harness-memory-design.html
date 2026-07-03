@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Harness 与自进化记忆设计 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+    <style>
+        /* 四问法评分 */
+        .score-pass { color: #2E7D32; font-weight: 700; }
+        .score-partial { color: #B45309; font-weight: 700; }
+        .score-fail { color: #C62828; font-weight: 700; }
+        /* 架构图 */
+        .arch-diagram {
+            background: #1a1a2e; color: #e0e0e0; padding: 20px 24px; border-radius: 10px;
+            font-family: 'Fira Code', Consolas, monospace; font-size: 13px; line-height: 1.8;
+            margin: 16px 0; overflow-x: auto; white-space: pre;
+        }
+        /* 记忆层 */
+        .memory-tier { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .tier-working { background: #E3F2FD; color: #1565C0; }
+        .tier-raw { background: #F3E5F5; color: #7B1FA2; }
+        .tier-consolidated { background: #E8F5E9; color: #2E7D32; }
+        .tier-semantic { background: #FFF3E0; color: #E65100; }
+        /* 管线步骤 */
+        .pipeline-step {
+            display: inline-block; background: #f0f4f8; border: 1px solid #d0d5dd;
+            border-radius: 6px; padding: 4px 10px; margin: 2px; font-size: 13px;
+        }
+        .pipeline-arrow { color: #4a9eff; font-weight: 700; margin: 0 2px; }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.2 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">参考</div>
+        <nav>
+            <a href="09-llm-api-comparison.html">LLM API 厂商对比</a>
+            <a href="10-multi-model-layered-design.html">多模型分层设计</a>
+            <a href="11-harness-memory-design.html" class="active">Harness 与自进化记忆</a>
+            <a href="99-glossary.html">术语表</a>
+        </nav>
+    </aside>
+    <main class="main">
+        <h1>11. Harness 与自进化记忆设计</h1>
+        <p style="color:#666;">基于 Harness Engineering 概念导论与 Hermes Agent 记忆架构，设计适合本项目的运行控制层与自进化长期记忆系统。</p>
+
+        <div class="toc">
+            <h3>目录</h3>
+            <ol style="padding-left:20px;">
+                <li><a href="#s1">Harness Engineering 概念引入</a></li>
+                <li><a href="#s2">四问法评估当前项目</a></li>
+                <li><a href="#s3">Harness 分层设计与目标架构</a></li>
+                <li><a href="#s4">任务契约（Task Contract）</a></li>
+                <li><a href="#s5">Progress 文件与外部状态</a></li>
+                <li><a href="#s6">Policy Gate — 独立于模型的约束层</a></li>
+                <li><a href="#s7">Checkpoint / Recovery — 任务可恢复性</a></li>
+                <li><a href="#s8">自进化长期记忆 — 四层模型</a></li>
+                <li><a href="#s9">记忆抽取管线</a></li>
+                <li><a href="#s10">心跳整理（Heartbeat Consolidation）</a></li>
+                <li><a href="#s11">记忆召回 — 新任务唤起</a></li>
+                <li><a href="#s12">集成路径与 Phase 规划</a></li>
+                <li><a href="#s13">代码占位与 TODO</a></li>
+            </ol>
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s1">11.1 Harness Engineering 概念引入</h2>
+
+        <p>Harness Engineering 源自传统软件工程中的 test harness 隐喻：<strong>它不是被测对象本身，而是为被测对象提供输入、运行环境、观测和断言的一套外部装置</strong>。Agent harness 沿用了这个隐喻，只是对象从"被测程序"变成了"需要持续观察、行动和修正的模型"。</p>
+
+        <div class="callout info">
+            <div class="callout-title">一句话定义</div>
+            Harness 是包在模型周围的一层运行与控制系统，用行动循环、环境工具、上下文管理和独立控制，把模型变成能在外部环境中持续完成任务的 Agent。
+        </div>
+
+        <h3>为什么需要 Harness？</h3>
+        <p>从单次模型调用到 Agent 任务，系统责任发生了质变：</p>
+        <table>
+            <tr><th>阶段</th><th>模型输出代表什么</th><th>系统新增责任</th></tr>
+            <tr><td>单次请求</td><td>一段文本或结构化结果</td><td>输入、输出格式、超时、基本审计</td></tr>
+            <tr><td>Function Calling</td><td>一个外部行动请求</td><td>工具选择、参数校验、执行、错误回传</td></tr>
+            <tr><td>Agent Loop / ReAct</td><td>下一步行动决策</td><td>循环、观察、重试、停止条件、预算</td></tr>
+            <tr><td><strong>Agent 任务</strong></td><td><strong>对真实目标的持续推进</strong></td><td><strong>工作空间、状态、记忆、权限、验证、恢复、服务化</strong></td></tr>
+        </table>
+
+        <p>三个来自工业界的观察，共同说明一件事：<strong>Agent 的任务表现是模型、接口、上下文/状态、控制机制与外部环境共同产生的系统属性</strong>，而非模型单独决定。</p>
+
+        <div class="callout warning">
+            <div class="callout-title">三条工程结论</div>
+            <ol style="padding-left:18px;">
+                <li><strong>任务从可验证的契约开始，而不是只从一段 Prompt 开始。</strong>目标、范围、证据、预算、权限和升级条件应当成为外部任务对象。</li>
+                <li><strong>上下文窗口不是任务状态。</strong>计划、进度、决策、Workspace 和证据需要独立持久化，不能只保存在聊天历史里。</li>
+                <li><strong>能用确定性机制表达的约束，不应只写成自然语言。</strong>Schema、Policy、Tests、权限和状态断言应尽量在模型之外执行。</li>
+                <li><strong>重要失败要进入可重复的回归闭环。</strong>保存 Trace 和环境结果，定位失败归属，修改最接近根因的 Harness 层。</li>
+            </ol>
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s2">11.2 四问法评估当前项目</h2>
+
+        <p>使用 Sanderson Oliveira de Macedo 的"四问法"（<em>What makes a harness a harness</em>, arXiv 2606.10106），对当前项目（Phase 1 完成态）进行边界评估：</p>
+
+        <table>
+            <tr><th>问题</th><th>通过条件</th><th>当前状态</th><th>缺口</th></tr>
+            <tr>
+                <td><strong>T1: 运行时闭环？</strong></td>
+                <td>上一步的环境观察能改变下一步行动</td>
+                <td class="score-pass">✅ ReAct Loop 完整实现<br>think → tool_call → observe → loop</td>
+                <td>—</td>
+            </tr>
+            <tr>
+                <td><strong>T2: 感知并改变环境？</strong></td>
+                <td>工具不只返回知识，还能写文件、运行命令</td>
+                <td class="score-partial">🔶 3 个内置工具<br>run_shell / write_file / read_file</td>
+                <td>无沙箱隔离；无浏览器/网络工具；工具集固定不可扩展</td>
+            </tr>
+            <tr>
+                <td><strong>T3: 任务感知上下文？</strong></td>
+                <td>进入模型窗口的信息由当前任务决定，而非全部堆入</td>
+                <td class="score-partial">🔶 全量 messages 追加<br>无选择性上下文管理</td>
+                <td><strong>缺：</strong>上下文窗口管理、任务状态外部化、Progress 文件、跨会话状态</td>
+            </tr>
+            <tr>
+                <td><strong>T4: 独立于模型的控制？</strong></td>
+                <td>权限、预算、测试、策略门能独立阻断或确认执行</td>
+                <td class="score-fail">❌ 无独立控制<br>Prompt 中的约束全靠模型自觉</td>
+                <td><strong>缺：</strong>Policy Gate、工具白名单、token 预算硬限制、独立验收、审批门</td>
+            </tr>
+        </table>
+
+        <div class="callout success">
+            <div class="callout-title">评估结论</div>
+            当前项目拥有<strong>完整的 T1（ReAct Loop）</strong>和<strong>部分的 T2（基础工具）</strong>，但在 T3（任务感知上下文）和 T4（独立控制）上存在明显缺口。这也是 Phase 3-6 需要逐步补齐的 Harness 能力。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s3">11.3 Harness 分层设计与目标架构</h2>
+
+        <p>参考 Harness Engineering 概念导论的六层模型（L0-L5），映射到本项目：</p>
+
+        <div class="arch-diagram">
+┌──────────────────────────────────────────────────────────────┐
+│  L5  治理与组织 (Phase 6)                                     │
+│      身份认证 · 多租户 · 成本审计 · 审批流程 · 平台模板        │
+├──────────────────────────────────────────────────────────────┤
+│  L4  质量与交付 (Phase 4-6)                                   │
+│      Event Logs · Trace · 独立验收 · Eval 回归 · Policy Gate  │
+├──────────────────────────────────────────────────────────────┤
+│  L3  任务运行与服务 (Phase 1 ✅ → Phase 3-5)                   │
+│      ReAct Loop ✅ · 编排 · 状态管理 · 记忆 · 恢复 ·          │
+│      Task Contract · Progress · Checkpoint · Heartbeat        │
+├──────────────────────────────────────────────────────────────┤
+│  L2  行动与环境 (Phase 1 ✅ → Phase 5)                         │
+│      Tools (3 builtins) ✅ · MCP · Workspace · Sandbox        │
+├──────────────────────────────────────────────────────────────┤
+│  L1  指导与上下文 (Phase 1 ✅)                                 │
+│      System Prompt ✅ · Agent Config ✅ · Skills · RAG         │
+├──────────────────────────────────────────────────────────────┤
+│  L0  模型 (Phase 1 ✅)                                         │
+│      OpenAI-compatible API ✅ · SSE Streaming ✅               │
+└──────────────────────────────────────────────────────────────┘
+        </div>
+
+        <div class="callout info">
+            <div class="callout-title">设计原则</div>
+            <strong>Harness 的厚度跟任务风险匹配。</strong>简单对话只需要薄薄一层（消息历史 + 超时 + 日志）；跨系统写入、运行数小时、能取消和恢复的 Agent 任务，需要明显更厚的运行与控制层。本项目的每个 Phase 逐渐增厚 Harness，而非一次性全量实现。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s4">11.4 任务契约（Task Contract）</h2>
+
+        <p>核心思想来自 Anthropic 长任务案例：<strong>把"什么算完成"从人脑里搬到系统对象里</strong>。任务开始前，明确声明范围、验收标准、预算、权限和升级条件。</p>
+
+        <h3>TaskContract 结构体</h3>
+        <pre>// TODO: Phase 3 — TaskContract 定义
+// 位置: internal/harness/contract.go
+
+type TaskContract struct {
+    // 任务身份
+    TaskID    string   `json:"task_id"`
+    ProjectID string   `json:"project_id"`  // 项目隔离
+
+    // 目标与范围
+    Goal        string   `json:"goal"`         // 高层目标（一句话）
+    Scope       string   `json:"scope"`        // 范围边界（明确不做什么）
+    Deliverables []string `json:"deliverables"` // 可交付物清单
+
+    // 验收标准（结构化，不只是自然语言）
+    AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria"`
+    // 示例: { type: "test_pass", target: "go test ./...", expected: "PASS" }
+    //       { type: "file_exists", target: "output/report.md" }
+    //       { type: "shell_exit_zero", target: "docker build ." }
+
+    // 资源预算
+    Budget TaskBudget `json:"budget"`
+    // MaxTokens: 50000, MaxCostUSD: 0.50, MaxDurationSec: 300
+
+    // 权限边界
+    Permissions TaskPermissions `json:"permissions"`
+    // AllowedTools: ["read_file", "write_file", "run_shell"]
+    // FileScope: "storage/{task_id}/"  (只允许在这个目录下写文件)
+    // NetworkAccess: false
+    // RequireApprovalFor: ["run_shell:rm", "run_shell:git push"]
+
+    // 升级策略
+    Escalation EscalationPolicy `json:"escalation"`
+    // OnBudgetExceeded: "pause_and_ask_user"
+    // OnTimeout: "checkpoint_and_exit"
+    // On3ConsecutiveFailures: "escalate_to_human"
+}</pre>
+
+        <h3>验收标准类型</h3>
+        <table>
+            <tr><th>类型</th><th>说明</th><th>示例</th></tr>
+            <tr><td><code>test_pass</code></td><td>运行指定测试套件并通过</td><td><code>go test ./...</code> → PASS</td></tr>
+            <tr><td><code>file_exists</code></td><td>指定文件存在且非空</td><td><code>output/report.md</code> 存在 &gt; 100 bytes</td></tr>
+            <tr><td><code>shell_exit_zero</code></td><td>Shell 命令退出码为 0</td><td><code>docker build .</code> → exit 0</td></tr>
+            <tr><td><code>json_schema</code></td><td>输出符合 JSON Schema</td><td>结构化输出校验</td></tr>
+            <tr><td><code>human_review</code></td><td>需要人工确认</td><td>修改 &gt;3 个文件时触发</td></tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">与 Prompt 的区别</div>
+            Prompt 是对模型的"建议"；TaskContract 是 Harness 的"强制约束"。预算超了就是超了，不管模型怎么说。文件只允许写在 <code>storage/{task_id}/</code> 下，路径遍历直接拦截。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s5">11.5 Progress 文件与外部状态</h2>
+
+        <p>参考 Anthropic 的 <code>claude-progress.txt</code> 和 OpenAI 的 execution plan：<strong>任务状态不能只存在于聊天上下文里</strong>，必须外部化到可见、可版本化、可验证的文件中。</p>
+
+        <h3>Progress 文件设计</h3>
+        <pre>// TODO: Phase 3 — Progress 文件管理
+// 位置: internal/harness/progress.go
+
+// 每个 Task 在 storage/{task_id}/ 下维护 progress.json
+// 引擎在关键节点自动写入，新会话启动时首先读取
+
+type TaskProgress struct {
+    TaskID     string           `json:"task_id"`
+    Status     string           `json:"status"`  // planning | executing | verifying | completed
+    UpdatedAt  time.Time        `json:"updated_at"`
+
+    // 当前执行位置
+    CurrentStep    int    `json:"current_step"`
+    CurrentSubGoal string `json:"current_sub_goal"`
+
+    // 已完成 / 待完成
+    CompletedItems []ProgressItem `json:"completed_items"`
+    PendingItems   []ProgressItem `json:"pending_items"`
+
+    // 决策记录（为什么这么做，而非只记录做了什么）
+    DecisionLog []Decision `json:"decision_log"`
+    // 示例: { decision: "使用 Docker 多阶段构建", reason: "减少最终镜像体积",
+    //         alternatives: ["单阶段构建", "distroless"], timestamp: "..." }
+
+    // 当前环境状态
+    EnvironmentState EnvironmentSnapshot `json:"environment_state"`
+    // GitCommit: "abc1234", LastTestRun: "PASS", PortsInUse: [8080, 3000]
+}
+
+// ProgressItem 是功能清单中的一项
+// 参考 Anthropic: 初始全部标记为 failing，实际验证通过后才改为 passing
+type ProgressItem struct {
+    ID          string `json:"id"`
+    Description string `json:"description"`
+    Status      string `json:"status"` // pending | in_progress | passing | failing
+    VerifiedBy  string `json:"verified_by"` // 验收方式: "go test ./..." | "manual" | "file_exists:..."
+}</pre>
+
+        <h3>工作流</h3>
+        <div class="arch-diagram">
+Task 启动
+  │
+  ├─ 1. 读取 progress.json（如果存在 → 恢复；不存在 → 新建）
+  ├─ 2. 读取 Git 状态 + 上次基线测试结果
+  ├─ 3. 识别当前 SubGoal 和下一步
+  ├─ 4. 执行一个 SubGoal（一次只做一个功能）
+  ├─ 5. 验证 → 更新 ProgressItem status
+  ├─ 6. 写回 progress.json + Git commit
+  └─ 循环直到全部 passing
+        </div>
+
+        <div class="callout success">
+            <div class="callout-title">关键设计决策</div>
+            <strong>一次只做一个功能。</strong>Anthropic 实验表明 Agent 一次做太多会导致上下文耗尽时留下半成品。Progress 文件强制分步、强制验证、强制交接 —— 新会话不需要从聊天摘要猜测上一会话做了什么。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s6">11.6 Policy Gate — 独立于模型的约束层</h2>
+
+        <p>这是 T4 的核心实现。Policy Gate 在工具执行<strong>之前</strong>拦截，而非执行之后补救。它是确定性的 Go 代码，不依赖模型是否"听话"。</p>
+
+        <h3>PolicyGate 接口</h3>
+        <pre>// TODO: Phase 4 — Policy Gate
+// 位置: internal/harness/policy.go
+
+// PolicyGate 是工具执行前的安全检查层。
+// 所有检查都是确定性的 Go 代码 —— 不依赖 LLM 自觉。
+// 任何一条规则返回 false，工具调用即被拒绝，Engine 收到 ErrBlockedByPolicy。
+type PolicyGate interface {
+    // Allow 判断是否允许执行指定的工具调用。
+    // 返回 nil 表示允许；返回 error 表示拒绝（含拒绝原因）。
+    Allow(taskID string, toolName string, args map[string]any) error
+}
+
+// 内置规则链（Chain of Responsibility）
+type PolicyChain struct {
+    rules []PolicyRule
+}
+
+// PolicyRule 是单条策略规则
+type PolicyRule interface {
+    Name() string
+    Check(taskID string, toolName string, args map[string]any) error
+}
+
+// 预置规则示例：
+// - PathTraversalRule: 拒绝 "../" 路径遍历
+// - FileScopeRule: 只允许在 storage/{task_id}/ 下写文件
+// - DangerousCommandRule: 拒绝 rm -rf /、fork bomb、curl | bash
+// - TokenBudgetRule: 超过 token 预算硬限制时拒绝继续
+// - ToolWhitelistRule: 只允许 TaskContract 中声明的工具
+// - ApprovalRule: 高风险操作（如 git push）需要前端确认</pre>
+
+        <h3>拦住什么？</h3>
+        <table>
+            <tr><th>规则</th><th>拦截条件</th><th>Phase</th></tr>
+            <tr><td><code>PathTraversalRule</code></td><td>路径包含 <code>..</code> 或绝对路径越界</td><td>3 ✅ 已有基础</td></tr>
+            <tr><td><code>FileScopeRule</code></td><td>写入 <code>storage/{task_id}/</code> 之外的路径</td><td>3</td></tr>
+            <tr><td><code>DangerousCommandRule</code></td><td><code>rm -rf /</code>、<code>fork()</code>、<code>curl | sh</code> 等</td><td>4</td></tr>
+            <tr><td><code>TokenBudgetRule</code></td><td>累计 token 超过 TaskContract 预算</td><td>4</td></tr>
+            <tr><td><code>ToolWhitelistRule</code></td><td>使用了 TaskContract 未声明的工具</td><td>4</td></tr>
+            <tr><td><code>ApprovalRule</code></td><td>高风险操作 → 前端弹窗确认</td><td>5</td></tr>
+        </table>
+
+        <div class="callout danger">
+            <div class="callout-title">设计铁律</div>
+            Policy Gate 的逻辑<strong>必须全部是确定性的 Go 代码</strong>。不要把"判断是否危险"也交给模型 —— 那等于把监狱的钥匙交给了囚犯。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s7">11.7 Checkpoint / Recovery — 任务可恢复性</h2>
+
+        <p>Agent 任务可能运行数分钟甚至数小时。进程崩溃、网络中断、API 限流都可能打断执行。Checkpoint 机制确保任务可以从中断点恢复，而非从头开始。</p>
+
+        <pre>// TODO: Phase 4 — Checkpoint 机制
+// 位置: internal/harness/checkpoint.go
+
+type Checkpoint struct {
+    TaskID      string          `json:"task_id"`
+    CreatedAt   time.Time       `json:"created_at"`
+    StepIndex   int             `json:"step_index"`
+
+    // 完整对话历史（用于恢复 LLM 上下文）
+    Messages    []llm.Message   `json:"messages"`
+
+    // 当前 Progress 快照
+    Progress    TaskProgress    `json:"progress"`
+
+    // 文件系统快照（可选，Phase 5+）
+    // WorkspaceSnapshot string  `json:"workspace_snapshot"`
+}
+
+// CheckpointManager 管理 checkpoint 的创建和恢复
+type CheckpointManager interface {
+    Save(ctx context.Context, cp Checkpoint) error
+    LoadLatest(taskID string) (*Checkpoint, error)
+    // 恢复流程:
+    // 1. 从 SQLite 加载最新 checkpoint
+    // 2. 重建 Engine 的 messages 切片
+    // 3. 从 progress.json 恢复当前 SubGoal
+    // 4. 重新执行被中断的 step
+    Recover(taskID string, engine *Engine) error
+}</pre>
+
+        <div class="callout info">
+            <div class="callout-title">触发时机</div>
+            <ul style="padding-left:18px;">
+                <li><strong>每个 SubGoal 完成后</strong>：自动创建 checkpoint</li>
+                <li><strong>工具执行失败前</strong>：保存当前状态再退出</li>
+                <li><strong>Token 预算耗尽前</strong>：提前 10% 创建 checkpoint</li>
+                <li><strong>定期心跳</strong>：每 N 步自动 checkpoint（Phase 4+）</li>
+            </ul>
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s8">11.8 自进化长期记忆 — 四层模型</h2>
+
+        <p>参考 Hermes Agent 的记忆架构和 CoALA 认知模型，将长期记忆分为四层。核心洞察：<strong>记忆是治理问题，不只是存储问题</strong>。RAG 只覆盖"召回"，写入、修正、遗忘这三个动作决定"这条记录未来该不该影响行为"。</p>
+
+        <h3>四层记忆总览</h3>
+        <table>
+            <tr><th>层</th><th>放什么</th><th>默认进 Prompt?</th><th>存储</th><th>治理方式</th></tr>
+            <tr>
+                <td><span class="memory-tier tier-working">Working Memory</span></td>
+                <td>当前任务必要信息：TaskContract + Stable Rules + 相关 Episode 摘要</td>
+                <td>✅ 是</td>
+                <td>内存 + <code>task_brief.json</code></td>
+                <td>任务开始前构建，任务结束后丢弃</td>
+            </tr>
+            <tr>
+                <td><span class="memory-tier tier-raw">Raw Episodic</span></td>
+                <td>原始事件流：对话、工具调用、工具结果</td>
+                <td>❌ 否</td>
+                <td>SQLite <code>conversations</code> 表</td>
+                <td>只追加、不修饰、不删除</td>
+            </tr>
+            <tr>
+                <td><span class="memory-tier tier-consolidated">Consolidated Episodic</span></td>
+                <td>任务摘要、关键决策、失败原因、候选经验</td>
+                <td>🔶 候选</td>
+                <td>SQLite <code>memories</code> 表</td>
+                <td>心跳整理 + 模型抽取 + 证据链接</td>
+            </tr>
+            <tr>
+                <td><span class="memory-tier tier-semantic">Semantic / Policy</span></td>
+                <td>稳定规则、用户偏好、长期事实、项目经验</td>
+                <td>✅ 高优先</td>
+                <td>SQLite <code>memories</code> 表</td>
+                <td>少而稳定，每条必须有晋升理由和证据。宁可漏记，不可记错</td>
+            </tr>
+        </table>
+
+        <h3>Hermes Agent 映射</h3>
+        <table>
+            <tr><th>Hermes Agent 结构</th><th>本项目对应</th><th>落地方式</th></tr>
+            <tr><td><code>MEMORY.md</code> / <code>USER.md</code></td><td>Semantic / Policy 层</td><td><code>memories</code> 表，type=preference|rule|fact，带 evidence + promotion_reason</td></tr>
+            <tr><td>SQLite + <code>session_search</code></td><td>Raw Episodic 层</td><td>现有 <code>conversations</code> 表，按 task_id 查询</td></tr>
+            <tr><td>会话结束抽取 / 后台 review</td><td>Consolidated + Semantic 晋升</td><td>Heartbeat 定时触发整理管线</td></tr>
+            <tr><td>Memory Provider</td><td>可选向量检索扩展</td><td>Phase 6 向量检索（LanceDB / ChromaDB），不作为主存储</td></tr>
+        </table>
+
+        <h3>数据库 Schema 扩展</h3>
+        <pre>-- TODO: Phase 4 — memories 表 + memory_links 表
+-- 位置: pkg/db/database.go (createTables 中追加)
+
+CREATE TABLE IF NOT EXISTS memories (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,     -- 项目隔离（不同 project 的记忆不互通）
+    type         TEXT NOT NULL,     -- preference | rule | fact | lesson | reflection
+    tier         TEXT NOT NULL,     -- consolidated | semantic
+    content      TEXT NOT NULL,     -- 记忆内容（脱离上下文也能读懂的一句话）
+    embedding    BLOB,              -- 向量（Phase 6+，用于语义检索）
+    confidence   REAL DEFAULT 1.0,  -- 置信度 0-1
+    status       TEXT DEFAULT 'active', -- active | obsolete | cold | invalid
+
+    -- 证据链（每条记忆必须能追溯到来源）
+    source_task_ids  JSON,          -- 来源任务 ID 列表
+    source_event_ids JSON,          -- 来源事件 ID 列表
+    promotion_reason TEXT,          -- 晋升理由: repeated_across_sessions | tool_failure_evidence | explicit_user_instruction
+
+    -- 生命周期
+    access_count    INT DEFAULT 0,
+    last_accessed   DATETIME,
+    last_reviewed   DATETIME,       -- 上次审查时间（用于过期检测）
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 记忆关联表（记忆之间的引用关系）
+CREATE TABLE IF NOT EXISTS memory_links (
+    source_id  TEXT NOT NULL,
+    target_id  TEXT NOT NULL,
+    relation   TEXT NOT NULL,  -- supplements | contradicts | relates_to | replaces
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_id, target_id),
+    FOREIGN KEY (source_id) REFERENCES memories(id),
+    FOREIGN KEY (target_id) REFERENCES memories(id)
+);</pre>
+
+        <!-- ============================================================ -->
+        <h2 id="s9">11.9 记忆抽取管线</h2>
+
+        <p>四层记忆的抽取不是一次性完成的，而是通过一条异步管线逐步压缩和晋升。核心分工原则：</p>
+
+        <div class="callout success">
+            <div class="callout-title">分工原则</div>
+            <strong>理解自然语言的判断交给模型</strong>（哪句话值得记？两条候选是不是同一件事？用户是否显式说"以后都这样"？）<br>
+            <strong>可核对的结构化判断留在代码</strong>（工具返回的 status 是不是 failed？一条候选被几个 task 独立支持？access_count 是否过低？）
+        </div>
+
+        <h3>抽取管线流程</h3>
+        <div class="arch-diagram">
+Raw Events (conversations 表)
+  │
+  │  Step 1: 模型抽取 (Consolidation Agent)
+  │  输入: 单个 Task 的全部 conversation 记录
+  │  输出: episode_summary + memory_items[]
+  │  每项 memory_item 带 type、statement、supported_event_ids、durable 标记
+  │
+  ▼
+Candidate Memories (memories 表, tier=consolidated)
+  │
+  │  Step 2: 模型合并同义候选 (Dedup Agent)
+  │  输入: 同 project 下的所有 candidate
+  │  输出: merged_memories[]（同义合并，不发明新内容）
+  │
+  │  Step 3: 代码按证据决定晋升 (Promotion Gate)
+  │  三条晋升通道:
+  │    ✓ repeated_across_sessions: 被 ≥2 个独立 task 支持
+  │    ✓ tool_failure_evidence: 关联的 event 中有 tool status=failed
+  │    ✓ explicit_user_instruction: 用户显式说"以后都这样"/durable=true
+  │  不满足任一条 → 留在 candidate，等下次证据
+  │
+  ▼
+Semantic Rules (memories 表, tier=semantic)
+  │
+  │  Step 4: 定期审查 (Prune Agent)
+  │  超过 30 天未 access → status=cold
+  │  被更新版本覆盖 → status=obsolete
+  │  confidence 持续下降 → 标记待审查
+  │
+  ▼
+Working Memory (task_brief.json)
+  │  新任务启动时按 project_id + 关键词 + 向量相似度召回
+  │  注入 System Prompt 或作为 context 前置
+        </div>
+
+        <h3>三条晋升通道</h3>
+        <table>
+            <tr><th>通道</th><th>触发条件</th><th>代码判断</th><th>示例</th></tr>
+            <tr>
+                <td><code>repeated_across_sessions</code></td>
+                <td>同一经验被 ≥2 个独立 task 支持</td>
+                <td><code>COUNT(DISTINCT source_task_id) >= 2</code></td>
+                <td>"远距离景点单独占一整天"——北京和西安都犯了同样的错</td>
+            </tr>
+            <tr>
+                <td><code>tool_failure_evidence</code></td>
+                <td>关联的 event 中有 tool status=failed</td>
+                <td><code>event_index.status == "failed"</code></td>
+                <td>"route_checker 报告跨区移动不可行"——工具返回了确凿的失败证据</td>
+            </tr>
+            <tr>
+                <td><code>explicit_user_instruction</code></td>
+                <td>用户显式说"以后都这样"或 durable=true</td>
+                <td><code>memory_item.durable == true</code></td>
+                <td>"以后输出行程时附上检查结论"——用户明确要求长期生效</td>
+            </tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">晋升门槛宁紧勿松</div>
+            Semantic 层进 Prompt 的优先级最高。进去一条错的，以后每个任务都要为它买单。只出现过一次、没有失败证据、用户也没说"以后都这样"的信息，留在 consolidated 层等下次证据，而不是急着变成规则。
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s10">11.10 心跳整理（Heartbeat Consolidation）</h2>
+
+        <p>记忆整理不适合放在对话进行中做——用户还在等回复，没人愿意每轮多等几秒等 Agent "记笔记"。心跳机制是一个后台定时任务，在系统空闲时扫描新事件、触发抽取管线、更新 checkpoint。</p>
+
+        <pre>// TODO: Phase 4 — Heartbeat 后台整理器
+// 位置: internal/harness/heartbeat.go
+
+type Heartbeat struct {
+    db          *sql.DB
+    llmClient   *llm.Client      // 复用轻量模型做抽取（低成本）
+    interval    time.Duration     // 基础间隔
+    state       *HeartbeatState   // 持久化的处理进度
+
+    // 回调（解耦抽取逻辑）
+    OnNewEvents  func([]EventRecord) error
+    OnConsolidate func(taskID string) error
+    OnPromote     func(projectID string) error
+}
+
+type HeartbeatState struct {
+    LastProcessedEventID string    `json:"last_processed_event_id"`
+    LastRunAt            time.Time `json:"last_run_at"`
+    ProcessedTaskCount   int       `json:"processed_task_count"`
+    NextIntervalSeconds  int       `json:"next_interval_seconds"`
+}
+
+// 自适应间隔
+func (h *Heartbeat) adaptiveInterval(newEventCount int) time.Duration {
+    switch {
+    case newEventCount >= 10: return 60 * time.Second   // 活跃
+    case newEventCount >= 1:  return 5 * time.Minute    // 有活动
+    default:                  return 15 * time.Minute   // 空闲
+    }
+}
+
+// 一次心跳执行四件事:
+// 1. scan: 扫描上次 checkpoint 之后的新 conversation 记录
+// 2. consolidate: 对新完成的 task 调用抽取 Agent（模型）
+// 3. promote: 合并 + 晋升判断（代码）
+// 4. checkpoint: 更新 HeartbeatState，记录进度
+func (h *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) { ... }</pre>
+
+        <h3>心跳安全边界</h3>
+        <div class="callout danger">
+            <div class="callout-title">自动整理不能变成自动污染</div>
+            心跳是后台进程，它读到的内容不只有用户对话——邮件、消息、网页、仓库都可能流进来。后台写记忆这条通道如果没有治理，会出现安全问题（参考 Mind Your HEARTBEAT! 论文，arXiv 2603.23064）。
+            <br><br>
+            <strong>防御措施：</strong>
+            <ul style="padding-left:18px;">
+                <li>每条记忆必须有 <code>source_event_ids</code>（可追溯）</li>
+                <li>每条记忆必须有 <code>promotion_reason</code>（可解释）</li>
+                <li>低置信度记忆不进入 Semantic 层</li>
+                <li>支持记忆回滚（通过 memory_links 的 replaces 关系）</li>
+                <li>定期审查：超过 30 天未 access 的 Semantic 规则自动降级</li>
+            </ul>
+        </div>
+
+        <!-- ============================================================ -->
+        <h2 id="s11">11.11 记忆召回 — 新任务唤起</h2>
+
+        <p>新任务启动时，不是把所有历史灌进上下文，而是按优先级构建 Working Memory：</p>
+
+        <div class="arch-diagram">
+新任务: "帮我在项目中加一个 API 认证中间件"
+  │
+  ├─ Step 1: 项目隔离
+  │   project_id = 当前项目 → 只看本项目的记忆
+  │
+  ├─ Step 2: Semantic 规则（整批带入，优先级最高）
+  │   SELECT * FROM memories WHERE tier='semantic' AND project_id=?
+  │   → "项目使用 gorilla/mux 作为路由框架"
+  │   → ".env 中存储 API Key"
+  │   → "所有中间件放在 internal/middleware/ 目录"
+  │
+  ├─ Step 3: Consolidated Episodes（按相关性选取 Top 3）
+  │   关键词匹配 + (Phase 6: 向量相似度) → 排序
+  │   → 上次添加 logging 中间件的 task 摘要
+  │   → 上次修改路由配置的 task 摘要
+  │
+  ├─ Step 4: 打包为 task_brief.json
+  │   {
+  │     "task": "...",
+  │     "stable_rules": [...],
+  │     "related_episodes": [...]
+  │   }
+  │
+  └─ Step 5: 注入 System Prompt
+      "以下是从以往任务中总结的稳定规则和相关经验: ..."
+        </div>
+
+        <pre>// TODO: Phase 5 — Memory Recall
+// 位置: internal/harness/recall.go
+
+type MemoryRecall struct {
+    db *sql.DB
+}
+
+// BuildWorkingMemory 为新任务构建 working memory context
+func (r *MemoryRecall) BuildWorkingMemory(projectID, taskGoal string) (*WorkingMemory, error) {
+    wm := &WorkingMemory{TaskGoal: taskGoal}
+
+    // 1. 加载 Semantic 规则（整批）
+    wm.StableRules = r.loadSemanticRules(projectID)
+
+    // 2. 关键词匹配 + 召回相关 Episode（Top N）
+    wm.RelatedEpisodes = r.recallEpisodes(projectID, taskGoal, 3)
+
+    // 3. 构建 task_brief.json
+    wm.BuildBrief()
+
+    return wm, nil
+}</pre>
+
+        <!-- ============================================================ -->
+        <h2 id="s12">11.12 集成路径与 Phase 规划</h2>
+
+        <h3>Harness 能力渐进图</h3>
+        <table>
+            <tr><th>Phase</th><th>Harness 新增</th><th>记忆新增</th><th>关键交付</th></tr>
+            <tr>
+                <td><strong>Phase 2 (当前)</strong></td>
+                <td>—</td>
+                <td>—</td>
+                <td>前端可视化（AgentTree / TypeWriter / Markdown）</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 3</strong></td>
+                <td>
+                    TaskContract 定义<br>
+                    Progress 文件管理<br>
+                    FileScopeRule + PathTraversalRule<br>
+                    AcceptanceCriteria 基础实现
+                </td>
+                <td>
+                    Task 完成后自动生成摘要<br>
+                    (Engine 调用轻量模型做单 task 总结)
+                </td>
+                <td>任务契约 + 外部进度 + 路径安全</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 4</strong></td>
+                <td>
+                    PolicyChain 完整实现<br>
+                    Checkpoint / Recovery<br>
+                    TokenBudgetRule<br>
+                    ToolWhitelistRule
+                </td>
+                <td>
+                    <code>memories</code> 表 + <code>memory_links</code> 表<br>
+                    Heartbeat 后台整理器<br>
+                    Candidate → Semantic 晋升管线<br>
+                    三条晋升通道的代码实现
+                </td>
+                <td>策略门 + 检查点 + 记忆表 + 心跳</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 5</strong></td>
+                <td>
+                    ApprovalRule（高风险操作确认）<br>
+                    Docker Sandbox<br>
+                    DangerousCommandRule
+                </td>
+                <td>
+                    Memory Recall 召回<br>
+                    Working Memory 构建<br>
+                    记忆冲突检测 + 合并
+                </td>
+                <td>沙箱 + 审批 + 记忆召回</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 6</strong></td>
+                <td>
+                    CostTracker 成本追踪<br>
+                    Eval 回归闭环<br>
+                    完整治理与审计
+                </td>
+                <td>
+                    向量检索（语义召回增强）<br>
+                    遗忘曲线 + 冷存储<br>
+                    记忆审查 Agent（定期 prune）
+                </td>
+                <td>成本追踪 + 向量检索 + 记忆治理</td>
+            </tr>
+        </table>
+
+        <h3>目标目录结构</h3>
+        <pre>
+internal/
+  harness/                    # Harness 层（Phase 3+）
+    contract.go               # TaskContract 类型 + 验收标准
+    progress.go               # TaskProgress 管理 + 读写
+    policy.go                 # PolicyGate + PolicyChain + 内置规则
+    checkpoint.go             # CheckpointManager + 恢复流程
+    heartbeat.go              # Heartbeat 后台整理器
+    recall.go                 # MemoryRecall 召回 + WorkingMemory 构建
+  memory/                     # 记忆系统（Phase 4+）
+    consolidation.go          # Consolidation Agent（模型抽取）
+    promotion.go              # Promotion Gate（代码晋升判断）
+    prune.go                  # 记忆审查 + 过期处理
+pkg/db/
+    database.go               # + memories 表 + memory_links 表
+</pre>
+
+        <!-- ============================================================ -->
+        <h2 id="s13">11.13 代码占位与 TODO</h2>
+
+        <p>以下 TODO 注释应在对应 Phase 开始时加入代码：</p>
+
+        <h3>Phase 3 占位</h3>
+        <pre>// TODO: Phase 3 — TaskContract 定义 (internal/harness/contract.go)
+// TODO: Phase 3 — Progress 文件管理 (internal/harness/progress.go)
+// TODO: Phase 3 — Engine.Run() 接受 TaskContract，Progress 文件在关键节点写入
+// TODO: Phase 3 — FileScopeRule 在 write_file 工具执行前检查路径边界
+// TODO: Phase 3 — Task 完成时生成摘要 (Engine 内部调用轻量模型)</pre>
+
+        <h3>Phase 4 占位</h3>
+        <pre>// TODO: Phase 4 — PolicyChain 在 Engine.executeTool() 之前调用
+// TODO: Phase 4 — Checkpoint 在每个 SubGoal 完成时自动保存
+// TODO: Phase 4 — memories 表 + memory_links 表 Schema (pkg/db/database.go)
+// TODO: Phase 4 — Heartbeat 在 Server 启动时作为 goroutine 运行
+// TODO: Phase 4 — Consolidation Agent: 模型抽取 task 摘要 + 候选记忆
+// TODO: Phase 4 — Promotion Gate: 三条晋升通道的代码判断</pre>
+
+        <h3>Phase 5 占位</h3>
+        <pre>// TODO: Phase 5 — MemoryRecall: 新任务启动时构建 Working Memory
+// TODO: Phase 5 — ApprovalRule: 高风险操作通过 WebSocket 发送确认请求到前端
+// TODO: Phase 5 — DangerousCommandRule: 解析 shell 命令 AST 检测危险模式
+// TODO: Phase 5 — Docker Sandbox: run_shell 在容器中执行</pre>
+
+        <h3>Phase 6 占位</h3>
+        <pre>// TODO: Phase 6 — 向量检索: embedding 生成 + LanceDB/ChromaDB 集成
+// TODO: Phase 6 — 记忆审查 Agent: 定期扫描 Semantic 层，标记过期/冲突
+// TODO: Phase 6 — CostTracker: 按 model/tier/task 维度的 API 成本报告
+// TODO: Phase 6 — Eval 回归: 保存失败 task 的 Trace，加入回归测试集</pre>
+
+        <!-- ============================================================ -->
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>Harness 与 Engine 的集成时序图</li>
+                <li>Policy Gate 规则优先级与冲突解决</li>
+                <li>记忆召回的质量评估指标（Recall@K / MRR）</li>
+                <li>心跳对系统性能的影响评估</li>
+                <li>记忆污染的实际测试用例</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="10-multi-model-layered-design.html">← 上一章</a> |
+            <a href="99-glossary.html">下一章：术语表 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM API 厂商对比 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+
+    <!-- ============================== SIDEBAR ============================== -->
+    <aside class="sidebar">
+        <div class="logo">
+            <h2>Multi-Agent Platform</h2>
+            <span>Product Documentation v0.2</span>
+        </div>
+
+        <div class="section-label">概览</div>
+        <nav>
+            <a href="../index.html">首页</a>
+        </nav>
+
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+
+        <div class="section-label">参考</div>
+        <nav>
+            <a href="09-llm-api-comparison.html" class="active">LLM API 厂商对比</a>
+            <a href="10-multi-model-layered-design.html">多模型分层设计</a>
+            <a href="99-glossary.html">术语表</a>
+        </nav>
+    </aside>
+
+    <!-- ============================== MAIN CONTENT ========================== -->
+    <main class="main">
+
+        <h1>LLM API 厂商对比
+            <span class="version">参考文档</span>
+        </h1>
+        <p class="subtitle">
+            深入对比 OpenAI、Anthropic、DeepSeek、阿里 DashScope 四家 LLM 厂商的 API 设计差异<br>
+            为后续 Provider 接口抽象提供设计参考
+        </p>
+
+        <div class="callout info">
+            <div class="callout-title">📋 文档目的</div>
+            本文档分析各厂商 API 的请求/响应格式差异、独有特性、流式协议差异，
+            为 Phase 5-6 的 <code>Provider</code> 接口抽象层提供设计依据。
+            <strong>当前项目仅实现了 OpenAI-compatible 协议</strong>（覆盖 DeepSeek、阿里百炼等国产模型）。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- TOC -->
+        <!-- ================================================================ -->
+        <div class="toc">
+            <h3>📑 目录</h3>
+            <ul>
+                <li><a href="#s1">1. OpenAI API 完整列表</a></li>
+                <li><a href="#s2">2. Chat Completions API 参数详解</a></li>
+                <li><a href="#s3">3. Anthropic (Claude) Messages API</a></li>
+                <li><a href="#s4">4. DeepSeek API</a></li>
+                <li><a href="#s5">5. 阿里 DashScope (百炼)</a></li>
+                <li><a href="#s6">6. 四家厂商差异总览</a></li>
+                <li><a href="#s7">7. Provider 接口抽象设计建议</a></li>
+                <li><a href="#s8">8. 实施计划</a></li>
+            </ul>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 1. OpenAI API 完整列表 -->
+        <!-- ================================================================ -->
+        <h2 id="s1">1. OpenAI API 完整列表</h2>
+
+        <p>OpenAI 提供的 API 端点远不止 <code>/chat/completions</code>。以下按与本项目的相关性排列：</p>
+
+        <h3>1.1 核心 API</h3>
+        <table>
+            <tr><th>端点</th><th>方法</th><th>用途</th><th>本项目</th></tr>
+            <tr>
+                <td><code>/v1/chat/completions</code></td>
+                <td>POST</td>
+                <td>对话补全 — 支持文本、工具调用、多模态</td>
+                <td><span class="badge green">✅ 已实现</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/embeddings</code></td>
+                <td>POST</td>
+                <td>文本向量化 — 将文本转为高维向量</td>
+                <td><span class="badge blue">🔮 Phase 6 (RAG)</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/models</code></td>
+                <td>GET</td>
+                <td>列出可用模型及其元信息</td>
+                <td><span class="badge yellow">🔮 可选</span></td>
+            </tr>
+        </table>
+
+        <h3>1.2 辅助 API</h3>
+        <table>
+            <tr><th>端点</th><th>方法</th><th>用途</th><th>本项目</th></tr>
+            <tr>
+                <td><code>/v1/completions</code></td>
+                <td>POST</td>
+                <td>文本补全（Legacy，GPT-3 时代）</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/audio/transcriptions</code></td>
+                <td>POST</td>
+                <td>语音转文字 (Whisper)</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/audio/speech</code></td>
+                <td>POST</td>
+                <td>文字转语音 (TTS)</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/images/generations</code></td>
+                <td>POST</td>
+                <td>图片生成 (DALL·E)</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/files</code></td>
+                <td>GET/POST/DELETE</td>
+                <td>文件上传/管理（用于 Fine-tuning）</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/fine_tuning/jobs</code></td>
+                <td>POST</td>
+                <td>微调任务管理</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+            <tr>
+                <td><code>/v1/moderations</code></td>
+                <td>POST</td>
+                <td>内容审核</td>
+                <td><span class="badge gray">❌ 不需要</span></td>
+            </tr>
+        </table>
+
+        <div class="callout info">
+            <div class="callout-title">🔑 关键结论</div>
+            与本项目相关的 OpenAI API 只有三个：<strong>Chat Completions</strong>（已实现）、
+            <strong>Embeddings</strong>（Phase 6 RAG）、<strong>Models</strong>（可选）。
+            其余 API 要么已废弃，要么与本项目领域无关。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 2. Chat Completions API 参数详解 -->
+        <!-- ================================================================ -->
+        <h2 id="s2">2. Chat Completions API 参数详解</h2>
+
+        <p>OpenAI Chat Completions API 是当前行业事实标准，绝大多数国产模型兼容此协议。
+        以下列出完整参数（加粗参数为当前已实现）：</p>
+
+        <h3>2.1 请求参数</h3>
+        <table>
+            <tr><th>参数</th><th>类型</th><th>必填</th><th>默认值</th><th>说明</th></tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>model</strong></td>
+                <td>string</td><td>✅</td><td>—</td>
+                <td>模型标识符，如 <code>gpt-4</code>、<code>deepseek-v4-flash</code></td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>messages</strong></td>
+                <td>array</td><td>✅</td><td>—</td>
+                <td>对话历史，按角色排列：system → user → assistant → tool → …</td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>stream</strong></td>
+                <td>bool</td><td>❌</td><td>false</td>
+                <td>是否启用 SSE 流式返回</td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>temperature</strong></td>
+                <td>float</td><td>❌</td><td>1.0</td>
+                <td>采样温度 (0-2)，越高越随机</td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>max_tokens</strong></td>
+                <td>int</td><td>❌</td><td>—</td>
+                <td>最大输出 token（已废弃，建议用 max_completion_tokens）</td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>tools</strong></td>
+                <td>array</td><td>❌</td><td>—</td>
+                <td>Function Calling 工具定义列表</td>
+            </tr>
+            <tr style="background:#f0f8f0;">
+                <td><strong>tool_choice</strong></td>
+                <td>string/obj</td><td>❌</td><td>"auto"</td>
+                <td>工具选择策略：<code>auto</code> / <code>none</code> / <code>required</code> / 指定工具</td>
+            </tr>
+            <tr>
+                <td>max_completion_tokens</td>
+                <td>int</td><td>❌</td><td>—</td>
+                <td><strong>新版参数</strong>，替代 max_tokens，仅限制输出 token</td>
+            </tr>
+            <tr>
+                <td>top_p</td>
+                <td>float</td><td>❌</td><td>1.0</td>
+                <td>Nucleus sampling — 从累积概率 top_p 的 token 集合中采样</td>
+            </tr>
+            <tr>
+                <td>stop</td>
+                <td>string/array</td><td>❌</td><td>—</td>
+                <td>停止词 — 遇到即停止生成</td>
+            </tr>
+            <tr>
+                <td>frequency_penalty</td>
+                <td>float</td><td>❌</td><td>0</td>
+                <td>频率惩罚 (-2.0 ~ 2.0)，降低重复</td>
+            </tr>
+            <tr>
+                <td>presence_penalty</td>
+                <td>float</td><td>❌</td><td>0</td>
+                <td>存在惩罚 (-2.0 ~ 2.0)，增加话题多样性</td>
+            </tr>
+            <tr>
+                <td>n</td>
+                <td>int</td><td>❌</td><td>1</td>
+                <td>生成几个候选回复</td>
+            </tr>
+            <tr>
+                <td>seed</td>
+                <td>int</td><td>❌</td><td>—</td>
+                <td>确定性输出种子（相同 seed + 相同参数 = 相同输出）</td>
+            </tr>
+            <tr>
+                <td>response_format</td>
+                <td>object</td><td>❌</td><td>—</td>
+                <td>结构化输出：<code>{"type": "json_object"}</code> 或
+                    <code>{"type": "json_schema", "json_schema": {...}}</code></td>
+            </tr>
+            <tr>
+                <td>logprobs</td>
+                <td>bool</td><td>❌</td><td>false</td>
+                <td>是否返回每个 token 的 log 概率</td>
+            </tr>
+            <tr>
+                <td>top_logprobs</td>
+                <td>int</td><td>❌</td><td>—</td>
+                <td>返回 top N 个 token 的概率（需 logprobs=true）</td>
+            </tr>
+            <tr>
+                <td>parallel_tool_calls</td>
+                <td>bool</td><td>❌</td><td>true</td>
+                <td>是否允许 LLM 并行调用多个工具</td>
+            </tr>
+            <tr>
+                <td>stream_options</td>
+                <td>object</td><td>❌</td><td>—</td>
+                <td><code>{"include_usage": true}</code> — 在流式最后一个 chunk 中返回 usage</td>
+            </tr>
+            <tr>
+                <td>user</td>
+                <td>string</td><td>❌</td><td>—</td>
+                <td>终端用户标识符（用于 OpenAI 监控和滥用检测）</td>
+            </tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">⚠️ max_tokens vs max_completion_tokens</div>
+            OpenAI 已将 <code>max_tokens</code> 标记为废弃，推荐使用 <code>max_completion_tokens</code>。
+            但部分国产模型（如 DeepSeek）仍使用 <code>max_tokens</code>。<br>
+            <strong>建议</strong>：Phase 5 Provider 抽象时同时支持两个参数，按厂商适配。
+        </div>
+
+        <h3>2.2 SSE 流式返回格式</h3>
+        <pre><code>// 每个 SSE chunk 的 JSON 结构
+{
+  "id": "chatcmpl-xxx",
+  "object": "chat.completion.chunk",
+  "created": 1234567890,
+  "model": "gpt-4",
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "role": "assistant",           // 仅第一个 chunk 有此字段
+      "content": "Hello",            // 文本增量（1~N 个 token）
+      "tool_calls": [{               // 工具调用增量（分多个 chunk 到达）
+        "index": 0,
+        "id": "call_xxx",            // 仅第一个 tool delta 有
+        "type": "function",
+        "function": {
+          "name": "run_shell",       // 仅第一个 delta 有
+          "arguments": "{\"com"      // 增量 JSON 片段
+        }
+      }]
+    },
+    "finish_reason": null            // 最后一个 chunk 有值: "stop"/"tool_calls"/"length"
+  }],
+  "usage": {                         // 仅 stream_options.include_usage=true 时返回
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}</code></pre>
+
+        <h3>2.3 ToolCall 增量到达顺序</h3>
+        <p>ToolCall 的增量是<strong>乱序到达</strong>的，这是 SSE 协议的核心挑战：</p>
+        <pre><code>// Chunk 1: 索引和 ID 先到
+delta: { tool_calls: [{ index: 0, id: "call_abc", type: "function" }] }
+
+// Chunk 2: 函数名到达
+delta: { tool_calls: [{ index: 0, function: { name: "run_shell", arguments: "" } }] }
+
+// Chunk 3-N: 参数片段逐步到达（可能跨多个 chunk）
+delta: { tool_calls: [{ index: 0, function: { arguments: "{\"com" } }] }
+delta: { tool_calls: [{ index: 0, function: { arguments: "mand" } }] }
+delta: { tool_calls: [{ index: 0, function: { arguments: "\": \"ls" } }] }
+delta: { tool_calls: [{ index: 0, function: { arguments: " -la\"}" } }] }
+
+// 最后一帧: finish_reason 出现
+delta: {}, finish_reason: "tool_calls"</code></pre>
+
+        <p>当前实现使用 <code>map[int]*ToolCall</code> 按 index 累积，组装完成后转为有序切片。</p>
+
+        <!-- ================================================================ -->
+        <!-- 3. Anthropic Messages API -->
+        <!-- ================================================================ -->
+        <h2 id="s3">3. Anthropic (Claude) Messages API</h2>
+
+        <p>Anthropic 的 API 设计<strong>与 OpenAI 完全不兼容</strong>，有自己独立的协议体系。
+        核心差异在于：system prompt 的传递方式、工具 schema 字段名、流式协议格式。</p>
+
+        <h3>3.1 核心端点</h3>
+        <table>
+            <tr><th>端点</th><th>方法</th><th>用途</th></tr>
+            <tr><td><code>/v1/messages</code></td><td>POST</td><td>对话（等价于 OpenAI 的 /chat/completions）</td></tr>
+            <tr><td><code>/v1/messages/count_tokens</code></td><td>POST</td><td>计算 token 数（不实际调用 LLM）</td></tr>
+        </table>
+
+        <h3>3.2 请求格式</h3>
+        <pre><code>// Anthropic Messages API 请求体
+{
+  "model": "claude-sonnet-4-6",
+  "max_tokens": 1024,              // ⚠️ 必填！跟 OpenAI 最大区别
+  "system": "You are a helpful assistant",  // ⚠️ 顶层字段，不在 messages 数组里
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi!"},
+    {"role": "user", "content": [
+      {"type": "text", "text": "What's in this image?"},
+      {"type": "image", "source": {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "iVBORw0KGgo..."
+      }}
+    ]}
+  ],
+  "tools": [{
+    "name": "get_weather",
+    "description": "Get the current weather",
+    "input_schema": {              // ⚠️ 字段名是 input_schema，不是 parameters
+      "type": "object",
+      "properties": {
+        "location": {"type": "string", "description": "City name"}
+      },
+      "required": ["location"]
+    }
+  }],
+  "tool_choice": {"type": "auto"}, // ⚠️ 对象格式，不是字符串
+  "stop_sequences": ["\n\nHuman:"], // ⚠️ 数组，不是 stop 字符串
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "top_k": 40,                     // ⚠️ Anthropic 独有参数
+  "stream": true
+}</code></pre>
+
+        <h3>3.3 流式返回格式</h3>
+        <p>Anthropic 的 SSE 格式与 OpenAI <strong>完全不同</strong>——使用 <code>event:</code> 行标识事件类型：</p>
+
+        <pre><code>// === Anthropic SSE 事件流 ===
+
+event: message_start
+data: {"type": "message_start", "message": {"id": "msg_xxx", "usage": {"input_tokens": 10}}}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}
+
+// 工具调用以独立 content_block 出现
+event: content_block_start
+data: {"type": "content_block_start", "index": 1, "content_block": {
+  "type": "tool_use", "id": "toolu_xxx", "name": "run_shell", "input": {}
+}}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 1, "delta": {
+  "type": "input_json_delta", "partial_json": "{\"com"
+}}
+
+event: content_block_stop
+data: {"type": "content_block_stop", "index": 1}
+
+event: message_delta
+data: {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 50}}
+
+event: message_stop
+data: {"type": "message_stop"}</code></pre>
+
+        <div class="callout warning">
+            <div class="callout-title">⚠️ Anthropic 流式协议的关键差异</div>
+            <ul>
+                <li><strong>双层结构</strong>：<code>event: type</code> + <code>data: {...}</code>，而非 OpenAI 的单层 <code>data: {...}</code></li>
+                <li><strong>Tool use 是独立 content_block</strong>：不是 delta.tool_calls 数组，而是独立的事件类型</li>
+                <li><strong>参数是 partial_json</strong>：不是 <code>function.arguments</code> 增量，而是 <code>input_json_delta</code></li>
+                <li><strong>Usage 分两段</strong>：input_tokens 在 message_start 中，output_tokens 在 message_delta 中</li>
+            </ul>
+        </div>
+
+        <h3>3.4 与 OpenAI 的关键差异总结</h3>
+        <table>
+            <tr><th>维度</th><th>OpenAI</th><th>Anthropic</th></tr>
+            <tr>
+                <td>System Prompt</td>
+                <td>在 messages 数组里 (role: "system")</td>
+                <td><strong>顶层 system 字段</strong></td>
+            </tr>
+            <tr>
+                <td>工具参数 Schema</td>
+                <td><code>function.parameters</code></td>
+                <td><strong><code>input_schema</code></strong></td>
+            </tr>
+            <tr>
+                <td>max_tokens</td>
+                <td>可选</td>
+                <td><strong>必填</strong></td>
+            </tr>
+            <tr>
+                <td>多模态 Content</td>
+                <td><code>[{type: "text"}, {type: "image_url"}]</code></td>
+                <td><code>[{type: "text"}, {type: "image", source: {...}}]</code></td>
+            </tr>
+            <tr>
+                <td>停止词</td>
+                <td><code>stop: string | array</code></td>
+                <td><strong><code>stop_sequences: array</code></strong></td>
+            </tr>
+            <tr>
+                <td>流式格式</td>
+                <td><code>data: {"choices": [...]}</code> 单层</td>
+                <td><strong><code>event: type</code> + <code>data: {...}</code> 双层</strong></td>
+            </tr>
+            <tr>
+                <td>Tool Use 流式</td>
+                <td><code>delta.tool_calls[].function.arguments</code> 增量</td>
+                <td><strong><code>delta.partial_json</code> 增量</strong></td>
+            </tr>
+            <tr>
+                <td>采样参数</td>
+                <td>temperature + top_p</td>
+                <td>temperature + top_p + <strong>top_k</strong></td>
+            </tr>
+            <tr>
+                <td>Token 计数</td>
+                <td>usage 在最后一个 chunk</td>
+                <td><strong>input 在 message_start，output 在 message_delta</strong></td>
+            </tr>
+            <tr>
+                <td>Tool Choice</td>
+                <td><code>"auto" | "none" | "required"</code></td>
+                <td><strong><code>{"type": "auto"}</code> 对象格式</strong></td>
+            </tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 4. DeepSeek API -->
+        <!-- ================================================================ -->
+        <h2 id="s4">4. DeepSeek API</h2>
+
+        <div class="callout success">
+            <div class="callout-title">✅ 完全兼容 OpenAI 协议</div>
+            DeepSeek 的 API 100% 兼容 OpenAI Chat Completions 协议，<strong>无需任何代码修改</strong>即可使用当前 <code>internal/llm/client.go</code>。
+        </div>
+
+        <h3>4.1 核心端点</h3>
+        <table>
+            <tr><th>端点</th><th>方法</th><th>说明</th></tr>
+            <tr><td><code>/v1/chat/completions</code></td><td>POST</td><td>标准对话补全，完全兼容 OpenAI</td></tr>
+            <tr><td><code>/v1/models</code></td><td>GET</td><td>模型列表</td></tr>
+        </table>
+
+        <h3>4.2 独有特性：reasoning_content</h3>
+        <p>DeepSeek R1 等推理模型会返回<strong>思维链内容</strong>（thinking process），
+        在 delta 中与 content 并列返回：</p>
+
+        <pre><code>// DeepSeek R1 的 SSE chunk 扩展
+{
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "reasoning_content": "Let me think about this step by step...\n\nFirst, we need to...",  // 🆕 思考过程
+      "content": ""                                                                             // 正式回答
+    }
+  }]
+}
+
+// 思考完成后，才开始输出正式回答
+{
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "reasoning_content": "",                  // 思考结束
+      "content": "The answer is 42"             // 正式回答开始
+    }
+  }]
+}</code></pre>
+
+        <div class="callout info">
+            <div class="callout-title">🔮 扩展计划</div>
+            <code>reasoning_content</code> 可用于实现"展示 Agent 思考过程"的白盒可视化特性。
+            计划在 Phase 5-6 的 Provider 抽象中作为可选字段支持。
+            当前代码中 <code>Delta</code> 结构体未包含此字段，需要向后兼容地扩展。
+        </div>
+
+        <h3>4.3 其他注意事项</h3>
+        <ul>
+            <li>使用 <code>max_tokens</code> 而非 <code>max_completion_tokens</code></li>
+            <li>不支持 <code>parallel_tool_calls</code> 参数</li>
+            <li>部分模型（如 deepseek-chat）支持 <code>frequency_penalty</code> 和 <code>presence_penalty</code></li>
+            <li><code>tool_choice</code> 支持 <code>"auto"</code> 和 <code>"none"</code>，不支持 <code>"required"</code></li>
+        </ul>
+
+        <!-- ================================================================ -->
+        <!-- 5. 阿里 DashScope -->
+        <!-- ================================================================ -->
+        <h2 id="s5">5. 阿里 DashScope (百炼)</h2>
+
+        <p>阿里 DashScope 同时提供<strong>原生协议</strong>和<strong>OpenAI 兼容模式</strong>。
+        兼容模式下基本可用，但有一些独有参数和响应格式差异。</p>
+
+        <h3>5.1 核心端点</h3>
+        <table>
+            <tr><th>端点</th><th>方法</th><th>说明</th></tr>
+            <tr><td><code>/compatible-mode/v1/chat/completions</code></td><td>POST</td><td>OpenAI 兼容模式（推荐）</td></tr>
+            <tr><td><code>/v1/services/aigc/text-generation/generation</code></td><td>POST</td><td>原生文本生成</td></tr>
+            <tr><td><code>/v1/services/embeddings/text-embedding/text-embedding</code></td><td>POST</td><td>文本向量化</td></tr>
+        </table>
+
+        <h3>5.2 独有参数</h3>
+        <table>
+            <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+            <tr>
+                <td><code>enable_search</code></td>
+                <td>bool</td>
+                <td>联网搜索增强 — 模型可实时搜索互联网</td>
+            </tr>
+            <tr>
+                <td><code>repetition_penalty</code></td>
+                <td>float</td>
+                <td>重复惩罚系数（非 OpenAI 标准参数）</td>
+            </tr>
+            <tr>
+                <td><code>result_format</code></td>
+                <td>string</td>
+                <td>返回格式：<code>"message"</code> 或 <code>"text"</code></td>
+            </tr>
+            <tr>
+                <td><code>incremental_output</code></td>
+                <td>bool</td>
+                <td>是否增量输出（流式专用）</td>
+            </tr>
+        </table>
+
+        <h3>5.3 响应格式差异</h3>
+        <p>阿里原生协议的 SSE 响应结构与 OpenAI 有细微差异：</p>
+        <pre><code>// 阿里 DashScope 原生 SSE 格式
+{
+  "output": {                          // ⚠️ 外层包了 output
+    "choices": [{
+      "message": {                     // ⚠️ 用 message 而非 delta
+        "content": "Hello",
+        "role": "assistant"
+      },
+      "finish_reason": "null"
+    }]
+  },
+  "usage": {
+    "output_tokens": 10,               // ⚠️ 字段名是 output_tokens 而非 completion_tokens
+    "input_tokens": 20
+  },
+  "request_id": "xxx"
+}</code></pre>
+
+        <div class="callout warning">
+            <div class="callout-title">⚠️ 兼容模式 vs 原生模式</div>
+            建议使用阿里 DashScope 的<strong>OpenAI 兼容模式</strong>（<code>/compatible-mode/v1/chat/completions</code>），
+            该模式下请求/响应格式与 OpenAI 基本一致。<br>
+            原生模式仅当需要 <code>enable_search</code> 等独有特性时才使用。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 6. 四家厂商差异总览 -->
+        <!-- ================================================================ -->
+        <h2 id="s6">6. 四家厂商差异总览</h2>
+
+        <table>
+            <tr>
+                <th>维度</th>
+                <th>OpenAI</th>
+                <th>Anthropic</th>
+                <th>DeepSeek</th>
+                <th>阿里 DashScope</th>
+            </tr>
+            <tr>
+                <td>协议兼容性</td>
+                <td><span class="badge blue">标准</span></td>
+                <td><span class="badge red">完全独立</span></td>
+                <td><span class="badge green">100% 兼容 OpenAI</span></td>
+                <td><span class="badge yellow">兼容模式可用</span></td>
+            </tr>
+            <tr>
+                <td>API 端点</td>
+                <td><code>/v1/chat/completions</code></td>
+                <td><code>/v1/messages</code></td>
+                <td><code>/v1/chat/completions</code></td>
+                <td><code>/compatible-mode/v1/chat/completions</code></td>
+            </tr>
+            <tr>
+                <td>System Prompt</td>
+                <td>messages[0] role:system</td>
+                <td><strong>顶层 system 字段</strong></td>
+                <td>同 OpenAI</td>
+                <td>同 OpenAI</td>
+            </tr>
+            <tr>
+                <td>工具 Schema</td>
+                <td><code>function.parameters</code></td>
+                <td><strong><code>input_schema</code></strong></td>
+                <td>同 OpenAI</td>
+                <td>同 OpenAI</td>
+            </tr>
+            <tr>
+                <td>max_tokens</td>
+                <td>可选</td>
+                <td><strong>必填</strong></td>
+                <td>可选</td>
+                <td>可选</td>
+            </tr>
+            <tr>
+                <td>流式格式</td>
+                <td>单层 <code>data:</code></td>
+                <td><strong>双层 <code>event:</code> + <code>data:</code></strong></td>
+                <td>同 OpenAI</td>
+                <td>类似 OpenAI，略有差异</td>
+            </tr>
+            <tr>
+                <td>Tool Use 流式</td>
+                <td><code>delta.tool_calls[].function.arguments</code></td>
+                <td><strong><code>delta.partial_json</code></strong></td>
+                <td>同 OpenAI</td>
+                <td>同 OpenAI</td>
+            </tr>
+            <tr>
+                <td>独有特性</td>
+                <td>response_format (JSON Schema) / logprobs</td>
+                <td>top_k / extended thinking</td>
+                <td><strong>reasoning_content</strong></td>
+                <td>enable_search / repetition_penalty</td>
+            </tr>
+            <tr>
+                <td>本项目优先级</td>
+                <td><span class="badge green">✅ 已实现</span></td>
+                <td><span class="badge blue">🔮 Phase 6</span></td>
+                <td><span class="badge blue">🔮 Phase 3-4</span></td>
+                <td><span class="badge blue">🔮 Phase 5-6</span></td>
+            </tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 7. Provider 接口抽象设计建议 -->
+        <!-- ================================================================ -->
+        <h2 id="s7">7. Provider 接口抽象设计建议</h2>
+
+        <p>为支持多厂商 LLM，需要从当前硬编码的 OpenAI-compatible 客户端中抽取一层 <code>Provider</code> 接口。
+        以下为建议的架构设计：</p>
+
+        <h3>7.1 目标目录结构</h3>
+        <pre><code>internal/llm/
+├── client.go          # 当前: OpenAI-compatible 通用客户端 (保留)
+├── provider.go        # 新增: Provider 接口 + 工厂函数
+├── openai_provider.go  # 新增: OpenAI provider (基线实现)
+├── anthropic_provider.go  # 新增: Anthropic provider (Phase 6)
+└── deepseek_provider.go   # 新增: DeepSeek provider (reasoning_content 扩展)</code></pre>
+
+        <h3>7.2 Provider 接口设计</h3>
+        <pre><code>// Provider 抽象不同 LLM 厂商的 API 差异，将通用请求转换为厂商特定格式。
+// 接口设计遵循"统一输入、统一输出"原则：
+//   - ChatRequest / StreamDelta 是项目内部的统一类型
+//   - 每个 Provider 负责将其与厂商 API 格式互转
+type Provider interface {
+    // Name 返回厂商名称，如 "openai"、"anthropic"、"deepseek"
+    Name() string
+
+    // Endpoint 返回 API 基础地址
+    Endpoint() string
+
+    // BuildRequest 将统一请求转为厂商特定的 HTTP body
+    BuildRequest(req *ChatRequest) ([]byte, error)
+
+    // ParseStreamChunk 解析一行 SSE 数据，返回统一格式的 StreamDelta
+    // 不同厂商的 SSE 格式差异在此方法中处理
+    ParseStreamChunk(line []byte) (*StreamDelta, error)
+
+    // BuildHeaders 返回厂商特定的 HTTP 请求头
+    BuildHeaders() map[string]string
+}
+
+// StreamDelta 是项目内部的统一流式增量格式
+type StreamDelta struct {
+    Content          string     // 文本增量
+    ToolCalls        []ToolCallDelta  // 工具调用增量
+    FinishReason     string     // 停止原因
+    ReasoningContent string     // 思维链内容 (DeepSeek R1 等)
+    Usage            *Usage     // token 使用量
+}
+
+// ToolCallDelta 是工具调用的增量格式
+type ToolCallDelta struct {
+    Index     int
+    ID        string
+    Name      string
+    Arguments string  // 增量 JSON 片段
+}</code></pre>
+
+        <h3>7.3 工厂函数</h3>
+        <pre><code>// NewProvider 根据厂商名称创建对应的 Provider 实例
+func NewProvider(name string, cfg *ProviderConfig) (Provider, error) {
+    switch name {
+    case "openai":
+        return NewOpenAIProvider(cfg)
+    case "anthropic":
+        return NewAnthropicProvider(cfg)
+    case "deepseek":
+        return NewDeepSeekProvider(cfg)
+    default:
+        // 默认回退到 OpenAI-compatible
+        return NewOpenAIProvider(cfg)
+    }
+}</code></pre>
+
+        <h3>7.4 设计原则</h3>
+        <ol>
+            <li><strong>统一输入输出</strong>：Engine 层只与 <code>ChatRequest</code> / <code>StreamDelta</code> 交互，不感知厂商差异</li>
+            <li><strong>每厂商一个 Provider</strong>：每个 Provider 文件负责一个厂商的协议转换</li>
+            <li><strong>默认回退</strong>：未知厂商自动走 OpenAI-compatible 路径</li>
+            <li><strong>向后兼容</strong>：现有的 <code>Client</code> 结构体在迁移期间保持不变</li>
+            <li><strong>可扩展字段</strong>：<code>StreamDelta</code> 预留 <code>ReasoningContent</code> 等扩展字段</li>
+        </ol>
+
+        <!-- ================================================================ -->
+        <!-- 8. 实施计划 -->
+        <!-- ================================================================ -->
+        <h2 id="s8">8. 实施计划</h2>
+
+        <table>
+            <tr><th>阶段</th><th>内容</th><th>优先级</th></tr>
+            <tr>
+                <td><strong>Phase 2-3</strong></td>
+                <td>
+                    保持现有 OpenAI-compatible 客户端不动<br>
+                    <span class="muted">理由：DeepSeek、阿里百炼、智谱、月之暗面等国产模型全兼容此格式</span>
+                </td>
+                <td><span class="badge gray">无需改动</span></td>
+            </tr>
+            <tr>
+                <td><strong>Phase 3-4</strong></td>
+                <td>
+                    扩展 <code>Delta</code> 结构体，增加 <code>ReasoningContent</code> 字段<br>
+                    <span class="muted">理由：DeepSeek R1 / Qwen3 等推理模型的思维链展示</span>
+                </td>
+                <td><span class="badge yellow">低</span></td>
+            </tr>
+            <tr>
+                <td><strong>Phase 5</strong></td>
+                <td>
+                    抽取 <code>Provider</code> 接口，创建 <code>openai_provider.go</code><br>
+                    <span class="muted">理由：为 Runtime Tool 注册等功能提供更灵活的 LLM 配置</span>
+                </td>
+                <td><span class="badge yellow">中</span></td>
+            </tr>
+            <tr>
+                <td><strong>Phase 6</strong></td>
+                <td>
+                    实现 <code>AnthropicProvider</code> + <code>DeepSeekProvider</code><br>
+                    <span class="muted">理由：作为高级特性，支持多厂商 LLM 切换</span>
+                </td>
+                <td><span class="badge blue">高</span></td>
+            </tr>
+            <tr>
+                <td><strong>Phase 6</strong></td>
+                <td>
+                    实现 Embeddings API（RAG 向量检索）<br>
+                    <span class="muted">理由：向量检索是 RAG 的基础</span>
+                </td>
+                <td><span class="badge blue">高</span></td>
+            </tr>
+        </table>
+
+        <div class="callout info">
+            <div class="callout-title">💡 为什么不现在就做 Provider 抽象？</div>
+            <p>当前阶段（Phase 2-3）的核心任务是<strong>前端可视化</strong>和<strong>预设 Cases</strong>，
+            国产模型几乎全部兼容 OpenAI 协议，增加 Anthropic 支持属于<strong>过早抽象</strong>。</p>
+            <p>等到 Phase 5-6 需要 Runtime 注册、RAG 等高级特性时，再引入 Provider 接口层，
+            届时对 LLM 领域的理解更深，接口设计会更成熟。</p>
+        </div>
+
+        <div class="footer">
+            Multi-Agent Platform Documentation &copy; 2026 |
+            LLM API 厂商对比参考文档 |
+            Last updated: 2026-07-03
+        </div>
+
+    </main>
+</div>
+</body>
+</html>

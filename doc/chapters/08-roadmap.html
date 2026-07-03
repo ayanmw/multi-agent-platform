@@ -36,7 +36,13 @@
             <a href="07-features.html">功能模块</a>
             <a href="08-roadmap.html" class="active">路线图</a>
         </nav>
-        <div class="section-label">附录</div><nav><a href="99-glossary.html">术语表</a></nav>
+        <div class="section-label">参考</div>
+        <nav>
+            <a href="09-llm-api-comparison.html">LLM API 厂商对比</a>
+            <a href="10-multi-model-layered-design.html">多模型分层设计</a>
+            <a href="11-harness-memory-design.html">Harness 与自进化记忆</a>
+            <a href="99-glossary.html">术语表</a>
+        </nav>
     </aside>
     <main class="main">
         <h1>8. 路线图</h1>
@@ -60,22 +66,25 @@
             </div>
 
             <!-- Phase 1 -->
-            <div class="phase-card in-progress">
-                <h3>Phase 1: Agent Loop 核心引擎 <span class="tag wip">🔜 即将开始</span></h3>
+            <div class="phase-card completed">
+                <h3>Phase 1: Agent Loop 核心引擎 <span class="tag done">✅ 完成</span></h3>
+                <p style="font-size:13px; color:#666;">2026-07-03</p>
                 <ul>
                     <li>OpenAI-compatible LLM Client（内部 API + SSE streaming）</li>
                     <li>3 个内置工具实现（run_shell, write_file, read_file）</li>
                     <li>ReAct Loop 引擎（think → tool_call → observe → loop）</li>
                     <li>Step 状态机 + 事件发送</li>
                     <li>Agent 配置加载（SQLite → LLM 绑定）</li>
-                    <li>Vue 3 Vite 迁移 + TypeScript</li>
+                    <li>DB 持久化 + Agent CRUD API + Task 历史查询</li>
+                    <li>安全加固 + 白盒注释铁律</li>
                 </ul>
             </div>
 
             <!-- Phase 2 -->
-            <div class="phase-card planned">
-                <h3>Phase 2: 前端可视化 <span class="tag future">计划</span></h3>
+            <div class="phase-card in-progress">
+                <h3>Phase 2: 前端可视化 <span class="tag wip">🔜 当前</span></h3>
                 <ul>
+                    <li>Vue 3 Vite 迁移 + TypeScript</li>
                     <li>AgentTree 组件（递归树 + 实时更新）</li>
                     <li>TypeWriter 组件（LLMDelta 流式渲染）</li>
                     <li>Markdown 实时渲染 + 语法高亮</li>
@@ -86,44 +95,69 @@
 
             <!-- Phase 3 -->
             <div class="phase-card planned">
-                <h3>Phase 3: 预设 Cases + 配置页面 <span class="tag future">计划</span></h3>
+                <h3>Phase 3: 预设 Cases + 配置页面 + Harness 基础 <span class="tag future">计划</span></h3>
                 <ul>
-                    <li>5 个预设 Task Cases（代码生成、研究、多Agent、对话、干预）</li>
+                    <li>5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）</li>
                     <li>CaseCard UI 组件 + 一键执行</li>
                     <li>Agent 配置 CRUD 页面</li>
                     <li>任务历史侧边栏（SQLite 回放）</li>
+                    <li><strong>Harness:</strong> TaskContract 定义 + Progress 文件管理</li>
+                    <li><strong>Harness:</strong> FileScopeRule + PathTraversalRule（路径安全）</li>
+                    <li><strong>Harness:</strong> AcceptanceCriteria 基础实现</li>
+                    <li><strong>Memory:</strong> Task 完成时自动生成摘要（轻量模型）</li>
                 </ul>
             </div>
 
             <!-- Phase 4 -->
             <div class="phase-card planned">
-                <h3>Phase 4: 多 Agent 并发 <span class="tag future">计划</span></h3>
+                <h3>Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 <span class="tag future">计划</span></h3>
                 <ul>
-                    <li>多 Agent Task 分派（并行执行）</li>
-                    <li>前端多树渲染（并排或选项卡）</li>
+                    <li>多 Agent Task 分派（goroutine 并行）</li>
+                    <li>前端多树渲染（并排或选项卡，颜色区分）</li>
                     <li>Agent 间通信协议</li>
+                    <li><strong>ModelProfile</strong> 类型 + ModelRegistry 注册表</li>
+                    <li>Agent 模型绑定（不同 Agent 可选不同模型）</li>
+                    <li><strong>Harness:</strong> PolicyChain 完整实现（PolicyGate + 内置规则链）</li>
+                    <li><strong>Harness:</strong> Checkpoint / Recovery（任务可恢复性）</li>
+                    <li><strong>Harness:</strong> TokenBudgetRule + ToolWhitelistRule</li>
+                    <li><strong>Memory:</strong> <code>memories</code> 表 + <code>memory_links</code> 表 Schema</li>
+                    <li><strong>Memory:</strong> Heartbeat 后台整理器（定时触发抽取管线）</li>
+                    <li><strong>Memory:</strong> Candidate → Semantic 晋升管线（三条晋升通道）</li>
                 </ul>
             </div>
 
             <!-- Phase 5 -->
             <div class="phase-card planned">
-                <h3>Phase 5: 运行时注册 + 扩展 <span class="tag future">计划</span></h3>
+                <h3>Phase 5: 运行时注册 + Provider + Router + 记忆召回 <span class="tag future">计划</span></h3>
                 <ul>
                     <li>运行时 Tool 注册 REST API</li>
                     <li>AI 自描述工具注册</li>
                     <li>Docker 沙箱（run_shell 安全隔离）</li>
+                    <li><strong>LLM Provider 接口抽象</strong> + OpenAIProvider 基线</li>
+                    <li><strong>Router 路由决策</strong>（意图分类 + 模型选择）</li>
+                    <li><strong>Harness:</strong> ApprovalRule（高风险操作前端确认）</li>
+                    <li><strong>Harness:</strong> DangerousCommandRule（Shell 命令危险模式检测）</li>
+                    <li><strong>Memory:</strong> MemoryRecall 召回 + Working Memory 构建</li>
+                    <li><strong>Memory:</strong> 记忆冲突检测 + 合并</li>
                 </ul>
             </div>
 
             <!-- Phase 6 -->
             <div class="phase-card planned">
-                <h3>Phase 6: 高级特性 <span class="tag future">远期</span></h3>
+                <h3>Phase 6: 高级特性 + 多厂商 + 成本控制 + 记忆治理 <span class="tag future">远期</span></h3>
                 <ul>
                     <li>RAG 向量检索（Embedding + 向量数据库）</li>
                     <li>用户认证 / 多租户</li>
                     <li>gRPC 协议迁移</li>
                     <li>可观测性（OpenTelemetry + Prometheus）</li>
                     <li>Prompt Template 引擎</li>
+                    <li><strong>多厂商 Provider</strong>（Anthropic + DeepSeek reasoning）</li>
+                    <li><strong>Worker Pool</strong> 并发调度 + CostTracker 成本追踪</li>
+                    <li><strong>降级策略</strong>（Opus→Sonnet→DeepSeek→本地）</li>
+                    <li><strong>Harness:</strong> Eval 回归闭环（失败 Trace → 回归测试集）</li>
+                    <li><strong>Harness:</strong> 完整治理与审计（身份 + 审批 + 成本）</li>
+                    <li><strong>Memory:</strong> 向量检索增强（LanceDB / ChromaDB）</li>
+                    <li><strong>Memory:</strong> 遗忘曲线 + 冷存储 + 记忆审查 Agent</li>
                 </ul>
             </div>
         </div>

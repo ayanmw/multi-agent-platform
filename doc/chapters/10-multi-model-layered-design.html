@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多模型分层设计 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+    <style>
+        /* 分层图例 */
+        .tier-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+        .tier-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 4px; }
+        .tier-premium { background: #e74c3c; }
+        .tier-standard { background: #e67e22; }
+        .tier-mid { background: #f1c40f; }
+        .tier-light { background: #2ecc71; }
+        .tier-efficient { background: #9b59b6; }
+        .tier-free { background: #95a5a6; }
+        /* 架构图 */
+        .arch-diagram {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            padding: 24px 28px;
+            border-radius: 8px;
+            font-family: 'Fira Code', Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.8;
+            margin: 16px 0;
+            overflow-x: auto;
+        }
+        .arch-diagram .router { color: #2ecc71; }
+        .arch-diagram .planner { color: #e74c3c; }
+        .arch-diagram .worker { color: #e67e22; }
+        .arch-diagram .validator { color: #9b59b6; }
+        .arch-diagram .arrow { color: #888; }
+        /* 成本标签 */
+        .cost-high { color: #e74c3c; font-weight: 600; }
+        .cost-mid { color: #e67e22; font-weight: 600; }
+        .cost-low { color: #2ecc71; font-weight: 600; }
+        /* 代码块 */
+        .go-keyword { color: #c678dd; }
+        .go-type { color: #e5c07b; }
+        .go-string { color: #98c379; }
+        .go-comment { color: #5c6370; font-style: italic; }
+    </style>
+</head>
+<body>
+<div class="layout">
+
+    <!-- ============================== SIDEBAR ============================== -->
+    <aside class="sidebar">
+        <div class="logo">
+            <h2>Multi-Agent Platform</h2>
+            <span>Product Documentation v0.2</span>
+        </div>
+
+        <div class="section-label">概览</div>
+        <nav>
+            <a href="../index.html">首页</a>
+        </nav>
+
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+
+        <div class="section-label">参考</div>
+        <nav>
+            <a href="09-llm-api-comparison.html">LLM API 厂商对比</a>
+            <a href="10-multi-model-layered-design.html" class="active">多模型分层设计</a>
+            <a href="99-glossary.html">术语表</a>
+        </nav>
+    </aside>
+
+    <!-- ============================== MAIN CONTENT ========================== -->
+    <main class="main">
+
+        <h1>多模型分层设计
+            <span class="version">设计文档</span>
+        </h1>
+        <p class="subtitle">
+            多 Agent 场景下的模型分层策略、Router + Worker Pool 架构设计、成本优化方案<br>
+            适用于 Phase 4-6 的多 Agent 并发与模型管理
+        </p>
+
+        <div class="callout info">
+            <div class="callout-title">📋 文档目的</div>
+            本文档定义多 Agent 系统中<strong>模型分层策略</strong>和<strong>路由调度架构</strong>。
+            核心目标：在保证 Agent 能力的前提下，通过分层模型选择将 API 调用成本控制在合理范围。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- TOC -->
+        <!-- ================================================================ -->
+        <div class="toc">
+            <h3>📑 目录</h3>
+            <ul>
+                <li><a href="#s1">1. 模型分层概览</a></li>
+                <li><a href="#s2">2. 多 Agent 架构示意</a></li>
+                <li><a href="#s3">3. 成本优化分析</a></li>
+                <li><a href="#s4">4. 缺失维度补充</a></li>
+                <li><a href="#s5">5. ModelProfile 抽象设计</a></li>
+                <li><a href="#s6">6. Router 路由设计</a></li>
+                <li><a href="#s7">7. Worker Pool 设计</a></li>
+                <li><a href="#s8">8. 集成路径与代码演进</a></li>
+                <li><a href="#s9">9. 实施优先级</a></li>
+            </ul>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 1. 模型分层概览 -->
+        <!-- ================================================================ -->
+        <h2 id="s1">1. 模型分层概览</h2>
+
+        <p>多 Agent 系统中，不同 Agent 的任务复杂度差异巨大——从简单的意图分类到复杂的多步推理。
+        单一模型无法同时满足<strong>成本控制</strong>和<strong>能力上限</strong>两个维度。
+        因此引入 6 层模型分层：</p>
+
+        <div class="tier-legend">
+            <span><span class="tier-dot tier-premium"></span> 🔴 顶层 — 复杂推理/编排决策</span>
+            <span><span class="tier-dot tier-standard"></span> 🟠 高层 — 主力 Agent 执行</span>
+            <span><span class="tier-dot tier-mid"></span> 🟡 中层 — 并行 Agent / 代码生成</span>
+            <span><span class="tier-dot tier-light"></span> 🟢 轻量 — 快速分类/路由</span>
+            <span><span class="tier-dot tier-efficient"></span> 🟣 高效 — 大量吞吐/低成本</span>
+            <span><span class="tier-dot tier-free"></span> ⚫ 免费 — 测试/冷备/本地开发</span>
+        </div>
+
+        <table>
+            <tr>
+                <th>层</th>
+                <th>代表模型</th>
+                <th>输入价格</th>
+                <th>输出价格</th>
+                <th>定位</th>
+                <th>典型场景</th>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-premium"></span> 顶层</td>
+                <td>Claude Opus 4.5/4.6</td>
+                <td class="cost-high">$5/M</td>
+                <td class="cost-high">$25/M</td>
+                <td>复杂推理 / 编排决策</td>
+                <td>多步任务规划、自反思修正、复杂代码架构设计</td>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-standard"></span> 高层</td>
+                <td>Sonnet 4.5/4.6</td>
+                <td class="cost-mid">$3/M</td>
+                <td class="cost-mid">$15/M</td>
+                <td>主力 Agent 执行</td>
+                <td>通用任务执行、Tool Calling、代码生成</td>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-mid"></span> 中层</td>
+                <td>GPT-5.4 · Gemini 3.1 Pro · GPT-5.3-Codex</td>
+                <td class="cost-mid">$1.75-2.5/M</td>
+                <td class="cost-mid">$12-15/M</td>
+                <td>并行 Agent / 代码生成</td>
+                <td>批量代码生成、长上下文 RAG、多 Agent 并行执行</td>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-light"></span> 轻量</td>
+                <td>Claude Haiku 4.5</td>
+                <td class="cost-low">$1/M</td>
+                <td class="cost-low">$5/M</td>
+                <td>快速分类 / 路由</td>
+                <td>意图识别、请求分类、简单问答、格式转换</td>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-efficient"></span> 高效</td>
+                <td>DeepSeek V4-Flash/Pro</td>
+                <td class="cost-low">$0.14-1.71/M</td>
+                <td class="cost-low">$0.29-3.43/M</td>
+                <td>大量吞吐 / 低成本</td>
+                <td>批量分析、结果校验、数据清洗、简单代码生成</td>
+            </tr>
+            <tr>
+                <td><span class="tier-dot tier-free"></span> 免费</td>
+                <td>DeepSeek-V4-Flash-Local · Qwen-397B · GLM · Kimi</td>
+                <td class="cost-low">Free</td>
+                <td class="cost-low">Free</td>
+                <td>测试 / 冷备 / 本地开发</td>
+                <td>本地调试、单元测试、CI/CD 流水线、灾难降级</td>
+            </tr>
+        </table>
+
+        <div class="callout info">
+            <div class="callout-title">💡 当前项目状态</div>
+            当前（Phase 1-2）使用内部 API 的 <code>deepseek-v4-flash</code>（高效层），
+            成本极低。后续接入外部模型时，按此分层逐步引入。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 2. 多 Agent 架构示意 -->
+        <!-- ================================================================ -->
+        <h2 id="s2">2. 多 Agent 架构示意</h2>
+
+        <div class="arch-diagram">
+<span class="arrow">User Request</span>
+     │
+     ▼
+┌─────────────────────────────────────────────┐
+│  <span class="router">Router</span> (Haiku $1/$5 或 DeepSeek-Flash $0.14)  │
+│  ── 意图识别 + 复杂度评估 + 模型选择         │
+└────────┬──────────────────┬─────────────────┘
+         │                  │
+    <span class="arrow">简单请求</span>            <span class="arrow">复杂请求</span>
+         │                  │
+         ▼                  ▼
+┌─────────────────┐  ┌──────────────────────────┐
+│  <span class="validator">Worker</span>           │  <span class="planner">Planner</span> (Opus $5/$25)    │
+│  DeepSeek-Flash  │  │  ── 任务分解 + 子任务编排 │
+│  $0.14/M         │  └────────┬─────────────────┘
+│  ── 直接执行     │           │
+└─────────────────┘           ▼
+                    ┌──────────────────────────┐
+                    │  <span class="worker">Worker Pool</span>              │
+                    │  ├─ Sonnet $3    通用主力 │
+                    │  ├─ Codex $1.75  代码专用 │
+                    │  └─ Gemini $2    长上下文 │
+                    └────────┬─────────────────┘
+                             │
+                             ▼
+                    ┌──────────────────────────┐
+                    │  <span class="validator">Validator</span> (DeepSeek-Flash) │
+                    │  $0.14/M — 廉价互检      │
+                    │  ── 结果校验 + 安全检查   │
+                    └────────┬─────────────────┘
+                             │
+                             ▼
+                    <span class="arrow">Final Output</span>
+        </div>
+
+        <h3>2.1 各组件职责</h3>
+        <table>
+            <tr><th>组件</th><th>模型</th><th>职责</th><th>延迟要求</th></tr>
+            <tr>
+                <td><strong>Router</strong></td>
+                <td>Haiku / DeepSeek-Flash</td>
+                <td>意图识别、复杂度评估、请求分类、模型选择</td>
+                <td>< 500ms</td>
+            </tr>
+            <tr>
+                <td><strong>Planner</strong></td>
+                <td>Opus</td>
+                <td>复杂任务分解、子任务编排、依赖关系管理</td>
+                <td>可容忍 5-10s</td>
+            </tr>
+            <tr>
+                <td><strong>Worker</strong></td>
+                <td>Sonnet / Codex / Gemini</td>
+                <td>执行具体子任务：代码生成、工具调用、分析推理</td>
+                <td>1-5s</td>
+            </tr>
+            <tr>
+                <td><strong>Validator</strong></td>
+                <td>DeepSeek-Flash</td>
+                <td>结果校验、安全检查、输出格式化</td>
+                <td>< 1s</td>
+            </tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 3. 成本优化分析 -->
+        <!-- ================================================================ -->
+        <h2 id="s3">3. 成本优化分析</h2>
+
+        <h3>3.1 优化公式</h3>
+        <table>
+            <tr><th>策略</th><th>机制</th><th>预估节省</th></tr>
+            <tr>
+                <td><strong>分层路由</strong></td>
+                <td>简单请求走 Haiku/Flash，复杂请求才走 Sonnet/Opus</td>
+                <td class="cost-low">省 70-80%</td>
+            </tr>
+            <tr>
+                <td><strong>批量 Flash</strong></td>
+                <td>大量分析任务全走 DeepSeek-Flash</td>
+                <td class="cost-low">省 95%+</td>
+            </tr>
+            <tr>
+                <td><strong>本地开发</strong></td>
+                <td>调试阶段用免费本地模型</td>
+                <td class="cost-low">省 100%</td>
+            </tr>
+            <tr>
+                <td><strong>廉价互检</strong></td>
+                <td>Validator 用 Flash 而非 Sonnet</td>
+                <td class="cost-low">省 90%+</td>
+            </tr>
+        </table>
+
+        <h3>3.2 成本计算示例</h3>
+        <p>假设一天 1000 次请求，其中 70% 简单、30% 复杂：</p>
+
+        <div class="arch-diagram">
+<span class="go-comment">// 方案 A: 全用 Sonnet（无分层）</span>
+1000 × ~2000 tokens × $3/M input + 1000 × ~500 tokens × $15/M output
+= $6.00 + $7.50 = <span class="cost-high">$13.50/天</span>
+
+<span class="go-comment">// 方案 B: 分层路由</span>
+Router:  1000 × ~100 tokens × $1/M = $0.10
+简单:    700 × ~2000 tokens × $0.14/M + 700 × ~500 × $0.29/M = $0.20 + $0.10 = $0.30
+复杂:    300 × ~2000 tokens × $3/M + 300 × ~500 × $15/M = $1.80 + $2.25 = $4.05
+Validator: 300 × ~500 tokens × $0.14/M = $0.02
+总计: $0.10 + $0.30 + $4.05 + $0.02 = <span class="cost-low">$4.47/天</span>
+
+<span class="go-comment">// 节省: ($13.50 - $4.47) / $13.50 = 67%</span>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 4. 缺失维度补充 -->
+        <!-- ================================================================ -->
+        <h2 id="s4">4. 缺失维度补充</h2>
+
+        <div class="callout warning">
+            <div class="callout-title">⚠️ 基础分层设计缺少以下关键维度</div>
+            仅有模型价格和定位是不够的。实际工程中还需要考虑能力矩阵、降级策略、上下文窗口、延迟约束。
+        </div>
+
+        <h3>4.1 能力矩阵</h3>
+        <p>不是所有模型都支持所有能力。Router 必须根据 <strong>任务所需能力</strong> 筛选可用模型：</p>
+        <table>
+            <tr><th>模型</th><th>Tool Calling</th><th>Streaming</th><th>Vision</th><th>Reasoning</th><th>JSON Mode</th></tr>
+            <tr>
+                <td>Claude Opus 4.5</td>
+                <td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td>
+            </tr>
+            <tr>
+                <td>Claude Sonnet 4.5</td>
+                <td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td>
+            </tr>
+            <tr>
+                <td>Claude Haiku 4.5</td>
+                <td>✅</td><td>✅</td><td>✅</td><td>⚠️ 有限</td><td>✅</td>
+            </tr>
+            <tr>
+                <td>DeepSeek V4-Flash</td>
+                <td>✅</td><td>✅</td><td>❌</td><td>⚠️ 有限</td><td>✅</td>
+            </tr>
+            <tr>
+                <td>DeepSeek R1</td>
+                <td>⚠️ 部分</td><td>✅</td><td>❌</td><td>✅ 强</td><td>✅</td>
+            </tr>
+            <tr>
+                <td>GPT-5.3-Codex</td>
+                <td>✅</td><td>✅</td><td>❌</td><td>⚠️ 有限</td><td>✅</td>
+            </tr>
+        </table>
+
+        <h3>4.2 降级策略</h3>
+        <p>每个模型层必须有 fallback，API 不可用是常态：</p>
+        <table>
+            <tr><th>主模型</th><th>降级模型</th><th>降级条件</th></tr>
+            <tr><td>Opus 4.5</td><td>→ Sonnet 4.5</td><td>API 超时 / 限流 / 余额不足</td></tr>
+            <tr><td>Sonnet 4.5</td><td>→ DeepSeek Pro</td><td>API 超时 / 限流</td></tr>
+            <tr><td>Haiku 4.5</td><td>→ DeepSeek Flash</td><td>API 超时 / 限流</td></tr>
+            <tr><td>DeepSeek Flash</td><td>→ 本地免费模型</td><td>API 超时 / 限流</td></tr>
+            <tr><td>所有云端模型</td><td>→ 本地 Qwen/GLM</td><td>网络中断 / 全局故障</td></tr>
+        </table>
+
+        <h3>4.3 上下文窗口约束</h3>
+        <p>Router 必须根据输入长度排除不合适的模型：</p>
+        <table>
+            <tr><th>模型</th><th>Context Window</th><th>适用场景</th></tr>
+            <tr><td>Claude Opus 4.5</td><td>200K</td><td>超长文档分析、全仓库代码审查</td></tr>
+            <tr><td>Claude Sonnet 4.5</td><td>200K</td><td>长文档分析、多文件代码生成</td></tr>
+            <tr><td>Gemini 3.1 Pro</td><td>1M</td><td>超长上下文 RAG、全量代码库分析</td></tr>
+            <tr><td>DeepSeek V4</td><td>128K</td><td>常规对话、中等长度任务</td></tr>
+            <tr><td>Claude Haiku 4.5</td><td>200K</td><td>快速分类、简单问答</td></tr>
+        </table>
+
+        <h3>4.4 延迟约束</h3>
+        <table>
+            <tr><th>场景</th><th>延迟要求</th><th>推荐模型</th></tr>
+            <tr><td>实时对话</td><td>< 2s</td><td>Haiku / DeepSeek Flash</td></tr>
+            <tr><td>交互式编码</td><td>< 5s</td><td>Sonnet</td></tr>
+            <tr><td>复杂推理</td><td>可容忍 10-30s</td><td>Opus / DeepSeek R1</td></tr>
+            <tr><td>批量分析</td><td>无实时要求</td><td>DeepSeek Flash（并行）</td></tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 5. ModelProfile 抽象设计 -->
+        <!-- ================================================================ -->
+        <h2 id="s5">5. ModelProfile 抽象设计</h2>
+
+        <p><code>ModelProfile</code> 是模型分层的核心数据结构，描述一个模型的完整画像——能力、成本、限制、降级路径。</p>
+
+        <pre><code><span class="go-comment">// ModelProfile 描述一个模型的完整画像</span>
+<span class="go-comment">// 用于 Router 做模型选择决策和 Worker Pool 做能力匹配</span>
+<span class="go-keyword">type</span> ModelProfile <span class="go-keyword">struct</span> {
+    <span class="go-comment">// 基础标识</span>
+    Name     <span class="go-type">string</span>    <span class="go-comment">// "deepseek-v4-flash"</span>
+    Provider <span class="go-type">string</span>    <span class="go-comment">// "deepseek" / "openai" / "anthropic"</span>
+    Tier     ModelTier  <span class="go-comment">// 分层标识</span>
+
+    <span class="go-comment">// 能力矩阵</span>
+    Capabilities []ModelCapability <span class="go-comment">// tools / vision / reasoning / streaming / json_mode</span>
+
+    <span class="go-comment">// 成本 (per 1M tokens, USD)</span>
+    InputPrice  <span class="go-type">float64</span>
+    OutputPrice <span class="go-type">float64</span>
+
+    <span class="go-comment">// 上下文限制</span>
+    MaxContextWindow <span class="go-type">int</span>  <span class="go-comment">// 最大上下文 token 数</span>
+    MaxOutputTokens  <span class="go-type">int</span>  <span class="go-comment">// 最大输出 token 数</span>
+
+    <span class="go-comment">// 速率限制</span>
+    RateLimitRPM <span class="go-type">int</span>  <span class="go-comment">// 每分钟最大请求数</span>
+
+    <span class="go-comment">// 降级路径</span>
+    FallbackModel <span class="go-type">string</span>  <span class="go-comment">// 当前模型不可用时的替代模型名</span>
+
+    <span class="go-comment">// 延迟特征</span>
+    AvgLatencyMs <span class="go-type">int</span>  <span class="go-comment">// 平均响应延迟</span>
+}
+
+<span class="go-keyword">type</span> ModelTier <span class="go-keyword">int</span>
+<span class="go-keyword">const</span> (
+    TierFree       ModelTier = <span class="go-keyword">iota</span>  <span class="go-comment">// ⚫ 免费/本地</span>
+    TierEfficient                        <span class="go-comment">// 🟣 低成本高吞吐</span>
+    TierLightweight                      <span class="go-comment">// 🟢 快速分类路由</span>
+    TierStandard                         <span class="go-comment">// 🟠 主力执行</span>
+    TierPremium                          <span class="go-comment">// 🔴 复杂推理</span>
+)
+
+<span class="go-keyword">type</span> ModelCapability <span class="go-keyword">string</span>
+<span class="go-keyword">const</span> (
+    CapToolCalling ModelCapability = <span class="go-string">"tool_calling"</span>
+    CapStreaming   ModelCapability = <span class="go-string">"streaming"</span>
+    CapVision      ModelCapability = <span class="go-string">"vision"</span>
+    CapReasoning   ModelCapability = <span class="go-string">"reasoning"</span>  <span class="go-comment">// 深度推理/思维链</span>
+    CapJSONMode    ModelCapability = <span class="go-string">"json_mode"</span>
+)</code></pre>
+
+        <h3>5.1 ModelRegistry — 全局模型注册表</h3>
+        <pre><code><span class="go-comment">// ModelRegistry 管理所有可用模型的 Profile</span>
+<span class="go-comment">// 从配置文件或数据库加载，支持运行时动态更新</span>
+<span class="go-keyword">type</span> ModelRegistry <span class="go-keyword">struct</span> {
+    profiles  <span class="go-keyword">map</span>[<span class="go-type">string</span>]*ModelProfile  <span class="go-comment">// name → profile</span>
+    byTier    <span class="go-keyword">map</span>[ModelTier][]<span class="go-type">string</span>    <span class="go-comment">// tier → model names</span>
+    mu        sync.RWMutex
+}
+
+<span class="go-comment">// 常用方法</span>
+<span class="go-keyword">func</span> (r *ModelRegistry) GetByTier(tier ModelTier) []*ModelProfile
+<span class="go-keyword">func</span> (r *ModelRegistry) FilterByCapability(cap ModelCapability) []*ModelProfile
+<span class="go-keyword">func</span> (r *ModelRegistry) FilterByContextLen(minTokens <span class="go-type">int</span>) []*ModelProfile
+<span class="go-keyword">func</span> (r *ModelRegistry) GetFallback(name <span class="go-type">string</span>) *ModelProfile</code></pre>
+
+        <!-- ================================================================ -->
+        <!-- 6. Router 路由设计 -->
+        <!-- ================================================================ -->
+        <h2 id="s6">6. Router 路由设计</h2>
+
+        <p>Router 是<strong>意图识别 + 模型选择</strong>的核心组件。路由决策本身也由 LLM 完成，但使用最廉价的模型。</p>
+
+        <h3>6.1 路由决策流程</h3>
+        <div class="arch-diagram">
+<span class="go-comment">// 路由决策 pipeline</span>
+RouteRequest
+    │
+    ▼
+<span class="go-comment">// Step 1: 规则过滤（零成本，零延迟）</span>
+ContextLen > MaxContextWindow?  → 排除该模型
+需要 Tool Calling 但模型不支持? → 排除该模型
+延迟要求高但模型慢?           → 排除该模型
+    │
+    ▼
+<span class="go-comment">// Step 2: 意图分类（轻量模型，~100 tokens，成本 < $0.001）</span>
+Classifier: <span class="go-string">"Classify this request into: simple_chat | code_gen | complex_reasoning | multi_step"</span>
+    │
+    ▼
+<span class="go-comment">// Step 3: 按意图 + 预算 + 延迟 → 选择最佳模型</span>
+simple_chat        → TierEfficient  (DeepSeek-Flash)
+code_generation    → TierStandard   (Sonnet)
+complex_reasoning  → TierPremium    (Opus)
+multi_step         → TierStandard   (Sonnet) + TierPremium (Planner)
+    │
+    ▼
+RouteDecision { Primary, Fallback, Reason }
+        </div>
+
+        <h3>6.2 Router 接口</h3>
+        <pre><code><span class="go-comment">// Router 根据请求特征选择最优模型</span>
+<span class="go-keyword">type</span> Router <span class="go-keyword">struct</span> {
+    registry   *ModelRegistry
+    classifier *Client  <span class="go-comment">// 用于意图分类的轻量模型 (Haiku/Flash)</span>
+}
+
+<span class="go-comment">// RouteRequest 是路由器的输入</span>
+<span class="go-keyword">type</span> RouteRequest <span class="go-keyword">struct</span> {
+    UserInput   <span class="go-type">string</span>         <span class="go-comment">// 用户原始输入</span>
+    ContextLen  <span class="go-type">int</span>            <span class="go-comment">// 输入 token 数</span>
+    RequiredCaps []ModelCapability <span class="go-comment">// 必需的能力</span>
+    Budget      <span class="go-type">float64</span>        <span class="go-comment">// 可选：成本上限 (USD)</span>
+    LatencyReq  <span class="go-type">time.Duration</span>  <span class="go-comment">// 可选：延迟要求</span>
+}
+
+<span class="go-comment">// RouteDecision 是路由器的输出</span>
+<span class="go-keyword">type</span> RouteDecision <span class="go-keyword">struct</span> {
+    Primary   *ModelProfile  <span class="go-comment">// 首选模型</span>
+    Fallback  *ModelProfile  <span class="go-comment">// 降级模型</span>
+    Reason    <span class="go-type">string</span>         <span class="go-comment">// 路由原因（白盒展示）</span>
+    Tier      ModelTier      <span class="go-comment">// 选中的分层</span>
+}
+
+<span class="go-keyword">func</span> (r *Router) Select(req *RouteRequest) (*RouteDecision, <span class="go-type">error</span>)</code></pre>
+
+        <h3>6.3 意图分类 Prompt</h3>
+        <pre><code><span class="go-keyword">const</span> intentClassifierPrompt = `You are a request classifier. Classify the user's request into exactly one category.
+Respond with ONLY the category name, nothing else.
+
+Categories:
+- simple_chat: 简单问答、闲聊、信息查询、格式转换
+- code_generation: 代码编写、调试、重构、代码审查
+- complex_reasoning: 多步推理、数学问题、逻辑分析、架构设计
+- multi_step: 需要多个工具调用、多阶段执行、Agent 编排
+
+Request: %s
+Category:`</code></pre>
+
+        <!-- ================================================================ -->
+        <!-- 7. Worker Pool 设计 -->
+        <!-- ================================================================ -->
+        <h2 id="s7">7. Worker Pool 设计</h2>
+
+        <p>Worker Pool 管理多 Agent 并发执行，核心职责：<strong>模型分配、并发控制、成本追踪、降级处理</strong>。</p>
+
+        <h3>7.1 接口设计</h3>
+        <pre><code><span class="go-comment">// WorkerPool 管理多 Agent 的并发执行</span>
+<span class="go-keyword">type</span> WorkerPool <span class="go-keyword">struct</span> {
+    router    *Router
+    registry  *ModelRegistry
+    agents    <span class="go-keyword">map</span>[<span class="go-type">string</span>]*AgentRuntime  <span class="go-comment">// agentID → runtime</span>
+    semaphore <span class="go-keyword">chan</span> <span class="go-keyword">struct</span>{}             <span class="go-comment">// 并发槽位</span>
+    tracker   *CostTracker              <span class="go-comment">// 成本追踪</span>
+    mu        sync.RWMutex
+}
+
+<span class="go-comment">// Dispatch 分配任务到合适的 Agent</span>
+<span class="go-keyword">func</span> (p *WorkerPool) Dispatch(task Task) <span class="go-type">error</span> {
+    <span class="go-comment">// 1. Router 选择模型</span>
+    decision := p.router.Select(&RouteRequest{
+        UserInput:   task.UserInput,
+        ContextLen:  estimateTokens(task.Messages),
+        RequiredCaps: requiredCaps(task),
+    })
+
+    <span class="go-comment">// 2. 发送路由决策事件（白盒展示）</span>
+    p.emitEvent(EventRouterDecision{
+        TaskID:   task.ID,
+        Primary:  decision.Primary.Name,
+        Fallback: decision.Fallback.Name,
+        Reason:   decision.Reason,
+    })
+
+    <span class="go-comment">// 3. 获取/创建 Agent 实例</span>
+    agent := p.getOrCreateAgent(task.ID, decision.Primary)
+
+    <span class="go-comment">// 4. 执行 + 监控</span>
+    ctx, cancel := context.WithTimeout(context.Background(), task.Timeout)
+    <span class="go-keyword">defer</span> cancel()
+
+    result, err := agent.Run(ctx, task)
+    <span class="go-keyword">if</span> err != nil {
+        <span class="go-comment">// 5. 降级重试</span>
+        <span class="go-keyword">if</span> decision.Fallback != nil && isRetryable(err) {
+            log.Warn(<span class="go-string">"primary model failed, falling back"</span>,
+                <span class="go-string">"primary"</span>, decision.Primary.Name,
+                <span class="go-string">"fallback"</span>, decision.Fallback.Name,
+                <span class="go-string">"error"</span>, err,
+            )
+            agent = p.getOrCreateAgent(task.ID, decision.Fallback)
+            result, err = agent.Run(ctx, task)
+        }
+    }
+
+    <span class="go-comment">// 6. 记录成本</span>
+    p.tracker.Record(CostRecord{
+        TaskID:   task.ID,
+        Model:    decision.Primary.Name,
+        Tier:     decision.Tier,
+        Tokens:   result.Usage,
+        Cost:     p.calculateCost(decision.Primary, result.Usage),
+    })
+
+    <span class="go-keyword">return</span> err
+}</code></pre>
+
+        <h3>7.2 CostTracker 成本追踪</h3>
+        <pre><code><span class="go-comment">// CostTracker 追踪每个任务和整个系统的 API 调用成本</span>
+<span class="go-keyword">type</span> CostTracker <span class="go-keyword">struct</span> {
+    db *sql.DB
+}
+
+<span class="go-keyword">type</span> CostRecord <span class="go-keyword">struct</span> {
+    TaskID     <span class="go-type">string</span>
+    Model      <span class="go-type">string</span>
+    Tier       ModelTier
+    InputTokens  <span class="go-type">int</span>
+    OutputTokens <span class="go-type">int</span>
+    CostUSD    <span class="go-type">float64</span>
+    Timestamp  <span class="go-type">time.Time</span>
+}
+
+<span class="go-comment">// 输出：按模型/分层/任务维度的成本报告</span>
+<span class="go-keyword">func</span> (t *CostTracker) DailyReport() *CostReport
+<span class="go-keyword">func</span> (t *CostTracker) TaskCost(taskID <span class="go-type">string</span>) <span class="go-type">float64</span>
+<span class="go-keyword">func</span> (t *CostTracker) TierBreakdown() <span class="go-keyword">map</span>[ModelTier]<span class="go-type">float64</span></code></pre>
+
+        <!-- ================================================================ -->
+        <!-- 8. 集成路径与代码演进 -->
+        <!-- ================================================================ -->
+        <h2 id="s8">8. 集成路径与代码演进</h2>
+
+        <h3>8.1 目标目录结构</h3>
+        <pre><code>internal/
+├── llm/
+│   ├── client.go              <span class="go-comment">// 当前：OpenAI-compatible 客户端</span>
+│   ├── provider.go            <span class="go-comment">// Phase 5: Provider 接口</span>
+│   ├── openai_provider.go     <span class="go-comment">// Phase 5: OpenAI/DeepSeek 适配</span>
+│   ├── anthropic_provider.go  <span class="go-comment">// Phase 6: Anthropic 适配</span>
+│   └── model_profile.go       <span class="go-comment">// Phase 4: ModelProfile + ModelRegistry</span>
+│
+├── runtime/
+│   ├── engine.go              <span class="go-comment">// 当前：ReAct Loop（不变）</span>
+│   ├── persistence.go         <span class="go-comment">// 当前：Persistence 接口</span>
+│   ├── router.go              <span class="go-comment">// Phase 5: Router 意图分类 + 模型选择</span>
+│   ├── pool.go                <span class="go-comment">// Phase 6: Worker Pool 并发管理</span>
+│   └── cost_tracker.go        <span class="go-comment">// Phase 6: 成本追踪</span>
+│
+└── config/
+    └── config.go              <span class="go-comment">// 扩展：多模型配置加载</span>
+
+pkg/db/
+└── models.go                  <span class="go-comment">// Phase 4: model_profiles 表 + CRUD</span></code></pre>
+
+        <h3>8.2 演进路径</h3>
+        <table>
+            <tr><th>阶段</th><th>改动范围</th><th>破坏性</th><th>说明</th></tr>
+            <tr>
+                <td><strong>Phase 1-2</strong>（当前）</td>
+                <td>单一 Client，硬编码端点</td>
+                <td>—</td>
+                <td>保持现状，不做架构变更</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 3-4</strong></td>
+                <td>新增 <code>model_profile.go</code> + 配置加载</td>
+                <td>无</td>
+                <td>纯新增，不影响现有流程。Agent 创建时可选指定模型</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 4</strong>（多 Agent 并发）</td>
+                <td>每个 Agent 绑定不同模型</td>
+                <td>低</td>
+                <td>Engine 构造时注入 Client，不同 Agent 用不同 Client</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 5</strong></td>
+                <td>抽取 Provider 接口 + 实现 Router</td>
+                <td>中</td>
+                <td>Client 重构为 Provider 模式，但保持向后兼容</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 6</strong></td>
+                <td>Worker Pool + CostTracker + 降级</td>
+                <td>中</td>
+                <td>新增调度层，Engine 嵌入 Pool 管理</td>
+            </tr>
+        </table>
+
+        <h3>8.3 配置示例</h3>
+        <pre><code><span class="go-comment"># .env 扩展 — 多模型配置 (Phase 4+)</span>
+LLM_MODELS=deepseek-flash,deepseek-pro,claude-sonnet,claude-opus
+
+<span class="go-comment"># DeepSeek Flash — 高效层</span>
+LLM_MODEL_deepseek-flash_ENDPOINT=https://aicoding.dobest.com/v1
+LLM_MODEL_deepseek-flash_PROVIDER=deepseek
+LLM_MODEL_deepseek-flash_TIER=efficient
+LLM_MODEL_deepseek-flash_MAX_TOKENS=4096
+LLM_MODEL_deepseek-flash_CONTEXT_WINDOW=128000
+LLM_MODEL_deepseek-flash_FALLBACK=local-free
+
+<span class="go-comment"># Claude Sonnet — 标准层</span>
+LLM_MODEL_claude-sonnet_ENDPOINT=https://api.anthropic.com/v1
+LLM_MODEL_claude-sonnet_PROVIDER=anthropic
+LLM_MODEL_claude-sonnet_TIER=standard
+LLM_MODEL_claude-sonnet_API_KEY=sk-ant-xxx
+LLM_MODEL_claude-sonnet_MAX_TOKENS=8192
+LLM_MODEL_claude-sonnet_CONTEXT_WINDOW=200000
+LLM_MODEL_claude-sonnet_FALLBACK=deepseek-pro
+
+<span class="go-comment"># Claude Opus — 顶层</span>
+LLM_MODEL_claude-opus_ENDPOINT=https://api.anthropic.com/v1
+LLM_MODEL_claude-opus_PROVIDER=anthropic
+LLM_MODEL_claude-opus_TIER=premium
+LLM_MODEL_claude-opus_API_KEY=sk-ant-xxx
+LLM_MODEL_claude-opus_MAX_TOKENS=8192
+LLM_MODEL_claude-opus_CONTEXT_WINDOW=200000
+LLM_MODEL_claude-opus_FALLBACK=claude-sonnet
+
+<span class="go-comment"># 本地免费模型 — 降级兜底</span>
+LLM_MODEL_local-free_ENDPOINT=http://localhost:11434/v1
+LLM_MODEL_local-free_PROVIDER=openai
+LLM_MODEL_local-free_TIER=free
+LLM_MODEL_local-free_MAX_TOKENS=2048
+LLM_MODEL_local-free_CONTEXT_WINDOW=8192
+LLM_MODEL_local-free_FALLBACK=</code></pre>
+
+        <!-- ================================================================ -->
+        <!-- 9. 实施优先级 -->
+        <!-- ================================================================ -->
+        <h2 id="s9">9. 实施优先级</h2>
+
+        <div class="callout warning">
+            <div class="callout-title">🎯 核心原则：架构跟着需求走，不提前抽象</div>
+            当前阶段（Phase 2-3）的核心任务是前端可视化和预设 Cases，<strong>保持单一模型</strong>。
+            多模型分层是 Phase 4-6 的需求，届时对 LLM 领域的理解更深，接口设计会更成熟。
+        </div>
+
+        <table>
+            <tr><th>阶段</th><th>交付物</th><th>理由</th></tr>
+            <tr>
+                <td><strong>Phase 3-4</strong></td>
+                <td>
+                    <code>ModelProfile</code> 类型 + <code>ModelRegistry</code><br>
+                    从配置/DB 加载模型列表<br>
+                    Agent 创建时可选指定模型
+                </td>
+                <td>为 Router 做数据准备，纯新增，不影响现有功能。<br>多 Agent 并发自然需要不同模型。</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 5</strong></td>
+                <td>
+                    <code>Provider</code> 接口抽取<br>
+                    <code>Router</code> 意图分类 + 模型选择<br>
+                    <code>openai_provider.go</code> 基线实现
+                </td>
+                <td>此时 Provider 抽象足够成熟，<br>Router 依赖 ModelRegistry 和 Provider 两层。</td>
+            </tr>
+            <tr>
+                <td><strong>Phase 6</strong></td>
+                <td>
+                    <code>WorkerPool</code> 并发调度<br>
+                    <code>CostTracker</code> 成本追踪<br>
+                    降级策略 + 自动 fallback<br>
+                    <code>AnthropicProvider</code> 实现
+                </td>
+                <td>生产级特性，依赖前面所有层。<br>成本追踪是白盒 Agent 的最终闭环。</td>
+            </tr>
+        </table>
+
+        <h3>9.1 一句话建议</h3>
+        <div class="callout success">
+            <div class="callout-title">💡 模型分层使用原则</div>
+            <strong>Opus 给最重要的 1 个决策者，Sonnet 给所有主力 Agent，Haiku 给路由器，Flash 给其余所有能省就省的任务，Free 模型给本地开发和冷备。</strong>
+        </div>
+
+        <div class="footer">
+            Multi-Agent Platform Documentation &copy; 2026 |
+            多模型分层设计文档 |
+            Last updated: 2026-07-03
+        </div>
+
+    </main>
+</div>
+</body>
+</html>

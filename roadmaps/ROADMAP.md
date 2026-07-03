@@ -97,52 +97,82 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 
 ---
 
-## Phase 3: 预设 Cases + 配置页面
+## Phase 3: 预设 Cases + 配置页面 + Harness 基础
 
-**目标**: 提供一键式任务和 Agent 配置管理
+**目标**: 提供一键式任务和 Agent 配置管理，引入 Harness 基础组件
 
 ### 交付物
 - [ ] 5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）
 - [ ] CaseCard UI 组件 + Run 按钮
 - [ ] Agent 配置 CRUD 页面（REST API + 前端表单）
 - [ ] 任务历史侧边栏（SQLite 读取 + 回放）
+- [ ] **Harness: TaskContract 定义**（目标、范围、验收标准、预算、权限）
+- [ ] **Harness: Progress 文件管理**（TaskProgress 类型 + 关键节点自动写入）
+- [ ] **Harness: FileScopeRule + PathTraversalRule**（路径安全，在 write_file 之前拦截）
+- [ ] **Harness: AcceptanceCriteria 基础实现**（test_pass / file_exists / shell_exit_zero）
+- [ ] **Memory: Task 完成时自动生成摘要**（Engine 调用轻量模型做单 task 总结）
 
 ### 验证标准
 - 点击 Case 卡片 → 任务自动执行 → 历史可回放
+- TaskContract 的预算/权限在运行时被强制执行
 
 ---
 
-## Phase 4: 多 Agent 并发
+## Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础
 
-**目标**: 支持多个 Agent 并行执行
+**目标**: 支持多个 Agent 并行执行，引入 Policy Gate 和记忆系统
 
 ### 交付物
 - [ ] 多 Agent Task 分派（goroutine 并行）
 - [ ] 前端多树渲染（并排或选项卡，颜色区分）
 - [ ] Agent 间通信协议（Agent A 调用 Agent B 的接口）
+- [ ] **多模型分层基础**: `ModelProfile` 类型 + `ModelRegistry` 注册表
+- [ ] **Agent 模型绑定**: 创建 Agent 时可选指定模型（从 Registry 中选择）
+- [ ] **多模型配置加载**: 从 `.env` / DB 加载多个模型配置
+- [ ] **Harness: PolicyChain 完整实现**（PolicyGate + PolicyChain + 内置规则链）
+- [ ] **Harness: TokenBudgetRule**（累计 token 超过 TaskContract 预算时硬拒绝）
+- [ ] **Harness: ToolWhitelistRule**（只允许 TaskContract 中声明的工具）
+- [ ] **Harness: Checkpoint / Recovery**（CheckpointManager + 崩溃恢复流程）
+- [ ] **Memory: `memories` 表 + `memory_links` 表** Schema（pkg/db/database.go）
+- [ ] **Memory: Heartbeat 后台整理器**（定时扫描新 conversation → 触发抽取管线）
+- [ ] **Memory: Candidate → Semantic 晋升管线**（三条晋升通道的代码实现）
 
 ### 验证标准
 - 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新
+- 不同 Agent 使用不同模型（如一个用 deepseek-flash，一个用 deepseek-pro）
+- 工具调用超过 TokenBudget 时被 PolicyGate 拦截，Engine 收到 ErrBlockedByPolicy
+- 进程崩溃后可从 checkpoint 恢复，不从头开始
+- 心跳定时触发记忆抽取，Semantic 规则有明确的 promotion_reason
 
 ---
 
-## Phase 5: 运行时注册 + 扩展
+## Phase 5: 运行时注册 + Provider + Router + 记忆召回
 
-**目标**: 支持动态注册工具和 Agent
+**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由和记忆召回
 
 ### 交付物
 - [ ] 运行时 Tool 注册 REST API
 - [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）
 - [ ] Docker 沙箱（run_shell 安全隔离）
+- [ ] **LLM Provider 接口抽象**: `Provider` 接口 + `OpenAIProvider` 基线实现
+- [ ] **Router 路由决策**: 意图分类 + 模型选择（轻量模型做路由，成本 < $0.001/次）
+- [ ] **模型能力矩阵**: 标注各模型的 tool_calling / streaming / vision / reasoning 能力
+- [ ] **Harness: ApprovalRule**（高风险操作通过 WebSocket 发送确认请求到前端）
+- [ ] **Harness: DangerousCommandRule**（Shell 命令危险模式检测）
+- [ ] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
+- [ ] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
 
 ### 验证标准
 - 无需重启服务，通过 API 注册新工具并立即使用
+- 同一任务请求根据意图自动路由到不同模型（简单→Flash，复杂→Pro）
+- 高风险操作（如 git push）触发前端审批弹窗
+- 新任务启动时，Semantic 规则和相关 Episode 写入 Working Memory 注入 System Prompt
 
 ---
 
 ## Phase 6: 高级特性（远期）
 
-**目标**: 生产级特性
+**目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理
 
 ### 交付物
 - [ ] RAG 向量检索（Embedding + 向量数据库）
@@ -151,6 +181,21 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 - [ ] 可观测性（OpenTelemetry + Prometheus）
 - [ ] Prompt Template 引擎
 - [ ] API Key 加密存储
+- [ ] **多厂商 LLM Provider**: Anthropic Provider + DeepSeek Provider（reasoning_content 支持）
+- [ ] **Worker Pool 并发调度**: 多 Agent 并发管理 + 模型分配 + 限流控制
+- [ ] **CostTracker 成本追踪**: 按模型/分层/任务维度的 API 成本报告
+- [ ] **降级策略**: 主模型不可用时自动 fallback（Opus→Sonnet→DeepSeek→本地）
+- [ ] **模型能力矩阵完整实现**: 根据任务所需能力自动筛选可用模型
+- [ ] **Harness: Eval 回归闭环**（失败 Trace → 回归测试集 → 自动化回归）
+- [ ] **Harness: 完整治理与审计**（身份 + 审批 + 成本 + 合规日志）
+- [ ] **Memory: 向量检索增强**（LanceDB / ChromaDB 语义召回）
+- [ ] **Memory: 遗忘曲线 + 冷存储**（超过 30 天未 access → status=cold）
+- [ ] **Memory: 记忆审查 Agent**（定期扫描 Semantic 层，标记过期/冲突规则）
+
+### 参考文档
+- `doc/chapters/09-llm-api-comparison.html` — LLM 厂商 API 差异分析
+- `doc/chapters/10-multi-model-layered-design.html` — 多模型分层设计
+- `doc/chapters/11-harness-memory-design.html` — Harness 与自进化记忆设计
 
 ---
 
