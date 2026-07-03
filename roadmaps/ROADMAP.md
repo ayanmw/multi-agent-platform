@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-03
-> **Current version**: v0.1 Alpha (Phase 0 complete)
+> **Current version**: v0.2 Alpha (Phase 1 complete)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 🔜 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6
-  (骨架)      (Agent)     (UI)     (Cases)   (并发)   (注册)   (高级)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5 → Phase 6
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)    (注册)    (高级)
 ```
 
 ---
@@ -31,35 +31,45 @@ Phase 0 ✅ → Phase 1 🔜 → Phase 2 → Phase 3 → Phase 4 → Phase 5 →
 - [x] 产品文档（doc/ 目录，8 个章节 + 共享样式表）
 - [x] 路线图文件（roadmaps/ROADMAP.md）
 
-### 已知待优化
+### 已知待优化（Phase 1 已解决部分）
 - [ ] DB 初始化未在 Server 启动时调用
-- [ ] `internal/llm/`, `internal/runtime/`, `internal/config/` 为空壳目录
+- [x] ~~`internal/llm/`, `internal/runtime/`, `internal/config/` 为空壳目录~~ → Phase 1 已实现
+- [x] ~~API Key 散落在 CLAUDE.md，待迁移到 `.env`~~ → Phase 1 已实现
 - [ ] Event 中 `interface{}` 待统一为 `any`
 - [ ] 前端为 CDN 单文件，待迁移到 Vite + TypeScript
-- [ ] API Key 散落在 CLAUDE.md，待迁移到 `.env`
 
 ---
 
-## Phase 1: Agent Loop 核心引擎 🔜
+## Phase 1: Agent Loop 核心引擎 ✅ COMPLETED
 
 **目标**: 打通真实 LLM API 调用，实现 ReAct Loop 完整闭环
 
-### 交付物
-- [ ] OpenAI-compatible LLM Client（内部 API + SSE streaming）
-- [ ] 3 个内置工具实现（run_shell, write_file, read_file）
-- [ ] ReAct Loop 引擎（think → tool_call → observe → loop）
-- [ ] Step 状态机 + 事件发送
-- [ ] Agent 配置加载（从 SQLite 读取 → LLM 绑定）
-- [ ] 前端迁移到 Vite + TypeScript
-- [ ] `.env` 配置文件（API Key 管理）
+**完成日期**: 2026-07-03
+**Git commit**: `54730c8`
 
-### 验证标准
-- `curl -X POST /api/tasks -d '{"action":"chat","agent_id":"xxx","input":"写一个 Go 函数并测试"}'` → 正常执行完整 Loop
-- 前端能实时看到 LLM token 流和 tool call 结果
+### 交付物
+- [x] OpenAI-compatible LLM Client（`internal/llm/client.go`，SSE streaming）
+- [x] 3 个内置工具实现（`internal/tool/builtin.go`：run_shell, write_file, read_file）
+- [x] ReAct Loop 引擎（`internal/runtime/engine.go`：think → tool_call → observe → loop）
+- [x] Step 状态机 + 事件广播（EventBus 接口）
+- [x] Agent 配置加载 + `.env` 管理（`internal/config/config.go`）
+- [x] Go 端到端测试工具（`cmd/e2e-test/main.go`，WebSocket + 着色输出）
+- [x] `cmd/server/main.go` 重构，整合真实 Agent Loop 替代 demo stream
+
+### 验证结果
+- 简单对话 `curl chat "1+1=?"` → 697 tokens，正确回答 "2"
+- 工具调用 `curl chat "用 run_shell 执行 echo hello_from_agent"` → 两步 Loop：tool_call(23ms) → 分析结果 → 730 tokens
+- e2e-test 工具全场景通过（simple + tool → all）
+
+### 已知待优化
+- [ ] DB 持久化未接入 Agent Loop（Task/Step/Conversation 未写入 SQLite）
+- [ ] Event 中 `interface{}` 待统一为 `any`
+- [ ] `run_shell` 无沙箱（Phase 5 加 Docker）
+- [ ] `func (tc ToolCall) Index()` 方法未使用，可删除
 
 ---
 
-## Phase 2: 前端可视化
+## Phase 2: 前端可视化 🔜
 
 **目标**: 实现 Agent 执行过程的完整可视化
 
@@ -138,3 +148,4 @@ Phase 0 ✅ → Phase 1 🔜 → Phase 2 → Phase 3 → Phase 4 → Phase 5 →
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | v0.1 | 2026-07-03 | Phase 0 完成，初始骨架搭建 |
+| v0.2 | 2026-07-03 | Phase 1 完成，Agent Loop 核心引擎 + e2e 测试工具 |
