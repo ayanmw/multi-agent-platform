@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
@@ -11,6 +13,11 @@ import (
 var DB *sql.DB
 
 func Init(dataPath string) error {
+	// Ensure parent directory exists
+	dir := filepath.Dir(dataPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
 	var err error
 	DB, err = sql.Open("sqlite", dataPath)
 	if err != nil {

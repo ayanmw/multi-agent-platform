@@ -29,12 +29,23 @@ type Client struct {
 	closed bool
 }
 
+// ClientControlMsg represents a control message sent from the client
+type ClientControlMsg struct {
+	Action string `json:"action"` // pause, resume, cancel
+	TaskID string `json:"task_id"`
+	AgentID string `json:"agent_id"`
+}
+
+// ControlHandler is called when a client sends a control message
+type ControlHandler func(msg ClientControlMsg)
+
 type Hub struct {
-	clients    map[*Client]bool
-	register   chan *Client
-	unregister chan *Client
-	broadcast  chan event.Event
-	mu         sync.RWMutex
+	clients        map[*Client]bool
+	register       chan *Client
+	unregister     chan *Client
+	broadcast      chan event.Event
+	controlHandler ControlHandler
+	mu             sync.RWMutex
 }
 
 func NewHub() *Hub {
@@ -81,6 +92,11 @@ func (h *Hub) SendEvent(evt event.Event) {
 	h.broadcast <- evt
 }
 
+// SetControlHandler registers a handler for client control messages
+func (h *Hub) SetControlHandler(handler ControlHandler) {
+	h.controlHandler = handler
+}
+
 func ServeWS(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -109,9 +125,21 @@ func (c *Client) readPump() {
 	}()
 
 	for {
-		_, _, err := c.Conn.ReadMessage()
+		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			break
+		}
+
+		// Try to parse as control message
+		var msg ClientControlMsg
+		if err := json.Unmarshal(message, &msg); err != nil {
+			log.Printf("Client %s: unparseable message: %s", c.ID, string(message))
+			continue
+		}
+
+		// Route to control handler if registered
+		if c.Hub.controlHandler != nil {
+			go c.Hub.controlHandler(msg)
 		}
 	}
 }

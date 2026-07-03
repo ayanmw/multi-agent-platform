@@ -14,13 +14,13 @@ type Event struct {
 	StepIndex int                    `json:"step_index"`
 	Type      string                 `json:"type"`
 	Timestamp int64                  `json:"timestamp"`
-	Data      map[string]interface{} `json:"data"`
+	Data      map[string]any `json:"data"`
 }
 
 // NewEvent creates a new event with auto-generated ID and timestamp
-func NewEvent(eventType, taskID, agentID string, stepIndex int, data map[string]interface{}) Event {
+func NewEvent(eventType, taskID, agentID string, stepIndex int, data map[string]any) Event {
 	if data == nil {
-		data = make(map[string]interface{})
+		data = make(map[string]any)
 	}
 	return Event{
 		EventID:   generateID(),

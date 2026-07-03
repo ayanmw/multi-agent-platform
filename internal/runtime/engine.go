@@ -27,6 +27,7 @@ type EngineConfig struct {
 	Temperature  float32
 	MaxTokens    int
 	MaxSteps     int
+	Persistence  Persistence // optional: set to nil for no persistence
 }
 
 // Engine executes the ReAct loop for a single agent
@@ -35,6 +36,7 @@ type Engine struct {
 	llm      *llm.Client
 	tools    *tool.Registry
 	bus      EventBus
+	persist  Persistence
 	taskID   string
 	messages []llm.Message
 	stepIdx  int
@@ -53,11 +55,12 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 
 	return &Engine{
-		cfg:    cfg,
-		llm:    llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
-		tools:  tools,
-		bus:    bus,
-		taskID: taskID,
+		cfg:     cfg,
+		llm:     llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
+		tools:   tools,
+		bus:     bus,
+		persist: cfg.Persistence,
+		taskID:  taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: cfg.SystemPrompt},
 		},
@@ -69,6 +72,9 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error) {
 	// Add user message to conversation
 	e.messages = append(e.messages, llm.Message{Role: "user", Content: userInput})
+
+	// Persist user message
+	e.saveConversation("user", userInput)
 
 	// Notify agent is ready
 	e.bus.SendEvent(event.NewEvent("agent_ready", e.taskID, e.cfg.AgentID, 0, map[string]any{
@@ -83,6 +89,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "cancelled",
 			}))
+			e.updateTask("failed", "", 0)
 			return "", e.stepIdx, ctx.Err()
 		default:
 		}
@@ -94,6 +101,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 				"reason": "llm_error",
 				"error":  err.Error(),
 			}))
+			e.updateTask("failed", "", 0)
 			return "", e.stepIdx, fmt.Errorf("think step %d: %w", e.stepIdx, err)
 		}
 
@@ -102,11 +110,18 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 
 		// If no tool calls, this is the final answer
 		if len(toolCalls) == 0 {
+			// Persist final step
+			e.saveStep(StepRecord{
+				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
+			})
+			e.saveConversation("assistant", content)
+
 			// Emit final observation
 			e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"content":     content,
-				"total_tokens": usage.TotalTokens,
-				"prompt_tokens": usage.PromptTokens,
+				"content":           content,
+				"total_tokens":      usage.TotalTokens,
+				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 			}))
 			e.bus.SendEvent(event.NewEvent("task_completed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -114,11 +129,19 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 				"total_tokens": usage.TotalTokens,
 				"total_steps":  e.stepIdx,
 			}))
+			e.updateTask("completed", content, usage.TotalTokens)
 			return content, usage.TotalTokens, nil
 		}
 
 		// Step: Execute tool calls
 		for _, tc := range toolCalls {
+			// Persist think step before tool execution
+			e.saveStep(StepRecord{
+				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
+			})
+			e.saveConversation("assistant", content)
+
 			result, err := e.executeTool(tc)
 			if err != nil {
 				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -126,8 +149,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 					"tool_name": tc.Function.Name,
 					"error":     err.Error(),
 				}))
+				e.updateTask("failed", "", 0)
 				return "", e.stepIdx, fmt.Errorf("tool %s: %w", tc.Function.Name, err)
 			}
+
+			// Persist tool result
+			e.saveConversation("tool", result)
 
 			// Add assistant + tool result to conversation
 			e.messages = append(e.messages, llm.Message{
@@ -145,10 +172,43 @@ func (e *Engine) Run(ctx context.Context, userInput string) (string, int, error)
 
 	// Max steps exceeded
 	e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"reason":     "max_steps_exceeded",
-		"max_steps":  e.cfg.MaxSteps,
+		"reason":    "max_steps_exceeded",
+		"max_steps": e.cfg.MaxSteps,
 	}))
+	e.updateTask("failed", "", 0)
 	return "", e.stepIdx, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
+}
+
+// saveConversation persists a conversation message (no-op if persistence is nil)
+func (e *Engine) saveConversation(role, content string) {
+	if e.persist == nil {
+		return
+	}
+	if err := e.persist.SaveConversation(ConversationRecord{
+		TaskID: e.taskID, Role: role, Content: content,
+	}); err != nil {
+		log.Printf("[Engine] Failed to save conversation: %v", err)
+	}
+}
+
+// saveStep persists a step record (no-op if persistence is nil)
+func (e *Engine) saveStep(s StepRecord) {
+	if e.persist == nil {
+		return
+	}
+	if err := e.persist.SaveStep(s); err != nil {
+		log.Printf("[Engine] Failed to save step: %v", err)
+	}
+}
+
+// updateTask persists task status update (no-op if persistence is nil)
+func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
+	if e.persist == nil {
+		return
+	}
+	if err := e.persist.UpdateTask(e.taskID, status, finalResult, totalTokens); err != nil {
+		log.Printf("[Engine] Failed to update task: %v", err)
+	}
 }
 
 // think sends the current conversation to the LLM and streams the response

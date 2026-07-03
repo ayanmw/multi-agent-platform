@@ -14,6 +14,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
+	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
@@ -26,7 +27,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	// Override port from CLI flag if not default
 	if *port != "8080" || cfg.ServerPort == "" {
 		cfg.ServerPort = *port
 	}
@@ -34,6 +34,23 @@ func main() {
 	// Initialize WebSocket hub
 	hub := ws.NewHub()
 	go hub.Run()
+
+	// Register control handler for client-side pause/resume/cancel
+	hub.SetControlHandler(func(msg ws.ClientControlMsg) {
+		log.Printf("[Control] Received: action=%s task=%s agent=%s", msg.Action, msg.TaskID, msg.AgentID)
+		// TODO: Phase 4+ — implement actual engine control via context cancellation
+		// For now, we just log the control message
+	})
+
+	// Initialize database
+	if err := db.Init(cfg.DBPath); err != nil {
+		log.Printf("Warning: DB init failed: %v (continuing without persistence)", err)
+	} else {
+		log.Println("Database initialized")
+	}
+
+	// Initialize persistence adapter
+	persist := &DBPersistence{}
 
 	// Initialize tool registry with built-in tools
 	toolRegistry := tool.NewRegistry()
@@ -45,14 +62,25 @@ func main() {
 
 	// API: Start a chat task with real Agent Loop
 	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		// GET /api/tasks — list recent tasks
+		if r.Method == http.MethodGet {
+			// GET /api/tasks?id=xxx — single task detail
+			if r.URL.Query().Get("id") != "" {
+				handleGetTask(w, r)
+				return
+			}
+			handleListTasks(w, r)
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
+
 		var req struct {
-			Action   string `json:"action"`
-			AgentID  string `json:"agent_id"`
-			Input    string `json:"input"`
+			Action       string `json:"action"`
+			AgentID      string `json:"agent_id"`
+			Input        string `json:"input"`
 			SystemPrompt string `json:"system_prompt"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -62,14 +90,12 @@ func main() {
 
 		switch req.Action {
 		case "stream-demo":
-			// Legacy demo mode — simulate a multi-step task
 			taskID := "task_" + time.Now().Format("20060102150405")
 			go streamTask(hub, taskID)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"task_id": taskID})
 
 		case "chat":
-			// Real agent loop with LLM
 			if req.Input == "" {
 				http.Error(w, "input is required for chat action", http.StatusBadRequest)
 				return
@@ -89,7 +115,7 @@ func main() {
 			}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -103,13 +129,21 @@ func main() {
 		}
 	})
 
+	// Agent CRUD API
+	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+		handleAgents(w, r)
+	})
+	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		handleAgentByID(w, r)
+	})
+
 	// Health check
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
 
-	// Serve Vue static files in dev, or dist in production
+	// Serve Vue static files
 	webDir := "./web/dist"
 	if _, err := os.Stat(webDir); err == nil {
 		http.Handle("/", http.FileServer(http.Dir(webDir)))
@@ -132,7 +166,12 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence) {
+	// Persist task creation
+	if persist != nil {
+		persist.SaveTask(taskID, userInput, []string{agentID})
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:      agentID,
 		SystemPrompt: systemPrompt,
@@ -142,9 +181,9 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		Temperature:  0.7,
 		MaxTokens:    4096,
 		MaxSteps:     10,
+		Persistence:  persist,
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
-	// Emit task started
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
 		"task_id":  taskID,
 		"agent_id": agentID,

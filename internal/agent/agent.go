@@ -44,7 +44,7 @@ type Step struct {
 	Status     Status
 	Thinking   string
 	ToolName   string
-	ToolInput  map[string]interface{}
+	ToolInput  map[string]any
 	ToolOutput string
 	DurationMs int
 	CreatedAt  time.Time

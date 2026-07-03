@@ -274,7 +274,9 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 	return contentBuilder.String(), usage, toolCalls, nil
 }
 
-// Index returns the tool call index from the struct field
+// Index returns the tool call index from the struct field.
+// TODO: Phase 4+ 多 Agent 并发时，ToolCall Index 用于追踪 tool_call 执行顺序
+// 和分布式 tracing，届时需要增强为确定性 ID 生成。
 func (tc ToolCall) Index() int {
 	return tc.Idx
 }
