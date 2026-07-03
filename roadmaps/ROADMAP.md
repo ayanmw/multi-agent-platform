@@ -74,8 +74,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Pha
 
 ### 已知待优化
 - [ ] `run_shell` 无沙箱（Phase 5 加 Docker）
-- [ ] Agent CRUD 前端页面（Phase 2 随 Vue 迁移实现）
-- [ ] `llm_delta` 批量发送（当前每 token 一条 WS 消息，Phase 2 加节流）
+- [ ] Agent CRUD 前端页面 → Phase 3（配置页面与 Agent CRUD 合并实现）
+- [ ] `llm_delta` 批量发送 → Phase 3（随 Cases 测试时一起调优节流策略）
 - [ ] Conversation 历史回读用于多轮对话（Phase 3+ Session 管理）
 
 ---
@@ -85,7 +85,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Pha
 **目标**: 实现 Agent 执行过程的完整可视化
 
 **完成日期**: 2026-07-03
-**Git commit**: TBD
+**Git commit**: `f335a51`
 
 ### 交付物
 - [x] Vite + Vue 3 + TypeScript 工程化迁移（从 CDN 单文件）

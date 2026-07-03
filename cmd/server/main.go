@@ -178,7 +178,7 @@ func main() {
 	}
 
 	log.Printf("========================================")
-	log.Printf("Multi-Agent Platform v0.2 (Phase 1)")
+	log.Printf("Multi-Agent Platform v0.3 (Phase 2)")
 	log.Printf("========================================")
 	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
 	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
