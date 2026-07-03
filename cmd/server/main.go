@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/agent"
+	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/anmingwei/multi-agent-platform/internal/runtime"
+	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
@@ -18,43 +21,86 @@ func main() {
 	port := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
 
+	// Load configuration from .env and environment
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	// Override port from CLI flag if not default
+	if *port != "8080" || cfg.ServerPort == "" {
+		cfg.ServerPort = *port
+	}
+
+	// Initialize WebSocket hub
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// Register hardcoded test agent
-	_ = &agent.Agent{
-		ID:           "agent_test_001",
-		Name:         "Test Agent",
-		SystemPrompt: "You are a test agent",
-		Model:        "deepseek-v4-flash",
-		Endpoint:     "https://aicoding.dobest.com/v1",
-	}
+	// Initialize tool registry with built-in tools
+	toolRegistry := tool.NewRegistry()
+	tool.RegisterBuiltins(toolRegistry)
+	log.Printf("Registered %d built-in tools", len(toolRegistry.List()))
 
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
 
-	// API: start demo stream task
+	// API: Start a chat task with real Agent Loop
 	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
 		var req struct {
-			Action string `json:"action"`
+			Action   string `json:"action"`
+			AgentID  string `json:"agent_id"`
+			Input    string `json:"input"`
+			SystemPrompt string `json:"system_prompt"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Action != "stream-demo" {
-			http.Error(w, "unknown action", http.StatusBadRequest)
-			return
-		}
 
-		taskID := "task_" + time.Now().Format("20060102150405")
-		go streamTask(hub, taskID)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"task_id": taskID})
+		switch req.Action {
+		case "stream-demo":
+			// Legacy demo mode — simulate a multi-step task
+			taskID := "task_" + time.Now().Format("20060102150405")
+			go streamTask(hub, taskID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"task_id": taskID})
+
+		case "chat":
+			// Real agent loop with LLM
+			if req.Input == "" {
+				http.Error(w, "input is required for chat action", http.StatusBadRequest)
+				return
+			}
+
+			agentID := req.AgentID
+			if agentID == "" {
+				agentID = "agent_default"
+			}
+
+			systemPrompt := req.SystemPrompt
+			if systemPrompt == "" {
+				systemPrompt = "You are a helpful AI assistant with access to tools. " +
+					"When you need to run commands, read files, or write files, use the available tools. " +
+					"Always explain your reasoning before using tools. " +
+					"After using tools, analyze the results and continue until the task is complete."
+			}
+
+			taskID := "task_" + time.Now().Format("20060102150405")
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry)
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"task_id":  taskID,
+				"agent_id": agentID,
+				"action":   "chat",
+			})
+
+		default:
+			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
+		}
 	})
 
 	// Health check
@@ -69,14 +115,66 @@ func main() {
 		http.Handle("/", http.FileServer(http.Dir(webDir)))
 	}
 
-	log.Printf("Server starting on :%s", *port)
-	log.Printf("WebSocket endpoint: ws://localhost:%s/ws", *port)
-	log.Printf("API endpoint: http://localhost:%s/api/tasks", *port)
-	log.Printf("Health check: http://localhost:%s/health", *port)
+	log.Printf("========================================")
+	log.Printf("Multi-Agent Platform v0.2 (Phase 1)")
+	log.Printf("========================================")
+	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
+	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
+	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
+	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
+	log.Printf("LLM:         %s (%s)", cfg.LLMEndpoint, cfg.LLMModel)
+	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
+	log.Printf("========================================")
 
-	if err := http.ListenAndServe(":"+*port, nil); err != nil {
+	if err := http.ListenAndServe(":"+cfg.ServerPort, nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// runAgentLoop executes the full ReAct loop for a chat request
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry) {
+	engine := runtime.NewEngine(runtime.EngineConfig{
+		AgentID:      agentID,
+		SystemPrompt: systemPrompt,
+		Model:        cfg.LLMModel,
+		Endpoint:     cfg.LLMEndpoint,
+		APIKey:       cfg.LLMAPIKey,
+		Temperature:  0.7,
+		MaxTokens:    4096,
+		MaxSteps:     10,
+	}, tools, &hubAdapter{hub: hub}, taskID)
+
+	// Emit task started
+	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
+		"task_id":  taskID,
+		"agent_id": agentID,
+		"input":    userInput,
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	result, totalTokens, err := engine.Run(ctx, userInput)
+	if err != nil {
+		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
+		if result == "" {
+			hub.SendEvent(event.NewEvent("task_failed", taskID, agentID, 0, map[string]any{
+				"reason": err.Error(),
+			}))
+		}
+		return
+	}
+
+	log.Printf("[Task %s] Completed successfully. Tokens: %d, Result: %s", taskID, totalTokens, truncate(result, 100))
+}
+
+// hubAdapter adapts ws.Hub to the runtime.EventBus interface
+type hubAdapter struct {
+	hub *ws.Hub
+}
+
+func (a *hubAdapter) SendEvent(evt event.Event) {
+	a.hub.SendEvent(evt)
 }
 
 // streamTask emits a demo sequence of events simulating a multi-step agent task
@@ -84,8 +182,8 @@ func streamTask(hub *ws.Hub, taskID string) {
 	agentID := "agent_test_001"
 
 	sequence := []struct {
-		eType  string
-		data   map[string]any
+		eType   string
+		data    map[string]any
 		delayMs int
 	}{
 		{"agent_ready", nil, 100},
@@ -128,4 +226,11 @@ func streamTask(hub *ws.Hub, taskID string) {
 			time.Sleep(time.Duration(item.delayMs) * time.Millisecond)
 		}
 	}
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

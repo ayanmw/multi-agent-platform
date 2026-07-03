@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
@@ -117,18 +118,47 @@ func (c *Client) readPump() {
 
 func (c *Client) writePump() {
 	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		c.Conn.Close()
+	}()
 
-	for range ticker.C {
-		c.mu.Lock()
-		if c.closed {
+	for {
+		select {
+		case message, ok := <-c.Send:
+			if !ok {
+				// Hub closed the channel
+				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			c.mu.Lock()
+			if c.closed {
+				c.mu.Unlock()
+				return
+			}
 			c.mu.Unlock()
-			return
-		}
-		c.mu.Unlock()
 
-		if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-			return
+			// Marshal event to JSON and send
+			data, err := json.Marshal(message)
+			if err != nil {
+				log.Printf("writePump: marshal error: %v", err)
+				continue
+			}
+			if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("writePump: write error: %v", err)
+				return
+			}
+
+		case <-ticker.C:
+			c.mu.Lock()
+			if c.closed {
+				c.mu.Unlock()
+				return
+			}
+			c.mu.Unlock()
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }
