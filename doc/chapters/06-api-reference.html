@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>6. API 参考 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html" class="active">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div><nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+    <main class="main">
+        <h1>6. API 参考</h1>
+
+        <h2>6.1 端点总览</h2>
+        <table>
+            <tr><th>方法</th><th>路径</th><th>说明</th><th>Phase</th></tr>
+            <tr><td>GET</td><td><code>/health</code></td><td>健康检查</td><td>0 ✅</td></tr>
+            <tr><td>GET</td><td><code>/ws</code></td><td>WebSocket 连接升级</td><td>0 ✅</td></tr>
+            <tr><td>POST</td><td><code>/api/tasks</code></td><td>创建/启动任务</td><td>0 ✅</td></tr>
+            <tr><td>GET</td><td><code>/api/tasks</code></td><td>查询任务列表</td><td>1 🔲</td></tr>
+            <tr><td>GET</td><td><code>/api/tasks/{id}</code></td><td>查询单个任务详情</td><td>1 🔲</td></tr>
+            <tr><td>POST</td><td><code>/api/agents</code></td><td>创建 Agent</td><td>1 🔲</td></tr>
+            <tr><td>GET</td><td><code>/api/agents</code></td><td>查询 Agent 列表</td><td>1 🔲</td></tr>
+            <tr><td>PUT</td><td><code>/api/agents/{id}</code></td><td>更新 Agent</td><td>1 🔲</td></tr>
+            <tr><td>DELETE</td><td><code>/api/agents/{id}</code></td><td>删除 Agent</td><td>1 🔲</td></tr>
+            <tr><td>POST</td><td><code>/api/tools</code></td><td>注册工具</td><td>5 🔲</td></tr>
+        </table>
+
+        <h2>6.2 健康检查</h2>
+        <pre>GET /health
+→ 200 ok</pre>
+
+        <h2>6.3 WebSocket — /ws</h2>
+        <p>WebSocket 连接升级后，所有事件以 JSON 格式双向传输。</p>
+        <pre>// 连接
+const ws = new WebSocket('ws://localhost:8080/ws');
+
+// 接收事件（服务端 → 客户端）
+ws.onmessage = (evt) => {
+    const event = JSON.parse(evt.data);
+    // event 结构见 4.2 节
+};
+
+// 发送控制指令（客户端 → 服务端）
+ws.send(JSON.stringify({ type: "pause", task_id: "xxx" }));
+ws.send(JSON.stringify({ type: "cancel", task_id: "xxx" }));</pre>
+
+        <h2>6.4 POST /api/tasks — 创建任务</h2>
+        <pre>// 请求
+POST /api/tasks
+Content-Type: application/json
+
+// 基础对话（Phase 1+）
+{
+    "action": "chat",
+    "agent_id": "agent_research_001",
+    "input": "帮我分析最新的 AI 发展趋势"
+}
+
+// 流式 Demo（Phase 0 测试用）
+{
+    "action": "stream-demo"
+}
+
+// 预设 Case（Phase 3+）
+{
+    "action": "case",
+    "case_id": "code_gen_and_test"
+}
+
+// 响应
+HTTP 200
+{
+    "task_id": "task_20260703103000",
+    "status": "started"
+}</pre>
+
+        <h2>6.5 Agent CRUD（Phase 1+）</h2>
+        <div class="callout info">
+            <div class="callout-title">📋 待实现</div>
+            Phase 1 将实现 Agent 配置的 CRUD 接口。
+        </div>
+        <pre>// 创建 Agent
+POST /api/agents
+{
+    "name": "research_agent",
+    "system_prompt": "You are a research assistant...",
+    "model": "deepseek-v4-flash",
+    "api_endpoint": "https://aicoding.dobest.com/v1",
+    "api_key": "sk-xxx",
+    "tools": ["web_search", "write_file"]
+}
+
+// 查询所有
+GET /api/agents
+
+// 更新
+PUT /api/agents/{id}
+
+// 删除
+DELETE /api/agents/{id}</pre>
+
+        <h2>6.6 Tool 注册（Phase 5+）</h2>
+        <pre>// 注册新工具
+POST /api/tools
+{
+    "name": "web_search",
+    "description": "Search the web for information",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "Search query" }
+        },
+        "required": ["query"]
+    }
+}</pre>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>详细的错误码表</li>
+                <li>分页查询参数</li>
+                <li>API 认证（API Key / JWT）</li>
+                <li>OpenAPI / Swagger 自动生成</li>
+                <li>速率限制策略</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="05-data-model.html">← 上一章</a> |
+            <a href="07-features.html">下一章：功能模块 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

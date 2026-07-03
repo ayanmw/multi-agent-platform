@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>8. 路线图 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+    <style>
+        .phase-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 18px 20px; margin: 14px 0; }
+        .phase-card.completed { border-left: 4px solid #51cf66; }
+        .phase-card.in-progress { border-left: 4px solid #4a9eff; }
+        .phase-card.planned { border-left: 4px solid #ccc; }
+        .phase-card h3 { margin-top: 0; font-size: 16px; }
+        .phase-card .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+        .tag.done { background: #d4edda; color: #155724; }
+        .tag.wip { background: #d1ecf1; color: #0c5460; }
+        .tag.future { background: #f0f0f0; color: #666; }
+        .phase-card ul { padding-left: 18px; font-size: 13px; }
+        .phase-card li { margin: 3px 0; }
+        .timeline { position: relative; padding-left: 24px; }
+        .timeline::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: #e0e0e0; }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html" class="active">路线图</a>
+        </nav>
+        <div class="section-label">附录</div><nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+    <main class="main">
+        <h1>8. 路线图</h1>
+        <p style="color:#666;">产品阶段性规划与里程碑。详细版本见 <code>roadmaps/ROADMAP.md</code>。</p>
+
+        <div class="timeline">
+
+            <!-- Phase 0 -->
+            <div class="phase-card completed">
+                <h3>Phase 0: 项目骨架 + 通信验证 <span class="tag done">✅ 完成</span></h3>
+                <p style="font-size:13px; color:#666;">2026-07-03</p>
+                <ul>
+                    <li>Go 模块初始化 + 目录结构</li>
+                    <li>WebSocket Hub（gorilla/websocket）</li>
+                    <li>AgentEvent 系统（18 种事件类型）</li>
+                    <li>SQLite 6 张表 Schema</li>
+                    <li>Vue 3 CDN 前端 + 事件路由器</li>
+                    <li><code>/api/tasks</code> stream-demo 端到端测试</li>
+                    <li>OpenSpec 全部产物（proposal, design, 6 specs, tasks）</li>
+                </ul>
+            </div>
+
+            <!-- Phase 1 -->
+            <div class="phase-card in-progress">
+                <h3>Phase 1: Agent Loop 核心引擎 <span class="tag wip">🔜 即将开始</span></h3>
+                <ul>
+                    <li>OpenAI-compatible LLM Client（内部 API + SSE streaming）</li>
+                    <li>3 个内置工具实现（run_shell, write_file, read_file）</li>
+                    <li>ReAct Loop 引擎（think → tool_call → observe → loop）</li>
+                    <li>Step 状态机 + 事件发送</li>
+                    <li>Agent 配置加载（SQLite → LLM 绑定）</li>
+                    <li>Vue 3 Vite 迁移 + TypeScript</li>
+                </ul>
+            </div>
+
+            <!-- Phase 2 -->
+            <div class="phase-card planned">
+                <h3>Phase 2: 前端可视化 <span class="tag future">计划</span></h3>
+                <ul>
+                    <li>AgentTree 组件（递归树 + 实时更新）</li>
+                    <li>TypeWriter 组件（LLMDelta 流式渲染）</li>
+                    <li>Markdown 实时渲染 + 语法高亮</li>
+                    <li>Step 展开/折叠 + 状态指示器</li>
+                    <li>Pause / Resume / Cancel 控制 + 指标面板</li>
+                </ul>
+            </div>
+
+            <!-- Phase 3 -->
+            <div class="phase-card planned">
+                <h3>Phase 3: 预设 Cases + 配置页面 <span class="tag future">计划</span></h3>
+                <ul>
+                    <li>5 个预设 Task Cases（代码生成、研究、多Agent、对话、干预）</li>
+                    <li>CaseCard UI 组件 + 一键执行</li>
+                    <li>Agent 配置 CRUD 页面</li>
+                    <li>任务历史侧边栏（SQLite 回放）</li>
+                </ul>
+            </div>
+
+            <!-- Phase 4 -->
+            <div class="phase-card planned">
+                <h3>Phase 4: 多 Agent 并发 <span class="tag future">计划</span></h3>
+                <ul>
+                    <li>多 Agent Task 分派（并行执行）</li>
+                    <li>前端多树渲染（并排或选项卡）</li>
+                    <li>Agent 间通信协议</li>
+                </ul>
+            </div>
+
+            <!-- Phase 5 -->
+            <div class="phase-card planned">
+                <h3>Phase 5: 运行时注册 + 扩展 <span class="tag future">计划</span></h3>
+                <ul>
+                    <li>运行时 Tool 注册 REST API</li>
+                    <li>AI 自描述工具注册</li>
+                    <li>Docker 沙箱（run_shell 安全隔离）</li>
+                </ul>
+            </div>
+
+            <!-- Phase 6 -->
+            <div class="phase-card planned">
+                <h3>Phase 6: 高级特性 <span class="tag future">远期</span></h3>
+                <ul>
+                    <li>RAG 向量检索（Embedding + 向量数据库）</li>
+                    <li>用户认证 / 多租户</li>
+                    <li>gRPC 协议迁移</li>
+                    <li>可观测性（OpenTelemetry + Prometheus）</li>
+                    <li>Prompt Template 引擎</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>每个 Phase 的预估工时</li>
+                <li>版本发布计划（v0.1 → v1.0）</li>
+                <li>里程碑甘特图</li>
+                <li>风险表（每个 Phase 的已知风险）</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="07-features.html">← 上一章</a> |
+            <a href="99-glossary.html">下一章：术语表 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

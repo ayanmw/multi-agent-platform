@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="../shared.css">
+    <style>
+        .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+        .tech-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; }
+        .tech-card h4 { margin-bottom: 6px; }
+        .tech-card .version-tag { display:inline-block; background:#4a9eff; color:#fff; padding:1px 8px; border-radius:10px; font-size:11px; }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div>
+        <nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html" class="active">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div>
+        <nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+
+    <main class="main">
+        <h1>3. 技术栈</h1>
+
+        <h2>3.1 后端（Go）</h2>
+        <div class="tech-grid">
+            <div class="tech-card">
+                <h4>🟢 运行时</h4>
+                <p><span class="version-tag">Go 1.25</span></p>
+                <p style="font-size:13px;">标准库 net/http，无 MVC 框架。保持最小依赖。</p>
+            </div>
+            <div class="tech-card">
+                <h4>🔌 WebSocket</h4>
+                <p><span class="version-tag">gorilla/websocket v1.5</span></p>
+                <p style="font-size:13px;">成熟的 WebSocket 实现，支持自定义 upgrader 和消息 pump。</p>
+            </div>
+            <div class="tech-card">
+                <h4>🗄️ 数据库</h4>
+                <p><span class="version-tag">modernc.org/sqlite v1.53</span></p>
+                <p style="font-size:13px;">纯 Go SQLite，无需 CGO 编译，单文件部署。</p>
+            </div>
+            <div class="tech-card">
+                <h4>📦 其他</h4>
+                <p><span class="version-tag">google/uuid</span> <span class="version-tag">gorilla/websocket</span></p>
+                <p style="font-size:13px;">UUID 生成、JSON 处理使用标准库 encoding/json。</p>
+            </div>
+        </div>
+
+        <h2>3.2 前端（Vue 3）</h2>
+        <table>
+            <tr><th>技术</th><th>当前版本</th><th>计划迁移</th></tr>
+            <tr><td>Vue 核心</td><td>CDN Vue 3 (global build)</td><td>Phase 1 → npm + Vite</td></tr>
+            <tr><td>状态管理</td><td>Vue reactive()</td><td>Phase 2 → Pinia</td></tr>
+            <tr><td>路由</td><td>无（单页）</td><td>Phase 3 → vue-router</td></tr>
+            <tr><td>Markdown</td><td>占位</td><td>Phase 2 → marked + highlight.js</td></tr>
+            <tr><td>样式</td><td>内联 CSS</td><td>Phase 2 → Tailwind CSS / scoped</td></tr>
+            <tr><td>构建</td><td>无</td><td>Phase 1 → Vite + TypeScript</td></tr>
+        </table>
+
+        <h2>3.3 通信协议</h2>
+        <table>
+            <tr><th>协议</th><th>用途</th><th>格式</th><th>当前状态</th></tr>
+            <tr><td>WebSocket</td><td>实时事件流（Agent 状态 / LLM token / Tool 结果）</td><td>JSON</td><td>✅ Phase 0</td></tr>
+            <tr><td>REST POST</td><td>任务触发、Agent CRUD、Tool 注册</td><td>JSON</td><td>✅ Phase 0（基础）</td></tr>
+            <tr><td>gRPC Streaming</td><td>预留（多客户端、类型安全）</td><td>Protobuf</td><td>⏳ Phase 6+</td></tr>
+            <tr><td>SSE</td><td>预留（单向 LLM streaming fallback）</td><td>text/event-stream</td><td>⏳ 备选</td></tr>
+        </table>
+
+        <h2>3.4 基础设施</h2>
+        <table>
+            <tr><th>组件</th><th>选型</th><th>用途</th></tr>
+            <tr><td>版本控制</td><td>Git</td><td>代码管理，每个 Phase 提交</td></tr>
+            <tr><td>文档</td><td>HTML + CSS（共享样式表）</td><td>产品文档，分章节可导航</td></tr>
+            <tr><td>路线图</td><td>Markdown + Mermaid（预留）</td><td>产品路线图，每 Phase 更新</td></tr>
+            <tr><td>记忆</td><td>.claude/projects/.../memory/</td><td>项目决策和规则持久化</td></tr>
+        </table>
+
+        <h2>3.5 未来技术选型（Phase 3+）</h2>
+        <div class="callout info">
+            <div class="callout-title">📋 待评估列表</div>
+            <ul style="padding-left:18px;">
+                <li>向量数据库：pgvector / Qdrant / Weaviate（RAG Phase）</li>
+                <li>任务队列：NATS / RabbitMQ（异步任务调度）</li>
+                <li>监控：OpenTelemetry + Prometheus（生产可观测性）</li>
+                <li>沙箱：Docker / Firecracker（安全执行 run_shell）</li>
+                <li>认证：OAuth2 / JWT（多用户 Phase）</li>
+                <li>缓存：Redis（Session 缓存、速率限制）</li>
+            </ul>
+        </div>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>Go module 依赖图（go mod graph 可视化）</li>
+                <li>前端依赖树（package.json 详细说明）</li>
+                <li>各技术选型的性能 benchmark</li>
+                <li>版本升级历史（Upgrade Log）</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="02-architecture.html">← 上一章</a> |
+            <a href="04-event-system.html">下一章：事件系统 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

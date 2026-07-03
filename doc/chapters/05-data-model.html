@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>5. 数据模型 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html" class="active">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div><nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+    <main class="main">
+        <h1>5. 数据模型</h1>
+        <p style="color:#666;">SQLite Schema 定义、表关系、文件存储方案。</p>
+
+        <h2>5.1 数据库概况</h2>
+        <table>
+            <tr><th>属性</th><th>值</th></tr>
+            <tr><td>数据库引擎</td><td>SQLite (<code>modernc.org/sqlite</code>，纯 Go)</td></tr>
+            <tr><td>文件位置</td><td><code>data/app.db</code></td></tr>
+            <tr><td>表数量</td><td>6 张（agents, tasks, steps, tools, conversations, files）</td></tr>
+            <tr><td>迁移方式</td><td>启动时 <code>CREATE TABLE IF NOT EXISTS</code></td></tr>
+        </table>
+
+        <h2>5.2 ER 关系图</h2>
+        <pre>
+┌──────────┐       ┌──────────┐       ┌──────────┐
+│  agents  │       │  tasks   │       │  steps   │
+├──────────┤       ├──────────┤       ├──────────┤
+│ id (PK)  │       │ id (PK)  │◄──────│ task_id  │
+│ name     │       │ user_inp │       │ id (PK)  │
+│ prompt   │       │ status   │       │ agent_id │
+│ model    │       │agent_ids │       │stp_index │
+│ endpoint │       │ result   │       │ type     │
+│ api_key  │       │ tokens   │       │ status   │
+│ tools    │       │started_at│       │ content  │
+│ config   │       │compltd_at│       │tool_name │
+└──────────┘       └──────────┘       │tool_inp  │
+       │                 │            │tool_out  │
+       │    ┌────────────┘            │dur_ms    │
+       │    │                         └──────────┘
+       │    │
+       │    ▼
+       │  ┌──────────────┐
+       │  │ conversations│
+       │  ├──────────────┤
+       │  │ id (PK)      │
+       │  │ task_id (FK) │
+       │  │ role         │
+       │  │ content      │
+       │  └──────────────┘
+       │
+       ▼
+┌──────────┐       ┌──────────┐
+│  tools   │       │  files   │
+├──────────┤       ├──────────┤
+│ name(PK) │       │ id (PK)  │
+│ desc     │       │ task_id  │
+│ schema   │       │ filename │
+│ enabled  │       │ path     │
+└──────────┘       │ size     │
+                   │ mime     │
+                   │ metadata │
+                   └──────────┘</pre>
+
+        <h2>5.3 表详细定义</h2>
+
+        <h3>5.3.1 agents — Agent 配置表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>id</code></td><td>TEXT PK</td><td>Agent 唯一标识</td></tr>
+            <tr><td><code>name</code></td><td>TEXT UNIQUE</td><td>Agent 名称</td></tr>
+            <tr><td><code>description</code></td><td>TEXT</td><td>描述</td></tr>
+            <tr><td><code>system_prompt</code></td><td>TEXT</td><td>系统提示词</td></tr>
+            <tr><td><code>model</code></td><td>TEXT</td><td>使用模型（如 deepseek-v4-flash）</td></tr>
+            <tr><td><code>temperature</code></td><td>REAL</td><td>温度参数，默认 0.7</td></tr>
+            <tr><td><code>max_tokens</code></td><td>INT</td><td>最大 token 数，默认 4096</td></tr>
+            <tr><td><code>api_endpoint</code></td><td>TEXT</td><td>LLM API 端点</td></tr>
+            <tr><td><code>api_key</code></td><td>TEXT</td><td>API Key（明文存储，Phase 6+ 加密）</td></tr>
+            <tr><td><code>tools</code></td><td>JSON</td><td>允许的工具列表 ["run_shell","write_file"]</td></tr>
+            <tr><td><code>config</code></td><td>JSON</td><td>扩展配置（预留）</td></tr>
+            <tr><td><code>created_at</code></td><td>DATETIME</td><td>创建时间</td></tr>
+            <tr><td><code>updated_at</code></td><td>DATETIME</td><td>更新时间</td></tr>
+        </table>
+
+        <h3>5.3.2 tasks — 任务执行记录表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>id</code></td><td>TEXT PK</td><td>任务 ID</td></tr>
+            <tr><td><code>user_input</code></td><td>TEXT</td><td>用户输入</td></tr>
+            <tr><td><code>status</code></td><td>TEXT</td><td>running / completed / failed</td></tr>
+            <tr><td><code>agent_ids</code></td><td>JSON</td><td>参与的 Agent ID 数组</td></tr>
+            <tr><td><code>final_result</code></td><td>TEXT</td><td>最终结果</td></tr>
+            <tr><td><code>total_tokens</code></td><td>INT</td><td>总 token 消耗</td></tr>
+            <tr><td><code>started_at</code></td><td>DATETIME</td><td>开始时间</td></tr>
+            <tr><td><code>completed_at</code></td><td>DATETIME</td><td>完成时间</td></tr>
+        </table>
+
+        <h3>5.3.3 steps — 执行步骤日志表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>id</code></td><td>TEXT PK</td><td>步骤 ID</td></tr>
+            <tr><td><code>task_id</code></td><td>TEXT FK</td><td>关联 tasks.id</td></tr>
+            <tr><td><code>agent_id</code></td><td>TEXT</td><td>所属 Agent</td></tr>
+            <tr><td><code>step_index</code></td><td>INT</td><td>第几轮 Loop</td></tr>
+            <tr><td><code>type</code></td><td>TEXT</td><td>think / tool_call / observation</td></tr>
+            <tr><td><code>status</code></td><td>TEXT</td><td>running / completed / failed</td></tr>
+            <tr><td><code>content</code></td><td>TEXT</td><td>思考内容或工具输出</td></tr>
+            <tr><td><code>tool_name</code></td><td>TEXT</td><td>工具名称（type=tool_call 时）</td></tr>
+            <tr><td><code>tool_input</code></td><td>JSON</td><td>工具输入参数</td></tr>
+            <tr><td><code>tool_output</code></td><td>TEXT</td><td>工具执行结果</td></tr>
+            <tr><td><code>duration_ms</code></td><td>INT</td><td>执行耗时（毫秒）</td></tr>
+            <tr><td><code>token_used</code></td><td>INT</td><td>本步消耗 token</td></tr>
+            <tr><td><code>created_at</code></td><td>DATETIME</td><td>创建时间</td></tr>
+        </table>
+
+        <h3>5.3.4 tools — 工具注册表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>name</code></td><td>TEXT PK</td><td>工具名称（唯一）</td></tr>
+            <tr><td><code>description</code></td><td>TEXT</td><td>工具描述</td></tr>
+            <tr><td><code>schema</code></td><td>JSON</td><td>JSON Schema 参数定义</td></tr>
+            <tr><td><code>enabled</code></td><td>BOOLEAN</td><td>是否启用</td></tr>
+            <tr><td><code>created_at</code></td><td>DATETIME</td><td>注册时间</td></tr>
+        </table>
+
+        <h3>5.3.5 conversations — 对话历史表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>id</code></td><td>TEXT PK</td><td>消息 ID</td></tr>
+            <tr><td><code>task_id</code></td><td>TEXT FK</td><td>关联 tasks.id</td></tr>
+            <tr><td><code>role</code></td><td>TEXT</td><td>user / assistant / tool / system</td></tr>
+            <tr><td><code>content</code></td><td>TEXT</td><td>消息内容</td></tr>
+            <tr><td><code>created_at</code></td><td>DATETIME</td><td>创建时间</td></tr>
+        </table>
+
+        <h3>5.3.6 files — 文件元数据表</h3>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>id</code></td><td>TEXT PK</td><td>文件 ID</td></tr>
+            <tr><td><code>task_id</code></td><td>TEXT FK</td><td>关联任务</td></tr>
+            <tr><td><code>filename</code></td><td>TEXT</td><td>文件名</td></tr>
+            <tr><td><code>path</code></td><td>TEXT</td><td>存储路径（相对 storage/）</td></tr>
+            <tr><td><code>size_bytes</code></td><td>INT</td><td>文件大小</td></tr>
+            <tr><td><code>mime_type</code></td><td>TEXT</td><td>MIME 类型</td></tr>
+            <tr><td><code>metadata</code></td><td>JSON</td><td>扩展元数据</td></tr>
+            <tr><td><code>created_at</code></td><td>DATETIME</td><td>创建时间</td></tr>
+        </table>
+
+        <h2>5.4 文件存储方案</h2>
+        <pre>
+storage/
+├── {task_id}/
+│   ├── output.go          # write_file 创建的文件
+│   ├── research_report.md
+│   └── ...
+└── .gitkeep</pre>
+        <p>文件按 <code>task_id</code> 分目录，元数据存入 SQLite <code>files</code> 表。</p>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>Schema 版本迁移策略（goose / golang-migrate）</li>
+                <li>索引策略（慢查询优化）</li>
+                <li>数据备份与恢复方案</li>
+                <li>大文件存储方案（>10MB 的 write_file 输出）</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="04-event-system.html">← 上一章</a> |
+            <a href="06-api-reference.html">下一章：API 参考 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

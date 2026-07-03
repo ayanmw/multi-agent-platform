@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>1. 产品概述 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo">
+            <h2>📚 文档</h2>
+            <span>v0.1 Alpha</span>
+        </div>
+        <div class="section-label">概览</div>
+        <nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html" class="active">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div>
+        <nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+
+    <main class="main">
+        <h1>1. 产品概述</h1>
+        <p style="color:#666;">描述产品的目标、定位、核心价值和使用场景。</p>
+
+        <h2>1.1 产品定位</h2>
+        <p>Multi-Agent Platform 是一个<strong>可实时观察、可扩展、可配置</strong>的 AI Agent 协作平台。</p>
+        <p>它同时服务于两种角色：</p>
+        <ul style="padding-left:20px; margin:12px 0;">
+            <li><strong>学习工具</strong>：作为研究 Agent 架构、Go 后端开发、Vue 实时可视化的实验场</li>
+            <li><strong>内部产品</strong>：作为团队内部使用的多 Agent 任务执行平台</li>
+        </ul>
+
+        <div class="callout info">
+            <div class="callout-title">核心理念</div>
+            "看见 AI 如何思考" —— 不只是看结果，而是看整个思考-行动-观察的循环过程。
+        </div>
+
+        <h2>1.2 目标用户</h2>
+        <table>
+            <tr><th>用户类型</th><th>特征</th><th>核心需求</th></tr>
+            <tr><td>开发者（主要）</th><td>Go / Agent 技术栈学习者</td><td>实时观察 Agent 行为、理解 ReAct Loop、调试 Tool 调用</td></tr>
+            <tr><td>内部用户</td><td>团队成员</td><td>一键发起预设任务、查看执行结果、管理 Agent 配置</td></tr>
+        </table>
+
+        <h2>1.3 核心价值</h2>
+        <table>
+            <tr><th>价值点</th><th>说明</th></tr>
+            <tr>
+                <td>🔍 <strong>全链路可视化</strong></td>
+                <td>实时展示 Agent 的每一步：思考过程、工具调用、观察结果、token 消耗</td>
+            </tr>
+            <tr>
+                <td>⚡ <strong>多 Agent 并行</strong></td>
+                <td>支持多个 Agent 同时执行不同的子任务，前端实时合并状态树</td>
+            </tr>
+            <tr>
+                <td>🔧 <strong>高度可配置</strong></td>
+                <td>每个 Agent 可独立配置 API endpoint、model、system prompt、允许的工具集</td>
+            </tr>
+            <tr>
+                <td>🧩 <strong>运行时扩展</strong></td>
+                <td>工具支持运行时注册（API / AI 自描述），无需重启服务</td>
+            </tr>
+            <tr>
+                <td>💾 <strong>持久化一切</strong></td>
+                <td>SQLite 存储所有配置、执行历史、对话记录、文件元数据</td>
+            </tr>
+            <tr>
+                <td>🛠️ <strong>学习优先</strong></td>
+                <td>自研 Agent Loop（不封装 langchaingo），最大化学习价值</td>
+            </tr>
+        </table>
+
+        <h2>1.4 系统边界</h2>
+        <table>
+            <tr><th>范围内 ✅</th><th>范围外 ❌</th></tr>
+            <tr>
+                <td>
+                    <ul style="padding-left:18px;">
+                        <li>单仓库 monorepo（Go + Vue）</li>
+                        <li>内部 LLM API（deepseek-v4-flash）</li>
+                        <li>本地 SQLite 持久化</li>
+                        <li>WebSocket 实时通信</li>
+                        <li>3 个内置工具（shell / file ops）</li>
+                        <li>5 个预设任务场景</li>
+                    </ul>
+                </td>
+                <td>
+                    <ul style="padding-left:18px;">
+                        <li>外部 LLM Provider（仅内部 API）</li>
+                        <li>用户认证 / 多租户（Phase 6+）</li>
+                        <li>RAG 向量检索（Phase 6+）</li>
+                        <li>gRPC（预留接口，Phase 0-4 用 WS）</li>
+                        <li>Docker 沙箱（Phase 5+）</li>
+                        <li>移动端 UI</li>
+                    </ul>
+                </td>
+            </tr>
+        </table>
+
+        <h2>1.5 设计原则</h2>
+        <table>
+            <tr><th>原则</th><th>解释</th></tr>
+            <tr>
+                <td>渐进式构建</td>
+                <td>分 Phase 实现，每个 Phase 独立可验证，不追求一步到位</td>
+            </tr>
+            <tr>
+                <td>可见性优先</td>
+                <td>Agent 内部状态尽可能暴露给前端，支持选择性隐藏</td>
+            </tr>
+            <tr>
+                <td>协议可替换</td>
+                <td>后端 EventBus 接口抽象，WebSocket ↔ gRPC 可无缝切换</td>
+            </tr>
+            <tr>
+                <td>数据不丢失</td>
+                <td>所有执行历史持久化到 SQLite，支持回放和审计</td>
+            </tr>
+            <tr>
+                <td>学习驱动</td>
+                <td>自研核心组件（Agent Loop / Tool Registry），而非封装第三方库</td>
+            </tr>
+        </table>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>用户旅程图（User Journey Map）</li>
+                <li>竞品对比分析（OpenClaw / AutoGen / CrewAI）</li>
+                <li>产品截图 / 演示 GIF</li>
+                <li>设计稿 / Figma 链接</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="02-architecture.html">下一章：系统架构 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

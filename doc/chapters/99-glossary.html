@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>术语表 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div><nav><a href="99-glossary.html" class="active">术语表</a></nav>
+    </aside>
+    <main class="main">
+        <h1>术语表</h1>
+
+        <table>
+            <tr><th style="width:160px;">术语</th><th>说明</th></tr>
+            <tr><td><strong>Agent</strong></td><td>AI 代理，绑定特定 LLM 配置、System Prompt、工具集，可独立执行任务的智能体</td></tr>
+            <tr><td><strong>ReAct Loop</strong></td><td>Reason + Act 循环：Agent 思考(think) → 调用工具(tool_call) → 观察结果(observation) → 继续思考的迭代过程</td></tr>
+            <tr><td><strong>Step</strong></td><td>Agent 执行的一次循环单位，类型为 think / tool_call / observation</td></tr>
+            <tr><td><strong>Task</strong></td><td>用户发起的一次任务，可包含 1 个或多个 Agent，有完整的生命周期(running→completed/failed)</td></tr>
+            <tr><td><strong>Tool</strong></td><td>Agent 可调用的外部能力（如 shell 执行、文件读写），通过 JSON Schema 描述参数</td></tr>
+            <tr><td><strong>Tool Registry</strong></td><td>工具注册中心，管理所有可用工具的注册、查询、执行</td></tr>
+            <tr><td><strong>Event</strong></td><td>系统内部通信的最小单位，通过 WebSocket 在前后端之间传输</td></tr>
+            <tr><td><strong>EventType</strong></td><td>事件类型枚举，共 18 种，覆盖生命周期 / LLM / 工具 / 控制 / 系统事件</td></tr>
+            <tr><td><strong>Hub</strong></td><td>WebSocket 连接管理中心，管理所有客户端连接、注册、注销、广播</td></tr>
+            <tr><td><strong>LLM Delta</strong></td><td>LLM 流式输出中的增量文本，前端累积后实时渲染</td></tr>
+            <tr><td><strong>SSE</strong></td><td>Server-Sent Events，HTTP 单向流协议，用于 LLM token 流式传输</td></tr>
+            <tr><td><strong>WebSocket</strong></td><td>全双工通信协议，本平台的前后端实时通信基础</td></tr>
+            <tr><td><strong>gRPC</strong></td><td>Google RPC 框架，Phase 6+ 的协议迁移目标，提供类型安全和双向流</td></tr>
+            <tr><td><strong>OpenAI-compatible</strong></td><td>与 OpenAI API 格式兼容的接口标准，内部 API 遵循此标准</td></tr>
+            <tr><td><strong>System Prompt</strong></td><td>系统提示词，定义 Agent 的角色、行为准则和约束</td></tr>
+            <tr><td><strong>Function Calling</strong></td><td>LLM 输出结构化 JSON 来触发工具调用的能力</td></tr>
+            <tr><td><strong>Token</strong></td><td>LLM 处理文本的最小语义单元，用于计费和量化上下文长度</td></tr>
+            <tr><td><strong>Case Card</strong></td><td>前端预设任务卡片，用户可一键发起预设的 Agent 任务</td></tr>
+            <tr><td><strong>Agent Tree</strong></td><td>前端 Agent 状态可视化组件，以树形结构展示 Agent 的每一步执行过程</td></tr>
+            <tr><td><strong>TypeWriter</strong></td><td>前端流式文本渲染效果，模拟打字机逐字显示 LLM 输出</td></tr>
+            <tr><td><strong>RAG</strong></td><td>Retrieval-Augmented Generation，检索增强生成，Phase 6+ 的知识库能力</td></tr>
+            <tr><td><strong>OpenSpec</strong></td><td>项目采用的变更管理框架，包含 proposal → design → specs → tasks 工件流</td></tr>
+            <tr><td><strong>Phase</strong></td><td>开发阶段，每个 Phase 有独立的目标和验证标准，完成后提交 Git</td></tr>
+        </table>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>英文术语对照（方便检索）</li>
+                <li>UML 类图术语映射</li>
+                <li>常见缩写表</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="08-roadmap.html">← 上一章</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

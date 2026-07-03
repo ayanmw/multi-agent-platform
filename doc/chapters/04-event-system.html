@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>4. 事件系统 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div><nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html" class="active">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div><nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+    <main class="main">
+        <h1>4. 事件系统</h1>
+        <p style="color:#666;">AgentEvent 协议定义、通信机制、状态机流程。</p>
+
+        <h2>4.1 设计目标</h2>
+        <p>事件系统是整个平台的核心通信中枢，负责：</p>
+        <ul style="padding-left:20px;">
+            <li>将后端 Agent 执行状态实时推送到前端</li>
+            <li>支持多 Agent 并行时的状态隔离与合并</li>
+            <li>提供细粒度的事件类型，前端可按需展示或隐藏细节</li>
+        </ul>
+
+        <h2>4.2 Event 结构体</h2>
+        <p>所有 WebSocket 消息统一使用 <code>AgentEvent</code> 结构：</p>
+        <pre>{
+  "event_id":   "a1b2c3d4e5f6",      // 唯一 ID（UUID fragment）
+  "task_id":    "task_20260101000000", // 关联任务 ID
+  "agent_id":   "agent_research_001",  // 事件来源 Agent
+  "step_index": 0,                    // 当前第几轮 Loop
+  "type":       "llm_delta",          // 事件类型
+  "timestamp":  1717200000000,        // Unix ms
+  "data": {                           // 事件载荷（类型相关）
+    "content": "some text delta..."
+  }
+}</pre>
+
+        <h2>4.3 事件类型一览</h2>
+        <table>
+            <tr><th>类别</th><th>事件类型</th><th>说明</th><th>data 字段</th></tr>
+            <tr><td rowspan="3">生命周期</td><td><code>task_started</code></td><td>任务开始执行</td><td>task_id</td></tr>
+            <tr><td><code>task_completed</code></td><td>任务成功完成</td><td>result</td></tr>
+            <tr><td><code>task_failed</code></td><td>任务失败</td><td>error</td></tr>
+            <tr><td rowspan="4">LLM 交互</td><td><code>llm_thinking</code></td><td>LLM 刚开始生成</td><td>content</td></tr>
+            <tr><td><code>llm_delta</code></td><td>Token 增量（批量）</td><td>content</td></tr>
+            <tr><td><code>llm_token</code></td><td>单个 token（备用）</td><td>token</td></tr>
+            <tr><td><code>llm_message_complete</code></td><td>LLM 本轮回复完毕</td><td>—</td></tr>
+            <tr><td rowspan="4">工具调用</td><td><code>tool_call_started</code></td><td>工具开始执行</td><td>tool, args</td></tr>
+            <tr><td><code>tool_call_input</code></td><td>工具参数确认</td><td>tool, input</td></tr>
+            <tr><td><code>tool_call_output</code></td><td>工具执行结果</td><td>result</td></tr>
+            <tr><td><code>tool_call_complete</code></td><td>工具执行完成</td><td>tool, duration_ms</td></tr>
+            <tr><td rowspan="2">Agent 步骤</td><td><code>step_started</code></td><td>新一轮 Loop 开始</td><td>step, type(think/tool_call)</td></tr>
+            <tr><td><code>observation</code></td><td>Agent 对结果的观察</td><td>content</td></tr>
+            <tr><td rowspan="3">控制</td><td><code>paused</code></td><td>用户暂停</td><td>—</td></tr>
+            <tr><td><code>resumed</code></td><td>用户恢复</td><td>—</td></tr>
+            <tr><td><code>cancelled</code></td><td>用户取消</td><td>—</td></tr>
+            <tr><td>系统</td><td><code>error</code></td><td>错误事件</td><td>error, context</td></tr>
+            <tr><td>系统</td><td><code>metric</code></td><td>指标（token/耗时）</td><td>tokens, duration_ms</td></tr>
+        </table>
+
+        <h2>4.4 典型事件序列</h2>
+        <p>一个完整的 ReAct Loop 产生的典型事件流：</p>
+        <pre>1. task_started        → 任务开始
+2.   step_started      → 第 0 轮开始 (type: think)
+3.     llm_thinking    → LLM 开始生成
+4.     llm_delta       → token 增量 × N
+5.     llm_message_complete
+6.   step_complete      → 第 0 轮结束（纯文本回复）
+7.   step_started      → 第 1 轮开始 (type: tool_call)
+8.     tool_call_started → 调用 write_file
+9.     tool_call_input   → 参数确认
+10.    tool_call_output  → 执行结果
+11.    tool_call_complete → 完成（42ms）
+12.  step_complete       → 第 1 轮结束
+13.  observation        → Agent 观察：文件已写入
+14. step_started        → 第 2 轮开始 (type: think)
+...（循环直到最终答案）
+N.  task_completed     → 任务完成，附带最终结果</pre>
+
+        <h2>4.5 WebSocket  Hub 架构</h2>
+        <pre>Client ──connect──▶ Hub.register ──▶ clients map
+                                          │
+Client ◀──broadcast── Hub.broadcast ◀── SendEvent()
+                                          │
+                                    for each client:
+                                      client.Send ← evt
+                                          │
+                                    client.writePump()
+                                          │
+                                    websocket.WriteJSON()</pre>
+
+        <h2>4.6 事件去重与排序</h2>
+        <div class="callout warning">
+            <div class="callout-title">注意事项</div>
+            <ul style="padding-left:18px;">
+                <li>每个事件有唯一 <code>event_id</code>，前端可用于去重</li>
+                <li><code>timestamp</code> 保证事件有序（但 WebSocket 本身保证顺序）</li>
+                <li>多 Agent 并行时，事件交错到达，前端按 <code>agent_id</code> 分桶</li>
+                <li><code>llm_delta</code> 是批量事件，前端需追加而非覆盖</li>
+            </ul>
+        </div>
+
+        <h2>4.7 前端事件处理</h2>
+        <p>前端收到事件后，按 <code>type</code> 分发到对应处理函数：</p>
+        <table>
+            <tr><th>事件类型</th><th>前端操作</th></tr>
+            <tr><td><code>task_started</code></td><td>创建新 Task 节点，状态设为 running</td></tr>
+            <tr><td><code>step_started</code></td><td>创建新 Step 节点，追加到对应 Agent</td></tr>
+            <tr><td><code>llm_delta</code></td><td>追加 text 到最后 Step 的 thinking 字段</td></tr>
+            <tr><td><code>tool_call_*</code></td><td>更新 Step 的 toolCall 对象</td></tr>
+            <tr><td><code>observation</code></td><td>创建 observation 类型 Step</td></tr>
+            <tr><td><code>task_completed</code></td><td>标记 Task 完成，显示 finalResult</td></tr>
+        </table>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>事件 Schema 的 JSON Schema 定义（用于 API 文档生成）</li>
+                <li>事件时序图（Mermaid）</li>
+                <li>前端 Event Router 的状态机实现</li>
+                <li>事件重放机制（从 SQLite steps 表重建事件流）</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="03-tech-stack.html">← 上一章</a> |
+            <a href="05-data-model.html">下一章：数据模型 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>

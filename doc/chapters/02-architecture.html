@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>2. 系统架构 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="section-label">概览</div>
+        <nav><a href="../index.html">首页</a></nav>
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html" class="active">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">附录</div>
+        <nav><a href="99-glossary.html">术语表</a></nav>
+    </aside>
+
+    <main class="main">
+        <h1>2. 系统架构</h1>
+        <p style="color:#666;">分层架构设计、数据流、部署拓扑。</p>
+
+        <h2>2.1 分层架构总览</h2>
+
+        <pre>
+┌──────────────────────────────────────────────────────────────────┐
+│                      Vue 3 Frontend                              │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
+│  │ Agent Tree │  │ TypeWriter   │  │ Case Cards               │ │
+│  │ Viewer     │  │ Renderer     │  │ Panel                    │ │
+│  │ (实时状态)  │  │ (Markdown)   │  │ (预设任务)               │ │
+│  └─────┬──────┘  └──────┬───────┘  └───────────┬──────────────┘ │
+│        │                │                       │                 │
+└────────┼────────────────┼───────────────────────┼─────────────────┘
+         │   WebSocket    │                       │  REST
+         ▼                ▼                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     Go Backend Server                             │
+│                                                                  │
+│  ┌─────────────────────────┐  ┌──────────────────────────────┐ │
+│  │       Protocol Layer    │  │    WebSocket Hub              │ │
+│  │   (EventBus interface)  │  │    (gorilla/websocket)        │ │
+│  └────────────┬────────────┘  └──────────────┬───────────────┘ │
+│               │                               │                   │
+│  ┌────────────┴───────────────────────────────┴───────────────┐ │
+│  │                    Agent Runtime                           │ │
+│  │  ┌─────────────┐  ┌───────────────┐  ┌──────────────────┐ │ │
+│  │  │ LLM Client  │  │ Tool Registry │  │ ReAct Loop       │ │ │
+│  │  │ (OpenAI     │  │ (动态注册)     │  │ Engine           │ │ │
+│  │  │  compatible)│  │               │  │                  │ │ │
+│  │  └─────────────┘  └───────────────┘  └──────────────────┘ │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│               │                                                   │
+│  ┌────────────┴──────────────────────────────────────────────┐ │
+│  │              Persistence Layer (SQLite)                     │ │
+│  │  Agents │ Tasks │ Steps │ Tools │ Conversations │ Files    │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Internal LLM API                              │  │
+│  │        https://aicoding.dobest.com/v1                     │  │
+│  │        Model: deepseek-v4-flash                           │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+        </pre>
+
+        <h2>2.2 目录结构</h2>
+        <table>
+            <tr><th>路径</th><th>说明</th><th>Phase</th></tr>
+            <tr><td><code>cmd/server/</code></td><td>入口 main.go，HTTP + WebSocket Server</td><td>0</td></tr>
+            <tr><td><code>internal/agent/</code></td><td>Agent 数据结构（Agent, Step, Status）</td><td>0</td></tr>
+            <tr><td><code>internal/ws/</code></td><td>WebSocket Hub（connect / broadcast / lifecycle）</td><td>0</td></tr>
+            <tr><td><code>internal/tool/</code></td><td>Tool 接口 + Registry + 内置工具实现</td><td>1</td></tr>
+            <tr><td><code>internal/llm/</code></td><td>LLM Client（OpenAI-compatible SSE streaming）</td><td>1</td></tr>
+            <tr><td><code>internal/runtime/</code></td><td>Task / Session 状态管理 + Agent Loop 编排</td><td>1</td></tr>
+            <tr><td><code>internal/config/</code></td><td>配置管理（Agent CRUD + LLM 配置绑定）</td><td>1</td></tr>
+            <tr><td><code>pkg/event/</code></td><td>AgentEvent 结构体 + EventType 枚举 + JSON</td><td>0</td></tr>
+            <tr><td><code>pkg/db/</code></td><td>SQLite 初始化 + Schema + 基础 CRUD</td><td>0</td></tr>
+            <tr><td><code>web/</code></td><td>Vue 3 前端（Vite + TypeScript）</td><td>0→2</td></tr>
+            <tr><td><code>doc/</code></td><td>产品文档（HTML 多章节）</td><td>0</td></tr>
+            <tr><td><code>roadmaps/</code></td><td>产品路线图（Markdown，每 Phase 更新）</td><td>0</td></tr>
+        </table>
+
+        <h2>2.3 数据流</h2>
+        <pre>
+用户发起任务
+    │
+    ▼
+前端 POST /api/tasks { action, input }
+    │
+    ▼
+后端创建 Task + Agent 实例
+    │
+    ▼
+ReAct Loop 开始
+    │
+    ├─► 调用 LLM API（SSE streaming）
+    │       │
+    │       ├─► llm_thinking 事件 ──► WebSocket ──► 前端实时渲染
+    │       ├─► llm_delta 事件   ──► WebSocket ──► 前端 typewriter
+    │       └─► llm_message_complete
+    │
+    ├─► 解析 Function Call
+    │       │
+    │       ├─► tool_call_started  ──► 前端高亮工具名称
+    │       ├─► tool_call_input    ──► 前端展示参数
+    │       ├─► [执行工具]
+    │       ├─► tool_call_output   ──► 前端展示结果
+    │       └─► tool_call_complete ──► 前端更新状态
+    │
+    ├─► 将工具结果追加到上下文
+    │       │
+    │       └─► 回到 LLM 调用（继续 Loop）
+    │
+    └─► 最终答案
+            │
+            ├─► task_completed 事件
+            ├─► 持久化到 SQLite（task + steps + conversations）
+            └─► 前端展示最终结果
+        </pre>
+
+        <h2>2.4 部署拓扑</h2>
+        <table>
+            <tr><th>环境</th><th>配置</th><th>说明</th></tr>
+            <tr><td>开发</td><td>单机，localhost:8080</td><td>Go 后端 + Vue dev server（proxy）或直接访问文件</td></tr>
+            <tr><td>测试</td><td>单机，局域网 IP</td><td>Go builds binary，Vue build → dist/ 由 Go serve</td></tr>
+            <tr><td>生产（未来）</td><td>Nginx + systemd</td><td>Nginx 反代 /ws 到 Go 端口，serve static files</td></tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">⚠️ 当前部署方式</div>
+            Phase 0-4 阶段，前端使用 <code>web/index.html</code> CDN 直接访问，无需 build step。<br>
+            Phase 2+ 迁移到 Vite 工程化后，需 <code>npm run build</code> 生成 <code>web/dist/</code>。
+        </div>
+
+        <h2>2.5 关键设计决策回顾</h2>
+        <table>
+            <tr><th>决策</th><th>选择</th><th>原因</th></tr>
+            <tr><td>通信协议</td><td>WebSocket + JSON</td><td>前端原生支持、调试直观、单连接承载所有事件</td></tr>
+            <tr><td>数据库</td><td>SQLite (modernc.org)</td><td>纯 Go 无 CGO、单文件、零运维</td></tr>
+            <tr><td>Agent Loop</td><td>自研 ReAct Loop</td><td>学习优先、最大控制权、可注入任意中间事件</td></tr>
+            <tr><td>LLM 接入</td><td>OpenAI-compatible API</td><td>内部 API 已兼容、标准 streaming format</td></tr>
+            <tr><td>前端状态</td><td>Vue reactive（Phase 1→Pinia）</td><td>快速验证优先，后续工程化</td></tr>
+            <tr><td>工具执行</td><td>Go 直接执行（Phase 5+ 沙箱）</td><td>MVP 阶段允许，文档注明风险</td></tr>
+        </table>
+
+        <div class="placeholder">
+            后续补充：
+            <ul style="padding-left:18px;">
+                <li>C4 架构图（Context / Container / Component / Code）</li>
+                <li>时序图（Task 执行全流程）</li>
+                <li>状态机图（Agent Step 状态转换）</li>
+                <li>部署架构图（Docker Compose / K8s）</li>
+                <li>依赖图（Go module graph）</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <a href="../index.html">← 返回首页</a> |
+            <a href="01-overview.html">← 上一章</a> |
+            <a href="03-tech-stack.html">下一章：技术栈 →</a>
+        </div>
+    </main>
+</div>
+</body>
+</html>
