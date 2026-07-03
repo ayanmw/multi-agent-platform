@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/composables/usetaskstore.ts","./src/composables/usewebsocket.ts","./src/types/events.ts","./src/app.vue","./src/components/agenttree.vue","./src/components/metricspanel.vue","./src/components/statusindicator.vue","./src/components/taskinput.vue","./src/components/typewriter.vue","./env.d.ts"],"version":"5.8.3"}

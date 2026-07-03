@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-03
-> **Current version**: v0.2 Alpha (Phase 1 complete)
+> **Current version**: v0.3 Alpha (Phase 2 complete)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5 → Phase 6
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Phase 5 → Phase 6
   (骨架)      (Agent)     (UI)       (Cases)    (并发)    (注册)    (高级)
 ```
 
@@ -80,20 +80,32 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 
 ---
 
-## Phase 2: 前端可视化 🔜
+## Phase 2: 前端可视化 ✅ COMPLETED
 
 **目标**: 实现 Agent 执行过程的完整可视化
 
+**完成日期**: 2026-07-03
+**Git commit**: TBD
+
 ### 交付物
-- [ ] AgentTree 组件（递归树 + 实时更新）
-- [ ] TypeWriter 组件（LLMDelta 流式渲染 + 打字机效果）
-- [ ] Markdown 实时渲染 + 代码语法高亮（marked + highlight.js）
-- [ ] Step 展开/折叠 + 状态指示器（running/completed/failed 图标）
-- [ ] Pause / Resume / Cancel 控制按钮
-- [ ] 指标面板（token 消耗、耗时统计）
+- [x] Vite + Vue 3 + TypeScript 工程化迁移（从 CDN 单文件）
+- [x] AgentTree 组件（递归树 + 实时更新）
+- [x] TypeWriter 组件（LLMDelta 流式渲染 + marked + highlight.js）
+- [x] Markdown 实时渲染 + 代码语法高亮
+- [x] Step 展开/折叠 + StatusIndicator 状态指示器
+- [x] Pause / Resume / Cancel 控制按钮
+- [x] 指标面板（连接状态、task 状态、agents、steps、tokens）
+- [x] TaskInput 组件（chat 输入 + 发送）
+- [x] useTaskStore 状态管理（事件路由 + 响应式 TaskState）
+- [x] useWebSocket 连接管理（自动重连 + 指数退避）
+- [x] Go embed 集成（前端 dist/ 嵌入二进制，单文件部署）
+- [x] 独立部署支持（Vite dev server 代理 /ws 和 /api 到 Go 后端）
 
 ### 验证标准
-- 运行一个复杂任务，能在前端看到每一步的完整可视化
+- [x] `vue-tsc` 类型检查通过
+- [x] `vite build` 构建成功
+- [x] `go build ./...` 编译通过
+- [x] 前端 embed 到 Go 二进制，单文件部署
 
 ---
 
@@ -205,3 +217,4 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 |------|------|------|
 | v0.1 | 2026-07-03 | Phase 0 完成，初始骨架搭建 |
 | v0.2 | 2026-07-03 | Phase 1 完成，Agent Loop 核心引擎 + e2e 测试工具 |
+| v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |

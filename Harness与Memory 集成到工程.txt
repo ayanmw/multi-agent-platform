@@ -1,0 +1,368 @@
+"D:\aaaaaaaaaaaa-ai\260629 Harness Engineering\Harness_Engineering_Concept_Intro\Harness_Engineering_概念导论.md" "D:\aaaaaaaaaaaa-ai\260629 Harness Engineering\Memory\搭建类似Hermes
+  Agent的自进化长期记忆.md" 这里有两份文档, 看下是否有借鉴意义,继续供我们完善 我们的 harness 和 自动记忆管理 ,一定要适合我们当前项目
+
+
+两份文档都非常有深度。让我提取核心洞察，并精准映射到我们的项目架构上。
+
+---
+关键洞察提取
+核心洞察提炼
+
+从 Harness 概念导论中
+Harness 文档的核心贡献
+
+1. 四问法（判断系统是否完整 Harness）：T1 运行时闭环 / T2 环境感知与改变 / T3 任务感知上下文 / T4 独立于模型的控制验证
+2. 四条工程结论：任务契约 → 上下文≠状态 → 确定性约束优先 → 失败回归闭环
+3. 六层结构：L0 模型 → L1 指导 → L2 行动 → L3 运行 → L4 质量 → L5 治理
+4. Anthropic 长任务案例：feature_list.json + claude-progress.txt + init.sh + 端到端测试
+
+1. 四问法评估当前项目：
+
+┌────────────────────┬────────────────────┬───────────────────────────────────────────┐
+│        问题        │      当前状态      │                   缺口                    │
+├────────────────────┼────────────────────┼───────────────────────────────────────────┤
+│ T1: 运行时闭环     │ ✅ ReAct Loop 完整 │ —                                         │
+├────────────────────┼────────────────────┼───────────────────────────────────────────┤
+│ T2: 感知并改变环境 │ ✅ 3 个内置工具    │ —                                         │
+├────────────────────┼────────────────────┼───────────────────────────────────────────┤
+│ T3: 任务感知上下文 │ ❌                 │ 全量消息追加，无选择性上下文管理          │
+├────────────────────┼────────────────────┼───────────────────────────────────────────┤
+│ T4: 独立控制/验证  │ ❌                 │ 只有 MaxSteps，无策略门/测试断言/预算控制 │
+└────────────────────┴────────────────────┴───────────────────────────────────────────┘
+
+2. Anthropic 长任务案例的关键教训：
+- 强模型 + Loop + Compaction 仍然不够
+- 需要外部工件：feature_list、progress.txt、init.sh、端到端测试
+- "完成"由外部验收结果决定，不由模型一句话决定
+
+3. 四条工程结论：
+- 任务从可验证的契约开始，而非一段 Prompt
+- 上下文窗口 ≠ 任务状态
+- 确定性约束不应只写成自然语言
+- 重要失败要进入可重复的回归闭环
+
+
+
+记忆文档的核心贡献
+
+1. 四层记忆模型：Working → Raw Episodic → Consolidated Episodic → Semantic/Policy
+2. 分工原则：抽取靠模型，治理靠代码，验收看行为
+3. 三条晋升通道：跨会话重复 / 工具失败证据 / 用户显式长期指令
+4. 心跳安全边界：来源标记 + 证据链接 + 置信度 + 可回滚
+
+
+从 Hermes 记忆文档中
+
+1. 记忆是治理问题，不是存储问题：RAG 只覆盖召回；写入、修正、遗忘才是关键
+
+2. 三层晋升通道：跨会话重复 → 工具失败证据 → 用户显式长期指令
+
+3. 分工原则：模型负责理解自然语言（抽取、同义判断），代码负责结构化判断（status、出现次数、证据链接）
+
+4. 心跳安全边界：后台写入必须独立治理，否则自动整理 = 自动污染
+--------------------------------------------------------
+
+ Document 1: Harness Engineering 概念导论
+
+  This is a comprehensive academic/introductory document about Harness Engineering. Key insights:
+
+  Core Concept: What is Harness?
+
+  - The "harness" metaphor comes from test harness: providing input, environment, observation, and assertions for the model
+  - "Agent的表现不是模型单独的属性，而是模型、Harness与环境共同作用的结果"
+  - Harness sits between the model and the execution environment
+
+  Key Architectural Insight: 6-Layer Model
+
+  - L0: Model (能力基础，不是Harness本体)
+  - L1: 指导与上下文 (Prompt, docs, Skills, RAG, Progress)
+  - L2: 行动与环境 (Tools, MCP, Workspace, Sandbox)
+  - L3: 任务运行与服务 (Loop, 编排, 状态, 记忆, 恢复, 消息和Streaming)
+  - L4: 质量与交付 (Event logs, Trace, Tests, Eval, CI, Review)
+  - L5: 治理与组织 (身份, 审批, 成本, 审计, 职责)
+
+  The "四问法" (Four Questions for Boundary Judgment)
+
+  1. T1: 运行时是否存在"推理/决策—行动—观察"的闭环？
+  2. T2: 模型是否能通过接口感知并改变外部环境？
+  3. T3: 系统是否主动、按任务内容管理上下文和状态？
+  4. T4: 是否至少有一种不依赖"模型自觉服从"的控制或验证？
+
+  Key Problems for Agent Tasks
+
+  1. 输出变成行动
+  2. 一次调用变成持续循环
+  3. 外部环境成为任务状态的一部分
+  4. 上下文窗口不再等于任务记忆
+  5. 最终回复不再等于交付结果
+  6. 调用接口变成长期服务
+
+  Anthropic Long Task Case - Key Insights
+
+  - Even with strong model + loop + compaction, long tasks fail without external state management
+  - Solutions: feature_list.json, claude-progress.txt, Git history, init.sh, end-to-end tests
+  - "完成"由外部验收结果决定，不由模型一句话决定
+
+  Three Engineering Observations
+
+  1. SWE-agent: Fixed model, changing interface → task results change (18% vs 11%)
+  2. Anthropic: Strong model + loop + compaction → still can't maintain long tasks naturally
+  3. OpenAI: Agent-first repository transforms "things the model can't see" into system objects
+
+  Four Engineering Conclusions
+
+  1. 任务从可验证的契约开始
+  2. 上下文窗口不是任务状态
+  3. 能用确定性机制表达的约束，不应只写成自然语言
+  4. 重要失败要进入可重复的回归闭环
+
+  Document 2: Hermes Agent 自进化长期记忆
+
+  Core Insight: 记忆是治理问题，不是存储问题
+
+  - RAG只覆盖召回；写入、修正、遗忘决定"这条记录未来该不该影响行为"
+  - 数据库负责"存进去还能读出来"；记忆系统还要负责"这条记录在未来该不该影响行为"
+
+  Four-Layer Memory Model
+
+  1. Working Memory: 当前任务必要信息 → task_brief.json
+  2. Raw Episodic: 原始事件、工具输出、对话 → raw_events.jsonl
+  3. Consolidated Episodic: 任务摘要、决策、失败原因 → consolidated_sessions.jsonl
+  4. Semantic / Policy: 稳定规则、偏好、长期事实 → semantic_rules.jsonl
+
+  Hermes Agent Structure Reference
+
+  - MEMORY.md / USER.md: Semantic/Policy稳定规则
+  - SQLite + session_search: Raw Episodic完整事件流
+  - 会话结束抽取/后台review: Raw→Consolidated→Semantic整理动作
+  - Memory Provider: 语义检索与外部记忆扩展
+
+  Pipeline: Extract → Classify → Merge → Prune → Index
+
+  1. Extract: 从Task steps中提取关键信息
+  2. Classify: fact / procedure / reflection
+  3. Merge: 与已有记忆比对（新/冲突/补充/重复）
+  4. Prune: 超过30天未访问→降级，被覆盖→obsolete，与事实不符→失效
+  5. Index: embedding向量化+关键词索引
+
+  Three Promotion Channels (晋升通道)
+
+  1. cross-session repetition (跨会话重复)
+  2. tool failure evidence (工具失败证据)
+  3. explicit user instruction (用户显式长期指令)
+
+  Heartbeat Mechanism
+
+  - 后台定时任务，扫描新raw事件→触发抽取→合并→晋升→checkpoint
+  - Adaptive interval: new>=10 → 60s, new>=1 → 300s, none → 900s
+  - 分工原则: 模型负责理解自然语言的判断，代码负责可核对的结构化判断
+
+  Security: Memory Pollution
+
+  - Background heartbeat can silently pollute memory through E→M→B path
+  - 后台写入必须有独立治理：来源标记、证据链接、置信度、可回滚
+
+  Retrieval Pipeline
+
+  1. 关键词匹配 (快速)
+  2. 向量相似度 (语义)
+  3. 相关性排序 (融合): score = 0.6×向量相似度 + 0.2×关键词匹配 + 0.1×新鲜度 + 0.1×历史命中率
+  4. 注入上下文
+
+  Key Engineering Boundary
+
+  | 角色 | 负责 | 不负责 |
+  | Session | 当前会话历史、窗口裁剪 | 跨任务长期记忆治理 |
+  | 文件记忆库 | raw/consolidated/semantic/task_brief | 工程级权限、索引、并发 |
+  | Workspace | 工程化持久化、scope隔离、ContextPackage | 四层记忆理论本身 |
+  | 向量库扩展 | 语义近义召回加速 | 主事实存储、证据链、权限 |
+  | 心跳整理器 | 定时触发抽取、合并、晋升、checkpoint | 记忆理论和业务规则 |
+  | 模型 | 抽取、同义判断、摘要、表达 | 独立完成记忆治理 |
+
+  ---
+  Now let me think about how to apply these to our project:
+
+  Our Current State Assessment
+
+  Using the 四问法 (Four Questions):
+  - T1 ✅: ReAct Loop exists (engine.go has think→tool_call→observe→loop)
+  - T2 ✅: Tools (run_shell, write_file, read_file) can change environment
+  - T3 ❌: Simply appends all messages, no task-aware context management
+  - T4 ❌: No independent control/verification beyond MaxSteps
+
+  What We Need to Add
+
+  1. Harness Layer: Task Contract (任务契约)
+
+  - Before task starts: define scope, acceptance criteria, budget, escalation conditions
+  - This maps to Anthropic's feature_list.json approach
+  - For our project: TaskContract struct with goals, acceptance criteria, budget, timeout
+
+  2. Harness Layer: Progress & State (进度与状态)
+
+  - Externalize task state from chat history
+  - claude-progress.txt equivalent for our project
+  - Progress file/schema with: what was done, what remains, current baseline
+
+  3. Harness Layer: Independent Verification (独立验证)
+
+  - T4: 不依赖模型自觉的控制
+  - Policy gate, tests, state assertions
+  - For our project: tool whitelist, execution budget, pre-execution hooks
+
+  4. Memory System: Four-Layer Implementation
+
+  - Raw Episodic: Our existing steps + conversations tables
+  - Consolidated Episodic: Task summary + decision records
+  - Semantic/Policy: Cross-session rules and preferences
+  - Working Memory: Per-task context assembly
+
+  5. Memory Heartbeat
+
+  - Background consolidation agent
+  - Runs after task completion, not during
+  - Scans for new events, extracts, merges, promotes
+
+  6. Memory Retrieval
+
+  - Project-scoped (project_id isolation)
+  - Keyword + semantic (future vector)
+  - Relevance scoring
+
+  Mapping to ROADMAP Phases
+
+  Phase 3 (Cases): Add basic task contract
+  - TaskContract: goal, acceptance criteria, budget
+  - Feature list (from Anthropic case)
+
+  Phase 4 (Multi-Agent): Add progress tracking
+  - TaskProgress table/artifact
+  - Cross-session state recovery
+
+  Phase 5 (Runtime Registration): Add policy gates
+  - Tool execution policy (whitelist, budget)
+  - Pre-execution hooks
+
+  Phase 6 (Advanced): Add memory system
+  - Memory schema (memories + memory_links tables)
+  - Memory consolidation agent (heartbeat)
+  - Memory retrieval for context injection
+  - CostTracker, fallback strategy
+
+  New Document Structure
+
+  I should write a comprehensive document that:
+  1. Synthesizes both source documents
+  2. Maps to our specific project architecture
+  3. Proposes concrete implementation in Go
+  4. Integrates into existing ROADMAP
+
+  Let me also think about what makes sense for our project specifically:
+
+  Harness厚度矩阵 (from the concept intro):
+  - 我们的项目是"长任务+有副作用+路径需要动态探索+验证困难+失败成本中等"
+  - 所以需要中等偏厚的Harness
+
+  Key design decisions for our project:
+
+  1. Task Contract: Add before Phase 4 (multi-agent needs clear contracts)
+    - Schema: task_contracts table or JSON field in tasks
+    - Fields: goal, acceptance_criteria, budget_tokens, budget_cost, escalation
+  2. Progress Artifacts: Add in Phase 4
+    - Schema: task_progress table
+    - Fields: task_id, whats_done, whats_remaining, current_baseline, updated_at
+  3. Policy Gates: Add in Phase 5
+    - Tool execution policy
+    - Pre-execution validation hooks in Tool Registry
+  4. Memory System: Phase 6
+    - SQLite schema extension
+    - Memory consolidation agent
+    - Retrieval pipeline
+
+  Let me write the document now. I'll create doc/chapters/11-harness-memory-design.html that covers both topics.
+
+  Actually, let me think about whether to create one document or two. The two source documents are closely related — memory is a subsystem of harness. The concept intro explicitly says "长期记忆与自进化则主要扩展'状态与记忆'和'可观测与Eval'两个模块". So it makes sense to have one document that covers both harness and memory, showing how they integrate.
+
+  Let me create a comprehensive document that:
+
+  1. Introduces Harness Engineering concepts
+  2. Assesses our current project against the 四问法
+  3. Proposes concrete Harness additions
+  4. Designs the four-layer memory system
+  5. Maps everything to our Phase roadmap
+  6. Provides Go code skeletons
+
+  For the code, I'll add TODO comments in relevant files:
+  - internal/runtime/engine.go: Task contract reference
+  - internal/tool/registry.go: Policy gate hooks
+  - pkg/db/database.go: Memory schema extension (comment only)
+
+  Let me also consider the ROADMAP updates needed.
+
+--------------------------------------------------------
+
+1. 新文档 doc/chapters/11-harness-memory-design.html
+
+13 个章节，将两份参考文档的核心思想融入本项目：
+
+┌──────┬──────────────────────────────────────────────────────────────┬───────────────────────────────┐
+│ 章节 │                             内容                             │           参考来源            │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §1-3 │ Harness 概念引入 + 四问法评估当前项目 + 目标架构             │ 概念导论                      │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §4   │ TaskContract — 任务契约（目标、验收标准、预算、权限）        │ Anthropic 长任务案例          │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §5   │ Progress 文件 — 外部状态管理（一次只做一个功能）             │ Anthropic claude-progress.txt │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §6   │ Policy Gate — 独立于模型的约束层（确定性 Go 代码）           │ 四问法 T4                     │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §7   │ Checkpoint / Recovery — 任务可恢复性                         │ 概念导论                      │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §8   │ 四层记忆模型 — Working / Raw / Consolidated / Semantic       │ Hermes Agent + CoALA          │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §9   │ 记忆抽取管线 — 三条晋升通道（repeated / failure / explicit） │ Hermes 记忆讲义               │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §10  │ 心跳整理 — Heartbeat 后台定时触发 + 安全边界                 │ 心跳 + Mind Your HEARTBEAT!   │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §11  │ 记忆召回 — 新任务唤起 + Working Memory 构建                  │ Hermes 记忆讲义               │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §12  │ Phase 集成路径 — 每个 Phase 的 Harness + Memory 交付清单     │ 项目映射                      │
+├──────┼──────────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ §13  │ 代码占位 TODO — 按 Phase 分组的 TODO 注释                    │ 可直接复制到代码              │
+└──────┴──────────────────────────────────────────────────────────────┴───────────────────────────────┘
+
+2. 四问法评估结果
+
+┌───────────────────┬─────────────────┬──────────────────────────────────────────┐
+│       维度        │    当前状态     │                   缺口                   │
+├───────────────────┼─────────────────┼──────────────────────────────────────────┤
+│ T1 运行时闭环     │ ✅ ReAct Loop   │ —                                        │
+├───────────────────┼─────────────────┼──────────────────────────────────────────┤
+│ T2 环境感知       │ 🔶 3 个基础工具 │ 无沙箱、无浏览器工具                     │
+├───────────────────┼─────────────────┼──────────────────────────────────────────┤
+│ T3 任务感知上下文 │ 🔶 全量追加     │ 无选择性上下文、无 Progress 文件         │
+├───────────────────┼─────────────────┼──────────────────────────────────────────┤
+│ T4 独立控制       │ ❌ 无           │ 无 Policy Gate、无预算硬限制、无独立验收 │
+└───────────────────┴─────────────────┴──────────────────────────────────────────┘
+
+3. ROADMAP 更新
+
+┌─────────┬────────────────────────────────────────────────────────────────┬──────────────────────────────────────┐
+│  Phase  │                          新增 Harness                          │             新增 Memory              │
+├─────────┼────────────────────────────────────────────────────────────────┼──────────────────────────────────────┤
+│ Phase 3 │ TaskContract / Progress / FileScopeRule / AcceptanceCriteria   │ Task 完成摘要（轻量模型）            │
+├─────────┼────────────────────────────────────────────────────────────────┼──────────────────────────────────────┤
+│ Phase 4 │ PolicyChain / Checkpoint / TokenBudgetRule / ToolWhitelistRule │ memories 表 + Heartbeat + 晋升管线   │
+├─────────┼────────────────────────────────────────────────────────────────┼──────────────────────────────────────┤
+│ Phase 5 │ ApprovalRule / DangerousCommandRule / Docker Sandbox           │ MemoryRecall + 冲突检测              │
+├─────────┼────────────────────────────────────────────────────────────────┼──────────────────────────────────────┤
+│ Phase 6 │ Eval 回归 / 完整治理审计                                       │ 向量检索 + 遗忘曲线 + 记忆审查 Agent │
+└─────────┴────────────────────────────────────────────────────────────────┴──────────────────────────────────────┘
+
+4. 文件变更
+
+- ✅ 新建 doc/chapters/11-harness-memory-design.html
+- ✅ 更新 doc/index.html — 侧边栏新增链接
+- ✅ 更新 doc/chapters/01-08-roadmap.html — Phase 3-6 内容扩展
+- ✅ 更新 doc/chapters/01-07, 99 — 侧边栏全部新增链接
+- ✅ 更新 roadmaps/ROADMAP.md — Phase 3-6 全面扩展

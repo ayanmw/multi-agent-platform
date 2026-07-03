@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/config"
@@ -16,6 +17,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/anmingwei/multi-agent-platform/web"
 )
 
 func main() {
@@ -143,10 +145,36 @@ func main() {
 		fmt.Fprintln(w, "ok")
 	})
 
-	// Serve Vue static files
-	webDir := "./web/dist"
-	if _, err := os.Stat(webDir); err == nil {
-		http.Handle("/", http.FileServer(http.Dir(webDir)))
+	// Serve Vue SPA from embedded filesystem (production mode).
+	// In dev mode, users can run `cd web && npm run dev` to use Vite's dev server
+	// with HMR. The embedded dist/ is used when building the Go binary.
+	distFS, err := fs.Sub(web.Dist, "dist")
+	if err != nil {
+		log.Printf("Warning: embedded frontend dist not found: %v", err)
+	} else {
+		// Create a file server that serves the embedded dist/ directory
+		fileServer := http.FileServer(http.FS(distFS))
+
+		// SPA fallback: any request that doesn't match an API route or a static file
+		// should serve index.html (Vue Router handles client-side routing).
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// API and WebSocket routes are handled by their own handlers registered above
+			if r.URL.Path == "/" || r.URL.Path == "/index.html" || !fileExists(distFS, r.URL.Path) {
+				// Serve index.html for SPA client-side routing (e.g., /agents, /tasks/123)
+				// But only if the path doesn't match a real file in dist/
+				indexFile, err := distFS.Open("index.html")
+				if err != nil {
+					http.NotFound(w, r)
+					return
+				}
+				defer indexFile.Close()
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				http.ServeContent(w, r, "index.html", time.Time{}, indexFile.(io.ReadSeeker))
+				return
+			}
+			fileServer.ServeHTTP(w, r)
+		})
+		log.Println("Frontend embedded: serving from embedded dist/")
 	}
 
 	log.Printf("========================================")
@@ -272,4 +300,22 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// fileExists checks if a path exists in the embedded filesystem.
+// It strips the leading "/" because fs.FS paths are relative.
+func fileExists(fsys fs.FS, path string) bool {
+	// Strip leading slash for fs.FS compatibility
+	if len(path) > 0 && path[0] == '/' {
+		path = path[1:]
+	}
+	if path == "" {
+		path = "index.html"
+	}
+	f, err := fsys.Open(path)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
 }

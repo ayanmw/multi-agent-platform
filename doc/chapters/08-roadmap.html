@@ -81,21 +81,24 @@
             </div>
 
             <!-- Phase 2 -->
-            <div class="phase-card in-progress">
-                <h3>Phase 2: 前端可视化 <span class="tag wip">🔜 当前</span></h3>
+            <div class="phase-card completed">
+                <h3>Phase 2: 前端可视化 <span class="tag done">✅ 完成</span></h3>
+                <p style="font-size:13px; color:#666;">2026-07-03</p>
                 <ul>
                     <li>Vue 3 Vite 迁移 + TypeScript</li>
                     <li>AgentTree 组件（递归树 + 实时更新）</li>
-                    <li>TypeWriter 组件（LLMDelta 流式渲染）</li>
+                    <li>TypeWriter 组件（LLMDelta 流式渲染 + marked + highlight.js）</li>
                     <li>Markdown 实时渲染 + 语法高亮</li>
-                    <li>Step 展开/折叠 + 状态指示器</li>
+                    <li>Step 展开/折叠 + StatusIndicator 状态指示器</li>
                     <li>Pause / Resume / Cancel 控制 + 指标面板</li>
+                    <li>Go embed 集成（前端 dist/ 嵌入二进制，单文件部署）</li>
+                    <li>独立部署支持（Vite dev server 代理到 Go 后端）</li>
                 </ul>
             </div>
 
             <!-- Phase 3 -->
-            <div class="phase-card planned">
-                <h3>Phase 3: 预设 Cases + 配置页面 + Harness 基础 <span class="tag future">计划</span></h3>
+            <div class="phase-card in-progress">
+                <h3>Phase 3: 预设 Cases + 配置页面 + Harness 基础 <span class="tag wip">🔜 当前</span></h3>
                 <ul>
                     <li>5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）</li>
                     <li>CaseCard UI 组件 + 一键执行</li>
