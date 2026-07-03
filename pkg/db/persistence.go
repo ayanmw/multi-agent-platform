@@ -34,6 +34,23 @@ type StepRecord struct {
 	TokenUsed int
 }
 
+// AgentRecord mirrors the agents table
+type AgentRecord struct {
+	ID           string
+	Name         string
+	Description  string
+	SystemPrompt string
+	Model        string
+	Temperature  float64
+	MaxTokens    int
+	APIEndpoint  string
+	APIKey       string
+	Tools        []string
+	Config       map[string]any
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // InsertTask creates a new task record
 func InsertTask(t TaskRecord) error {
 	if DB == nil {
@@ -162,4 +179,97 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 		steps = append(steps, s)
 	}
 	return steps, rows.Err()
+}
+
+// InsertAgent creates a new agent record
+func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	toolsJSON, _ := json.Marshal(tools)
+	_, err := DB.Exec(
+		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON),
+	)
+	return err
+}
+
+// QueryAgents returns all agents ordered by creation time
+func QueryAgents() ([]AgentRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
+		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), created_at, updated_at
+		 FROM agents ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []AgentRecord
+	for rows.Next() {
+		var a AgentRecord
+		var toolsJSON, configJSON string
+		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
+			&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
+			&toolsJSON, &configJSON, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(toolsJSON), &a.Tools)
+		json.Unmarshal([]byte(configJSON), &a.Config)
+		agents = append(agents, a)
+	}
+	return agents, rows.Err()
+}
+
+// QueryAgentByID returns a single agent by ID
+func QueryAgentByID(id string) (*AgentRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	var a AgentRecord
+	var toolsJSON, configJSON string
+	err := DB.QueryRow(
+		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
+		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), created_at, updated_at
+		 FROM agents WHERE id=?`, id,
+	).Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
+		&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
+		&toolsJSON, &configJSON, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal([]byte(toolsJSON), &a.Tools)
+	json.Unmarshal([]byte(configJSON), &a.Config)
+	return &a, nil
+}
+
+// UpdateAgent updates an existing agent record
+func UpdateAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	toolsJSON, _ := json.Marshal(tools)
+	_, err := DB.Exec(
+		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, temperature=?,
+		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, updated_at=CURRENT_TIMESTAMP
+		 WHERE id=?`,
+		name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON), id,
+	)
+	return err
+}
+
+// DeleteAgent removes an agent by ID
+func DeleteAgent(id string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(`DELETE FROM agents WHERE id=?`, id)
+	return err
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/google/uuid"
 )
 
 // === Task History API ===
@@ -73,16 +74,16 @@ type agentRequest struct {
 func handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		// TODO: list agents from DB when agent CRUD persistence is implemented
+		agents, err := db.QueryAgents()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if agents == nil {
+			agents = []db.AgentRecord{}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]any{
-			{
-				"id":            "agent_default",
-				"name":          "Default Agent",
-				"system_prompt": "You are a helpful AI assistant with access to tools.",
-				"model":         "deepseek-v4-flash",
-			},
-		})
+		json.NewEncoder(w).Encode(agents)
 
 	case http.MethodPost:
 		var req agentRequest
@@ -90,15 +91,23 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		// TODO: persist agent to DB
+		if req.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		id := uuid.New().String()
+		if err := db.InsertAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		agent, err := db.QueryAgentByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":      "agent_" + req.Name,
-			"name":    req.Name,
-			"model":   req.Model,
-			"message": "Agent created (DB persistence TODO)",
-		})
+		json.NewEncoder(w).Encode(agent)
 
 	default:
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -116,13 +125,13 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// TODO: query agent from DB
+		agent, err := db.QueryAgentByID(id)
+		if err != nil {
+			http.Error(w, "agent not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":    id,
-			"name":  "Unknown Agent",
-			"model": "deepseek-v4-flash",
-		})
+		json.NewEncoder(w).Encode(agent)
 
 	case http.MethodPut:
 		var req agentRequest
@@ -130,20 +139,27 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		// TODO: update agent in DB
+		if err := db.UpdateAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		agent, err := db.QueryAgentByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":      id,
-			"name":    req.Name,
-			"message": "Agent updated (DB persistence TODO)",
-		})
+		json.NewEncoder(w).Encode(agent)
 
 	case http.MethodDelete:
-		// TODO: delete agent from DB
+		if err := db.DeleteAgent(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":      id,
-			"message": "Agent deleted (DB persistence TODO)",
+			"message": "Agent deleted successfully",
 		})
 
 	default:

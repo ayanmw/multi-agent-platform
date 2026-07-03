@@ -1,3 +1,13 @@
+// Package llm provides an OpenAI-compatible HTTP client for chat completions.
+//
+// It supports both non-streaming (Chat) and SSE streaming (ChatStream) modes,
+// and handles tool_call delta accumulation for ReAct Agent loops.
+//
+// Design notes:
+//   - The client is intentionally a thin HTTP wrapper — all ReAct logic lives in runtime/engine.go.
+//   - SSE streaming is parsed line-by-line with bufio.Scanner to avoid buffering the entire response.
+//   - ToolCall index tracking uses a map[int]*ToolCall because SSE deltas arrive out of order.
+//   - Usage is always read from the final SSE chunk, per OpenAI-compatible API convention.
 package llm
 
 import (
@@ -11,98 +21,114 @@ import (
 	"time"
 )
 
-// Message represents a chat message in OpenAI format
+// Message represents a chat message in OpenAI-compatible format.
+// It supports text content, tool calls (assistant role), and tool results (tool role).
 type Message struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
-	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	Name       string        `json:"name,omitempty"`
+	Role       string     `json:"role"`                   // "system", "user", "assistant", "tool"
+	Content    string     `json:"content,omitempty"`      // text content (empty for tool calls)
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // LLM-requested function calls
+	ToolCallID string     `json:"tool_call_id,omitempty"` // correlates tool result to call
+	Name       string     `json:"name,omitempty"`         // optional agent name
 }
 
-// ToolCall represents a function call request from the LLM
+// ToolCall represents a function call request from the LLM.
+// During SSE streaming, ToolCall deltas arrive incrementally — the ID arrives first,
+// the function name next, and arguments last (often across multiple chunks).
 type ToolCall struct {
-	Idx      int          `json:"index"`
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function FunctionCall `json:"function"`
+	Idx      int          `json:"index"`    // 0-based index for ordering multiple tool calls
+	ID       string       `json:"id"`       // unique call ID for tool result correlation
+	Type     string       `json:"type"`     // always "function"
+	Function FunctionCall `json:"function"` // the function name + arguments
 }
 
-// FunctionCall represents the function name and arguments
+// FunctionCall holds the name and JSON-encoded arguments of a tool call.
+// Arguments is a JSON string (not an object) because the LLM streams it incrementally.
 type FunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name      string `json:"name"`      // tool name (e.g., "run_shell")
+	Arguments string `json:"arguments"` // JSON-encoded arguments string
 }
 
-// ToolDef represents a tool definition sent to the LLM
+// ToolDef is a tool definition sent to the LLM as part of the chat request.
+// It tells the LLM what tools are available and how to call them.
 type ToolDef struct {
-	Type     string             `json:"type"`
-	Function FunctionDefinition `json:"function"`
+	Type     string             `json:"type"`     // always "function"
+	Function FunctionDefinition `json:"function"` // the function's name + schema
 }
 
-// FunctionDefinition is the JSON Schema for a function
+// FunctionDefinition describes a tool's interface to the LLM.
+// Parameters is a JSON Schema object describing the input format.
 type FunctionDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
+	Parameters  map[string]any `json:"parameters"` // JSON Schema
 }
 
-// ChatRequest is the request body for chat completions
+// ChatRequest is the request body POSTed to /chat/completions.
+// When Stream=true, the response is SSE; otherwise it's a single JSON object.
 type ChatRequest struct {
-	Model       string     `json:"model"`
-	Messages    []Message  `json:"messages"`
-	Tools       []ToolDef  `json:"tools,omitempty"`
-	ToolChoice  string     `json:"tool_choice,omitempty"`
-	Temperature float32    `json:"temperature"`
-	MaxTokens   int        `json:"max_tokens,omitempty"`
-	Stream      bool       `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Tools       []ToolDef `json:"tools,omitempty"`
+	ToolChoice  string    `json:"tool_choice,omitempty"` // "auto", "none", or specific tool
+	Temperature float32   `json:"temperature"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Stream      bool      `json:"stream"`
 }
 
-// ChatResponse is the non-streaming response body
+// ChatResponse is the non-streaming response body from /chat/completions.
 type ChatResponse struct {
 	ID      string   `json:"id"`
 	Choices []Choice `json:"choices"`
 	Usage   Usage    `json:"usage"`
 }
 
-// Choice represents a single completion choice
+// Choice represents a single completion choice. For streaming, Delta is populated;
+// for non-streaming, Message is populated.
 type Choice struct {
-	Index        int      `json:"index"`
-	Message      Message  `json:"message"`
-	FinishReason string   `json:"finish_reason"`
-	Delta        Delta    `json:"delta"`
+	Index        int     `json:"index"`
+	Message      Message `json:"message"`
+	FinishReason string  `json:"finish_reason"` // "stop", "tool_calls", "length"
+	Delta        Delta   `json:"delta"`
 }
 
-// Delta represents a streaming delta
+// Delta is a single SSE delta chunk. Content accumulates text tokens;
+// ToolCalls accumulate function call fragments.
 type Delta struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls"`
 }
 
-// Usage tracks token consumption
+// Usage tracks token consumption as reported by the API.
+// Token statistics are strictly read from the API response — never estimated locally.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// StreamChunk is a parsed SSE chunk
+// StreamChunk is a parsed SSE chunk passed to the onChunk callback.
+// It contains the delta content, finish reason, and optional usage (from the final chunk).
 type StreamChunk struct {
 	Delta        Delta  `json:"delta"`
 	FinishReason string `json:"finish_reason"`
 	Usage        Usage  `json:"usage"`
 }
 
-// Client is an OpenAI-compatible LLM client
+// Client is an OpenAI-compatible HTTP client for LLM chat completions.
+// It wraps an http.Client with the endpoint, API key, and model pre-configured.
+//
+// Each Agent gets its own Client instance (or shares one with the same config),
+// allowing multi-Agent setups with different endpoints/models.
 type Client struct {
-	Endpoint   string
-	APIKey     string
-	Model      string
-	HTTPClient *http.Client
+	Endpoint   string       // base URL (e.g., "https://api.openai.com/v1")
+	APIKey     string       // Bearer token
+	Model      string       // model name (e.g., "deepseek-v4-flash")
+	HTTPClient *http.Client // configured with 120s timeout
 }
 
-// NewClient creates a new LLM client
+// NewClient creates a new LLM client with the given endpoint, API key, and model.
+// The endpoint is trimmed of trailing slashes for consistent URL construction.
 func NewClient(endpoint, apiKey, model string) *Client {
 	return &Client{
 		Endpoint:   strings.TrimRight(endpoint, "/"),
@@ -112,7 +138,8 @@ func NewClient(endpoint, apiKey, model string) *Client {
 	}
 }
 
-// Chat sends a non-streaming chat request
+// Chat sends a non-streaming chat request and returns the full response.
+// Used for simple synchronous calls where streaming is not needed.
 func (c *Client) Chat(req ChatRequest) (*ChatResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -144,8 +171,18 @@ func (c *Client) Chat(req ChatRequest) (*ChatResponse, error) {
 	return &chatResp, nil
 }
 
-// ChatStream sends a streaming chat request and calls onChunk for each SSE event
-// Returns the accumulated full message content and usage
+// ChatStream sends a streaming chat request and calls onChunk for each SSE event.
+//
+// SSE parsing strategy:
+//   1. Read lines with bufio.Scanner (supports up to 1MB lines).
+//   2. Skip empty lines, comments (:), and non-data lines.
+//   3. Parse each "data: {...}" line as a JSON chunk.
+//   4. Accumulate content in a strings.Builder for full text.
+//   5. Accumulate ToolCall deltas in a map[int]*ToolCall (because deltas arrive
+//      out of order — the index/ID arrives first, then name, then arguments).
+//   6. Extract Usage from the final chunk (which contains the full usage object).
+//
+// Returns the accumulated content, usage, tool calls, and any error.
 func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	req.Stream = true
 	body, err := json.Marshal(req)
@@ -173,18 +210,20 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 	}
 
 	var (
-		contentBuilder strings.Builder
-		toolCalls      []ToolCall
-		usage          Usage
-		toolCallMap    = make(map[int]*ToolCall)
+		contentBuilder strings.Builder      // accumulates all text content
+		toolCalls      []ToolCall           // final assembled tool calls
+		usage          Usage                // from the final chunk
+		toolCallMap    = make(map[int]*ToolCall) // index → partially accumulated tool call
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
-	// Increase buffer for large lines
+	// Increase buffer for large lines (tool call arguments can be large JSON)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// SSE protocol: empty lines are heartbeat, ":" lines are comments
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue
 		}
@@ -193,9 +232,10 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
-			break
+			break // SSE stream termination signal
 		}
 
+		// Parse the SSE data as a JSON chunk
 		var chunk struct {
 			Choices []struct {
 				Delta        Delta `json:"delta"`
@@ -204,10 +244,10 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 			Usage *Usage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue // skip malformed chunks
+			continue // skip malformed chunks gracefully
 		}
 
-		// Track usage from final chunk
+		// Extract usage from the final chunk (the only chunk that carries it)
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
 		}
@@ -217,15 +257,19 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		}
 		choice := chunk.Choices[0]
 
-		// Accumulate content
+		// Accumulate text content — each delta may contain 1+ tokens
 		if choice.Delta.Content != "" {
 			contentBuilder.WriteString(choice.Delta.Content)
 		}
 
-		// Accumulate tool calls
+		// Accumulate tool call deltas — they arrive incrementally:
+		//   chunk 1: {index: 0, id: "call_xxx", type: "function"}
+		//   chunk 2-N: {index: 0, function: {name: "run_shell", arguments: "{\"cmd"}}
+		//   chunk N+1: {index: 0, function: {arguments: "\":\"ls\"}"}}
 		for _, tc := range choice.Delta.ToolCalls {
 			idx := tc.Idx
 			if existing, ok := toolCallMap[idx]; ok {
+				// Merge into existing tool call
 				if tc.ID != "" {
 					existing.ID = tc.ID
 				}
@@ -234,6 +278,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 				}
 				existing.Function.Arguments += tc.Function.Arguments
 			} else {
+				// New tool call
 				toolCallMap[idx] = &ToolCall{
 					ID:       tc.ID,
 					Type:     tc.Type,
@@ -245,7 +290,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 			}
 		}
 
-		// Notify callback
+		// Notify the streaming callback — this is how the Engine streams tokens to the frontend
 		if onChunk != nil {
 			sc := StreamChunk{
 				Delta:        choice.Delta,
@@ -264,7 +309,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		return "", usage, nil, fmt.Errorf("scan stream: %w", err)
 	}
 
-	// Assemble tool calls from map
+	// Assemble tool calls from the map in index order
 	for i := 0; i < len(toolCallMap); i++ {
 		if tc, ok := toolCallMap[i]; ok {
 			toolCalls = append(toolCalls, *tc)
@@ -275,7 +320,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 }
 
 // Index returns the tool call index from the struct field.
-// TODO: Phase 4+ 多 Agent 并发时，ToolCall Index 用于追踪 tool_call 执行顺序
+// TODO: Phase 4+ — 多 Agent 并发时 ToolCall Index 用于追踪 tool_call 执行顺序
 // 和分布式 tracing，届时需要增强为确定性 ID 生成。
 func (tc ToolCall) Index() int {
 	return tc.Idx
