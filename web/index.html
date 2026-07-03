@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent Platform</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Consolas', 'Monaco', monospace;
+            padding: 20px;
+        }
+        #app {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <h1>Multi-Agent Platform</h1>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+<script>
+const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
+
+createApp({
+    setup() {
+        const ws = ref(null);
+        const status = ref('disconnected');
+        const task = ref(null);
+        const agents = reactive({});
+
+        function connect() {
+            ws.value = new WebSocket('ws://localhost:8080/ws');
+
+            ws.value.onopen = () => {
+                status.value = 'connected';
+            };
+
+            ws.value.onmessage = (evt) => {
+                const msg = JSON.parse(evt.data);
+                handleEvent(msg);
+            };
+
+            ws.value.onclose = () => {
+                status.value = 'disconnected';
+            };
+
+            ws.value.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+        }
+
+        function handleEvent(evt) {
+            if (!task.value) {
+                task.value = {
+                    id: evt.task_id,
+                    agents: {}
+                };
+            }
+
+            const agentId = evt.agent_id || 'agent_default';
+            if (!task.value.agents[agentId]) {
+                task.value.agents[agentId] = {
+                    id: agentId,
+                    steps: []
+                };
+            }
+            const agent = task.value.agents[agentId];
+
+            switch (evt.type) {
+                case 'task_started':
+                    task.value.status = 'running';
+                    break;
+
+                case 'step_started':
+                    agent.steps.push({
+                        type: evt.data.type,
+                        status: 'running',
+                        thinking: '',
+                        toolCall: null,
+                        index: agent.steps.length
+                    });
+                    break;
+
+                case 'llm_thinking':
+                case 'llm_delta':
+                    const lastStep = agent.steps[agent.steps.length - 1];
+                    if (lastStep) {
+                        if (!lastStep.thinking) lastStep.thinking = '';
+                        lastStep.thinking += evt.data.content || '';
+                    }
+                    break;
+
+                case 'llm_message_complete':
+                    const current = agent.steps[agent.steps.length - 1];
+                    if (current) current.status = 'completed';
+                    break;
+
+                case 'tool_call_started':
+                    const step = agent.steps[agent.steps.length - 1];
+                    if (step) {
+                        step.toolCall = {
+                            name: evt.data.tool,
+                            input: evt.data.args,
+                            output: '',
+                            duration: 0
+                        };
+                    }
+                    break;
+
+                case 'tool_call_output':
+                    const toolStep = agent.steps[agent.steps.length - 1];
+                    if (toolStep && toolStep.toolCall) {
+                        toolStep.toolCall.output = JSON.stringify(evt.data.result);
+                    }
+                    break;
+
+                case 'tool_call_complete':
+                    const completed = agent.steps[agent.steps.length - 1];
+                    if (completed && completed.toolCall) {
+                        completed.toolCall.duration = evt.data.duration_ms;
+                        completed.status = 'completed';
+                    }
+                    break;
+
+                case 'observation':
+                    agent.steps.push({
+                        type: 'observation',
+                        status: 'completed',
+                        thinking: evt.data.content || '',
+                        index: agent.steps.length
+                    });
+                    break;
+
+                case 'task_completed':
+                    task.value.status = 'completed';
+                    task.value.finalResult = evt.data.result;
+                    break;
+            }
+        }
+
+        function startTest() {
+            // 打开一个 WS 连接，同时访问 /api/test/stream 来触发后端事件
+            if (!ws.value || status.value === 'disconnected') {
+                connect();
+            }
+
+            fetch('/api/test/stream?task_id=' + Date.now())
+                .then(r => r.json())
+                .then(data => console.log('Task started:', data))
+                .catch(err => console.error('Failed to start task:', err));
+        }
+
+        onMounted(() => {
+            connect();
+        });
+
+        onUnmounted(() => {
+            if (ws.value) ws.value.close();
+        });
+
+        return {
+            status,
+            task,
+            startTest
+        };
+    }
+}).mount('#app');
+</script>
+
+<div style="margin-top: 20px;">
+    <p>Connection status: <strong :class="status">{{ status }}</strong></p>
+    <button onclick="window.vm?.startTest()">Start Test Task</button>
+
+    <div v-if="task" style="margin-top: 20px;">
+        <h2>Task: {{ task.id }}</h2>
+        <p>Status: <strong>{{ task.status }}</strong></p>
+
+        <div v-for="(agent, agentId) in task.agents" :key="agentId" style="margin: 10px 0; padding: 10px; background: #2d2d2d;">
+            <h3>Agent: {{ agentId }}</h3>
+
+            <div v-for="step in agent.steps" :key="step.index" style="margin: 5px 0; padding: 8px; background: #333;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Step {{ step.index }} ({{ step.type }}) - <strong>[{{ step.status }}]</strong></span>
+                </div>
+
+                <div v-if="step.thinking" style="margin-top: 4px; white-space: pre-wrap; color: #9cdcfe;">
+                    {{ step.thinking }}
+                </div>
+
+                <div v-if="step.toolCall" style="margin-top: 4px; padding: 4px; background: #444;">
+                    <strong>Tool: {{ step.toolCall.name }}</strong>
+                    <pre style="color: #ce9178; margin-top: 2px;">{{ JSON.stringify(step.toolCall.input, null, 2) }}</pre>
+                    <div v-if="step.toolCall.output" style="color: #6a9955; margin-top: 4px;">
+                        Output: {{ step.toolCall.output }}
+                    </div>
+                    <span style="color: #808080;">Duration: {{ step.toolCall.duration }}ms</span>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="task?.finalResult" style="margin-top: 20px; padding: 10px; background: #1e3a1e; border: 1px solid #4caf50;">
+            <strong>Final Result:</strong>
+            <pre style="white-space: pre-wrap;">{{ task.finalResult }}</pre>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
