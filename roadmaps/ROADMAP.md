@@ -114,7 +114,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 →
 **目标**: 提供一键式任务和 Agent 配置管理，引入 Harness 基础组件
 
 **完成日期**: 2026-07-03
-**Git commit**: TBD
+**Git commit**: `455b047`
 
 ### 交付物
 - [x] 5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）
