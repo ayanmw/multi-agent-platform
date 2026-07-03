@@ -31,12 +31,12 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 - [x] 产品文档（doc/ 目录，8 个章节 + 共享样式表）
 - [x] 路线图文件（roadmaps/ROADMAP.md）
 
-### 已知待优化（Phase 1 已解决部分）
-- [ ] DB 初始化未在 Server 启动时调用
+### 已知待优化（Phase 1+ 已全部解决）
+- [x] ~~DB 初始化未在 Server 启动时调用~~ → Phase 1+ 已实现
 - [x] ~~`internal/llm/`, `internal/runtime/`, `internal/config/` 为空壳目录~~ → Phase 1 已实现
 - [x] ~~API Key 散落在 CLAUDE.md，待迁移到 `.env`~~ → Phase 1 已实现
-- [ ] Event 中 `interface{}` 待统一为 `any`
-- [ ] 前端为 CDN 单文件，待迁移到 Vite + TypeScript
+- [x] ~~Event 中 `interface{}` 待统一为 `any`~~ → Phase 1+ 已实现
+- [ ] 前端为 CDN 单文件，待迁移到 Vite + TypeScript → Phase 2
 
 ---
 
@@ -45,7 +45,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 **目标**: 打通真实 LLM API 调用，实现 ReAct Loop 完整闭环
 
 **完成日期**: 2026-07-03
-**Git commit**: `54730c8`
+**Git commit**: `bff272f`
 
 ### 交付物
 - [x] OpenAI-compatible LLM Client（`internal/llm/client.go`，SSE streaming）
@@ -55,17 +55,28 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 🔜 → Phase 3 → Phase 4 → Phase 5
 - [x] Agent 配置加载 + `.env` 管理（`internal/config/config.go`）
 - [x] Go 端到端测试工具（`cmd/e2e-test/main.go`，WebSocket + 着色输出）
 - [x] `cmd/server/main.go` 重构，整合真实 Agent Loop 替代 demo stream
+- [x] **Phase 1+**: DB 持久化接入 Agent Loop（Task/Step/Conversation 写入 SQLite）
+- [x] **Phase 1+**: `interface{}` → `any` 统一替换
+- [x] **Phase 1+**: Agent CRUD REST API + DB 持久化（`GET/POST/PUT/DELETE /api/agents`）
+- [x] **Phase 1+**: Task 历史查询 API（`GET /api/tasks` 列表 + `GET /api/tasks?id=xxx` 详情）
+- [x] **Phase 1+**: Client→Server 消息处理（`readPump` 解析 JSON 控制消息，`ControlHandler` 接口）
+- [x] **Phase 1+**: `run_shell` timeout 实现（`context.WithTimeout` + `exec.CommandContext`）
+- [x] **Phase 1+**: 安全加固（路径遍历防护 + 大文件保护 + Engine panic 恢复）
+- [x] **Phase 1+**: 白盒 Agent 注释铁律 — 所有导出类型/函数/关键流程补齐注释
 
 ### 验证结果
-- 简单对话 `curl chat "1+1=?"` → 697 tokens，正确回答 "2"
+- 简单对话 `curl chat "1+1=?"` → 741 tokens，正确回答 "2"
 - 工具调用 `curl chat "用 run_shell 执行 echo hello_from_agent"` → 两步 Loop：tool_call(23ms) → 分析结果 → 730 tokens
 - e2e-test 工具全场景通过（simple + tool → all）
+- Agent CRUD API 完整可用（创建/查询/更新/删除）
+- Task 历史持久化可查询（含 steps 详情）
+- `data/app.db` 自动创建，任务执行记录完整写入
 
 ### 已知待优化
-- [ ] DB 持久化未接入 Agent Loop（Task/Step/Conversation 未写入 SQLite）
-- [ ] Event 中 `interface{}` 待统一为 `any`
 - [ ] `run_shell` 无沙箱（Phase 5 加 Docker）
-- [ ] `func (tc ToolCall) Index()` 方法未使用，可删除
+- [ ] Agent CRUD 前端页面（Phase 2 随 Vue 迁移实现）
+- [ ] `llm_delta` 批量发送（当前每 token 一条 WS 消息，Phase 2 加节流）
+- [ ] Conversation 历史回读用于多轮对话（Phase 3+ Session 管理）
 
 ---
 
