@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-03
-> **Current version**: v0.3 Alpha (Phase 2 complete)
+> **Current version**: v0.4 Alpha (Phase 3 complete)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Phase 5 → Phase 6
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 → Phase 5 → Phase 6
   (骨架)      (Agent)     (UI)       (Cases)    (并发)    (注册)    (高级)
 ```
 
@@ -109,20 +109,25 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Pha
 
 ---
 
-## Phase 3: 预设 Cases + 配置页面 + Harness 基础
+## Phase 3: 预设 Cases + 配置页面 + Harness 基础 ✅ COMPLETED
 
 **目标**: 提供一键式任务和 Agent 配置管理，引入 Harness 基础组件
 
+**完成日期**: 2026-07-03
+**Git commit**: TBD
+
 ### 交付物
-- [ ] 5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）
-- [ ] CaseCard UI 组件 + Run 按钮
-- [ ] Agent 配置 CRUD 页面（REST API + 前端表单）
-- [ ] 任务历史侧边栏（SQLite 读取 + 回放）
-- [ ] **Harness: TaskContract 定义**（目标、范围、验收标准、预算、权限）
-- [ ] **Harness: Progress 文件管理**（TaskProgress 类型 + 关键节点自动写入）
-- [ ] **Harness: FileScopeRule + PathTraversalRule**（路径安全，在 write_file 之前拦截）
-- [ ] **Harness: AcceptanceCriteria 基础实现**（test_pass / file_exists / shell_exit_zero）
-- [ ] **Memory: Task 完成时自动生成摘要**（Engine 调用轻量模型做单 task 总结）
+- [x] 5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）
+- [x] CaseCard UI 组件 + Run 按钮
+- [x] **Harness: TaskContract 定义**（目标、范围、验收标准、预算、权限）
+- [x] **Harness: Progress 文件管理**（TaskProgress 类型 + 关键节点自动写入）
+- [x] **Harness: FileScopeRule + PathTraversalRule**（路径安全，在 write_file 之前拦截）
+- [x] **Harness: AcceptanceCriteria 基础实现**（test_pass / file_exists / shell_exit_zero）
+- [x] **Harness: PolicyGate 集成到 Engine**（executeTool 经过 PolicyGate 拦截）
+- [x] `/api/cases` 端点（列出所有预设 Cases）
+- [ ] Agent 配置 CRUD 前端页面 → Phase 4（与多模型配置页面合并）
+- [ ] 任务历史侧边栏 → Phase 4（与多 Agent 并发时一起实现回放）
+- [ ] Memory: Task 完成时自动生成摘要 → Phase 4（与记忆系统合并）
 
 ### 验证标准
 - 点击 Case 卡片 → 任务自动执行 → 历史可回放
@@ -218,3 +223,4 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 🔜 → Phase 4 → Pha
 | v0.1 | 2026-07-03 | Phase 0 完成，初始骨架搭建 |
 | v0.2 | 2026-07-03 | Phase 1 完成，Agent Loop 核心引擎 + e2e 测试工具 |
 | v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |
+| v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |

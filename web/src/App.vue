@@ -16,11 +16,23 @@
        events → handleEvent → task reactive → AgentTree re-renders
 -->
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useTaskStore } from './composables/useTaskStore'
 import MetricsPanel from './components/MetricsPanel.vue'
 import TaskInput from './components/TaskInput.vue'
 import AgentTree from './components/AgentTree.vue'
+import CaseCard from './components/CaseCard.vue'
+
+// Preset case type
+interface PresetCase {
+  id: string
+  name: string
+  description: string
+  icon: string
+  category: string
+  tags: string[]
+  default_input: string
+}
 
 const {
   task,
@@ -28,15 +40,32 @@ const {
   connect,
   disconnect,
   startTask,
+  startTaskWithCase,
   clearTask,
   pauseTask,
   resumeTask,
   cancelTask,
 } = useTaskStore()
 
+// Preset cases loaded from /api/cases
+const presetCases = ref<PresetCase[]>([])
+const casesLoading = ref(false)
+
 // Connect WebSocket on mount, disconnect on unmount
-onMounted(() => {
+onMounted(async () => {
   connect()
+  // Load preset cases
+  casesLoading.value = true
+  try {
+    const resp = await fetch('/api/cases')
+    if (resp.ok) {
+      presetCases.value = await resp.json()
+    }
+  } catch (err) {
+    console.error('Failed to load cases:', err)
+  } finally {
+    casesLoading.value = false
+  }
 })
 
 onUnmounted(() => {
@@ -58,6 +87,16 @@ async function handleSend(text: string) {
 function isAgentRunning(): boolean {
   if (!task.value) return false
   return task.value.status === 'running'
+}
+
+/** Handle running a preset case */
+async function handleCaseRun(caseId: string) {
+  try {
+    clearTask()
+    await startTaskWithCase(caseId)
+  } catch (err) {
+    console.error('Failed to start case:', err)
+  }
 }
 </script>
 
@@ -82,6 +121,21 @@ function isAgentRunning(): boolean {
       @cancel="cancelTask"
     />
 
+    <!-- Preset case cards — shown when no task is running -->
+    <div v-if="!task && presetCases.length > 0" class="cases-section">
+      <h2 class="section-title">📋 预设任务</h2>
+      <div v-if="casesLoading" class="cases-loading">Loading...</div>
+      <div v-else class="cases-grid">
+        <CaseCard
+          v-for="c in presetCases"
+          :key="c.id"
+          :case-data="c"
+          :disabled="isAgentRunning()"
+          @run="handleCaseRun"
+        />
+      </div>
+    </div>
+
     <!-- Agent trees — one per agent, side by side if multiple -->
     <div v-if="task" class="agent-trees">
       <div
@@ -97,7 +151,7 @@ function isAgentRunning(): boolean {
     </div>
 
     <!-- Empty state: shown when no task is active -->
-    <div v-else class="empty-state">
+    <div v-else-if="presetCases.length === 0" class="empty-state">
       <div class="empty-icon">🚀</div>
       <h2>Ready to start</h2>
       <p>Enter a task description above to see the agent in action.</p>
@@ -183,6 +237,31 @@ function isAgentRunning(): boolean {
 .empty-state p {
   font-size: 13px;
   margin-bottom: 4px;
+}
+
+/* Cases section */
+.cases-section {
+  margin-top: 20px;
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 12px;
+}
+
+.cases-loading {
+  text-align: center;
+  color: #888;
+  padding: 20px;
+  font-size: 13px;
+}
+
+.cases-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
 }
 
 /* Final result */

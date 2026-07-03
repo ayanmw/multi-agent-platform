@@ -93,6 +93,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -165,6 +166,22 @@ type EngineConfig struct {
 	// When set (e.g., to a SQLite-backed implementation), every step and message
 	// is durably stored for later audit and replay.
 	Persistence Persistence
+
+	// PolicyGate is the optional Harness policy enforcement layer. When set,
+	// every tool call is checked against the policy chain before execution.
+	// When nil, policy enforcement is skipped — all tool calls are allowed.
+	// See internal/harness for the full PolicyGate implementation.
+	PolicyGate *harness.PolicyGate
+
+	// ProgressManager is the optional Harness progress tracking. When set,
+	// progress nodes are written at key milestones (tool calls, step completions,
+	// task completion) to an external progress file that survives crashes.
+	Progress *harness.ProgressManager
+
+	// TaskContract is the structured task definition that defines scope,
+	// permissions, budget, and acceptance criteria for this task.
+	// Used by PolicyGate for enforcement and Progress for tracking.
+	Contract harness.TaskContract
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -200,14 +217,18 @@ type EngineConfig struct {
 // The * suffix indicates events that may repeat multiple times (streaming tokens,
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
-	cfg      EngineConfig    // immutable configuration set at creation
-	llm      *llm.Client     // HTTP client for the LLM API (one per engine)
-	tools    *tool.Registry  // the tool registry shared across agents
-	bus      EventBus        // event transport for real-time frontend updates
-	persist  Persistence     // optional persistence backend (nil = no persistence)
-	taskID   string          // unique task identifier for correlation
-	messages []llm.Message   // full conversation history (system + user + assistant + tool)
-	stepIdx  int             // current ReAct loop iteration (0-based)
+	cfg      EngineConfig            // immutable configuration set at creation
+	llm      *llm.Client             // HTTP client for the LLM API (one per engine)
+	tools    *tool.Registry          // the tool registry shared across agents
+	bus      EventBus                // event transport for real-time frontend updates
+	persist  Persistence             // optional persistence backend (nil = no persistence)
+	gate     *harness.PolicyGate     // optional policy enforcement (nil = allow all)
+	progress *harness.ProgressManager // optional progress tracking (nil = skip)
+	taskProgress *harness.TaskProgress // current progress state (nil if progress is nil)
+	taskID   string                  // unique task identifier for correlation
+	messages []llm.Message           // full conversation history (system + user + assistant + tool)
+	stepIdx  int                     // current ReAct loop iteration (0-based)
+	totalTokens int                  // cumulative token usage across all LLM calls
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -236,16 +257,19 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 
 	return &Engine{
-		cfg:     cfg,
-		llm:     llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
-		tools:   tools,
-		bus:     bus,
-		persist: cfg.Persistence,
-		taskID:  taskID,
+		cfg:      cfg,
+		llm:      llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
+		tools:    tools,
+		bus:      bus,
+		persist:  cfg.Persistence,
+		gate:     cfg.PolicyGate,   // nil = no policy enforcement
+		progress: cfg.Progress,     // nil = no progress tracking
+		taskID:   taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: cfg.SystemPrompt},
 		},
-		stepIdx: 0,
+		stepIdx:     0,
+		totalTokens: 0,
 	}
 }
 
@@ -306,6 +330,16 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 	// Persist the user message for audit trail and conversation replay.
 	e.saveConversation("user", userInput)
+
+	// Init Harness progress tracking if configured
+	if e.progress != nil {
+		tp, err := e.progress.Init(e.taskID, e.cfg.Contract)
+		if err != nil {
+			log.Printf("[Engine] Progress init failed: %v (continuing)", err)
+		} else {
+			e.taskProgress = tp
+		}
+	}
 
 	// Notify the frontend that the agent is initialized and ready to process.
 	// The UI uses this event to show the agent's name and model in the header.
@@ -709,23 +743,34 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// for performance monitoring and debugging — slow tools are bottlenecks
 	// that hurt user experience.
 	start := time.Now()
-	result, err := e.tools.Execute(tc.Function.Name, args)
+	// Route through PolicyGate if configured; otherwise execute directly.
+	// The PolicyGate checks the tool call against the policy chain (FileScopeRule,
+	// PathTraversalRule, etc.) before allowing the tool to execute.
+	var result any
+	var execErr error
+	if e.gate != nil {
+		result, execErr = e.gate.Execute(tc.Function.Name, args, func(input map[string]any) (any, error) {
+			return e.tools.Execute(tc.Function.Name, input)
+		})
+	} else {
+		result, execErr = e.tools.Execute(tc.Function.Name, args)
+	}
 	duration := time.Since(start).Milliseconds()
 
-	if err != nil {
+	if execErr != nil {
 		// Tool execution failed — emit failure events and return the error.
 		// The UI will show the tool name, error message, and duration.
 		// The step is still marked as "complete" (not "running") because the
 		// tool call phase is over — it just ended in failure.
 		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
-			"error":       err.Error(),
+			"error":       execErr.Error(),
 			"duration_ms": duration,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
-		return "", err
+		return "", execErr
 	}
 
 	// Serialize the tool result to JSON for the LLM conversation. The LLM

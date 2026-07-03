@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -98,26 +100,48 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]any{"task_id": taskID})
 
 		case "chat":
-			if req.Input == "" {
-				http.Error(w, "input is required for chat action", http.StatusBadRequest)
-				return
+		// Check if a preset case was specified — load its contract,
+		// default input, and system prompt before validating the request.
+		var contract harness.TaskContract
+		caseID := r.URL.Query().Get("case")
+		if caseID != "" {
+			if c := cases.Get(caseID); c != nil {
+				contract = c.Contract
+				// Use case's default input if none provided in request
+				if req.Input == "" {
+					req.Input = c.DefaultInput
+				}
+				// Use case's system prompt if none provided in request
+				if req.SystemPrompt == "" {
+					req.SystemPrompt = c.SystemPrompt
+				}
 			}
+		}
 
-			agentID := req.AgentID
-			if agentID == "" {
-				agentID = "agent_default"
-			}
+		if req.Input == "" {
+			http.Error(w, "input is required for chat action", http.StatusBadRequest)
+			return
+		}
 
-			systemPrompt := req.SystemPrompt
-			if systemPrompt == "" {
-				systemPrompt = "You are a helpful AI assistant with access to tools. " +
-					"When you need to run commands, read files, or write files, use the available tools. " +
-					"Always explain your reasoning before using tools. " +
-					"After using tools, analyze the results and continue until the task is complete."
-			}
+		agentID := req.AgentID
+		if agentID == "" {
+			agentID = "agent_default"
+		}
+
+		systemPrompt := req.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = "You are a helpful AI assistant with access to tools. " +
+				"When you need to run commands, read files, or write files, use the available tools. " +
+				"Always explain your reasoning before using tools. " +
+				"After using tools, analyze the results and continue until the task is complete."
+		}
+
+		if contract.Goal == "" {
+			contract = harness.DefaultContract(req.Input)
+		}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -143,6 +167,16 @@ func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
+	})
+
+	// Cases API: list preset task cases
+	http.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cases.All())
 	})
 
 	// Serve Vue SPA from embedded filesystem (production mode).
@@ -178,7 +212,7 @@ func main() {
 	}
 
 	log.Printf("========================================")
-	log.Printf("Multi-Agent Platform v0.3 (Phase 2)")
+	log.Printf("Multi-Agent Platform v0.4 (Phase 3)")
 	log.Printf("========================================")
 	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
 	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
@@ -194,11 +228,23 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract) {
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
 	}
+
+	// Build Harness policy gate with FileScopeRule and PathTraversalRule
+	// These are the foundational safety rules that prevent the agent from
+	// writing or reading files outside its task scope.
+	policyChain := harness.NewPolicyChain(
+		&harness.PathTraversalRule{},
+		&harness.FileScopeRule{},
+	)
+	policyGate := harness.NewPolicyGate(policyChain, contract)
+
+	// Set up progress tracking for the task
+	progressManager := harness.NewProgressManager()
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:      agentID,
@@ -208,8 +254,11 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		APIKey:       cfg.LLMAPIKey,
 		Temperature:  0.7,
 		MaxTokens:    4096,
-		MaxSteps:     10,
+		MaxSteps:     contract.MaxSteps,
 		Persistence:  persist,
+		PolicyGate:   policyGate,
+		Progress:     progressManager,
+		Contract:     contract,
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

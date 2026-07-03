@@ -234,6 +234,31 @@ export function useTaskStore() {
     task.value = null
   }
 
+  /**
+   * Start a task from a preset case by case ID.
+   * The case's system prompt and default input are loaded from the backend.
+   */
+  async function startTaskWithCase(caseId: string, agentId?: string): Promise<string> {
+    const resp = await fetch(`/api/tasks?case=${encodeURIComponent(caseId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'chat',
+        agent_id: agentId || 'agent_default',
+        // Input and system_prompt are filled by the backend from the case definition
+        input: '', // backend fills from case
+      }),
+    })
+
+    if (!resp.ok) {
+      const errText = await resp.text()
+      throw new Error(`Failed to start case: ${resp.status} ${errText}`)
+    }
+
+    const data = await resp.json()
+    return data.task_id as string
+  }
+
   /** Pause the current task */
   function pauseTask() {
     if (!task.value) return
@@ -270,6 +295,7 @@ export function useTaskStore() {
     connect,
     disconnect,
     startTask,
+    startTaskWithCase,
     clearTask,
     pauseTask,
     resumeTask,
