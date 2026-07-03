@@ -13,7 +13,7 @@
 <body>
 <div class="layout">
     <aside class="sidebar">
-        <div class="logo"><h2>📚 文档</h2><span>v0.1 Alpha</span></div>
+        <div class="logo"><h2>📚 文档</h2><span>v0.4 Alpha</span></div>
         <div class="section-label">概览</div>
         <nav><a href="../index.html">首页</a></nav>
         <div class="section-label">产品文档</div>
@@ -67,11 +67,13 @@
         <table>
             <tr><th>技术</th><th>当前版本</th><th>计划迁移</th></tr>
             <tr><td>Vue 核心</td><td><span class="version-tag">Vue 3.5 + Vite + TypeScript</span></td><td>✅ Phase 2 完成</td></tr>
-            <tr><td>状态管理</td><td>Vue reactive()</td><td>Phase 2 → Pinia</td></tr>
-            <tr><td>路由</td><td>无（单页）</td><td>Phase 3 → vue-router</td></tr>
-            <tr><td>Markdown</td><td>占位</td><td>Phase 2 → marked + highlight.js</td></tr>
-            <tr><td>样式</td><td>内联 CSS</td><td>Phase 2 → Tailwind CSS / scoped</td></tr>
-            <tr><td>构建</td><td>无</td><td>Phase 1 → Vite + TypeScript</td></tr>
+            <tr><td>状态管理</td><td>Vue reactive()</td><td>✅ Phase 2 完成（useTaskStore + useWebSocket）</td></tr>
+            <tr><td>路由</td><td>无（单页）</td><td>Phase 4+ → vue-router</td></tr>
+            <tr><td>Markdown</td><td><span class="version-tag">marked + highlight.js</span></td><td>✅ Phase 2 完成</td></tr>
+            <tr><td>样式</td><td>Scoped CSS + CSS Variables</td><td>✅ Phase 2 完成</td></tr>
+            <tr><td>构建</td><td><span class="version-tag">Vite 6 + vue-tsc</span></td><td>✅ Phase 2 完成</td></tr>
+            <tr><td>Harness</td><td><span class="version-tag">internal/harness</span></td><td>✅ Phase 3 完成</td></tr>
+            <tr><td>预设 Cases</td><td><span class="version-tag">internal/cases</span></td><td>✅ Phase 3 完成</td></tr>
         </table>
 
         <h2>3.3 通信协议</h2>

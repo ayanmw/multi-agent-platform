@@ -315,7 +315,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				"error":  fmt.Sprintf("%v", r),
 			}))
 			// Persist the failure status so the task history shows it as failed.
-			e.updateTask("failed", "", 0)
+			e.updateTask("failed", "", e.totalTokens)
 			// Re-panic to preserve the original stack trace for server-side logging.
 			// The panic will be caught by the HTTP server's recovery middleware
 			// or the caller's deferred recovery.
@@ -374,7 +374,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				"reason": "cancelled",
 			}))
 			e.updateTask("failed", "", 0)
-			return "", e.stepIdx, ctx.Err()
+			return "", e.totalTokens, ctx.Err()
 		default:
 			// Context is still valid — continue to the think phase.
 		}
@@ -391,16 +391,16 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		// llm_delta event, creating a typewriter effect in the UI.
 		content, usage, toolCalls, err := e.think(ctx)
 		if err != nil {
-			// LLM call failed — this could be a network error, API error,
-			// or rate limit. Emit failure and return. The frontend will show
-			// the error message to the user.
 			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "llm_error",
 				"error":  err.Error(),
 			}))
-			e.updateTask("failed", "", 0)
-			return "", e.stepIdx, fmt.Errorf("think step %d: %w", e.stepIdx, err)
+			e.updateTask("failed", "", e.totalTokens)
+			return "", e.totalTokens, fmt.Errorf("think step %d: %w", e.stepIdx, err)
 		}
+
+		// Accumulate token usage for budget tracking (TokenBudgetRule — Phase 4)
+		e.totalTokens += usage.TotalTokens
 
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), usage)
@@ -468,8 +468,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			//
 			// stepIdx is incremented INSIDE executeTool (not here) because
 			// executeTool manages the step lifecycle events (started/completed).
-			result, err := e.executeTool(tc)
-			if err != nil {
+			result, toolErr := e.executeTool(tc)
+			if toolErr != nil {
 				// Tool execution failed — this could be a tool-not-found error,
 				// a parameter validation error, or a runtime error inside the tool.
 				// Emit failure and return. The frontend will show which tool
@@ -477,10 +477,10 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"reason":    "tool_error",
 					"tool_name": tc.Function.Name,
-					"error":     err.Error(),
+					"error":     toolErr.Error(),
 				}))
-				e.updateTask("failed", "", 0)
-				return "", e.stepIdx, fmt.Errorf("tool %s: %w", tc.Function.Name, err)
+				e.updateTask("failed", "", e.totalTokens)
+				return "", e.totalTokens, fmt.Errorf("tool %s: %w", tc.Function.Name, toolErr)
 			}
 
 			// Persist the tool result for audit trail.
@@ -521,8 +521,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		"reason":    "max_steps_exceeded",
 		"max_steps": e.cfg.MaxSteps,
 	}))
-	e.updateTask("failed", "", 0)
-	return "", e.stepIdx, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
+	e.updateTask("failed", "", e.totalTokens)
+	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
 }
 
 // saveConversation persists a conversation message to the storage backend.
