@@ -32,6 +32,9 @@ import type { AgentEvent, TaskState, AgentState, Step, ToolCallData } from '../t
 /** The reactive task state — null when no task is active */
 const task = ref<TaskState | null>(null)
 
+/** Remember the last user input so we can retry/continue a task */
+const lastUserInput = ref<string>('')
+
 /** Whether a task has been sent but not yet confirmed by WebSocket events */
 const isTaskPending = ref(false)
 
@@ -285,6 +288,8 @@ export function useTaskStore() {
    * The WebSocket events will update the task state in real time.
    */
   async function startTask(input: string, agentId?: string, systemPrompt?: string, maxSteps?: number): Promise<string> {
+    // Remember input for retry/continue actions
+    lastUserInput.value = input
     isTaskPending.value = true
     // Safety timeout: clear pending state after 15s even if no event arrives
     const safetyTimeout = setTimeout(() => {
@@ -440,6 +445,7 @@ export function useTaskStore() {
     task,
     isTaskPending,
     wsStatus: status,
+    lastUserInput,
 
     // Actions
     connect,

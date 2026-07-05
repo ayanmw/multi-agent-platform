@@ -55,6 +55,7 @@ const {
   task,
   isTaskPending,
   wsStatus,
+  lastUserInput,
   connect,
   disconnect,
   startTask,
@@ -128,6 +129,34 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
     await startTask(text, undefined, undefined, options.maxSteps)
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
+  }
+}
+
+/** Compute the next max steps when continuing a failed task */
+function nextMaxSteps(): number {
+  // Prefer the failed task's own max_steps; fall back to the default
+  const currentMax = Object.values(task.value?.agents ?? {}).find(a => a.maxSteps)?.maxSteps ?? 10
+  return currentMax * 2
+}
+
+/** Whether the failure was caused by max_steps_exceeded */
+function isMaxStepsFailure(): boolean {
+  return task.value?.finalResult?.includes('max steps') ?? false
+}
+
+/** Continue a max-steps-exceeded task with doubled max_steps */
+async function handleContinue() {
+  if (!lastUserInput.value) {
+    showError('No previous input to continue from')
+    return
+  }
+  try {
+    const newMaxSteps = nextMaxSteps()
+    showInfo(`Continuing with max steps ×2 = ${newMaxSteps}`)
+    clearTask()
+    await startTask(lastUserInput.value, undefined, undefined, newMaxSteps)
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to continue task')
   }
 }
 
@@ -251,6 +280,12 @@ function handleCaseView(caseId: string) {
       <div v-if="task.finalResult" class="final-result-text">{{ task.finalResult }}</div>
       <div v-else class="final-result-text final-result-subtle">
         The task failed. Check the agent tree above for details.
+      </div>
+      <div v-if="isMaxStepsFailure()" class="failed-actions">
+        <button class="btn-continue" @click="handleContinue">
+          🚀 Continue with max steps ×2 ({{ nextMaxSteps() }})
+        </button>
+        <span class="continue-hint">Resume from the last input with doubled step budget</span>
       </div>
     </div>
 
@@ -463,5 +498,37 @@ function handleCaseView(caseId: string) {
 .final-result-subtle {
   color: #888;
   font-style: italic;
+}
+
+.failed-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid #4a2a2a;
+  background: #3a1e1e;
+  flex-wrap: wrap;
+}
+
+.btn-continue {
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+}
+
+.btn-continue:hover {
+  background: #3a8eef;
+  transform: translateY(-1px);
+}
+
+.continue-hint {
+  font-size: 11px;
+  color: #888;
 }
 </style>
