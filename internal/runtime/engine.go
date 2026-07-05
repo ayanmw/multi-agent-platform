@@ -217,18 +217,19 @@ type EngineConfig struct {
 // The * suffix indicates events that may repeat multiple times (streaming tokens,
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
-	cfg      EngineConfig            // immutable configuration set at creation
-	llm      *llm.Client             // HTTP client for the LLM API (one per engine)
-	tools    *tool.Registry          // the tool registry shared across agents
-	bus      EventBus                // event transport for real-time frontend updates
-	persist  Persistence             // optional persistence backend (nil = no persistence)
-	gate     *harness.PolicyGate     // optional policy enforcement (nil = allow all)
-	progress *harness.ProgressManager // optional progress tracking (nil = skip)
-	taskProgress *harness.TaskProgress // current progress state (nil if progress is nil)
-	taskID   string                  // unique task identifier for correlation
-	messages []llm.Message           // full conversation history (system + user + assistant + tool)
-	stepIdx  int                     // current ReAct loop iteration (0-based)
-	totalTokens int                  // cumulative token usage across all LLM calls
+	cfg         EngineConfig            // immutable configuration set at creation
+	llm         *llm.Client             // HTTP client for the LLM API (one per engine)
+	tools       *tool.Registry          // the tool registry shared across agents
+	bus         EventBus                // event transport for real-time frontend updates
+	persist     Persistence             // optional persistence backend (nil = no persistence)
+	gate        *harness.PolicyGate     // optional policy enforcement (nil = allow all)
+	progress    *harness.ProgressManager // optional progress tracking (nil = skip)
+	taskProgress *harness.TaskProgress   // current progress state (nil if progress is nil)
+	taskID      string                  // unique task identifier for correlation
+	messages    []llm.Message           // full conversation history (system + user + assistant + tool)
+	stepIdx     int                     // current ReAct loop iteration (0-based)
+	totalTokens int                     // cumulative total tokens across all LLM calls
+	tokenUsage  llm.Usage               // cumulative detailed token usage (input/cache/output)
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -257,19 +258,20 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 
 	return &Engine{
-		cfg:      cfg,
-		llm:      llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
-		tools:    tools,
-		bus:      bus,
-		persist:  cfg.Persistence,
-		gate:     cfg.PolicyGate,   // nil = no policy enforcement
-		progress: cfg.Progress,     // nil = no progress tracking
-		taskID:   taskID,
+		cfg:         cfg,
+		llm:         llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
+		tools:       tools,
+		bus:         bus,
+		persist:     cfg.Persistence,
+		gate:        cfg.PolicyGate,   // nil = no policy enforcement
+		progress:    cfg.Progress,     // nil = no progress tracking
+		taskID:      taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: cfg.SystemPrompt},
 		},
 		stepIdx:     0,
 		totalTokens: 0,
+		tokenUsage:  llm.Usage{},
 	}
 }
 
@@ -342,10 +344,11 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	}
 
 	// Notify the frontend that the agent is initialized and ready to process.
-	// The UI uses this event to show the agent's name and model in the header.
+	// The UI uses this event to show the agent's name, model, and limits.
 	e.bus.SendEvent(event.NewEvent("agent_ready", e.taskID, e.cfg.AgentID, 0, map[string]any{
 		"agent_name": e.cfg.AgentID,
 		"model":      e.cfg.Model,
+		"max_steps":  e.cfg.MaxSteps,
 	}))
 
 	// =========================================================================
@@ -401,12 +404,29 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 		// Accumulate token usage for budget tracking (TokenBudgetRule — Phase 4)
 		e.totalTokens += usage.TotalTokens
+		e.tokenUsage.PromptTokens += usage.PromptTokens
+		e.tokenUsage.PromptCacheHitTokens += usage.PromptCacheHitTokens
+		e.tokenUsage.PromptCacheMissTokens += usage.PromptCacheMissTokens
+		e.tokenUsage.CompletionTokens += usage.CompletionTokens
+		e.tokenUsage.TotalTokens += usage.TotalTokens
 
-			// Update the PolicyGate with the latest token usage so TokenBudgetRule
-			// can enforce the budget before the next tool execution.
-			if e.gate != nil {
-				e.gate.SetTokenUsage(e.totalTokens)
-			}
+	// Update the PolicyGate with the latest token usage so TokenBudgetRule
+	// can enforce the budget before the next tool execution.
+	if e.gate != nil {
+		e.gate.SetTokenUsage(e.totalTokens)
+	}
+
+	// Emit an agent_status event so the frontend can display real-time
+	// token consumption detail (input / cache / output) and progress.
+	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"prompt_tokens":            e.tokenUsage.PromptTokens,
+		"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
+		"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
+		"completion_tokens":        e.tokenUsage.CompletionTokens,
+		"total_tokens":             e.tokenUsage.TotalTokens,
+		"max_steps":                e.cfg.MaxSteps,
+		"current_step":             e.stepIdx,
+	}))
 
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), usage)
@@ -522,10 +542,11 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// allowed number of iterations. This is a safety mechanism to prevent
 	// infinite loops (e.g., the LLM keeps calling the same tool with the same
 	// arguments without making progress).
-	// =========================================================================
 	e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"reason":    "max_steps_exceeded",
-		"max_steps": e.cfg.MaxSteps,
+		"reason":        "max_steps_exceeded",
+		"max_steps":     e.cfg.MaxSteps,
+		"current_step":  e.stepIdx,
+		"total_tokens":  e.totalTokens,
 	}))
 	e.updateTask("failed", "", e.totalTokens)
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)

@@ -121,11 +121,11 @@ onUnmounted(() => {
 })
 
 /** Handle task submission from TaskInput */
-async function handleSend(text: string) {
+async function handleSend(text: string, options: { maxSteps?: number }) {
   try {
     // Clear previous task state before starting a new one
     clearTask()
-    await startTask(text)
+    await startTask(text, undefined, undefined, options.maxSteps)
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
   }
@@ -246,9 +246,12 @@ function handleCaseView(caseId: string) {
     </div>
 
     <!-- Task failed (shown when task failed) -->
-    <div v-if="task?.status === 'failed' && task?.finalResult" class="final-result final-result-failed">
+    <div v-if="task?.status === 'failed'" class="final-result final-result-failed">
       <div class="final-result-header">❌ Task Failed</div>
-      <pre class="final-result-text">{{ task.finalResult }}</pre>
+      <div v-if="task.finalResult" class="final-result-text">{{ task.finalResult }}</div>
+      <div v-else class="final-result-text final-result-subtle">
+        The task failed. Check the agent tree above for details.
+      </div>
     </div>
 
     <!-- Global toast notifications -->
@@ -455,5 +458,10 @@ function handleCaseView(caseId: string) {
   word-break: break-word;
   max-height: 400px;
   overflow-y: auto;
+}
+
+.final-result-subtle {
+  color: #888;
+  font-style: italic;
 }
 </style>

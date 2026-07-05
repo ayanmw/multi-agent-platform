@@ -107,6 +107,7 @@ export function useTaskStore() {
       case 'agent_ready':
         agent.name = (evt.data.agent_name as string) || agentId
         agent.model = (evt.data.model as string) || agent.model
+        agent.maxSteps = (evt.data.max_steps as number) || agent.maxSteps
         break
 
       case 'step_started': {
@@ -206,11 +207,63 @@ export function useTaskStore() {
         break
       }
 
-      case 'task_failed': {
+      case 'task_failed':
         task.value.status = 'failed'
-        task.value.finalResult = `Task failed: ${evt.data.reason || 'unknown error'}`
-        if (evt.data.error) {
-          task.value.finalResult += `\n${evt.data.error}`
+        {
+          const reason = (evt.data.reason as string) || 'unknown error'
+          const maxSteps = evt.data.max_steps as number | undefined
+          const currentStep = evt.data.current_step as number | undefined
+          let msg = `Task failed: ${reason}`
+          if (reason === 'max_steps_exceeded' && maxSteps !== undefined) {
+            msg = `Task failed: max steps (${maxSteps}) exceeded`
+            if (currentStep !== undefined) {
+              msg += ` at step ${currentStep}`
+            }
+          }
+          task.value.finalResult = msg
+          if (evt.data.error) {
+            task.value.finalResult += `\n${evt.data.error}`
+          }
+        }
+        break
+
+      case 'agent_status': {
+        // Real-time token usage and step progress update
+        agent.currentStep = (evt.data.current_step as number) ?? agent.currentStep
+        agent.maxSteps = (evt.data.max_steps as number) ?? agent.maxSteps
+        agent.tokenUsage = {
+          promptTokens: (evt.data.prompt_tokens as number) || 0,
+          promptCacheHitTokens: (evt.data.prompt_cache_hit_tokens as number) || 0,
+          promptCacheMissTokens: (evt.data.prompt_cache_miss_tokens as number) || 0,
+          completionTokens: (evt.data.completion_tokens as number) || 0,
+          totalTokens: (evt.data.total_tokens as number) || 0,
+        }
+
+        // Also update task-level token usage from aggregate
+        if (task.value) {
+          task.value.totalTokens = Object.values(task.value.agents).reduce(
+            (sum, a) => sum + (a.tokenUsage?.totalTokens || 0),
+            0
+          )
+          task.value.tokenUsage = {
+            promptTokens: Object.values(task.value.agents).reduce(
+              (sum, a) => sum + (a.tokenUsage?.promptTokens || 0),
+              0
+            ),
+            promptCacheHitTokens: Object.values(task.value.agents).reduce(
+              (sum, a) => sum + (a.tokenUsage?.promptCacheHitTokens || 0),
+              0
+            ),
+            promptCacheMissTokens: Object.values(task.value.agents).reduce(
+              (sum, a) => sum + (a.tokenUsage?.promptCacheMissTokens || 0),
+              0
+            ),
+            completionTokens: Object.values(task.value.agents).reduce(
+              (sum, a) => sum + (a.tokenUsage?.completionTokens || 0),
+              0
+            ),
+            totalTokens: task.value.totalTokens,
+          }
         }
         break
       }
@@ -231,7 +284,7 @@ export function useTaskStore() {
    * Start a chat task by POSTing to /api/tasks.
    * The WebSocket events will update the task state in real time.
    */
-  async function startTask(input: string, agentId?: string, systemPrompt?: string): Promise<string> {
+  async function startTask(input: string, agentId?: string, systemPrompt?: string, maxSteps?: number): Promise<string> {
     isTaskPending.value = true
     // Safety timeout: clear pending state after 15s even if no event arrives
     const safetyTimeout = setTimeout(() => {
@@ -241,15 +294,18 @@ export function useTaskStore() {
     }, 15000)
 
     try {
+      const body: Record<string, unknown> = {
+        action: 'chat',
+        agent_id: agentId || 'agent_default',
+        input,
+      }
+      if (systemPrompt) body.system_prompt = systemPrompt
+      if (maxSteps && maxSteps > 0) body.max_steps = maxSteps
+
       const resp = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'chat',
-          agent_id: agentId || 'agent_default',
-          input,
-          system_prompt: systemPrompt,
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!resp.ok) {

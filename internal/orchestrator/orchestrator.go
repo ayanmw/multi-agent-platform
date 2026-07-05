@@ -218,6 +218,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 	o.hub.SendEvent(event.NewEvent("agent_ready", taskID, spec.AgentID, 0, map[string]any{
 		"agent_name":    spec.Name,
 		"model":         model,
+		"max_steps":     contract.MaxSteps,
 		"parent_agent":  spec.ParentAgentID,
 		"allowed_tools": spec.AllowedTools,
 	}))

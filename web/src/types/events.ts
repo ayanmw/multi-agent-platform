@@ -1,6 +1,6 @@
 // Event system type definitions — mirrors the Go backend's pkg/event/event.go
 
-/** Event type enum — aligned with Go backend's 18 event types */
+/** Event type enum — aligned with Go backend's event types */
 export type EventType =
   // Lifecycle events
   | 'agent_ready'
@@ -21,6 +21,8 @@ export type EventType =
   | 'tool_call_failed'
   // Observation
   | 'observation'
+  // Status event for real-time metrics (Phase 4+)
+  | 'agent_status'
   // System events
   | 'system_info'
   | 'system_error'
@@ -41,6 +43,20 @@ export type StepType = 'think' | 'tool_call' | 'observation'
 
 /** Step status */
 export type StepStatus = 'running' | 'completed' | 'failed'
+
+/** Token usage details per agent / per task */
+export interface TokenUsage {
+  /** Total prompt (input) tokens */
+  promptTokens: number
+  /** Tokens read from cache (cheap) */
+  promptCacheHitTokens: number
+  /** Tokens not in cache */
+  promptCacheMissTokens: number
+  /** Completion (output) tokens */
+  completionTokens: number
+  /** Total tokens = prompt + completion */
+  totalTokens: number
+}
 
 /** Tool call data stored in a step */
 export interface ToolCallData {
@@ -79,6 +95,12 @@ export interface AgentState {
   steps: Step[]
   /** Display color for this agent in multi-agent view */
   color?: string
+  /** Max ReAct loop steps for this agent */
+  maxSteps?: number
+  /** Current step index (tool execution rounds) */
+  currentStep?: number
+  /** Detailed token usage for this agent */
+  tokenUsage?: TokenUsage
 }
 
 /** Task status */
@@ -96,6 +118,8 @@ export interface TaskState {
   agents: Record<string, AgentState>
   /** Timestamp when the task was started (ms since epoch) */
   startedAt: number
+  /** Detailed token usage across all agents */
+  tokenUsage?: TokenUsage
 }
 
 /** Control message sent from client to server via WebSocket */
@@ -111,6 +135,7 @@ export interface ChatRequest {
   agent_id: string
   input: string
   system_prompt?: string
+  max_steps?: number
 }
 
 /** Chat response from POST /api/tasks */

@@ -31,6 +31,9 @@ interface ReadonlyAgentState {
   readonly model: string
   readonly steps: readonly Step[]
   readonly color?: string
+  readonly maxSteps?: number
+  readonly currentStep?: number
+  readonly tokenUsage?: import('../types/events').TokenUsage
 }
 
 const props = defineProps<{
@@ -179,8 +182,11 @@ async function copyToolOutput(step: Step) {
   }
 }
 
-/** Total tokens across all steps */
+/** Total tokens across all steps (prefer detailed token usage from agent_status) */
 const totalTokens = computed(() => {
+  if (props.agent.tokenUsage?.totalTokens) {
+    return props.agent.tokenUsage.totalTokens
+  }
   let total = 0
   for (const s of props.agent.steps) {
     total += s.tokens
@@ -252,6 +258,9 @@ watch(
         <span class="agent-model">{{ agent.model }}</span>
       </div>
       <div class="agent-header-right">
+        <span v-if="agent.maxSteps" class="agent-steps">
+          step {{ agent.currentStep ?? 0 }} / {{ agent.maxSteps }}
+        </span>
         <StatusIndicator
           :status="isRunning ? 'running' : 'completed'"
           :label="isRunning ? 'Running' : `${agent.steps.length} steps`"
@@ -428,6 +437,14 @@ watch(
 .agent-tokens {
   font-size: 11px;
   color: #888;
+}
+
+.agent-steps {
+  font-size: 11px;
+  color: #888;
+  background: #2a2a2a;
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 
 /* Step list */

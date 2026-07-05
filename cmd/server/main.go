@@ -92,6 +92,7 @@ func main() {
 			Input        string                       `json:"input"`
 			SystemPrompt string                       `json:"system_prompt"`
 			CaseType     string                       `json:"case_type"`
+			MaxSteps     int                          `json:"max_steps"`
 			Agents       []orchestrator.AgentSpec     `json:"agents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -187,6 +188,10 @@ func main() {
 		if contract.Goal == "" {
 			contract = harness.DefaultContract(req.Input)
 		}
+		// Override MaxSteps from request if provided (>0)
+		if req.MaxSteps > 0 {
+			contract.MaxSteps = req.MaxSteps
+		}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
 			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract)
@@ -247,6 +252,7 @@ func main() {
 		var req struct {
 			Input    string                       `json:"input"`
 			CaseType string                       `json:"case_type"` // "multi_agent", "code_gen", or empty
+			MaxSteps int                          `json:"max_steps"` // override max steps for all agents
 			Agents   []orchestrator.AgentSpec     `json:"agents"`    // direct agent specs (optional)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -267,6 +273,17 @@ func main() {
 			decomposer := &orchestrator.TaskDecomposer{}
 			result := decomposer.Decompose(req.Input, req.CaseType)
 			specs = result.Agents
+		}
+
+		// Apply global MaxSteps override if provided
+		if req.MaxSteps > 0 {
+			for i := range specs {
+				if specs[i].Contract == nil {
+					contract := harness.DefaultContract(specs[i].Input)
+					specs[i].Contract = &contract
+				}
+				specs[i].Contract.MaxSteps = req.MaxSteps
+			}
 		}
 
 		taskID := "task_" + time.Now().Format("20060102150405")
@@ -301,6 +318,7 @@ func main() {
 			"task_id":     taskID,
 			"agent_count": len(specs),
 			"agent_ids":   agentIDs,
+			"max_steps":   req.MaxSteps,
 			"status":      "started",
 		})
 	})

@@ -131,10 +131,17 @@ type Delta struct {
 
 // Usage tracks token consumption as reported by the API.
 // Token statistics are strictly read from the API response — never estimated locally.
+//
+// Phase 4+ — added cache token breakdown. OpenAI-compatible APIs return
+// prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens.
+// Anthropic and DeepSeek also provide these fields. We store them for display
+// and cost tracking.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens           int `json:"prompt_tokens"`
+	CompletionTokens       int `json:"completion_tokens"`
+	TotalTokens            int `json:"total_tokens"`
+	PromptCacheHitTokens   int `json:"prompt_cache_hit_tokens"`   // tokens read from cache
+	PromptCacheMissTokens  int `json:"prompt_cache_miss_tokens"`  // tokens not in cache
 }
 
 // StreamChunk is a parsed SSE chunk passed to the onChunk callback.
@@ -283,6 +290,15 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		// Extract usage from the final chunk (the only chunk that carries it)
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
+			// Some providers only return prompt_tokens/completion_tokens, while others
+			// provide cache hit/miss breakdown. If TotalTokens is zero, compute it.
+			if usage.TotalTokens == 0 {
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			}
+			// If only prompt_cache_hit_tokens is provided, derive miss tokens.
+			if usage.PromptCacheMissTokens == 0 && usage.PromptTokens > 0 {
+				usage.PromptCacheMissTokens = usage.PromptTokens - usage.PromptCacheHitTokens
+			}
 		}
 
 		if len(chunk.Choices) == 0 {

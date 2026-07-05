@@ -1,16 +1,21 @@
-<!-- TaskInput — chat input area with send button and control buttons
+<!-- TaskInput — chat input area with send button, control buttons, and task options
      Props:
        disabled: whether the input is disabled (during task execution)
        isRunning: whether a task is currently running
+       isPending: whether a task is starting
 
      Emits:
-       send: user clicked send with the input text
+       send: user clicked send with input text and selected options
        pause: user clicked pause
        resume: user clicked resume
        cancel: user clicked cancel
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
+
+export interface SendOptions {
+  maxSteps: number
+}
 
 const props = defineProps<{
   disabled: boolean
@@ -19,18 +24,22 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [text: string]
+  send: [text: string, options: SendOptions]
   pause: []
   resume: []
   cancel: []
 }>()
 
 const inputText = ref('')
+const showOptions = ref(false)
+const maxSteps = ref(10)
+
+const quickSteps = [2, 5, 10, 15, 20, 30]
 
 function handleSend() {
   const text = inputText.value.trim()
   if (!text || props.disabled) return
-  emit('send', text)
+  emit('send', text, { maxSteps: maxSteps.value })
   inputText.value = ''
 }
 
@@ -40,6 +49,10 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault()
     handleSend()
   }
+}
+
+function setMaxSteps(n: number) {
+  maxSteps.value = n
 }
 </script>
 
@@ -62,6 +75,48 @@ function handleKeydown(e: KeyboardEvent) {
         <span v-if="isPending" class="btn-spinner"></span>
         <span v-else>Send</span>
       </button>
+    </div>
+
+    <!-- Task options toggle -->
+    <div class="options-row">
+      <button
+        class="options-toggle"
+        :class="{ active: showOptions }"
+        @click="showOptions = !showOptions"
+      >
+        ⚙️ Options
+      </button>
+      <span v-if="!showOptions" class="options-summary">
+        Max steps: {{ maxSteps }}
+      </span>
+    </div>
+
+    <!-- Task options panel -->
+    <div v-if="showOptions" class="options-panel">
+      <div class="option-group">
+        <label class="option-label">Max Steps: {{ maxSteps }}</label>
+        <div class="quick-steps">
+          <button
+            v-for="n in quickSteps"
+            :key="n"
+            class="quick-step-btn"
+            :class="{ active: maxSteps === n }"
+            @click="setMaxSteps(n)"
+          >
+            {{ n }}
+          </button>
+        </div>
+        <input
+          v-model.number="maxSteps"
+          type="range"
+          min="1"
+          max="50"
+          class="steps-slider"
+        />
+        <div class="option-hint">
+          Maximum number of ReAct loop iterations. Increase for long tasks, decrease for quick tasks.
+        </div>
+      </div>
     </div>
 
     <!-- Control buttons — visible only when a task is running -->
@@ -149,6 +204,93 @@ function handleKeydown(e: KeyboardEvent) {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Options row */
+.options-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.options-toggle {
+  background: transparent;
+  border: 1px solid #444;
+  color: #999;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.options-toggle:hover,
+.options-toggle.active {
+  background: #333;
+  color: #d4d4d4;
+  border-color: #4a9eff;
+}
+
+.options-summary {
+  font-size: 11px;
+  color: #888;
+}
+
+/* Options panel */
+.options-panel {
+  margin-top: 10px;
+  padding: 12px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 6px;
+}
+
+.option-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.option-label {
+  font-size: 12px;
+  color: #aaa;
+  font-weight: 600;
+}
+
+.quick-steps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quick-step-btn {
+  background: #333;
+  border: 1px solid #444;
+  color: #999;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.quick-step-btn:hover,
+.quick-step-btn.active {
+  background: #4a9eff;
+  color: #fff;
+  border-color: #4a9eff;
+}
+
+.steps-slider {
+  width: 100%;
+  accent-color: #4a9eff;
+}
+
+.option-hint {
+  font-size: 11px;
+  color: #666;
+  line-height: 1.4;
 }
 
 .control-row {
