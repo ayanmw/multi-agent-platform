@@ -360,6 +360,16 @@ type PolicyRule interface {
 	Check(toolName string, input map[string]any, contract TaskContract) (allowedInput map[string]any, err error)
 }
 
+// TokenAwareRule extends PolicyRule for rules that need to know the current
+// token usage. TokenBudgetRule implements this to enforce token budgets.
+// The Engine calls SetTokenUsage before each tool execution to update the
+// cumulative token count.
+type TokenAwareRule interface {
+	PolicyRule
+	// SetTokenUsage updates the rule's knowledge of cumulative token usage.
+	SetTokenUsage(totalTokens int)
+}
+
 // ErrBlockedByPolicy is returned when a PolicyRule blocks a tool call.
 // The LLM receives this error as the tool's output and can try a different
 // approach (e.g., writing to a different directory).
@@ -449,6 +459,16 @@ func (g *PolicyGate) Execute(toolName string, input map[string]any, executor fun
 // Contract returns the current TaskContract (read-only).
 func (g *PolicyGate) Contract() TaskContract {
 	return g.contract
+}
+
+// SetTokenUsage updates all TokenAwareRules in the chain with the current
+// cumulative token count. Called by the Engine before each tool execution.
+func (g *PolicyGate) SetTokenUsage(totalTokens int) {
+	for _, rule := range g.chain.rules {
+		if ta, ok := rule.(TokenAwareRule); ok {
+			ta.SetTokenUsage(totalTokens)
+		}
+	}
 }
 
 // ============================================================================
@@ -752,4 +772,90 @@ func truncateForDisplay(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// ============================================================================
+// TokenBudgetRule — enforces the TaskContract's token budget
+// ============================================================================
+
+// TokenBudgetRule blocks all tool calls when the cumulative token usage exceeds
+// the TaskContract's TokenBudget. It implements TokenAwareRule so the Engine can
+// update the cumulative token count before each tool execution.
+//
+// Design rationale: The token budget is a hard economic constraint — once the
+// budget is exceeded, the agent should stop consuming tokens. This rule is
+// checked BEFORE tool execution (not during LLM calls) because the Engine
+// already tracks token usage per LLM call. The rule blocks subsequent tool
+// calls to prevent the agent from making more LLM calls after the budget is
+// exceeded.
+//
+// When TokenBudget is 0, the rule never blocks (unlimited budget).
+type TokenBudgetRule struct {
+	// totalTokens tracks the cumulative token usage across all LLM calls.
+	// Updated by the Engine via SetTokenUsage.
+	totalTokens int
+}
+
+// Name returns the rule name.
+func (r *TokenBudgetRule) Name() string { return "TokenBudgetRule" }
+
+// SetTokenUsage updates the cumulative token count. Called by the Engine
+// (via PolicyGate.SetTokenUsage) before each tool execution.
+func (r *TokenBudgetRule) SetTokenUsage(totalTokens int) {
+	r.totalTokens = totalTokens
+}
+
+// Check blocks all tool calls if the cumulative token usage exceeds the budget.
+// When TokenBudget is 0 (unlimited), this rule always allows.
+func (r *TokenBudgetRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
+	if contract.TokenBudget <= 0 {
+		return input, nil // unlimited budget
+	}
+
+	if r.totalTokens >= contract.TokenBudget {
+		return input, &ErrBlockedByPolicy{
+			Rule:   r.Name(),
+			Reason: fmt.Sprintf("token budget exceeded: %d/%d tokens used", r.totalTokens, contract.TokenBudget),
+			Tool:   toolName,
+		}
+	}
+
+	return input, nil
+}
+
+// ============================================================================
+// ToolWhitelistRule — restricts which tools the agent can use
+// ============================================================================
+
+// ToolWhitelistRule only allows tool calls to tools listed in the TaskContract's
+// AllowedTools field. If AllowedTools is empty, all tools are allowed.
+//
+// Design rationale: The TaskContract specifies which tools the agent is allowed
+// to use. This rule enforces that restriction at the PolicyGate level, before the
+// tool is executed. The LLM may still request blocked tools in its response, but
+// the PolicyGate will intercept and return an error — the LLM can then try a
+// different approach.
+type ToolWhitelistRule struct{}
+
+// Name returns the rule name.
+func (r *ToolWhitelistRule) Name() string { return "ToolWhitelistRule" }
+
+// Check blocks tool calls to tools not in the contract's AllowedTools list.
+// If AllowedTools is empty, all tools are allowed (no restriction).
+func (r *ToolWhitelistRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
+	if len(contract.AllowedTools) == 0 {
+		return input, nil // no restrictions — all tools allowed
+	}
+
+	for _, allowed := range contract.AllowedTools {
+		if toolName == allowed {
+			return input, nil
+		}
+	}
+
+	return input, &ErrBlockedByPolicy{
+		Rule:   r.Name(),
+		Reason: fmt.Sprintf("tool %q is not in the allowed tools list: %v", toolName, contract.AllowedTools),
+		Tool:   toolName,
+	}
 }

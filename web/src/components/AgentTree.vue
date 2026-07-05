@@ -19,8 +19,8 @@
        "white-box" Agent philosophy.
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import type { AgentState, Step } from '../types/events'
+import { ref, computed, watch, nextTick } from 'vue'
+import type { AgentState, Step, ToolCallData } from '../types/events'
 import StatusIndicator from './StatusIndicator.vue'
 import TypeWriter from './TypeWriter.vue'
 
@@ -30,6 +30,7 @@ interface ReadonlyAgentState {
   readonly name: string
   readonly model: string
   readonly steps: readonly Step[]
+  readonly color?: string
 }
 
 const props = defineProps<{
@@ -39,6 +40,13 @@ const props = defineProps<{
 
 /** Track which steps are expanded (by index) */
 const expandedSteps = ref<Set<number>>(new Set())
+
+/** Scroll container ref for auto-scroll logic */
+const scrollContainer = ref<HTMLElement | null>(null)
+/** Whether the user has manually scrolled up (disables auto-scroll) */
+const userScrolledUp = ref(false)
+/** Whether to show the "scroll to bottom" button */
+const showScrollBtn = ref(false)
 
 /** Toggle step expand/collapse */
 function toggleStep(index: number) {
@@ -101,6 +109,76 @@ function stepSummary(step: Step): string {
   }
 }
 
+/** Check if tool input JSON can be formatted (range check for safety) */
+function isFormattableJSON(input: Record<string, unknown>): boolean {
+  try {
+    const s = JSON.stringify(input)
+    return s.length > 0 && s.length < 50000
+  } catch {
+    return false
+  }
+}
+
+/** Try to detect if tool output looks like JSON */
+function isJSONOutput(output: string): boolean {
+  const trimmed = output.trim()
+  return (trimmed.startsWith('{') || trimmed.startsWith('['))
+}
+
+/** Format JSON string with indentation */
+function formatJSON(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+/** Toggle JSON formatting for a tool input */
+function toggleInputFormat(step: Step) {
+  if (!step.toolCall) return
+  const formatted = step.toolCall as ToolCallData & { _inputFormatted?: boolean; _inputCompact?: string }
+  if (!formatted._inputFormatted) {
+    formatted._inputCompact = JSON.stringify(formatted.input)
+    formatted.input = JSON.parse(JSON.stringify(formatted.input)) // trigger reactivity
+    formatted._inputFormatted = true
+  } else {
+    formatted._inputFormatted = false
+    if (formatted._inputCompact) {
+      formatted.input = JSON.parse(formatted._inputCompact)
+    }
+  }
+  // Trigger reactivity by replacing the step
+  expandedSteps.value = new Set(expandedSteps.value)
+}
+
+/** Toggle JSON formatting for tool output */
+function toggleOutputFormat(step: Step) {
+  if (!step.toolCall) return
+  const formatted = step.toolCall as ToolCallData & { _outputFormatted?: boolean; _outputRaw?: string }
+  if (!formatted._outputFormatted) {
+    formatted._outputRaw = formatted.output
+    formatted.output = formatJSON(formatted.output)
+    formatted._outputFormatted = true
+  } else {
+    formatted._outputFormatted = false
+    if (formatted._outputRaw) {
+      formatted.output = formatted._outputRaw
+    }
+  }
+  expandedSteps.value = new Set(expandedSteps.value)
+}
+
+/** Copy tool output to clipboard */
+async function copyToolOutput(step: Step) {
+  if (!step.toolCall) return
+  try {
+    await navigator.clipboard.writeText(step.toolCall.output)
+  } catch {
+    // Clipboard API not available
+  }
+}
+
 /** Total tokens across all steps */
 const totalTokens = computed(() => {
   let total = 0
@@ -109,13 +187,67 @@ const totalTokens = computed(() => {
   }
   return total
 })
+
+// === Smart scroll: auto-scroll to bottom on new steps, but pause if user scrolls up ===
+
+/** Check if the scroll container is at the bottom (within 40px tolerance) */
+function isAtBottom(): boolean {
+  const el = scrollContainer.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+/** Scroll to the bottom of the container */
+function scrollToBottom() {
+  const el = scrollContainer.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+  userScrolledUp.value = false
+  showScrollBtn.value = false
+}
+
+/** Handle user scroll events — detect if user scrolled up */
+function handleScroll() {
+  const atBottom = isAtBottom()
+  if (atBottom) {
+    userScrolledUp.value = false
+    showScrollBtn.value = false
+  } else {
+    userScrolledUp.value = true
+    showScrollBtn.value = true
+  }
+}
+
+// Auto-scroll when steps change (new step added or thinking text updated)
+watch(
+  () => props.agent.steps.length,
+  () => {
+    if (!userScrolledUp.value) {
+      nextTick(() => scrollToBottom())
+    }
+  }
+)
+
+// Also auto-scroll when the last step's thinking text grows (streaming)
+watch(
+  () => {
+    const last = props.agent.steps[props.agent.steps.length - 1]
+    return last?.thinking?.length ?? 0
+  },
+  () => {
+    if (!userScrolledUp.value) {
+      nextTick(() => scrollToBottom())
+    }
+  }
+)
 </script>
 
 <template>
   <div class="agent-tree">
     <!-- Agent header -->
-    <div class="agent-header">
+    <div class="agent-header" :style="{ borderLeftColor: agent.color || '#4a9eff' }">
       <div class="agent-header-left">
+        <span class="agent-color-dot" :style="{ background: agent.color || '#4a9eff' }"></span>
         <span class="agent-name">{{ agent.name }}</span>
         <span class="agent-model">{{ agent.model }}</span>
       </div>
@@ -129,7 +261,28 @@ const totalTokens = computed(() => {
     </div>
 
     <!-- Step list -->
-    <div class="step-list">
+    <div
+      ref="scrollContainer"
+      class="step-list"
+      @scroll="handleScroll"
+    >
+      <!-- Skeleton screen — shown when agent is running but no steps yet -->
+      <div v-if="agent.steps.length === 0 && isRunning" class="skeleton-list">
+        <div class="skeleton-item">
+          <div class="skeleton-line skeleton-line-short"></div>
+          <div class="skeleton-line skeleton-line-long"></div>
+        </div>
+        <div class="skeleton-item">
+          <div class="skeleton-line skeleton-line-medium"></div>
+          <div class="skeleton-line skeleton-line-long"></div>
+          <div class="skeleton-line skeleton-line-short"></div>
+        </div>
+        <div class="skeleton-item">
+          <div class="skeleton-line skeleton-line-long"></div>
+          <div class="skeleton-line skeleton-line-medium"></div>
+        </div>
+      </div>
+
       <div
         v-for="step in agent.steps"
         :key="step.index"
@@ -175,18 +328,45 @@ const totalTokens = computed(() => {
             <!-- Tool input -->
             <details class="tool-detail-section" open>
               <summary>Input</summary>
+              <div class="tool-input-actions">
+                <button
+                  v-if="isFormattableJSON(step.toolCall.input)"
+                  class="tool-action-btn"
+                  @click="toggleInputFormat(step)"
+                >Format</button>
+              </div>
               <pre class="tool-json">{{ JSON.stringify(step.toolCall.input, null, 2) }}</pre>
             </details>
 
             <!-- Tool output -->
             <details v-if="step.toolCall.output" class="tool-detail-section">
               <summary>Output</summary>
+              <div class="tool-output-actions">
+                <button
+                  v-if="isJSONOutput(step.toolCall.output)"
+                  class="tool-action-btn"
+                  @click="toggleOutputFormat(step)"
+                >Format</button>
+                <button class="tool-action-btn" @click="copyToolOutput(step)">Copy</button>
+              </div>
               <pre class="tool-output">{{ step.toolCall.output }}</pre>
             </details>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Scroll-to-bottom button — shown when user has scrolled up -->
+    <Transition name="scroll-btn">
+      <button
+        v-if="showScrollBtn"
+        class="scroll-bottom-btn"
+        @click="scrollToBottom"
+        title="Scroll to bottom"
+      >
+        ↓ Bottom
+      </button>
+    </Transition>
   </div>
 </template>
 
@@ -197,6 +377,7 @@ const totalTokens = computed(() => {
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 16px;
+  position: relative;
 }
 
 /* Agent header */
@@ -207,12 +388,21 @@ const totalTokens = computed(() => {
   padding: 10px 14px;
   background: #252525;
   border-bottom: 1px solid #333;
+  border-left: 3px solid #4a9eff;
+  transition: border-left-color 0.3s;
 }
 
 .agent-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.agent-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .agent-name {
@@ -243,6 +433,9 @@ const totalTokens = computed(() => {
 /* Step list */
 .step-list {
   padding: 0;
+  max-height: 500px;
+  overflow-y: auto;
+  position: relative;
 }
 
 .step-item {
@@ -357,6 +550,32 @@ const totalTokens = computed(() => {
   color: #ccc;
 }
 
+/* Tool action buttons (Format/Copy) */
+.tool-input-actions,
+.tool-output-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.tool-action-btn {
+  background: #333;
+  color: #999;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tool-action-btn:hover {
+  background: #4a9eff;
+  color: #fff;
+  border-color: #4a9eff;
+}
+
 .tool-json {
   background: #1e1e1e;
   padding: 8px;
@@ -381,5 +600,79 @@ const totalTokens = computed(() => {
   white-space: pre-wrap;
   word-break: break-all;
   margin: 4px 0;
+}
+
+/* Skeleton screen — shown when agent is running but no steps yet */
+.skeleton-list {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skeleton-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skeleton-line {
+  height: 10px;
+  background: #333;
+  border-radius: 4px;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-line-short {
+  width: 40%;
+}
+
+.skeleton-line-medium {
+  width: 65%;
+}
+
+.skeleton-line-long {
+  width: 85%;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+/* Scroll-to-bottom button */
+.scroll-bottom-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.scroll-bottom-btn:hover {
+  background: #3a8eef;
+  transform: translateX(-50%) translateY(-2px);
+}
+
+/* Scroll button transition */
+.scroll-btn-enter-active,
+.scroll-btn-leave-active {
+  transition: all 0.2s ease;
+}
+
+.scroll-btn-enter-from,
+.scroll-btn-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
 }
 </style>

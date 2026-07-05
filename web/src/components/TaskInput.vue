@@ -15,6 +15,7 @@ import { ref } from 'vue'
 const props = defineProps<{
   disabled: boolean
   isRunning: boolean
+  isPending: boolean
 }>()
 
 const emit = defineEmits<{
@@ -58,7 +59,8 @@ function handleKeydown(e: KeyboardEvent) {
         :disabled="disabled || !inputText.trim()"
         @click="handleSend"
       >
-        Send
+        <span v-if="isPending" class="btn-spinner"></span>
+        <span v-else>Send</span>
       </button>
     </div>
 
@@ -132,6 +134,21 @@ function handleKeydown(e: KeyboardEvent) {
 
 .btn-send:hover:not(:disabled) {
   background: #3a8eef;
+}
+
+/* Loading spinner inside Send button */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .control-row {

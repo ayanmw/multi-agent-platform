@@ -402,6 +402,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		// Accumulate token usage for budget tracking (TokenBudgetRule — Phase 4)
 		e.totalTokens += usage.TotalTokens
 
+			// Update the PolicyGate with the latest token usage so TokenBudgetRule
+			// can enforce the budget before the next tool execution.
+			if e.gate != nil {
+				e.gate.SetTokenUsage(e.totalTokens)
+			}
+
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), usage)
 

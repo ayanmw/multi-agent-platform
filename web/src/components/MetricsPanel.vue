@@ -4,7 +4,7 @@
        wsStatus: WebSocket connection status string
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { TaskState } from '../types/events'
 import StatusIndicator from './StatusIndicator.vue'
 
@@ -12,6 +12,10 @@ const props = defineProps<{
   task: TaskState | null
   wsStatus: string
 }>()
+
+/** Elapsed time string (updated every second) */
+const elapsed = ref('')
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 /** Total steps across all agents */
 const totalSteps = computed(() => {
@@ -34,6 +38,35 @@ function formatTokens(n: number): string {
   return `${n}`
 }
 
+/** Format elapsed time from ms */
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  if (h > 0) return `${h}h ${m % 60}m ${s % 60}s`
+  if (m > 0) return `${m}m ${s % 60}s`
+  return `${s}s`
+}
+
+/** Update elapsed time every second while task is running */
+function updateElapsed() {
+  if (!props.task?.startedAt) {
+    elapsed.value = ''
+    return
+  }
+  const diff = Date.now() - props.task.startedAt
+  elapsed.value = formatElapsed(diff)
+}
+
+// Start/stop timer based on task status
+onMounted(() => {
+  elapsedTimer = setInterval(updateElapsed, 1000)
+})
+
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer)
+})
+
 /** Connection status badge class */
 const wsStatusClass = computed(() => {
   switch (props.wsStatus) {
@@ -47,6 +80,13 @@ const wsStatusClass = computed(() => {
 <template>
   <div class="metrics-panel">
     <div class="metrics-row">
+      <div class="metric">
+        <span class="metric-label">Agent</span>
+        <select class="agent-select" disabled title="Multi-agent selection coming in Phase 4">
+          <option>Default Agent</option>
+        </select>
+      </div>
+
       <div class="metric">
         <span class="metric-label">Connection</span>
         <span class="metric-value" :class="wsStatusClass">{{ wsStatus }}</span>
@@ -68,6 +108,10 @@ const wsStatusClass = computed(() => {
         <div class="metric">
           <span class="metric-label">Tokens</span>
           <span class="metric-value">{{ formatTokens(task.totalTokens) }}</span>
+        </div>
+        <div v-if="elapsed" class="metric">
+          <span class="metric-label">Elapsed</span>
+          <span class="metric-value">{{ elapsed }}</span>
         </div>
       </template>
 
@@ -130,5 +174,18 @@ const wsStatusClass = computed(() => {
 
 .ws-disconnected {
   color: #ff6b6b;
+}
+
+/* Agent selector (placeholder) */
+.agent-select {
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: not-allowed;
+  opacity: 0.6;
+  font-family: inherit;
 }
 </style>

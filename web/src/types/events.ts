@@ -48,6 +48,14 @@ export interface ToolCallData {
   input: Record<string, unknown>
   output: string
   duration: number
+  /** Internal: track whether input is currently formatted */
+  _inputFormatted?: boolean
+  /** Internal: original compact JSON before formatting */
+  _inputCompact?: string
+  /** Internal: track whether output is currently formatted */
+  _outputFormatted?: boolean
+  /** Internal: original raw output before formatting */
+  _outputRaw?: string
 }
 
 /** A single step in the agent's execution tree */
@@ -69,6 +77,8 @@ export interface AgentState {
   name: string
   model: string
   steps: Step[]
+  /** Display color for this agent in multi-agent view */
+  color?: string
 }
 
 /** Task status */
@@ -84,6 +94,8 @@ export interface TaskState {
   totalTokens: number
   /** Map of agent_id → AgentState */
   agents: Record<string, AgentState>
+  /** Timestamp when the task was started (ms since epoch) */
+  startedAt: number
 }
 
 /** Control message sent from client to server via WebSocket */

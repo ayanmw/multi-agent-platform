@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-03
-> **Current version**: v0.4 Alpha (Phase 3 complete)
+> **Last updated**: 2026-07-05
+> **Current version**: v0.4 Alpha (Phase 4 complete)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 → Phase 5 → Phase 6
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)    (注册)    (高级)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 🔜 → Phase 6
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
 ```
 
 ---
@@ -74,7 +74,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 →
 
 ### 已知待优化
 - [ ] `run_shell` 无沙箱（Phase 5 加 Docker）
-- [ ] Agent CRUD 前端页面 → Phase 3（配置页面与 Agent CRUD 合并实现）
+- [ ] Agent CRUD 前端页面 → Phase 4（配置页面与 Agent CRUD 合并实现）
 - [ ] `llm_delta` 批量发送 → Phase 3（随 Cases 测试时一起调优节流策略）
 - [ ] Conversation 历史回读用于多轮对话（Phase 3+ Session 管理）
 
@@ -135,31 +135,45 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 →
 
 ---
 
-## Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础
+## Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 ✅ COMPLETED
 
 **目标**: 支持多个 Agent 并行执行，引入 Policy Gate 和记忆系统
 
+**完成日期**: 2026-07-05
+**Git commit**: TODO
+
 ### 交付物
-- [ ] 多 Agent Task 分派（goroutine 并行）
-- [ ] 前端多树渲染（并排或选项卡，颜色区分）
-- [ ] Agent 间通信协议（Agent A 调用 Agent B 的接口）
+- [x] 多 Agent Task 分派（goroutine 并行）
+- [x] 前端多树渲染（并排或选项卡，颜色区分）
+- [ ] Agent 间通信协议（AgentBus 代码已落地，未接入 Engine ReAct Loop）
 - [ ] **多模型分层基础**: `ModelProfile` 类型 + `ModelRegistry` 注册表
 - [ ] **Agent 模型绑定**: 创建 Agent 时可选指定模型（从 Registry 中选择）
 - [ ] **多模型配置加载**: 从 `.env` / DB 加载多个模型配置
-- [ ] **Harness: PolicyChain 完整实现**（PolicyGate + PolicyChain + 内置规则链）
-- [ ] **Harness: TokenBudgetRule**（累计 token 超过 TaskContract 预算时硬拒绝）
-- [ ] **Harness: ToolWhitelistRule**（只允许 TaskContract 中声明的工具）
+- [x] **Harness: PolicyChain 完整实现**（PolicyGate + PolicyChain + 内置规则链）
+- [x] **Harness: TokenBudgetRule**（累计 token 超过 TaskContract 预算时硬拒绝）
+- [x] **Harness: ToolWhitelistRule**（只允许 TaskContract 中声明的工具）
 - [ ] **Harness: Checkpoint / Recovery**（CheckpointManager + 崩溃恢复流程）
 - [ ] **Memory: `memories` 表 + `memory_links` 表** Schema（pkg/db/database.go）
 - [ ] **Memory: Heartbeat 后台整理器**（定时扫描新 conversation → 触发抽取管线）
 - [ ] **Memory: Candidate → Semantic 晋升管线**（三条晋升通道的代码实现）
 
+### Phase 3 遗留推进
+- [x] 全局版本文件 `version.txt` → `go:embed` → `/api/version` → Vue 响应式绑定
+- [x] 发送消息非阻塞 loading 动画（isTaskPending + 15s 安全超时）
+- [x] 全局 Toast 错误提示
+- [x] AgentTree 空状态骨架屏
+- [x] AgentTree 智能滚动（用户上滚暂停自动滚动，显示 "↓ Bottom" 按钮）
+- [x] CaseCard 点击卡片显示详情弹窗，Run 按钮独立触发
+- [x] 全局快捷键系统（Ctrl+Shift+C 取消、Ctrl+Shift+P 暂停/恢复、? 提示面板）
+- [x] TypeWriter 代码块复制按钮 + Tool output JSON 格式化/还原切换
+- [x] MetricsPanel 运行时长 + Agent 选择器占坑
+
 ### 验证标准
-- 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新
-- 不同 Agent 使用不同模型（如一个用 deepseek-flash，一个用 deepseek-pro）
-- 工具调用超过 TokenBudget 时被 PolicyGate 拦截，Engine 收到 ErrBlockedByPolicy
-- 进程崩溃后可从 checkpoint 恢复，不从头开始
-- 心跳定时触发记忆抽取，Semantic 规则有明确的 promotion_reason
+- [x] 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新
+- [ ] 不同 Agent 使用不同模型（如一个用 deepseek-flash，一个用 deepseek-pro）→ 延迟到 Phase 5（ModelRegistry）
+- [x] 工具调用超过 TokenBudget 时被 PolicyGate 拦截，Engine 收到 ErrBlockedByPolicy
+- [ ] 进程崩溃后可从 checkpoint 恢复，不从头开始 → 延迟到 Phase 5
+- [ ] 心跳定时触发记忆抽取，Semantic 规则有明确的 promotion_reason → 延迟到 Phase 5
 
 ---
 
@@ -178,6 +192,15 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 →
 - [ ] **Harness: DangerousCommandRule**（Shell 命令危险模式检测）
 - [ ] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
 - [ ] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
+
+### 延迟项（从 Phase 4 移入）
+- Agent 配置 CRUD 前端页面
+- Task 历史侧边栏
+- Memory: Task 完成时自动生成摘要
+- AgentBus 接入 Engine ReAct Loop
+- ModelProfile + ModelRegistry
+- Checkpoint / Recovery
+- Memory: memories/memories_links 表 + Heartbeat + Candidate→Semantic 晋升管线
 
 ### 验证标准
 - 无需重启服务，通过 API 注册新工具并立即使用
@@ -224,3 +247,4 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 🔜 →
 | v0.2 | 2026-07-03 | Phase 1 完成，Agent Loop 核心引擎 + e2e 测试工具 |
 | v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |
 | v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |
+| v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |

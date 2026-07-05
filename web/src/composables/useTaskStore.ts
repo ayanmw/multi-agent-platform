@@ -32,8 +32,24 @@ import type { AgentEvent, TaskState, AgentState, Step, ToolCallData } from '../t
 /** The reactive task state — null when no task is active */
 const task = ref<TaskState | null>(null)
 
+/** Whether a task has been sent but not yet confirmed by WebSocket events */
+const isTaskPending = ref(false)
+
 /** Whether the store has been initialized (WebSocket listener registered) */
 let initialized = false
+
+// Agent color palette for multi-agent view
+const AGENT_COLORS = [
+  '#4a9eff', // blue
+  '#51cf66', // green
+  '#f0a030', // orange
+  '#9b59b6', // purple
+  '#e74c3c', // red
+  '#1abc9c', // teal
+  '#e67e22', // dark orange
+  '#3498db', // light blue
+]
+let colorIdx = 0
 
 export function useTaskStore() {
   const { status, connect, disconnect, sendControl, onEvent } = useWebSocket()
@@ -49,6 +65,11 @@ export function useTaskStore() {
    * This is the event router — it maps event types to state changes.
    */
   function handleEvent(evt: AgentEvent) {
+    // Clear pending state now that we have a real event from the server
+    if (isTaskPending.value) {
+      isTaskPending.value = false
+    }
+
     // First event for a task initializes the task state
     if (!task.value && evt.type === 'task_started') {
       task.value = {
@@ -57,6 +78,7 @@ export function useTaskStore() {
         finalResult: null,
         totalTokens: 0,
         agents: {},
+        startedAt: Date.now(),
       }
     }
 
@@ -72,6 +94,7 @@ export function useTaskStore() {
         name: agentId,
         model: (evt.data.model as string) || 'unknown',
         steps: [],
+        color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
       }
     }
     const agent = task.value.agents[agentId]
@@ -209,24 +232,40 @@ export function useTaskStore() {
    * The WebSocket events will update the task state in real time.
    */
   async function startTask(input: string, agentId?: string, systemPrompt?: string): Promise<string> {
-    const resp = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'chat',
-        agent_id: agentId || 'agent_default',
-        input,
-        system_prompt: systemPrompt,
-      }),
-    })
+    isTaskPending.value = true
+    // Safety timeout: clear pending state after 15s even if no event arrives
+    const safetyTimeout = setTimeout(() => {
+      if (isTaskPending.value) {
+        isTaskPending.value = false
+      }
+    }, 15000)
 
-    if (!resp.ok) {
-      const errText = await resp.text()
-      throw new Error(`Failed to start task: ${resp.status} ${errText}`)
+    try {
+      const resp = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'chat',
+          agent_id: agentId || 'agent_default',
+          input,
+          system_prompt: systemPrompt,
+        }),
+      })
+
+      if (!resp.ok) {
+        isTaskPending.value = false
+        clearTimeout(safetyTimeout)
+        const errText = await resp.text()
+        throw new Error(`Failed to start task: ${resp.status} ${errText}`)
+      }
+
+      const data = await resp.json()
+      return data.task_id as string
+    } catch (err) {
+      isTaskPending.value = false
+      clearTimeout(safetyTimeout)
+      throw err
     }
-
-    const data = await resp.json()
-    return data.task_id as string
   }
 
   /** Clear the current task state (for starting a new task) */
@@ -239,24 +278,39 @@ export function useTaskStore() {
    * The case's system prompt and default input are loaded from the backend.
    */
   async function startTaskWithCase(caseId: string, agentId?: string): Promise<string> {
-    const resp = await fetch(`/api/tasks?case=${encodeURIComponent(caseId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'chat',
-        agent_id: agentId || 'agent_default',
-        // Input and system_prompt are filled by the backend from the case definition
-        input: '', // backend fills from case
-      }),
-    })
+    isTaskPending.value = true
+    const safetyTimeout = setTimeout(() => {
+      if (isTaskPending.value) {
+        isTaskPending.value = false
+      }
+    }, 15000)
 
-    if (!resp.ok) {
-      const errText = await resp.text()
-      throw new Error(`Failed to start case: ${resp.status} ${errText}`)
+    try {
+      const resp = await fetch(`/api/tasks?case=${encodeURIComponent(caseId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'chat',
+          agent_id: agentId || 'agent_default',
+          // Input and system_prompt are filled by the backend from the case definition
+          input: '', // backend fills from case
+        }),
+      })
+
+      if (!resp.ok) {
+        isTaskPending.value = false
+        clearTimeout(safetyTimeout)
+        const errText = await resp.text()
+        throw new Error(`Failed to start case: ${resp.status} ${errText}`)
+      }
+
+      const data = await resp.json()
+      return data.task_id as string
+    } catch (err) {
+      isTaskPending.value = false
+      clearTimeout(safetyTimeout)
+      throw err
     }
-
-    const data = await resp.json()
-    return data.task_id as string
   }
 
   /** Pause the current task */
@@ -286,9 +340,49 @@ export function useTaskStore() {
     }
   }
 
+  /**
+   * Start a multi-agent orchestration task.
+   * Sends the input to /api/multi-agent which decomposes the task
+   * and runs multiple agents concurrently.
+   */
+  async function startMultiAgentTask(input: string, caseType?: string): Promise<string> {
+    isTaskPending.value = true
+    const safetyTimeout = setTimeout(() => {
+      if (isTaskPending.value) {
+        isTaskPending.value = false
+      }
+    }, 15000)
+
+    try {
+      const resp = await fetch('/api/multi-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input,
+          case_type: caseType || '',
+        }),
+      })
+
+      if (!resp.ok) {
+        isTaskPending.value = false
+        clearTimeout(safetyTimeout)
+        const errText = await resp.text()
+        throw new Error(`Failed to start multi-agent task: ${resp.status} ${errText}`)
+      }
+
+      const data = await resp.json()
+      return data.task_id as string
+    } catch (err) {
+      isTaskPending.value = false
+      clearTimeout(safetyTimeout)
+      throw err
+    }
+  }
+
   return {
     // Reactive state — components should treat this as read-only
     task,
+    isTaskPending,
     wsStatus: status,
 
     // Actions
@@ -296,6 +390,7 @@ export function useTaskStore() {
     disconnect,
     startTask,
     startTaskWithCase,
+    startMultiAgentTask,
     clearTask,
     pauseTask,
     resumeTask,

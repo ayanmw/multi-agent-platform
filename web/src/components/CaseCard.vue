@@ -1,10 +1,16 @@
 <!-- CaseCard — displays a preset task case with one-click run button
      Props:
-       case: the Case object from the API
+       caseData: the Case object from the API
        disabled: whether the button is disabled (during task execution)
 
      Emits:
        run: user clicked the Run button, emits the case ID
+       view: user clicked the card body (not the Run button), emits the case ID
+
+     Behavior:
+       - Clicking the card body (excluding the Run button) emits 'view' for detail modal
+       - Clicking the Run button emits 'run' directly
+       - Hover effect on the card, distinct hover on the button
 -->
 <script setup lang="ts">
 defineProps<{
@@ -15,17 +21,36 @@ defineProps<{
     icon: string
     category: string
     tags: string[]
+    default_input?: string
+    system_prompt?: string
+    contract?: {
+      goal?: string
+      scope?: string
+      allowed_tools?: string[]
+      token_budget?: number
+      max_steps?: number
+      acceptance_criteria?: Array<{
+        type: string
+        description: string
+      }>
+    }
   }
   disabled: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   run: [caseId: string]
+  view: [caseId: string]
 }>()
+
+/** Handle click on card body — emit view event (not run) */
+function handleCardClick() {
+  // The Run button click stops propagation, so this only fires on card body clicks
+}
 </script>
 
 <template>
-  <div class="case-card">
+  <div class="case-card" @click="emit('view', caseData.id)">
     <div class="case-card-header">
       <span class="case-icon">{{ caseData.icon }}</span>
       <div class="case-card-title">
@@ -41,7 +66,7 @@ defineEmits<{
       <button
         class="case-run-btn"
         :disabled="disabled"
-        @click="$emit('run', caseData.id)"
+        @click.stop="$emit('run', caseData.id)"
       >
         ▶ Run
       </button>

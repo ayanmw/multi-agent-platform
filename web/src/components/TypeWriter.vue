@@ -9,6 +9,8 @@
        - When isStreaming is true, shows a blinking cursor at the end
        - Auto-scrolls to the bottom when new text arrives
        - Sanitizes HTML (marked handles this by default)
+       - Each code block gets a "Copy" button
+       - JSON content in code blocks gets a "Format/Compact" toggle
 
      Design rationale:
        - Streaming text is the core of the "white-box" experience — the user sees
@@ -16,6 +18,7 @@
        - Markdown rendering is done on the fly: each update re-renders the full text
          via marked. marked is fast enough for this (~1ms for typical agent output)
        - The blinking cursor is a visual cue that the LLM is still generating
+       - Copy buttons on code blocks improve UX for generated code
 -->
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
@@ -82,12 +85,108 @@ const props = defineProps<{
 
 const contentRef = ref<HTMLElement | null>(null)
 
+/** Track which code blocks have had copy buttons injected */
+let copyButtonsInjected = false
+
 /** Render Markdown to HTML. Returns empty string for empty input. */
 const renderedHTML = computed(() => {
   if (!props.text) return ''
+  copyButtonsInjected = false
   // marked.parse returns string | Promise<string>; for sync usage it's always string
   return marked.parse(props.text, { breaks: true, gfm: true }) as string
 })
+
+/** Inject copy buttons into code blocks after DOM update */
+async function injectCopyButtons() {
+  if (copyButtonsInjected) return
+  await nextTick()
+  if (!contentRef.value) return
+
+  const pres = contentRef.value.querySelectorAll('pre')
+  for (const pre of pres) {
+    // Skip if already has a copy button wrapper
+    if (pre.querySelector('.code-toolbar')) continue
+
+    const code = pre.querySelector('code')
+    const codeText = code?.textContent || ''
+
+    // Wrap pre in a toolbar container
+    const wrapper = document.createElement('div')
+    wrapper.className = 'code-toolbar'
+    pre.parentNode?.insertBefore(wrapper, pre)
+    wrapper.appendChild(pre)
+
+    // Create toolbar
+    const toolbar = document.createElement('div')
+    toolbar.className = 'code-toolbar-actions'
+
+    // Detect if this is JSON content for format toggle
+    const lang = code?.className.match(/language-(\w+)/)?.[1] || ''
+    const isJson = lang === 'json' || (lang === '' && isJsonLike(codeText))
+
+    if (isJson && codeText) {
+      // Format/Compact toggle button
+      const formatBtn = document.createElement('button')
+      formatBtn.className = 'code-action-btn'
+      formatBtn.textContent = 'Format'
+      formatBtn.title = 'Toggle JSON formatting'
+      let formatted = false
+      formatBtn.addEventListener('click', () => {
+        try {
+          const parsed = JSON.parse(codeText)
+          if (formatted) {
+            code!.textContent = JSON.stringify(parsed)
+            formatBtn.textContent = 'Format'
+          } else {
+            code!.textContent = JSON.stringify(parsed, null, 2)
+            formatBtn.textContent = 'Compact'
+          }
+          formatted = !formatted
+          // Re-highlight
+          if (code) {
+            hljs.highlightElement(code)
+          }
+        } catch {
+          // Not valid JSON, ignore
+        }
+      })
+      toolbar.appendChild(formatBtn)
+    }
+
+    // Copy button
+    const copyBtn = document.createElement('button')
+    copyBtn.className = 'code-action-btn'
+    copyBtn.textContent = 'Copy'
+    copyBtn.title = 'Copy to clipboard'
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(codeText)
+        copyBtn.textContent = 'Copied!'
+        copyBtn.classList.add('copied')
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy'
+          copyBtn.classList.remove('copied')
+        }, 2000)
+      } catch {
+        copyBtn.textContent = 'Failed'
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy'
+        }, 2000)
+      }
+    })
+    toolbar.appendChild(copyBtn)
+
+    wrapper.insertBefore(toolbar, pre)
+  }
+
+  copyButtonsInjected = true
+}
+
+/** Check if text looks like JSON (starts with { or [) */
+function isJsonLike(text: string): boolean {
+  const trimmed = text.trim()
+  return (trimmed.startsWith('{') || trimmed.startsWith('['))
+}
 
 /** Auto-scroll to the bottom when new content arrives */
 watch(
@@ -97,6 +196,8 @@ watch(
     if (contentRef.value) {
       contentRef.value.scrollTop = contentRef.value.scrollHeight
     }
+    // Inject copy buttons after each render
+    injectCopyButtons()
   }
 )
 </script>
@@ -249,5 +350,48 @@ watch(
 .markdown-body :deep(img) {
   max-width: 100%;
   border-radius: 4px;
+}
+
+/* Code toolbar — copy button + format/compact toggle */
+.markdown-body :deep(.code-toolbar) {
+  position: relative;
+}
+
+.markdown-body :deep(.code-toolbar-actions) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.markdown-body :deep(.code-toolbar:hover .code-toolbar-actions) {
+  opacity: 1;
+}
+
+.markdown-body :deep(.code-action-btn) {
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.markdown-body :deep(.code-action-btn:hover) {
+  background: #4a9eff;
+  color: #fff;
+  border-color: #4a9eff;
+}
+
+.markdown-body :deep(.code-action-btn.copied) {
+  background: #51cf66;
+  color: #fff;
+  border-color: #51cf66;
 }
 </style>

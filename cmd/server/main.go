@@ -14,8 +14,10 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/version"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -61,6 +63,9 @@ func main() {
 	tool.RegisterBuiltins(toolRegistry)
 	log.Printf("Registered %d built-in tools", len(toolRegistry.List()))
 
+	// Initialize multi-agent orchestrator
+	orch := orchestrator.New(hub, cfg, toolRegistry, persist)
+
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
 
@@ -82,10 +87,12 @@ func main() {
 		}
 
 		var req struct {
-			Action       string `json:"action"`
-			AgentID      string `json:"agent_id"`
-			Input        string `json:"input"`
-			SystemPrompt string `json:"system_prompt"`
+			Action       string                       `json:"action"`
+			AgentID      string                       `json:"agent_id"`
+			Input        string                       `json:"input"`
+			SystemPrompt string                       `json:"system_prompt"`
+			CaseType     string                       `json:"case_type"`
+			Agents       []orchestrator.AgentSpec     `json:"agents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -93,6 +100,47 @@ func main() {
 		}
 
 		switch req.Action {
+
+			case "multi-agent":
+				// Multi-agent orchestration: decompose task and run agents concurrently
+				specs := req.Agents
+				if len(specs) == 0 {
+					decomposer := &orchestrator.TaskDecomposer{}
+					result := decomposer.Decompose(req.Input, req.CaseType)
+					specs = result.Agents
+				}
+
+				taskID := "task_" + time.Now().Format("20060102150405")
+				agentIDs := make([]string, len(specs))
+				for i, s := range specs {
+					agentIDs[i] = s.AgentID
+				}
+
+				if persist != nil {
+					persist.SaveTask(taskID, req.Input, agentIDs)
+				}
+
+				hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
+					"task_id":     taskID,
+					"input":       req.Input,
+					"agent_ids":   agentIDs,
+					"agent_count": len(specs),
+				}))
+
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					defer cancel()
+					orch.RunBlocking(ctx, taskID, specs)
+					log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
+				}()
+
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"task_id":     taskID,
+					"agent_count": len(specs),
+					"agent_ids":   agentIDs,
+					"status":      "started",
+				})
 		case "stream-demo":
 			taskID := "task_" + time.Now().Format("20060102150405")
 			go streamTask(hub, taskID)
@@ -169,6 +217,15 @@ func main() {
 		fmt.Fprintln(w, "ok")
 	})
 
+	// Version API: returns the current version from version.txt
+	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache")
+		json.NewEncoder(w).Encode(map[string]string{
+			"version": version.Version,
+		})
+	})
+
 	// Cases API: list preset task cases
 	http.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -177,6 +234,75 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cases.All())
+	})
+
+	// Multi-Agent orchestration endpoint (Phase 4)
+	// POST /api/multi-agent — runs multiple agents concurrently
+	http.HandleFunc("/api/multi-agent", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Input    string                       `json:"input"`
+			CaseType string                       `json:"case_type"` // "multi_agent", "code_gen", or empty
+			Agents   []orchestrator.AgentSpec     `json:"agents"`    // direct agent specs (optional)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.Input == "" && len(req.Agents) == 0 {
+			http.Error(w, "input or agents is required", http.StatusBadRequest)
+			return
+		}
+
+		// Decompose task into agent specs
+		var specs []orchestrator.AgentSpec
+		if len(req.Agents) > 0 {
+			specs = req.Agents
+		} else {
+			decomposer := &orchestrator.TaskDecomposer{}
+			result := decomposer.Decompose(req.Input, req.CaseType)
+			specs = result.Agents
+		}
+
+		taskID := "task_" + time.Now().Format("20060102150405")
+		agentIDs := make([]string, len(specs))
+		for i, s := range specs {
+			agentIDs[i] = s.AgentID
+		}
+
+		// Persist orchestrator task
+		if persist != nil {
+			persist.SaveTask(taskID, req.Input, agentIDs)
+		}
+
+		// Emit orchestrator task started event
+		hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
+			"task_id":    taskID,
+			"input":      req.Input,
+			"agent_ids":  agentIDs,
+			"agent_count": len(specs),
+		}))
+
+		// Launch agents concurrently
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			orch.RunBlocking(ctx, taskID, specs)
+			log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id":     taskID,
+			"agent_count": len(specs),
+			"agent_ids":   agentIDs,
+			"status":      "started",
+		})
 	})
 
 	// Serve Vue SPA from embedded filesystem (production mode).
@@ -212,7 +338,7 @@ func main() {
 	}
 
 	log.Printf("========================================")
-	log.Printf("Multi-Agent Platform v0.4 (Phase 3)")
+	log.Printf("Multi-Agent Platform %s", version.Version)
 	log.Printf("========================================")
 	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
 	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
@@ -234,12 +360,19 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		persist.SaveTask(taskID, userInput, []string{agentID})
 	}
 
-	// Build Harness policy gate with FileScopeRule and PathTraversalRule
-	// These are the foundational safety rules that prevent the agent from
-	// writing or reading files outside its task scope.
+	// Build Harness policy gate with all safety rules:
+	//   PathTraversalRule  — blocks ".." in file paths
+	//   FileScopeRule      — restricts file ops to contract scope
+	//   TokenBudgetRule    — blocks tool calls when token budget exceeded
+	//   ToolWhitelistRule  — only allows tools listed in the contract
+	//
+	// Rules are checked in order. The first rule that blocks stops the chain.
+	tokenBudgetRule := &harness.TokenBudgetRule{}
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
+		tokenBudgetRule,
+		&harness.ToolWhitelistRule{},
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 
