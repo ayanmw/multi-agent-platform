@@ -140,7 +140,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 **目标**: 支持多个 Agent 并行执行，引入 Policy Gate 和记忆系统
 
 **完成日期**: 2026-07-05
-**Git commit**: TODO
+**Git commit**: `b127861`
 
 ### 交付物
 - [x] 多 Agent Task 分派（goroutine 并行）
@@ -177,9 +177,9 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 5: 运行时注册 + Provider + Router + 记忆召回
+## Phase 5: 运行时注册 + Provider + Router + 记忆召回 + 会话历史
 
-**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由和记忆召回
+**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理和记忆召回
 
 ### 交付物
 - [ ] 运行时 Tool 注册 REST API
@@ -193,10 +193,64 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [ ] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
 - [ ] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
 
-### 延迟项（从 Phase 4 移入）
+### 新增核心设计：会话与任务历史管理（Session & Task History）
+
+为了让用户在不刷新页面的情况下启动多个任务、切换查看历史任务、继续执行已失败的任务，Phase 5 引入 **Session（会话）** 概念。
+
+#### 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| **Session** | 前端的一次"对话上下文"。一个 Session 关联零个或一个 Task。新建 Session 时回到主界面（预设任务卡片 + 输入框）；已有关联 Task 的 Session 显示该任务的 AgentTree 和结果。 |
+| **Active Session** | 当前用户正在查看的 Session。切换 Session 不影响正在运行的其他任务，因为后端任务本身是独立的 goroutine。 |
+| **Task History** | 所有已完成 / 失败 / 进行中的 Task 列表，从 SQLite `tasks` 表读取。历史任务可以被重新打开查看，也可以"Continue"继续执行。 |
+
+#### 前端状态设计
+
+```ts
+interface Session {
+  id: string           // 前端生成的 session id
+  name: string         // 默认 "Session N" 或取 user_input 前 20 字符
+  taskId: string | null
+  status: 'empty' | 'running' | 'completed' | 'failed'
+  createdAt: number
+  updatedAt: number
+}
+
+interface SessionState {
+  sessions: Session[]
+  activeSessionId: string | null
+}
+```
+
+`useTaskStore` 从"单任务"改为"任务缓存"：
+```ts
+const taskCache = ref<Record<string, TaskState>>({})  // taskId -> TaskState
+const activeTaskId = ref<string | null>(null)
+```
+
+每个 Session 展示时从 `taskCache` 取对应的 `TaskState`。
+
+#### 用户交互流程
+
+1. **新建会话**：侧边栏 / 顶部 `+ New Session` 按钮 → 创建空 Session → 回到主界面（预设 Cases + 输入框）
+2. **发送消息**：在 Session 内启动任务 → 后端生成 task_id → WebSocket 事件更新 `taskCache[taskId]`
+3. **会话列表**：左侧边栏展示所有 Session，每个显示名称、状态、耗时、总 token
+4. **切换会话**：点击历史 Session → 只切换 `activeSessionId`，显示对应 AgentTree
+5. **继续执行**：在历史失败 Session 上可 Retry / Continue（复用 lastUserInput，可调整 max_steps）
+6. **服务端恢复**：刷新页面后，前端调用 `GET /api/tasks` 拉取历史 task 列表，重建 Session 列表
+
+#### 与现有功能的关系
+
+- `lastUserInput`（刚实现） → Session 级别保存，用于 Continue
+- Continue with max steps ×2（刚实现） → 在 Session 上下文内重新启动
+- Task 历史侧边栏（Phase 3 遗留） → 作为 Session 列表的数据源
+- 后端 API 基本就绪：`GET /api/tasks` 列表 + `GET /api/tasks?id=xxx` 详情
+
+### Phase 4 延迟项
 - Agent 配置 CRUD 前端页面
-- Task 历史侧边栏
-- Memory: Task 完成时自动生成摘要
+- Task 历史侧边栏（升级为 Session 列表）
+- Memory: Task 完成时自动生成摘要（用于 Session 名称和预览）
 - AgentBus 接入 Engine ReAct Loop
 - ModelProfile + ModelRegistry
 - Checkpoint / Recovery
@@ -207,6 +261,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - 同一任务请求根据意图自动路由到不同模型（简单→Flash，复杂→Pro）
 - 高风险操作（如 git push）触发前端审批弹窗
 - 新任务启动时，Semantic 规则和相关 Episode 写入 Working Memory 注入 System Prompt
+- 完成一个任务后，点击「新建会话」即可回到主界面继续发起新任务
+- 刷新页面后，历史任务列表可恢复，点击历史任务可回看执行过程和结果
 
 ---
 

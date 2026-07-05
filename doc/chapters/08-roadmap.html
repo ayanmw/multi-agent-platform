@@ -114,26 +114,25 @@
             </div>
 
             <!-- Phase 4 -->
-            <div class="phase-card in-progress">
-                <h3>Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 <span class="tag wip">🔜 当前</span></h3>
+            <div class="phase-card completed">
+                <h3>Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 <span class="tag done">✅ 完成</span></h3>
                 <ul>
                     <li>多 Agent Task 分派（goroutine 并行）</li>
                     <li>前端多树渲染（并排或选项卡，颜色区分）</li>
-                    <li>Agent 间通信协议</li>
-                    <li><strong>ModelProfile</strong> 类型 + ModelRegistry 注册表</li>
-                    <li>Agent 模型绑定（不同 Agent 可选不同模型）</li>
                     <li><strong>Harness:</strong> PolicyChain 完整实现（PolicyGate + 内置规则链）</li>
-                    <li><strong>Harness:</strong> Checkpoint / Recovery（任务可恢复性）</li>
                     <li><strong>Harness:</strong> TokenBudgetRule + ToolWhitelistRule</li>
-                    <li><strong>Memory:</strong> <code>memories</code> 表 + <code>memory_links</code> 表 Schema</li>
-                    <li><strong>Memory:</strong> Heartbeat 后台整理器（定时触发抽取管线）</li>
-                    <li><strong>Memory:</strong> Candidate → Semantic 晋升管线（三条晋升通道）</li>
+                    <li>AgentBus 通信层代码落地</li>
+                    <li>前端体验优化：全局版本、loading、Toast、智能滚动、详情弹窗、快捷键、token 细节、max steps 配置</li>
+                    <li>Agent 间通信协议 → Phase 5</li>
+                    <li>ModelProfile + ModelRegistry → Phase 5</li>
+                    <li>Checkpoint / Recovery → Phase 5</li>
+                    <li><strong>Memory:</strong> memories 表 + 心跳整理器 → Phase 5</li>
                 </ul>
             </div>
 
             <!-- Phase 5 -->
-            <div class="phase-card planned">
-                <h3>Phase 5: 运行时注册 + Provider + Router + 记忆召回 <span class="tag future">计划</span></h3>
+            <div class="phase-card in-progress">
+                <h3>Phase 5: 运行时注册 + Provider + Router + 记忆召回 + 会话历史 <span class="tag wip">🔜 当前</span></h3>
                 <ul>
                     <li>运行时 Tool 注册 REST API</li>
                     <li>AI 自描述工具注册</li>
@@ -144,6 +143,7 @@
                     <li><strong>Harness:</strong> DangerousCommandRule（Shell 命令危险模式检测）</li>
                     <li><strong>Memory:</strong> MemoryRecall 召回 + Working Memory 构建</li>
                     <li><strong>Memory:</strong> 记忆冲突检测 + 合并</li>
+                    <li><strong>会话与任务历史（新增）</strong>：新建会话、历史会话切换、继续执行/查阅</li>
                 </ul>
             </div>
 

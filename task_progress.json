@@ -1,0 +1,11 @@
+{
+  "task_id": "task_20260705123503",
+  "goal": "Produce a structured research report",
+  "status": "running",
+  "current_step": 0,
+  "total_steps": 6,
+  "total_tokens": 0,
+  "nodes": [],
+  "started_at": "2026-07-05T12:35:03.1383242+08:00",
+  "updated_at": "2026-07-05T12:35:03.1383242+08:00"
+}
