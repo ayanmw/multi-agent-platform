@@ -111,6 +111,12 @@ type TaskContract struct {
 	// file deletion). These are enforced by the PolicyGate.
 	Permissions TaskPermissions `json:"permissions"`
 
+	// AutoApprovePolicy when true, automatically approves all policy-detected
+	// dangerous commands without user interaction. The approval events are still
+	// emitted and logged for audit trail purposes.
+	// When false (default), policy blocks enter WAITING state for user approval.
+	AutoApprovePolicy bool `json:"auto_approve_policy,omitempty"`
+
 	// Metadata carries arbitrary key-value pairs for the harness (e.g., case name,
 	// expected output, tags). Not used for enforcement.
 	Metadata map[string]string `json:"metadata,omitempty"`

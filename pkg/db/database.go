@@ -32,6 +32,11 @@ func Init(dataPath string) error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
+	// Run automatic schema migrations for existing databases
+	if err := RunMigrations(); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
 	log.Println("Database initialized successfully")
 	return nil
 }
@@ -50,6 +55,7 @@ func createTables() error {
 			api_key TEXT,
 			tools JSON DEFAULT '[]',
 			config JSON DEFAULT '{}',
+			is_default BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,

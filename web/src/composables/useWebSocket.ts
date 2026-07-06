@@ -115,9 +115,10 @@ export function useWebSocket() {
   }
 
   /**
-   * Send a control message to the server (pause / resume / cancel).
+   * Send a control message to the server (pause / resume / cancel / approve / deny).
+   * Extra fields (e.g. approval_id) are spread into the message body.
    */
-  function sendControl(msg: { action: string; task_id: string; agent_id: string }) {
+  function sendControl(msg: { action: string; task_id: string; agent_id: string; [key: string]: unknown }) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg))
     } else {

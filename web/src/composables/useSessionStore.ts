@@ -50,22 +50,44 @@ export function useSessionStore() {
     sessions.value.find(s => s.id === activeSessionId.value) || null
   )
 
-  /** Load list of sessions from backend and merge into local cache */
+  /** Load list of sessions from backend and replace local cache */
   async function loadSessions(): Promise<void> {
     const resp = await fetch('/api/sessions')
     if (!resp.ok) {
       throw new Error(`Failed to load sessions: ${resp.status}`)
     }
-    const data = (await resp.json()) as Session[]
-    // Merge by id, prefer server data
-    const map = new Map<string, Session>()
-    for (const s of sessions.value) {
-      map.set(s.id, s)
-    }
-    for (const s of data) {
-      map.set(s.id, s)
-    }
-    sessions.value = Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt)
+    const raw = (await resp.json()) as Array<{
+      id: string
+      name: string
+      root_task_id: string
+      status: string
+      user_input: string
+      total_tokens: number
+      created_at: string
+      updated_at: string
+    }>
+    console.log('[useSessionStore] loadSessions raw:', raw.map(s => ({
+      id: s.id, name: s.name, root_task_id: s.root_task_id, status: s.status,
+    })))
+    // Server is the source of truth — replace local cache entirely.
+    // This prevents stale localStorage entries from surviving after
+    // a session is deleted on the server.
+    // Map backend snake_case fields to frontend camelCase fields.
+    sessions.value = raw
+      .map((s): Session => ({
+        id: s.id,
+        name: s.name,
+        rootTaskId: s.root_task_id || null,
+        status: s.status as SessionStatus,
+        userInput: s.user_input || '',
+        totalTokens: s.total_tokens || 0,
+        createdAt: new Date(s.created_at).getTime(),
+        updatedAt: new Date(s.updated_at).getTime(),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    console.log('[useSessionStore] loadSessions mapped:', sessions.value.map(s => ({
+      id: s.id, name: s.name, rootTaskId: s.rootTaskId, status: s.status,
+    })))
     saveToStorage()
   }
 

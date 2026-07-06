@@ -27,6 +27,7 @@ import CaseCard from './components/CaseCard.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
+import ApprovalDialog from './components/ApprovalDialog.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import type { Session } from './composables/useSessionStore'
@@ -60,6 +61,7 @@ const {
   isTaskPending,
   wsStatus,
   lastUserInput,
+  pendingApproval,
   connect,
   disconnect,
   startTask,
@@ -71,6 +73,8 @@ const {
   pauseTask,
   resumeTask,
   cancelTask,
+  approveTask,
+  denyTask,
 } = useTaskStore()
 
 const {
@@ -83,9 +87,32 @@ const {
   deleteSession,
 } = useSessionStore()
 
-const { showAgentConfig, loadAgents } = useAgentStore()
+const { showAgentConfig, loadAgents, agents } = useAgentStore()
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
+
+// Selected agent ID for task execution
+const selectedAgentId = ref('agent_default')
+
+// Auto-approve policy blocks toggle (shared with MetricsPanel)
+const autoApprovePolicy = ref(false)
+
+// Handlers for approval dialog
+function handleApprove(approvalId: string) {
+  if (!pendingApproval.value) return
+  approveTask(approvalId, pendingApproval.value.taskId, pendingApproval.value.agentId)
+}
+
+function handleDeny(approvalId: string) {
+  if (!pendingApproval.value) return
+  denyTask(approvalId, pendingApproval.value.taskId, pendingApproval.value.agentId)
+}
+
+function handleApprovalClose() {
+  // Don't auto-deny on close — user must explicitly choose
+  // Just dismiss the dialog visually; the server will timeout
+  pendingApproval.value = null
+}
 
 // Keyboard shortcuts
 const { isRunning: kbIsRunning, showTips } = useKeyboard({
@@ -122,7 +149,14 @@ const isAgentRunning = computed(() => {
 // Connect WebSocket on mount, disconnect on unmount
 onMounted(async () => {
   connect()
+  console.log('[App] onMounted: loading sessions...')
   await loadSessions().catch(err => console.error('Failed to load sessions:', err))
+  console.log('[App] onMounted: sessions loaded, count:', sessions.value.length)
+  console.log('[App] onMounted: activeSessionId:', activeSessionId.value)
+  console.log('[App] onMounted: sessions detail:', sessions.value.map(s => ({
+    id: s.id, name: s.name, rootTaskId: s.rootTaskId, status: s.status,
+  })))
+  await loadAgents().catch(err => console.error('Failed to load agents:', err))
   // Load preset cases
   casesLoading.value = true
   try {
@@ -155,19 +189,17 @@ onUnmounted(() => {
 async function handleSend(text: string, options: { maxSteps?: number }) {
   try {
     const session = activeSession.value
-    if (!session || session.status !== 'empty') {
-      // Create a new session for the new task
+    if (!session) {
+      // No active session — create a new one
       const newSession = await createSession(undefined, text)
       setActiveSession(newSession.id)
-    } else {
-      // Update name if still empty default
-      if (session.name === 'New Session') {
-        // TODO: rename via PUT if needed
-      }
     }
+    // Always reuse the current session, regardless of its status.
+    // User can continue sending tasks in a completed/failed session.
     await startTask(text, {
       maxSteps: options.maxSteps,
       sessionId: activeSessionId.value || undefined,
+      agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
     })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
@@ -216,7 +248,7 @@ async function handleCaseRun(caseId: string) {
   try {
     showCaseModal.value = false
     const session = activeSession.value
-    if (!session || session.status !== 'empty') {
+    if (!session) {
       const newSession = await createSession(undefined, `Case: ${caseId}`)
       setActiveSession(newSession.id)
     }
@@ -237,11 +269,25 @@ function handleCaseView(caseId: string) {
 
 /** Switch to a different session from the sidebar */
 async function handleSessionSelect(session: Session) {
+  console.log('[App] handleSessionSelect:', JSON.stringify({
+    id: session.id,
+    name: session.name,
+    rootTaskId: session.rootTaskId,
+    status: session.status,
+    userInput: session.userInput,
+  }))
   setActiveSession(session.id)
   if (session.rootTaskId) {
+    console.log('[App] Loading task:', session.rootTaskId)
     clearActiveTask()
-    await loadTask(session.rootTaskId)
+    try {
+      await loadTask(session.rootTaskId)
+      console.log('[App] loadTask completed, taskCache keys:', Object.keys(taskCache.value))
+    } catch (err) {
+      console.error('[App] loadTask failed:', err)
+    }
   } else {
+    console.log('[App] No rootTaskId, clearing active task')
     clearActiveTask()
   }
 }
@@ -333,7 +379,7 @@ async function handleDeleteSession(session: Session) {
       </header>
 
       <!-- Metrics bar -->
-      <MetricsPanel :task="currentTask" :ws-status="wsStatus" />
+      <MetricsPanel :task="currentTask" :ws-status="wsStatus" :agents="agents" :selected-agent-id="selectedAgentId" :auto-approve="autoApprovePolicy" @update:selected-agent-id="(id: string) => selectedAgentId = id" @update:auto-approve="(v: boolean) => autoApprovePolicy = v" />
 
       <!-- Task input -->
       <TaskInput
@@ -428,6 +474,19 @@ async function handleDeleteSession(session: Session) {
         :shortcuts="SHORTCUTS"
         :is-running="isAgentRunning"
         @close="showTips = false"
+      />
+
+      <!-- Approval dialog for policy-blocked tool calls -->
+      <ApprovalDialog
+        :approval-id="pendingApproval?.approvalId ?? ''"
+        :tool="pendingApproval?.tool ?? ''"
+        :reason="pendingApproval?.reason ?? ''"
+        :input="pendingApproval?.input ?? {}"
+        :auto-approve="autoApprovePolicy"
+        :visible="pendingApproval !== null"
+        @approve="handleApprove"
+        @deny="handleDeny"
+        @close="handleApprovalClose"
       />
       </template>
     </main>

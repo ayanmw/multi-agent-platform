@@ -23,9 +23,18 @@ dist/
 Thumbs.db
 
 # Data
+data/
 data/*.db
 data/*.db-journal
 storage/
+
+# Runtime output
+output/
+fib/
+task_progress.json
+
+# Project research / experiments
+project/
 
 # Node
 node_modules/

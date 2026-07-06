@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow 与 Skill 深度指南 — Multi-Agent Platform</title>
+    <link rel="stylesheet" href="../shared.css">
+    <style>
+        /* 对比表 */
+        .compare-table th:first-child { width: 180px; }
+        .compare-table td:first-child { font-weight: 600; color: #1a1a2e; }
+        /* 决策流程图 */
+        .decision-flow {
+            background: #f8faff; border: 1px solid #d0d5dd; border-radius: 10px;
+            padding: 20px 24px; margin: 16px 0; font-size: 14px; line-height: 2.0;
+        }
+        .decision-flow .question { color: #4a9eff; font-weight: 600; }
+        .decision-flow .answer { color: #2E7D32; font-weight: 600; }
+        .decision-indent { padding-left: 24px; }
+        /* 架构图 */
+        .arch-diagram {
+            background: #1a1a2e; color: #e0e0e0; padding: 20px 24px; border-radius: 10px;
+            font-family: 'Fira Code', Consolas, monospace; font-size: 13px; line-height: 1.8;
+            margin: 16px 0; overflow-x: auto; white-space: pre;
+        }
+        /* 标签 */
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .tag-skill { background: #E3F2FD; color: #1565C0; }
+        .tag-workflow { background: #E8F5E9; color: #2E7D32; }
+        .tag-both { background: #FFF3E0; color: #E65100; }
+        /* 代码块 */
+        .yaml-key { color: #c678dd; }
+        .yaml-string { color: #98c379; }
+        .js-keyword { color: #c678dd; }
+        .js-string { color: #98c379; }
+        .js-comment { color: #5c6370; font-style: italic; }
+    </style>
+</head>
+<body>
+<div class="layout">
+
+    <!-- ============================== SIDEBAR ============================== -->
+    <aside class="sidebar">
+        <div class="logo">
+            <h2>Multi-Agent Platform</h2>
+            <span>Product Documentation v0.4</span>
+        </div>
+
+        <div class="section-label">概览</div>
+        <nav>
+            <a href="../index.html">首页</a>
+        </nav>
+
+        <div class="section-label">产品文档</div>
+        <nav>
+            <a href="01-overview.html">产品概述</a>
+            <a href="02-architecture.html">系统架构</a>
+            <a href="03-tech-stack.html">技术栈</a>
+            <a href="04-event-system.html">事件系统</a>
+            <a href="05-data-model.html">数据模型</a>
+            <a href="06-api-reference.html">API 参考</a>
+            <a href="07-features.html">功能模块</a>
+            <a href="08-roadmap.html">路线图</a>
+        </nav>
+        <div class="section-label">参考</div>
+        <nav>
+            <a href="09-llm-api-comparison.html">LLM API 厂商对比</a>
+            <a href="10-multi-model-layered-design.html">多模型分层设计</a>
+            <a href="11-harness-memory-design.html">Harness 与自进化记忆</a>
+            <a href="12-workflow-skill-guide.html" class="active">Workflow 与 Skill 深度指南</a>
+            <a href="99-glossary.html">术语表</a>
+        </nav>
+    </aside>
+
+    <!-- ============================== MAIN CONTENT ========================== -->
+    <main class="main">
+
+        <h1>12. Workflow 与 Skill 深度指南
+            <span class="version">设计文档</span>
+        </h1>
+        <p class="subtitle">
+            深入理解 Claude Code 的两大核心扩展机制：Skill（单 Agent 知识注入）与 Workflow（多 Agent 编排引擎）<br>
+            涵盖设计原理、触发机制、API 详解、使用场景决策，以及对本项目的启示
+        </p>
+
+        <div class="callout info">
+            <div class="callout-title">文档目的</div>
+            本文档系统性地解析 Claude Code 的 <strong>Skill</strong> 和 <strong>Workflow</strong> 两大扩展机制。
+            核心目标：(1) 理解两者的设计哲学和适用场景；(2) 掌握何时使用哪种机制；(3) 为 Multi-Agent Platform 项目的未来扩展提供设计参考。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- TOC -->
+        <!-- ================================================================ -->
+        <div class="toc">
+            <h3>目录</h3>
+            <ol style="padding-left:20px;">
+                <li><a href="#s1">概述：Skill 与 Workflow 定位</a></li>
+                <li><a href="#s2">Skill 深度解析</a></li>
+                <li><a href="#s3">Workflow 深度解析</a></li>
+                <li><a href="#s4">对比表：十一维全维度对比</a></li>
+                <li><a href="#s5">决策指南：何时用 Skill，何时用 Workflow</a></li>
+                <li><a href="#s6">实战案例：Skill 与 Workflow 的典型场景</a></li>
+                <li><a href="#s7">对本项目的启示</a></li>
+                <li><a href="#s8">代码示例：Skill 与 Workflow 完整实现</a></li>
+            </ol>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 1. 概述 -->
+        <!-- ================================================================ -->
+        <h2 id="s1">12.1 概述：Skill 与 Workflow 定位</h2>
+
+        <p>Claude Code 提供了两种本质不同的扩展机制来增强 Agent 的能力。它们解决的是不同层次的问题：</p>
+
+        <div class="arch-diagram">
+┌──────────────────────────────────────────────────────────────┐
+│                    Claude Code 扩展体系                        │
+│                                                              │
+│  ┌─────────────────────────┐  ┌─────────────────────────────┐│
+│  │        Skill              │  │        Workflow              ││
+│  │                           │  │                              ││
+│  │  "教一个 Agent 怎么做"      │  │  "编排多个 Agent 协作完成"       ││
+│  │                           │  │                              ││
+│  │  • 单 Agent 知识注入        │  │  • 多 Agent 编排引擎           ││
+│  │  • Markdown 文件           │  │  • JavaScript 脚本            ││
+│  │  • 关键词触发              │  │  • 显式调用 (/workflow)         ││
+│  │  • AI 自由遵循             │  │  • 确定性执行                  ││
+│  │  • 渐进式信息披露           │  │  • 并行/流水线模式             ││
+│  │  • 无状态                  │  │  • 有状态 (预算/缓存/恢复)       ││
+│  └─────────────────────────┘  └─────────────────────────────┘│
+│                                                              │
+│  类比: Skill = 给工匠一本手册      Workflow = 给工头一张施工图       │
+└──────────────────────────────────────────────────────────────┘
+        </div>
+
+        <h3>核心区别一句话</h3>
+        <table>
+            <tr><th>维度</th><th><span class="tag tag-skill">Skill</span></th><th><span class="tag tag-workflow">Workflow</span></th></tr>
+            <tr>
+                <td>本质</td>
+                <td><strong>单 Agent 的知识扩展</strong>——往 Agent 的上下文中注入领域知识和操作指南</td>
+                <td><strong>多 Agent 的编排引擎</strong>——定义多个 Agent 如何分工、协作、传递结果</td>
+            </tr>
+            <tr>
+                <td>类比</td>
+                <td>给一个聪明人一本详细的 SOP 手册，他按手册自由发挥</td>
+                <td>给一个工头一份施工蓝图，他指挥多个工人按图施工，每个步骤有明确的质量检查</td>
+            </tr>
+            <tr>
+                <td>解决的问题</td>
+                <td>"Agent 不知道这个领域的知识 / 不知道怎么做这个特定任务"</td>
+                <td>"单个 Agent 做不完这个任务 / 需要多视角分析 / 需要严格的质量门控"</td>
+            </tr>
+        </table>
+
+        <div class="callout success">
+            <div class="callout-title">设计哲学</div>
+            <strong>Skill 和 Workflow 不是互斥的，而是互补的。</strong>一个 Workflow 的每个 Phase 都可以使用 Skill 来增强各个 Agent 的能力。
+            选择 Skill 还是 Workflow，取决于<strong>任务的结构化程度</strong>和<strong>是否需要多 Agent 协作</strong>。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 2. Skill 深度解析 -->
+        <!-- ================================================================ -->
+        <h2 id="s2">12.2 Skill 深度解析</h2>
+
+        <h3>12.2.1 SKILL.md 的解剖结构</h3>
+
+        <p>Skill 的核心是一个 Markdown 文件，由两部分组成：<strong>YAML 前置元数据 (frontmatter)</strong> 和 <strong>Markdown 正文</strong>。</p>
+
+        <pre><code><span class="js-comment">---</span>
+<span class="yaml-key">name</span>: <span class="yaml-string">backend-patterns</span>
+<span class="yaml-key">description</span>: <span class="yaml-string">|</span>
+  <span class="yaml-string">Backend architecture patterns, API design,</span>
+  <span class="yaml-string">database optimization, and server-side best</span>
+  <span class="yaml-string">practices for Node.js, Express, and Next.js.</span>
+<span class="yaml-key">origin</span>: <span class="yaml-string">ECC</span>
+<span class="js-comment">---</span>
+
+<span class="js-comment"># Backend Development Patterns</span>
+
+<span class="js-comment">Backend architecture patterns and best practices...</span>
+
+<span class="js-comment">## When to Activate</span>
+<span class="js-comment">- Designing REST or GraphQL API endpoints</span>
+<span class="js-comment">- Implementing repository, service, or controller layers</span>
+
+<span class="js-comment">## API Design Patterns</span>
+<span class="js-comment">### RESTful API Structure</span>
+<span class="js-comment">...</span></code></pre>
+
+        <h4>Frontmatter 字段详解</h4>
+        <table>
+            <tr><th>字段</th><th>必需</th><th>说明</th><th>示例</th></tr>
+            <tr>
+                <td><code>name</code></td>
+                <td>是</td>
+                <td>Skill 的唯一标识符，用于系统内部引用</td>
+                <td><code>backend-patterns</code></td>
+            </tr>
+            <tr>
+                <td><code>description</code></td>
+                <td>是</td>
+                <td><strong>触发匹配的核心字段</strong>。系统将用户输入与此字段做关键词匹配，决定是否激活该 Skill</td>
+                <td><code>Backend architecture patterns, API design, database optimization...</code></td>
+            </tr>
+            <tr>
+                <td><code>trigger</code></td>
+                <td>否</td>
+                <td>显式触发命令（如 <code>/graphify</code>），用户输入此命令时直接激活</td>
+                <td><code>/graphify</code></td>
+            </tr>
+            <tr>
+                <td><code>origin</code></td>
+                <td>否</td>
+                <td>来源标识，用于追踪 Skill 的出处</td>
+                <td><code>ECC</code> (Everything Claude Code)</td>
+            </tr>
+        </table>
+
+        <h3>12.2.2 触发机制：基于描述的关键词匹配</h3>
+
+        <p>Skill 的触发不是显式的函数调用，而是<strong>基于语义匹配的自动激活</strong>。系统的工作流程如下：</p>
+
+        <div class="arch-diagram">
+用户输入: "帮我设计一个 REST API 的认证中间件"
+    │
+    ▼
+系统扫描所有已安装 Skill 的 description 字段
+    │
+    ├─ backend-patterns: "Backend architecture patterns, API design..."
+    │   → 关键词匹配: "REST API" + "设计" + "认证" + "中间件" → ✅ 匹配
+    │
+    ├─ frontend-patterns: "Frontend architecture patterns, UI..."
+    │   → 关键词匹配: 无相关词 → ❌ 不匹配
+    │
+    └─ coding-standards: "Coding standards and best practices..."
+        → 关键词匹配: 弱相关 → 🔶 部分匹配（低优先级）
+    │
+    ▼
+匹配的 Skill 被注入到 Agent 的 System Prompt 中
+    → Agent 在生成回复时参考 Skill 中的知识和指令
+        </div>
+
+        <div class="callout warning">
+            <div class="callout-title">关键理解</div>
+            Skill 的触发是<strong>概率性的、非确定性的</strong>。系统通过关键词匹配判断是否激活，但最终 Agent 是否严格遵循 Skill 中的指令，取决于模型自身的判断。这与 Workflow 的<strong>确定性执行</strong>形成鲜明对比。
+        </div>
+
+        <h4>description 编写最佳实践</h4>
+        <ul>
+            <li><strong>覆盖所有触发场景的关键词</strong>：如果 Skill 是关于"Go 后端开发"，description 应包含 "Go", "golang", "backend", "API", "server", "database" 等关键词</li>
+            <li><strong>使用自然语言描述</strong>：不要堆砌关键词，而是写一句通顺的话，自然地包含关键词</li>
+            <li><strong>明确 When to Activate</strong>：在正文的 "When to Activate" 部分，列出所有应该触发此 Skill 的具体场景</li>
+        </ul>
+
+        <h3>12.2.3 渐进式信息披露 (Progressive Disclosure)</h3>
+
+        <p>Skill 采用三层信息结构，系统按需加载，避免一次性将所有内容灌入上下文窗口：</p>
+
+        <div class="arch-diagram">
+Layer 1: 元数据 (Metadata)
+    ├─ name, description, trigger
+    ├─ 作用: 匹配阶段，判断是否激活
+    └─ Token 成本: ~50 tokens
+
+Layer 2: 正文 (Body)
+    ├─ Markdown 主体内容
+    ├─ 作用: 激活后注入 Agent 上下文
+    └─ Token 成本: ~500-3000 tokens
+
+Layer 3: 捆绑资源 (Bundled Resources)
+    ├─ scripts/    — 可执行脚本
+    ├─ references/ — 参考文档（按需加载）
+    └─ assets/     — 模板、图片等静态资源
+    └─ Token 成本: 仅在 Agent 显式引用时加载
+        </div>
+
+        <div class="callout info">
+            <div class="callout-title">设计意图</div>
+            渐进式披露确保 <strong>上下文窗口不被无关内容污染</strong>。Layer 1 用于匹配（便宜），Layer 2 在匹配成功后注入（中等成本），Layer 3 仅在需要时由 Agent 主动加载（按需付费）。这保证了 Skill 系统可以扩展到数百个 Skill 而不显著增加每次对话的 token 开销。
+        </div>
+
+        <h3>12.2.4 目录结构</h3>
+
+        <pre><code>skills/
+├── backend-patterns/
+│   ├── SKILL.md              <span class="js-comment"># 主文件（必需）</span>
+│   ├── scripts/              <span class="js-comment"># 可执行脚本（可选）</span>
+│   │   └── setup-database.sh
+│   ├── references/           <span class="js-comment"># 参考文档（可选）</span>
+│   │   └── orm-comparison.md
+│   └── assets/               <span class="js-comment"># 模板/静态资源（可选）</span>
+│       └── api-template.ts
+│
+├── deep-research/
+│   └── SKILL.md
+│
+└── bug-feature-dev/
+    └── SKILL.md</code></pre>
+
+        <h3>12.2.5 何时使用 Skill</h3>
+
+        <table>
+            <tr><th>场景</th><th>示例</th><th>原因</th></tr>
+            <tr>
+                <td><strong>领域知识注入</strong></td>
+                <td>后端架构模式、前端最佳实践、数据库优化</td>
+                <td>Agent 需要特定领域的专业知识，但不需要多个 Agent 协作</td>
+            </tr>
+            <tr>
+                <td><strong>固定流程的 SOP</strong></td>
+                <td>Bug 修复流程、代码审查清单、部署检查表</td>
+                <td>流程是固定的步骤序列，单个 Agent 可以执行</td>
+            </tr>
+            <tr>
+                <td><strong>编码规范</strong></td>
+                <td>Go 编码规范、Vue 组件风格指南、命名约定</td>
+                <td>规范是约束性知识，需要注入到每次对话中</td>
+            </tr>
+            <tr>
+                <td><strong>工具使用指南</strong></td>
+                <td>Docker 使用模式、Git 工作流、CI/CD 配置</td>
+                <td>Agent 需要知道如何正确使用工具，但执行是单 Agent 的</td>
+            </tr>
+            <tr>
+                <td><strong>项目特定约定</strong></td>
+                <td>CLAUDE.md 中的项目指令、目录结构约定</td>
+                <td>每个项目有自己的规则，需要自动注入</td>
+            </tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">Skill 的局限</div>
+            <strong>Skill 不能做的事：</strong>
+            <ul style="padding-left:18px;">
+                <li>不能编排多个 Agent 并行工作</li>
+                <li>不能强制执行步骤（Agent 可以自由选择是否遵循）</li>
+                <li>不能追踪状态（无状态，每次对话独立）</li>
+                <li>不能做质量门控（没有"通过/不通过"的强制判断）</li>
+                <li>不能做预算管理（无法限制 token 消耗或执行时间）</li>
+            </ul>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 3. Workflow 深度解析 -->
+        <!-- ================================================================ -->
+        <h2 id="s3">12.3 Workflow 深度解析</h2>
+
+        <h3>12.3.1 定义：多 Agent 编排引擎</h3>
+
+        <p>Workflow 是一个<strong>确定性的多 Agent 编排脚本</strong>，用 JavaScript 编写。它定义了多个 Agent 的分工、协作模式、数据传递路径和质量检查点。与 Skill 的"建议"性质不同，Workflow 是<strong>强制执行的</strong>——每个 Phase 必须完成，每个质量门必须通过，否则流程终止。</p>
+
+        <div class="arch-diagram">
+Workflow 脚本 (JavaScript)
+    │
+    ├─ export const meta = { name, description, budget }
+    │
+    ├─ phase("Research", async () => { ... })
+    │   ├─ agent("analyzer", { prompt: "...", model: "sonnet" })
+    │   └─ log("Analysis complete", { findings: [...] })
+    │
+    ├─ phase("Ideation", async () => {
+    │   │  parallel([
+    │   │    agent("codex", { prompt: "..." }),
+    │   │    agent("gemini", { prompt: "..." }),
+    │   │  ])
+    │   │})
+    │
+    ├─ phase("Plan", async () => {
+    │   │  pipeline([
+    │   │    agent("architect", { prompt: "..." }),
+    │   │    agent("reviewer", { prompt: "..." }),
+    │   │  ])
+    │   │})
+    │
+    ├─ phase("Execute", async () => { ... })
+    │
+    └─ phase("Review", async () => {
+        │  qualityGate({ score: 7, ... })
+        │})
+        </div>
+
+        <h3>12.3.2 脚本格式：meta 块 + 阶段定义</h3>
+
+        <p>每个 Workflow 脚本是一个 JavaScript 模块，必须导出 <code>meta</code> 对象：</p>
+
+        <pre><code><span class="js-comment">// 文件名: code-review.workflow.js</span>
+
+<span class="js-keyword">export const</span> meta = {
+    <span class="js-keyword">name</span>: <span class="js-string">"code-review"</span>,
+    <span class="js-keyword">description</span>: <span class="js-string">"Multi-model code review with adversarial verification"</span>,
+    <span class="js-keyword">budget</span>: {
+        <span class="js-keyword">total</span>: <span class="js-string">100000</span>,    <span class="js-comment">// 总 token 预算</span>
+        <span class="js-keyword">perAgent</span>: <span class="js-string">30000</span>,   <span class="js-comment">// 每个 Agent 的 token 预算</span>
+        <span class="js-keyword">maxTime</span>: <span class="js-string">600</span>,      <span class="js-comment">// 最大执行时间（秒）</span>
+    },
+    <span class="js-keyword">resume</span>: <span class="js-keyword">true</span>,          <span class="js-comment">// 支持中断恢复</span>
+    <span class="js-keyword">cache</span>: <span class="js-string">"phase"</span>,        <span class="js-comment">// 缓存策略: "phase" | "agent" | "none"</span>
+};</code></pre>
+
+        <h4>meta 字段详解</h4>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>name</code></td><td>string</td><td>Workflow 的唯一名称</td></tr>
+            <tr><td><code>description</code></td><td>string</td><td>描述用途，用于 <code>/workflow list</code> 展示</td></tr>
+            <tr><td><code>budget.total</code></td><td>number</td><td>整个 Workflow 的 token 预算上限。超限时自动暂停，等待用户确认</td></tr>
+            <tr><td><code>budget.perAgent</code></td><td>number</td><td>每个 Agent 实例的 token 预算。防止单个 Agent 消耗过多</td></tr>
+            <tr><td><code>budget.maxTime</code></td><td>number</td><td>最大执行时间（秒），超时后自动创建 checkpoint 并退出</td></tr>
+            <tr><td><code>resume</code></td><td>boolean</td><td>是否启用中断恢复。启用后，Workflow 在关键节点自动保存状态</td></tr>
+            <tr><td><code>cache</code></td><td>string</td><td>缓存策略：<code>"phase"</code> 缓存每个 Phase 的输出，<code>"agent"</code> 缓存每个 Agent 的输出，<code>"none"</code> 不缓存</td></tr>
+        </table>
+
+        <h3>12.3.3 核心 API</h3>
+
+        <h4>agent() — 创建单个 Agent 任务</h4>
+        <pre><code><span class="js-comment">// 最基本的用法：创建一个 Agent 并等待其完成</span>
+<span class="js-keyword">const</span> result = <span class="js-keyword">await</span> agent({
+    <span class="js-keyword">name</span>: <span class="js-string">"code-analyzer"</span>,
+    <span class="js-keyword">prompt</span>: <span class="js-string">"分析以下代码的安全漏洞：..."</span>,
+    <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,           <span class="js-comment">// 模型选择</span>
+    <span class="js-keyword">tools</span>: [<span class="js-string">"read_file"</span>, <span class="js-string">"grep"</span>],  <span class="js-comment">// 允许的工具</span>
+    <span class="js-keyword">maxSteps</span>: <span class="js-string">15</span>,               <span class="js-comment">// 最大步数</span>
+    <span class="js-keyword">context</span>: { ... },            <span class="js-comment">// 注入的上下文数据</span>
+});
+
+<span class="js-comment">// result 包含:</span>
+<span class="js-comment">// { output: string, tokens: { input, output }, steps: number, errors: [] }</span></code></pre>
+
+        <h4>parallel() — 并行执行多个 Agent</h4>
+        <pre><code><span class="js-comment">// 同时启动多个 Agent，等待全部完成</span>
+<span class="js-keyword">const</span> [backendResult, frontendResult] = <span class="js-keyword">await</span> parallel([
+    agent({ <span class="js-keyword">name</span>: <span class="js-string">"backend-review"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"审查后端代码..."</span>, <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span> }),
+    agent({ <span class="js-keyword">name</span>: <span class="js-string">"frontend-review"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"审查前端代码..."</span>, <span class="js-keyword">model</span>: <span class="js-string">"haiku"</span> }),
+]);
+
+<span class="js-comment">// parallel() 的特点:</span>
+<span class="js-comment">// - 所有 Agent 同时启动，不等待彼此</span>
+<span class="js-comment">// - 全部完成后才返回结果</span>
+<span class="js-comment">// - 任何一个失败，整个 parallel 块失败</span>
+<span class="js-comment">// - 适用于：多视角分析、独立审查、批量处理</span></code></pre>
+
+        <h4>pipeline() — 流水线顺序执行</h4>
+        <pre><code><span class="js-comment">// 多个 Agent 串联，前一个的输出作为后一个的输入</span>
+<span class="js-keyword">const</span> finalResult = <span class="js-keyword">await</span> pipeline([
+    <span class="js-comment">// Stage 1: 分析</span>
+    agent({ <span class="js-keyword">name</span>: <span class="js-string">"analyzer"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"分析代码库结构..."</span> }),
+
+    <span class="js-comment">// Stage 2: 基于分析结果进行规划</span>
+    ({ output: analysis }) => agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"planner"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`基于以下分析制定重构计划：\n${analysis}`</span>,
+    }),
+
+    <span class="js-comment">// Stage 3: 基于计划执行</span>
+    ({ output: plan }) => agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"executor"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`执行以下重构计划：\n${plan}`</span>,
+    }),
+]);
+
+<span class="js-comment">// pipeline() 的特点:</span>
+<span class="js-comment">// - 严格按顺序执行</span>
+<span class="js-comment">// - 前一个的输出自动传递给下一个</span>
+<span class="js-comment">// - 任何一个失败，pipeline 中断</span>
+<span class="js-comment">// - 适用于：分析→规划→执行 的线性流程</span></code></pre>
+
+        <h4>phase() — 定义执行阶段</h4>
+        <pre><code><span class="js-comment">// phase() 将 Workflow 分为命名阶段，便于追踪和恢复</span>
+<span class="js-keyword">await</span> phase(<span class="js-string">"Research"</span>, async (ctx) => {
+    <span class="js-keyword">ctx</span>.log(<span class="js-string">"开始研究阶段"</span>);
+
+    <span class="js-keyword">const</span> findings = <span class="js-keyword">await</span> agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"researcher"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">"研究项目的技术债务..."</span>,
+    });
+
+    <span class="js-comment">// ctx.data 在阶段间持久化</span>
+    <span class="js-keyword">ctx</span>.data.findings = findings.output;
+
+    <span class="js-keyword">ctx</span>.log(<span class="js-string">"研究阶段完成"</span>, { <span class="js-keyword">tokens</span>: findings.tokens });
+});
+
+<span class="js-comment">// phase() 的特点:</span>
+<span class="js-comment">// - 每个 phase 是独立的恢复点</span>
+<span class="js-comment">// - ctx.data 在 phase 间传递数据</span>
+<span class="js-comment">// - ctx.log() 输出结构化日志</span>
+<span class="js-comment">// - 如果 resume: true，中断后从最后一个完成的 phase 恢复</span></code></pre>
+
+        <h4>log() — 结构化日志</h4>
+        <pre><code><span class="js-comment">// log() 输出结构化日志，用于追踪和调试</span>
+log(<span class="js-string">"Agent 完成分析"</span>, {
+    <span class="js-keyword">agent</span>: <span class="js-string">"code-analyzer"</span>,
+    <span class="js-keyword">tokens</span>: { <span class="js-keyword">input</span>: <span class="js-string">5000</span>, <span class="js-keyword">output</span>: <span class="js-string">1200</span> },
+    <span class="js-keyword">duration</span>: <span class="js-string">"12.5s"</span>,
+    <span class="js-keyword">findings</span>: [<span class="js-string">"SQL injection risk"</span>, <span class="js-string">"XSS vulnerability"</span>],
+});
+
+<span class="js-comment">// 日志级别:</span>
+log.info(<span class="js-string">"信息"</span>);
+log.warn(<span class="js-string">"警告"</span>);
+log.error(<span class="js-string">"错误"</span>);</code></pre>
+
+        <h3>12.3.4 预算系统 (Budget System)</h3>
+
+        <p>Workflow 的预算系统是<strong>强制性的</strong>——不是建议，而是硬限制。它在三个层面控制资源消耗：</p>
+
+        <table>
+            <tr><th>层面</th><th>控制项</th><th>超限行为</th></tr>
+            <tr>
+                <td><strong>Workflow 级别</strong></td>
+                <td><code>budget.total</code> — 整个 Workflow 的 token 上限</td>
+                <td>暂停执行，显示预算使用报告，等待用户确认继续或终止</td>
+            </tr>
+            <tr>
+                <td><strong>Agent 级别</strong></td>
+                <td><code>budget.perAgent</code> — 每个 Agent 的 token 上限</td>
+                <td>Agent 被强制终止，输出已生成的部分结果，错误信息记录到日志</td>
+            </tr>
+            <tr>
+                <td><strong>时间级别</strong></td>
+                <td><code>budget.maxTime</code> — 最大执行时间</td>
+                <td>自动创建 checkpoint，保存当前状态，优雅退出</td>
+            </tr>
+        </table>
+
+        <pre><code><span class="js-comment">// 运行时查询预算状态</span>
+<span class="js-keyword">const</span> status = budget.status();
+<span class="js-comment">// { total: 100000, spent: 45000, remaining: 55000, agentCount: 3 }</span>
+
+<span class="js-comment">// 在关键节点检查预算</span>
+<span class="js-keyword">if</span> (budget.remaining() < <span class="js-string">10000</span>) {
+    log.warn(<span class="js-string">"预算即将耗尽，创建 checkpoint"</span>);
+    <span class="js-keyword">await</span> checkpoint.save();
+}</code></pre>
+
+        <h3>12.3.5 恢复/缓存机制 (Resume & Caching)</h3>
+
+        <p>Workflow 支持中断恢复和结果缓存，这是它与 Skill 的关键区别之一：</p>
+
+        <div class="arch-diagram">
+Workflow 执行流程与恢复机制:
+
+Phase 1: Research     ✅ 已完成 → 结果缓存
+Phase 2: Ideation     ✅ 已完成 → 结果缓存
+Phase 3: Plan         🔄 执行中 → 中断！
+    │
+    ▼
+用户重新运行: /workflow resume code-review
+    │
+    ├─ 检查缓存: Phase 1 ✅ → 跳过
+    ├─ 检查缓存: Phase 2 ✅ → 跳过
+    └─ Phase 3: 从 checkpoint 恢复，继续执行
+        </div>
+
+        <pre><code><span class="js-comment">// 缓存策略配置</span>
+<span class="js-keyword">export const</span> meta = {
+    <span class="js-keyword">cache</span>: <span class="js-string">"phase"</span>,  <span class="js-comment">// 缓存每个 phase 的结果</span>
+    <span class="js-comment">// "agent" — 缓存每个 agent 的结果（粒度更细）</span>
+    <span class="js-comment">// "none"  — 不缓存（每次重新执行）</span>
+};
+
+<span class="js-comment">// 手动创建 checkpoint</span>
+<span class="js-keyword">await</span> checkpoint.save({
+    <span class="js-keyword">phase</span>: <span class="js-string">"Plan"</span>,
+    <span class="js-keyword">data</span>: ctx.data,
+    <span class="js-keyword">timestamp</span>: Date.now(),
+});
+
+<span class="js-comment">// 恢复时自动加载</span>
+<span class="js-comment">// checkpoint.load() 返回最近一次保存的状态</span></code></pre>
+
+        <h3>12.3.6 Pipeline vs Parallel：选择指南</h3>
+
+        <table>
+            <tr><th>模式</th><th>适用场景</th><th>不适用场景</th></tr>
+            <tr>
+                <td><strong>Pipeline</strong><br>(顺序执行)</td>
+                <td>
+                    • 有数据依赖的流程（分析→规划→执行）<br>
+                    • 需要逐步精炼的任务（草稿→审查→终稿）<br>
+                    • 质量门控流程（执行→检查→通过/驳回）
+                </td>
+                <td>
+                    • 独立任务（浪费并行能力）<br>
+                    • 快速探索（等待时间过长）
+                </td>
+            </tr>
+            <tr>
+                <td><strong>Parallel</strong><br>(并行执行)</td>
+                <td>
+                    • 多视角分析（后端+前端+安全 同时审查）<br>
+                    • 批量处理（多个文件独立分析）<br>
+                    • 对抗性验证（两个 Agent 独立验证同一个结果）
+                </td>
+                <td>
+                    • 有依赖关系的任务（B 需要 A 的输出）<br>
+                    • 需要全局一致性的任务（容易产生冲突）
+                </td>
+            </tr>
+        </table>
+
+        <h3>12.3.7 常见 Workflow 模式</h3>
+
+        <h4>模式 1：对抗性验证 (Adversarial Verify)</h4>
+        <pre><code><span class="js-comment">// 两个 Agent 独立分析，结果交叉验证</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Verify"</span>, async (ctx) => {
+    <span class="js-keyword">const</span> [result1, result2] = <span class="js-keyword">await</span> parallel([
+        agent({ <span class="js-keyword">name</span>: <span class="js-string">"verifier-a"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"独立验证以下代码..."</span>, <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span> }),
+        agent({ <span class="js-keyword">name</span>: <span class="js-string">"verifier-b"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"独立验证以下代码..."</span>, <span class="js-keyword">model</span>: <span class="js-string">"haiku"</span> }),
+    ]);
+
+    <span class="js-comment">// 交叉比对，找出不一致</span>
+    <span class="js-keyword">const</span> conflicts = findConflicts(result1.output, result2.output);
+    <span class="js-keyword">if</span> (conflicts.length > <span class="js-string">0</span>) {
+        log.warn(<span class="js-string">"发现不一致"</span>, { conflicts });
+        <span class="js-comment">// 可以启动第三个 Agent 做仲裁</span>
+    }
+});</code></pre>
+
+        <h4>模式 2：循环直到合格 (Loop Until Dry)</h4>
+        <pre><code><span class="js-comment">// 反复执行直到没有新发现</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Review"</span>, async (ctx) => {
+    <span class="js-keyword">let</span> iteration = <span class="js-string">0</span>;
+    <span class="js-keyword">let</span> foundIssues = <span class="js-keyword">true</span>;
+
+    <span class="js-keyword">while</span> (foundIssues && iteration < <span class="js-string">5</span>) {
+        <span class="js-keyword">const</span> result = <span class="js-keyword">await</span> agent({
+            <span class="js-keyword">name</span>: <span class="js-string">"reviewer"</span>,
+            <span class="js-keyword">prompt</span>: <span class="js-string">`审查代码（第 ${iteration + 1} 轮）：\n${ctx.data.code}`</span>,
+        });
+
+        foundIssues = result.output.includes(<span class="js-string">"ISSUE"</span>);
+        <span class="js-keyword">if</span> (foundIssues) {
+            <span class="js-comment">// 自动修复发现的问题</span>
+            ctx.data.code = <span class="js-keyword">await</span> autoFix(result.output);
+        }
+        iteration++;
+    }
+});</code></pre>
+
+        <h4>模式 3：多阶段流水线 (Multi-Phase Pipeline)</h4>
+        <pre><code><span class="js-comment">// 完整的多阶段开发流程</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Research"</span>, async (ctx) => {
+    ctx.data.context = <span class="js-keyword">await</span> agent({ <span class="js-keyword">name</span>: <span class="js-string">"researcher"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">"研究..."</span> });
+});
+
+<span class="js-keyword">phase</span>(<span class="js-string">"Ideation"</span>, async (ctx) => {
+    <span class="js-keyword">const</span> [backend, frontend] = <span class="js-keyword">await</span> parallel([
+        agent({ <span class="js-keyword">name</span>: <span class="js-string">"backend-ideas"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">`基于 ${ctx.data.context} 提出后端方案`</span> }),
+        agent({ <span class="js-keyword">name</span>: <span class="js-string">"frontend-ideas"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">`基于 ${ctx.data.context} 提出前端方案`</span> }),
+    ]);
+    ctx.data.ideas = { backend, frontend };
+});
+
+<span class="js-keyword">phase</span>(<span class="js-string">"Plan"</span>, async (ctx) => {
+    ctx.data.plan = <span class="js-keyword">await</span> agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"planner"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`综合方案制定计划：\n${JSON.stringify(ctx.data.ideas)}`</span>,
+    });
+});
+
+<span class="js-keyword">phase</span>(<span class="js-string">"Execute"</span>, async (ctx) => {
+    <span class="js-keyword">await</span> agent({ <span class="js-keyword">name</span>: <span class="js-string">"executor"</span>, <span class="js-keyword">prompt</span>: <span class="js-string">`执行计划：\n${ctx.data.plan}`</span> });
+});
+
+<span class="js-keyword">phase</span>(<span class="js-string">"Review"</span>, async (ctx) => {
+    <span class="js-keyword">const</span> score = <span class="js-keyword">await</span> qualityGate();
+    <span class="js-keyword">if</span> (score < <span class="js-string">7</span>) <span class="js-keyword">throw new</span> Error(<span class="js-string">"质量不达标"</span>);
+});</code></pre>
+
+        <h3>12.3.8 何时使用 Workflow</h3>
+
+        <table>
+            <tr><th>场景</th><th>示例</th><th>原因</th></tr>
+            <tr>
+                <td><strong>大规模代码审查</strong></td>
+                <td>全仓库安全审计、跨模块重构审查</td>
+                <td>需要多个 Agent 并行分析不同模块，结果交叉验证</td>
+            </tr>
+            <tr>
+                <td><strong>多视角分析</strong></td>
+                <td>后端+前端+安全+性能 四维分析</td>
+                <td>不同视角需要不同的 Agent 和不同的模型</td>
+            </tr>
+            <tr>
+                <td><strong>批量迁移</strong></td>
+                <td>从 REST 迁移到 GraphQL、从 JS 迁移到 TS</td>
+                <td>大量文件需要独立处理，并行执行显著加速</td>
+            </tr>
+            <tr>
+                <td><strong>质量门控流程</strong></td>
+                <td>代码生成→审查→测试→部署 的 CI/CD 流水线</td>
+                <td>需要强制性的质量检查点，不合格必须终止</td>
+            </tr>
+            <tr>
+                <td><strong>对抗性验证</strong></td>
+                <td>两个 Agent 独立实现同一功能，结果对比</td>
+                <td>需要确定性的一致性检查，不能依赖模型自觉</td>
+            </tr>
+            <tr>
+                <td><strong>多 Agent 测试</strong></td>
+                <td>Agent A 生成测试用例，Agent B 执行测试，Agent C 分析结果</td>
+                <td>需要严格的阶段依赖和数据传递</td>
+            </tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 4. 对比表 -->
+        <!-- ================================================================ -->
+        <h2 id="s4">12.4 对比表：十一维全维度对比</h2>
+
+        <table class="compare-table">
+            <tr><th>维度</th><th><span class="tag tag-skill">Skill</span></th><th><span class="tag tag-workflow">Workflow</span></th></tr>
+            <tr>
+                <td>本质</td>
+                <td>单 Agent 知识注入</td>
+                <td>多 Agent 编排引擎</td>
+            </tr>
+            <tr>
+                <td>文件格式</td>
+                <td>Markdown (YAML frontmatter + body)</td>
+                <td>JavaScript (可执行脚本)</td>
+            </tr>
+            <tr>
+                <td>触发方式</td>
+                <td>自动（关键词匹配 description）</td>
+                <td>显式（用户执行 <code>/workflow</code> 命令）</td>
+            </tr>
+            <tr>
+                <td>确定性</td>
+                <td>非确定性 —— Agent 自由选择是否遵循</td>
+                <td>确定性 —— 脚本定义的步骤强制执行</td>
+            </tr>
+            <tr>
+                <td>Agent 数量</td>
+                <td>1 个（当前对话的 Agent）</td>
+                <td>N 个（可编排多个 Agent 并行/流水线）</td>
+            </tr>
+            <tr>
+                <td>状态管理</td>
+                <td>无状态 —— 每次对话独立</td>
+                <td>有状态 —— 预算追踪、检查点、缓存、恢复</td>
+            </tr>
+            <tr>
+                <td>预算控制</td>
+                <td>无 —— 不限制 token 或时间</td>
+                <td>有 —— 三层预算（Workflow/Agent/时间）</td>
+            </tr>
+            <tr>
+                <td>质量门控</td>
+                <td>无 —— 无法强制执行质量检查</td>
+                <td>有 —— 每个 Phase 可以设置评分门槛</td>
+            </tr>
+            <tr>
+                <td>执行模型</td>
+                <td>同步 —— 注入到当前对话的上下文中</td>
+                <td>异步 —— 后台执行，支持并行和流水线</td>
+            </tr>
+            <tr>
+                <td>信息加载</td>
+                <td>渐进式披露（元数据→正文→资源）</td>
+                <td>全量加载（脚本在启动时全部解析）</td>
+            </tr>
+            <tr>
+                <td>复杂度</td>
+                <td>低 —— 编写 Markdown 即可</td>
+                <td>高 —— 需要编写 JavaScript 编排逻辑</td>
+            </tr>
+            <tr>
+                <td>适用任务规模</td>
+                <td>小到中型 —— 单次对话能完成的任务</td>
+                <td>中到大型 —— 需要多轮、多 Agent 协作的任务</td>
+            </tr>
+            <tr>
+                <td>可恢复性</td>
+                <td>不可恢复 —— 中断后需重新开始</td>
+                <td>可恢复 —— 从 checkpoint 继续执行</td>
+            </tr>
+            <tr>
+                <td>学习曲线</td>
+                <td>低 —— 会写 Markdown 就会写 Skill</td>
+                <td>中高 —— 需要理解编排概念和异步编程</td>
+            </tr>
+        </table>
+
+        <!-- ================================================================ -->
+        <!-- 5. 决策指南 -->
+        <!-- ================================================================ -->
+        <h2 id="s5">12.5 决策指南：何时用 Skill，何时用 Workflow</h2>
+
+        <div class="decision-flow">
+            <p><strong>当你面对一个任务时，按以下决策树选择：</strong></p>
+
+            <p><span class="question">Q1: 这个任务是否需要多个 Agent 协作？</span></p>
+            <p class="decision-indent">├─ <span class="answer">是</span> → <span class="tag tag-workflow">Workflow</span>（例如：后端+前端同时审查、多视角分析）</p>
+            <p class="decision-indent">└─ <span class="answer">否</span> → 继续 Q2</p>
+
+            <p><span class="question">Q2: 这个任务是否需要强制性的质量检查/预算控制？</span></p>
+            <p class="decision-indent">├─ <span class="answer">是</span> → <span class="tag tag-workflow">Workflow</span>（例如：代码审查必须通过 7 分门槛）</p>
+            <p class="decision-indent">└─ <span class="answer">否</span> → 继续 Q3</p>
+
+            <p><span class="question">Q3: 这个任务是否可能运行超过 5 分钟，需要中断恢复？</span></p>
+            <p class="decision-indent">├─ <span class="answer">是</span> → <span class="tag tag-workflow">Workflow</span>（例如：全仓库迁移、批量重构）</p>
+            <p class="decision-indent">└─ <span class="answer">否</span> → 继续 Q4</p>
+
+            <p><span class="question">Q4: 这个任务是否是"教 Agent 如何做"（知识注入）而非"指挥 Agent 做什么"（编排）？</span></p>
+            <p class="decision-indent">├─ <span class="answer">知识注入</span> → <span class="tag tag-skill">Skill</span>（例如：后端架构模式、编码规范）</p>
+            <p class="decision-indent">└─ <span class="answer">编排任务</span> → <span class="tag tag-workflow">Workflow</span>（例如：多步骤开发流程）</p>
+        </div>
+
+        <h3>快速判断表</h3>
+        <table>
+            <tr><th>如果你的任务是...</th><th>用</th><th>理由</th></tr>
+            <tr><td>"帮我写一个 REST API 端点"</td><td><span class="tag tag-skill">Skill</span></td><td>单 Agent 任务，Skill 提供 API 设计模式知识</td></tr>
+            <tr><td>"按照公司规范审查这个 PR"</td><td><span class="tag tag-skill">Skill</span></td><td>审查规范是知识，单个 Agent 执行审查</td></tr>
+            <tr><td>"对整个仓库做安全审计"</td><td><span class="tag tag-workflow">Workflow</span></td><td>需要并行分析多个模块，交叉验证结果</td></tr>
+            <tr><td>"学习这个新代码库的架构"</td><td><span class="tag tag-skill">Skill</span></td><td>探索性任务，Agent 自由探索，Skill 提供分析方法</td></tr>
+            <tr><td>"从 JS 迁移到 TS，共 200 个文件"</td><td><span class="tag tag-workflow">Workflow</span></td><td>批量任务，需要并行处理、检查点、恢复机制</td></tr>
+            <tr><td>"部署前做最终检查"</td><td><span class="tag tag-workflow">Workflow</span></td><td>需要强制性的检查清单，不合格必须阻止</td></tr>
+            <tr><td>"修复这个 Bug"</td><td><span class="tag tag-skill">Skill</span></td><td>单 Agent 任务，Skill 提供 Bug 修复流程指导</td></tr>
+            <tr><td>"同时优化后端性能和前端加载速度"</td><td><span class="tag tag-workflow">Workflow</span></td><td>两个独立任务，可以并行执行</td></tr>
+        </table>
+
+        <div class="callout success">
+            <div class="callout-title">组合使用</div>
+            <strong>Skill 和 Workflow 不是互斥的。</strong>最佳实践是：用 Skill 提供领域知识，用 Workflow 编排执行流程。例如，一个"全栈代码审查" Workflow 可以：
+            <ul style="padding-left:18px;">
+                <li>Phase 1: 后端审查 Agent 使用 <code>backend-patterns</code> Skill</li>
+                <li>Phase 2: 前端审查 Agent 使用 <code>frontend-patterns</code> Skill</li>
+                <li>Phase 3: 安全审查 Agent 使用 <code>security-review</code> Skill</li>
+                <li>Phase 4: 汇总审查结果，质量评分</li>
+            </ul>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 6. 实战案例 -->
+        <!-- ================================================================ -->
+        <h2 id="s6">12.6 实战案例：Skill 与 Workflow 的典型场景</h2>
+
+        <h3>案例 1：Bug 修复流程 (Skill)</h3>
+        <p>本项目使用 <code>bug-feature-dev</code> Skill 来标准化 Bug 修复和功能开发流程。这个 Skill 定义了 6 个步骤：需求分析 → 更新 ROADMAP → 判断 API 变更 → 前后端并行实现 → 验证 → 标记完成。每个步骤都是对当前 Agent 的指导，由 Agent 自行判断如何执行。</p>
+
+        <pre><code><span class="js-comment">---</span>
+<span class="yaml-key">name</span>: <span class="yaml-string">bug-feature-dev</span>
+<span class="yaml-key">description</span>: <span class="yaml-string">|</span>
+  <span class="yaml-string">Multi-Agent Platform 项目的 Bug 修复与功能开发工作流。</span>
+  <span class="yaml-string">当用户报告 bug、提出功能需求、</span>
+  <span class="yaml-string">或说"修复xxx"、"新增xxx功能"、"优化xxx"时触发此 Skill。</span>
+<span class="js-comment">---</span>
+
+<span class="js-comment"># Bug / Feature 工作流</span>
+
+<span class="js-comment">## 步骤 1: 需求分析</span>
+<span class="js-comment">1. 复述需求 — 用自己的话确认理解是否正确</span>
+<span class="js-comment">2. 判断影响范围 — 涉及哪些模块？</span>
+<span class="js-comment">3. 列出潜在风险 — 可能破坏现有功能吗？</span>
+
+<span class="js-comment">## 步骤 2: 更新 ROADMAP</span>
+<span class="js-comment">...</span>
+
+<span class="js-comment">## 步骤 3: 判断 API 变更</span>
+<span class="js-comment">...</span>
+
+<span class="js-comment">## 步骤 4: 前后端并行实现</span>
+<span class="js-comment">将任务拆分为两个独立的子 Agent...</span>
+
+<span class="js-comment">## 步骤 5: 验证</span>
+<span class="js-comment">go build ./... && vue-tsc --noEmit && vite build</span>
+
+<span class="js-comment">## 步骤 6: 更新 ROADMAP 标记完成</span></code></pre>
+
+        <div class="callout info">
+            <div class="callout-title">为什么用 Skill 而不是 Workflow？</div>
+            这个流程虽然有多步骤，但本质上是<strong>单 Agent 的顺序执行</strong>。Agent 按照 Skill 中的指导逐步完成，不需要多个 Agent 并行。步骤 4 的"前后端并行实现"是指导 Agent 使用子 Agent 工具，而非 Workflow 层面的编排。
+        </div>
+
+        <h3>案例 2：多模型协作开发 (Workflow)</h3>
+        <p>multi-workflow 是一个典型的 Workflow 案例，它编排了 6 个 Phase 的协作开发流程，每个 Phase 中可能并行调用多个外部模型。</p>
+
+        <pre><code><span class="js-comment">// multi-workflow 的核心结构</span>
+
+<span class="js-comment">// Phase 1: 研究分析</span>
+<span class="js-comment">// - 提示增强（可选 MCP）</span>
+<span class="js-comment">// - 上下文检索</span>
+<span class="js-comment">// - 需求完整性评分（≥7 分才继续）</span>
+
+<span class="js-comment">// Phase 2: 方案构思（并行）</span>
+<span class="js-comment">// - Codex: 技术可行性 + 方案 + 风险</span>
+<span class="js-comment">// - Gemini: UI 可行性 + 方案 + UX 评估</span>
+<span class="js-comment">// → 综合两个模型的输出，提供至少 2 个方案选项</span>
+
+<span class="js-comment">// Phase 3: 详细规划（并行）</span>
+<span class="js-comment">// - Codex: 后端架构</span>
+<span class="js-comment">// - Gemini: 前端架构</span>
+<span class="js-comment">// → Claude 综合：采用 Codex 后端 + Gemini 前端</span>
+
+<span class="js-comment">// Phase 4: 实现</span>
+<span class="js-comment">// - 严格遵循批准的计划</span>
+<span class="js-comment">// - 遵循项目代码规范</span>
+
+<span class="js-comment">// Phase 5: 优化（并行）</span>
+<span class="js-comment">// - Codex: 安全、性能、错误处理</span>
+<span class="js-comment">// - Gemini: 可访问性、设计一致性</span>
+
+<span class="js-comment">// Phase 6: 质量审查</span>
+<span class="js-comment">// - 检查完成度</span>
+<span class="js-comment">// - 运行测试</span>
+<span class="js-comment">// - 评分 < 7 或用户不批准 → 强制停止</span></code></pre>
+
+        <div class="callout info">
+            <div class="callout-title">为什么用 Workflow 而不是 Skill？</div>
+            这个流程需要：<strong>(1) 并行调用多个外部模型</strong>（Codex + Gemini 同时工作）；<strong>(2) 强制性的质量门控</strong>（评分 < 7 必须停止）；<strong>(3) 阶段间的数据传递</strong>（Phase 2 的输出影响 Phase 3 的输入）；<strong>(4) 用户确认点</strong>（每个 Phase 完成后等待用户确认）。这些都不是单个 Skill 能实现的。
+        </div>
+
+        <h3>案例 3：Deep Research (Skill + 内部并行)</h3>
+        <p><code>deep-research</code> Skill 展示了一个有趣的混合模式：它本身是一个 Skill（Markdown 文件），但内部指导 Agent 使用子 Agent 工具做并行研究。</p>
+
+        <pre><code><span class="js-comment">## Parallel Research with Subagents</span>
+
+<span class="js-comment">For broad topics, use Claude Code's Task tool to parallelize:</span>
+
+<span class="js-comment">Launch 3 research agents in parallel:</span>
+<span class="js-comment">1. Agent 1: Research sub-questions 1-2</span>
+<span class="js-comment">2. Agent 2: Research sub-questions 3-4</span>
+<span class="js-comment">3. Agent 3: Research sub-question 5 + cross-cutting themes</span>
+
+<span class="js-comment">Each agent searches, reads sources, and returns findings.</span>
+<span class="js-comment">The main session synthesizes into the final report.</span></code></pre>
+
+        <div class="callout success">
+            <div class="callout-title">这是 Skill 还是 Workflow？</div>
+            这是 <strong>Skill 指导下的 Agent 内部并行</strong>。Skill 告诉 Agent "你可以用子 Agent 并行研究"，但实际的并行执行是由 Agent 在对话中自行发起的，不是 Workflow 引擎层面的编排。这种模式适合<strong>需要灵活性的探索性任务</strong>——不需要严格的质量门控，但可以从并行中受益。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 7. 对本项目的启示 -->
+        <!-- ================================================================ -->
+        <h2 id="s7">12.7 对本项目的启示</h2>
+
+        <h3>12.7.1 当前项目状态</h3>
+        <p>Multi-Agent Platform 项目目前已经实现了自己的 Agent 编排引擎（ReAct Loop + 多 Agent 并发调度），但在"知识注入"层面还比较薄弱。理解 Claude Code 的 Skill/Workflow 体系，可以帮助我们设计更好的 Agent 扩展机制。</p>
+
+        <h3>12.7.2 何时本项目需要 Workflow 级别的能力</h3>
+
+        <table>
+            <tr><th>场景</th><th>当前状态</th><th>Workflow 能带来的提升</th></tr>
+            <tr>
+                <td><strong>大规模代码审查</strong></td>
+                <td>单 Agent 逐文件审查，速度慢</td>
+                <td>并行审查多个模块，对抗性验证，质量评分</td>
+            </tr>
+            <tr>
+                <td><strong>多 Agent 端到端测试</strong></td>
+                <td>无自动化测试流程</td>
+                <td>Agent A 生成用例 → Agent B 执行 → Agent C 分析 → 报告</td>
+            </tr>
+            <tr>
+                <td><strong>批量迁移/重构</strong></td>
+                <td>手动逐个文件处理</td>
+                <td>并行处理文件，检查点恢复，预算控制</td>
+            </tr>
+            <tr>
+                <td><strong>多视角安全审计</strong></td>
+                <td>单视角分析</td>
+                <td>后端+前端+依赖+配置 四维并行审计</td>
+            </tr>
+            <tr>
+                <td><strong>CI/CD 质量门控</strong></td>
+                <td>无集成</td>
+                <td>代码生成→审查→测试→部署的完整流水线</td>
+            </tr>
+        </table>
+
+        <h3>12.7.3 设计启示：本项目的 Skill 化</h3>
+
+        <p>本项目可以从 Claude Code 的 Skill 系统中借鉴以下设计：</p>
+
+        <div class="arch-diagram">
+当前项目的 Skill 化方向:
+
+1. Agent 配置 Skill 化
+   当前: Agent 配置硬编码在 Go 代码中
+   改进: 每个 Agent 类型对应一个 SKILL.md 式的配置文件
+   内容: 领域知识 + 工具使用指南 + 编码规范 + 常见陷阱
+
+2. 渐进式信息披露
+   当前: 所有上下文一次性注入 System Prompt
+   改进: 三层加载 —— 元数据匹配 → 正文注入 → 资源按需加载
+   收益: 减少上下文窗口浪费，提高多 Agent 并发时的 token 效率
+
+3. 关键词触发
+   当前: Agent 手动选择
+   改进: 根据用户输入自动匹配最合适的 Agent 配置
+   方式: 类似 Skill 的 description 关键词匹配机制
+
+4. Tool 使用指南
+   当前: Tool 的 Description 是唯一的"使用说明"
+   改进: 每个 Tool 可以附带一个 SKILL.md 式的使用指南
+   内容: 最佳实践、参数说明、常见错误、组合使用模式
+        </div>
+
+        <h3>12.7.4 设计启示：本项目的 Workflow 化</h3>
+
+        <p>本项目的多 Agent 并发调度引擎（Phase 4 已实现）已经有了 Workflow 的雏形。未来可以进一步借鉴：</p>
+
+        <table>
+            <tr><th>Workflow 特性</th><th>当前项目状态</th><th>可借鉴的方向</th></tr>
+            <tr>
+                <td><strong>预算系统</strong></td>
+                <td>TokenBudgetRule 已实现（Harness 层）</td>
+                <td>三层预算（Task/Agent/Time）的分层控制</td>
+            </tr>
+            <tr>
+                <td><strong>检查点/恢复</strong></td>
+                <td>Checkpoint 已设计（Phase 4 TODO）</td>
+                <td>Phase 级别的自动检查点，支持中断恢复</td>
+            </tr>
+            <tr>
+                <td><strong>缓存策略</strong></td>
+                <td>无缓存</td>
+                <td>Phase 级别的结果缓存，避免重复执行</td>
+            </tr>
+            <tr>
+                <td><strong>质量门控</strong></td>
+                <td>PolicyGate 已实现</td>
+                <td>Phase 级别的评分门槛，不达标自动终止</td>
+            </tr>
+            <tr>
+                <td><strong>并行/流水线</strong></td>
+                <td>多 Agent 并发已实现</td>
+                <td>pipeline() 模式的数据依赖传递</td>
+            </tr>
+            <tr>
+                <td><strong>结构化日志</strong></td>
+                <td>Event 系统已实现</td>
+                <td>Phase 级别的结构化日志，便于追踪和调试</td>
+            </tr>
+        </table>
+
+        <div class="callout warning">
+            <div class="callout-title">不要过度设计</div>
+            当前项目（Phase 5）的核心任务是 Session 管理、Tool 注册、Memory 和 Sandbox。Workflow 级别的复杂编排（检查点、缓存、Phase 门控）是 Phase 6+ 的需求。架构跟着需求走，不提前抽象。
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- 8. 代码示例 -->
+        <!-- ================================================================ -->
+        <h2 id="s8">12.8 代码示例：Skill 与 Workflow 完整实现</h2>
+
+        <h3>8.1 完整 Skill 示例：Go 后端开发规范</h3>
+
+        <pre><code><span class="js-comment">---</span>
+<span class="yaml-key">name</span>: <span class="yaml-string">go-backend-standards</span>
+<span class="yaml-key">description</span>: <span class="yaml-string">|</span>
+  <span class="yaml-string">Go backend development standards for the Multi-Agent Platform.</span>
+  <span class="yaml-string">Covers project structure, error handling, concurrency patterns,</span>
+  <span class="yaml-string">database operations, and API design conventions.</span>
+  <span class="yaml-string">Trigger when user asks about Go, golang, backend, API, database.</span>
+<span class="js-comment">---</span>
+
+<span class="js-comment"># Go Backend Development Standards</span>
+
+<span class="js-comment">## When to Activate</span>
+<span class="js-comment">- Writing or modifying Go code in internal/ or pkg/</span>
+<span class="js-comment">- Adding new API endpoints</span>
+<span class="js-comment">- Working with SQLite database</span>
+<span class="js-comment">- Implementing new tools or agents</span>
+<span class="js-comment">- Debugging concurrency issues</span>
+
+<span class="js-comment">## Project Structure Conventions</span>
+<span class="js-comment">- cmd/server/ — Entry point, HTTP handlers, route registration</span>
+<span class="js-comment">- internal/ — Business logic (agent, llm, runtime, tool, ws)</span>
+<span class="js-comment">- pkg/ — Shared packages (event, db)</span>
+<span class="js-comment">- New features go in internal/; shared utilities in pkg/</span>
+
+<span class="js-comment">## Error Handling</span>
+<span class="js-comment">```go</span>
+<span class="js-comment">// Always wrap errors with context</span>
+<span class="js-comment">if err != nil {</span>
+<span class="js-comment">    return fmt.Errorf("failed to execute tool %s: %w", toolName, err)</span>
+<span class="js-comment">}</span>
+<span class="js-comment">```</span>
+
+<span class="js-comment">## Concurrency</span>
+<span class="js-comment">- Use sync.RWMutex for read-heavy shared state</span>
+<span class="js-comment">- Use context.Context for cancellation propagation</span>
+<span class="js-comment">- Goroutine leaks are bugs — always ensure cleanup</span>
+
+<span class="js-comment">## Database</span>
+<span class="js-comment">- Schema changes via pkg/db/migrate.go — append, never modify</span>
+<span class="js-comment">- Use prepared statements for all queries</span>
+<span class="js-comment">- Transaction for multi-table writes</span></code></pre>
+
+        <h3>8.2 完整 Workflow 示例：多 Agent 代码审查</h3>
+
+        <pre><code><span class="js-comment">// 文件名: multi-agent-code-review.workflow.js</span>
+<span class="js-comment">// 用途: 对整个仓库进行多视角、多 Agent 的并行代码审查</span>
+
+<span class="js-keyword">export const</span> meta = {
+    <span class="js-keyword">name</span>: <span class="js-string">"multi-agent-code-review"</span>,
+    <span class="js-keyword">description</span>: <span class="js-string">"Parallel multi-perspective code review with adversarial verification"</span>,
+    <span class="js-keyword">budget</span>: {
+        <span class="js-keyword">total</span>: <span class="js-string">150000</span>,      <span class="js-comment">// 15万 token 预算</span>
+        <span class="js-keyword">perAgent</span>: <span class="js-string">40000</span>,     <span class="js-comment">// 每个 Agent 4万 token</span>
+        <span class="js-keyword">maxTime</span>: <span class="js-string">900</span>,        <span class="js-comment">// 15分钟超时</span>
+    },
+    <span class="js-keyword">resume</span>: <span class="js-keyword">true</span>,
+    <span class="js-keyword">cache</span>: <span class="js-string">"phase"</span>,
+};
+
+<span class="js-comment">// ============================================================</span>
+<span class="js-comment">// Phase 1: 代码库扫描</span>
+<span class="js-comment">// ============================================================</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Scan"</span>, async (ctx) => {
+    log.info(<span class="js-string">"开始扫描代码库结构"</span>);
+
+    <span class="js-keyword">const</span> scanResult = <span class="js-keyword">await</span> agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"codebase-scanner"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`扫描项目代码库，识别所有模块和文件：
+        - 列出所有 Go 包及其职责
+        - 列出所有前端组件及其职责
+        - 识别跨模块的依赖关系
+        - 标记可能的问题区域（大文件、循环依赖、缺少测试）`</span>,
+        <span class="js-keyword">model</span>: <span class="js-string">"haiku"</span>,       <span class="js-comment">// 扫描用轻量模型</span>
+        <span class="js-keyword">tools</span>: [<span class="js-string">"glob"</span>, <span class="js-string">"grep"</span>, <span class="js-string">"read"</span>],
+        <span class="js-keyword">maxSteps</span>: <span class="js-string">20</span>,
+    });
+
+    ctx.data.modules = parseModuleList(scanResult.output);
+    ctx.data.totalFiles = ctx.data.modules.length;
+
+    log.info(<span class="js-string">"扫描完成"</span>, {
+        <span class="js-keyword">modules</span>: ctx.data.modules.length,
+        <span class="js-keyword">tokens</span>: scanResult.tokens,
+    });
+});
+
+<span class="js-comment">// ============================================================</span>
+<span class="js-comment">// Phase 2: 并行多视角审查</span>
+<span class="js-comment">// ============================================================</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Review"</span>, async (ctx) => {
+    log.info(<span class="js-string">"启动并行审查"</span>);
+
+    <span class="js-comment">// 并行启动 4 个审查 Agent</span>
+    <span class="js-keyword">const</span> [securityReview, performanceReview, styleReview, bugReview] =
+        <span class="js-keyword">await</span> parallel([
+            <span class="js-comment">// Agent 1: 安全审查</span>
+            agent({
+                <span class="js-keyword">name</span>: <span class="js-string">"security-reviewer"</span>,
+                <span class="js-keyword">prompt</span>: <span class="js-string">`审查以下模块的安全问题：
+                ${JSON.stringify(ctx.data.modules)}
+                关注: SQL注入、路径遍历、未校验输入、密钥泄露、不安全的依赖`</span>,
+                <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,
+                <span class="js-keyword">tools</span>: [<span class="js-string">"read"</span>, <span class="js-string">"grep"</span>],
+                <span class="js-keyword">maxSteps</span>: <span class="js-string">25</span>,
+            }),
+
+            <span class="js-comment">// Agent 2: 性能审查</span>
+            agent({
+                <span class="js-keyword">name</span>: <span class="js-string">"performance-reviewer"</span>,
+                <span class="js-keyword">prompt</span>: <span class="js-string">`审查以下模块的性能问题：
+                ${JSON.stringify(ctx.data.modules)}
+                关注: 不必要的内存分配、goroutine泄漏、阻塞IO、N+1查询`</span>,
+                <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,
+                <span class="js-keyword">tools</span>: [<span class="js-string">"read"</span>, <span class="js-string">"grep"</span>],
+                <span class="js-keyword">maxSteps</span>: <span class="js-string">25</span>,
+            }),
+
+            <span class="js-comment">// Agent 3: 代码风格审查</span>
+            agent({
+                <span class="js-keyword">name</span>: <span class="js-string">"style-reviewer"</span>,
+                <span class="js-keyword">prompt</span>: <span class="js-string">`审查以下模块的代码风格：
+                ${JSON.stringify(ctx.data.modules)}
+                关注: 命名规范、注释完整性、函数长度、文件组织、错误处理一致性`</span>,
+                <span class="js-keyword">model</span>: <span class="js-string">"haiku"</span>,     <span class="js-comment">// 风格审查用轻量模型</span>
+                <span class="js-keyword">tools</span>: [<span class="js-string">"read"</span>, <span class="js-string">"grep"</span>],
+                <span class="js-keyword">maxSteps</span>: <span class="js-string">20</span>,
+            }),
+
+            <span class="js-comment">// Agent 4: Bug 模式审查</span>
+            agent({
+                <span class="js-keyword">name</span>: <span class="js-string">"bug-pattern-reviewer"</span>,
+                <span class="js-keyword">prompt</span>: <span class="js-string">`审查以下模块的常见 Bug 模式：
+                ${JSON.stringify(ctx.data.modules)}
+                关注: 空指针、竞态条件、资源泄漏、边界条件、错误吞没`</span>,
+                <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,
+                <span class="js-keyword">tools</span>: [<span class="js-string">"read"</span>, <span class="js-string">"grep"</span>],
+                <span class="js-keyword">maxSteps</span>: <span class="js-string">25</span>,
+            }),
+        ]);
+
+    <span class="js-comment">// 保存审查结果</span>
+    ctx.data.reviews = {
+        <span class="js-keyword">security</span>: securityReview,
+        <span class="js-keyword">performance</span>: performanceReview,
+        <span class="js-keyword">style</span>: styleReview,
+        <span class="js-keyword">bugs</span>: bugReview,
+    };
+
+    <span class="js-keyword">const</span> totalIssues = countIssues(ctx.data.reviews);
+    log.info(<span class="js-string">"并行审查完成"</span>, { <span class="js-keyword">totalIssues</span> });
+});
+
+<span class="js-comment">// ============================================================</span>
+<span class="js-comment">// Phase 3: 对抗性验证</span>
+<span class="js-comment">// ============================================================</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Verify"</span>, async (ctx) => {
+    log.info(<span class="js-string">"开始对抗性验证"</span>);
+
+    <span class="js-comment">// 第二个 Agent 独立验证安全审查的结果</span>
+    <span class="js-keyword">const</span> verification = <span class="js-keyword">await</span> agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"security-verifier"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`独立验证以下安全审查发现的每个问题：
+        ${ctx.data.reviews.security.output}
+
+        对于每个发现:
+        - 确认: 问题确实存在 → 标记 CONFIRMED
+        - 误报: 问题不存在 → 标记 FALSE_POSITIVE，说明原因
+        - 不确定: 无法确认 → 标记 UNCERTAIN，说明需要什么额外信息`</span>,
+        <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,
+        <span class="js-keyword">tools</span>: [<span class="js-string">"read"</span>, <span class="js-string">"grep"</span>],
+        <span class="js-keyword">maxSteps</span>: <span class="js-string">15</span>,
+    });
+
+    ctx.data.verifiedFindings = verification.output;
+
+    <span class="js-keyword">const</span> { confirmed, falsePositives } = parseVerification(verification.output);
+    log.info(<span class="js-string">"验证完成"</span>, { confirmed, falsePositives });
+});
+
+<span class="js-comment">// ============================================================</span>
+<span class="js-comment">// Phase 4: 生成报告</span>
+<span class="js-comment">// ============================================================</span>
+<span class="js-keyword">phase</span>(<span class="js-string">"Report"</span>, async (ctx) => {
+    <span class="js-keyword">const</span> report = <span class="js-keyword">await</span> agent({
+        <span class="js-keyword">name</span>: <span class="js-string">"report-generator"</span>,
+        <span class="js-keyword">prompt</span>: <span class="js-string">`基于以下审查结果生成综合报告：
+
+        安全审查: ${ctx.data.reviews.security.output}
+        性能审查: ${ctx.data.reviews.performance.output}
+        风格审查: ${ctx.data.reviews.style.output}
+        Bug审查: ${ctx.data.reviews.bugs.output}
+        验证结果: ${ctx.data.verifiedFindings}
+
+        报告格式:
+        # 代码审查报告
+        ## 概览
+        ## 安全问题 (按严重程度排序)
+        ## 性能问题
+        ## 代码风格问题
+        ## Bug 模式
+        ## 建议的修复优先级`</span>,
+        <span class="js-keyword">model</span>: <span class="js-string">"sonnet"</span>,
+        <span class="js-keyword">maxSteps</span>: <span class="js-string">10</span>,
+    });
+
+    <span class="js-comment">// 质量评分</span>
+    <span class="js-keyword">const</span> score = calculateQualityScore(ctx.data.reviews);
+
+    <span class="js-keyword">if</span> (score < <span class="js-string">7</span>) {
+        log.error(<span class="js-string">"质量评分不达标"</span>, { score });
+        <span class="js-keyword">throw new</span> Error(<span class="js-string">`代码质量评分 ${score}/10，低于 7 分门槛，审查终止`</span>);
+    }
+
+    ctx.data.finalReport = report.output;
+    ctx.data.qualityScore = score;
+
+    log.info(<span class="js-string">"报告生成完成"</span>, { score, <span class="js-keyword">tokens</span>: report.tokens });
+});</code></pre>
+
+        <div class="callout success">
+            <div class="callout-title">这个 Workflow 展示了什么</div>
+            <ul style="padding-left:18px;">
+                <li><strong>Phase 分层</strong>：扫描 → 审查 → 验证 → 报告，每个阶段有明确的职责</li>
+                <li><strong>并行执行</strong>：Phase 2 中 4 个审查 Agent 同时运行，节省 75% 时间</li>
+                <li><strong>对抗性验证</strong>：Phase 3 中第二个 Agent 独立验证安全审查的结果</li>
+                <li><strong>质量门控</strong>：Phase 4 中评分 < 7 自动终止</li>
+                <li><strong>预算控制</strong>：meta.budget 定义了总预算和每 Agent 预算</li>
+                <li><strong>数据传递</strong>：ctx.data 在 Phase 间持久化数据</li>
+                <li><strong>结构化日志</strong>：每个关键步骤都有 log 输出</li>
+            </ul>
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- Footer -->
+        <!-- ================================================================ -->
+        <div class="footer">
+            <a href="../index.html">返回首页</a> |
+            <a href="11-harness-memory-design.html">上一章：Harness 与自进化记忆</a> |
+            <a href="99-glossary.html">下一章：术语表</a>
+            <br><br>
+            Multi-Agent Platform Documentation &copy; 2026 |
+            Workflow 与 Skill 深度指南 |
+            Last updated: 2026-07-06
+        </div>
+
+    </main>
+</div>
+</body>
+</html>

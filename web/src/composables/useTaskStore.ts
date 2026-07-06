@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
 import { useSessionStore } from './useSessionStore'
-import type { AgentEvent, TaskState, AgentState, Step, ToolCallData } from '../types/events'
+import type { SessionStatus } from './useSessionStore'
+import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
 
 /** Per-task reactive cache */
 const taskCache = ref<Record<string, TaskState>>({})
@@ -14,6 +15,17 @@ const isTaskPending = ref(false)
 
 /** Remember the last user input so we can retry/continue a task */
 const lastUserInput = ref<string>('')
+
+/** Pending approval request from system_info event (set by handleEvent, consumed by App.vue) */
+export interface PendingApproval {
+  approvalId: string
+  taskId: string
+  agentId: string
+  tool: string
+  reason: string
+  input: Record<string, any>
+}
+const pendingApproval = ref<PendingApproval | null>(null)
 
 /** Whether the store has been initialized (WebSocket listener registered) */
 let initialized = false
@@ -117,6 +129,8 @@ export function useTaskStore() {
           thinking: '',
           toolCall: null,
           tokens: 0,
+          durationMs: 0,
+          startedAt: Date.now(),
         })
         break
       }
@@ -134,6 +148,7 @@ export function useTaskStore() {
         const lastStep = getLastStep(agent)
         if (lastStep && lastStep.type === 'think') {
           lastStep.status = 'completed'
+          lastStep.durationMs = Date.now() - lastStep.startedAt
         }
         break
       }
@@ -166,6 +181,7 @@ export function useTaskStore() {
         if (lastStep && lastStep.toolCall) {
           lastStep.toolCall.duration = (evt.data.duration_ms as number) || 0
           lastStep.status = 'completed'
+          lastStep.durationMs = Date.now() - lastStep.startedAt
         }
         break
       }
@@ -174,6 +190,7 @@ export function useTaskStore() {
         const lastStep = getLastStep(agent)
         if (lastStep && lastStep.type === 'tool_call') {
           lastStep.status = 'failed'
+          lastStep.durationMs = Date.now() - lastStep.startedAt
         }
         break
       }
@@ -186,6 +203,8 @@ export function useTaskStore() {
           thinking: (evt.data.content as string) || '',
           toolCall: null,
           tokens: 0,
+          durationMs: 0,
+          startedAt: 0,
         })
         break
       }
@@ -199,6 +218,11 @@ export function useTaskStore() {
         task.status = 'completed'
         task.finalResult = (evt.data.result as string) || null
         task.totalTokens = (evt.data.total_tokens as number) || 0
+        // Update session status to completed
+        const sid = (evt.data.session_id as string) || ''
+        if (sid) {
+          updateSession(sid, { status: 'completed' })
+        }
         break
       }
 
@@ -219,8 +243,22 @@ export function useTaskStore() {
           if (evt.data.error) {
             task.finalResult += `\n${evt.data.error}`
           }
+          // Update session status to failed
+          const sid = (evt.data.session_id as string) || ''
+          if (sid) {
+            updateSession(sid, { status: 'failed' })
+          }
         }
         break
+
+      case 'session_status': {
+        const sid = (evt.data.session_id as string) || ''
+        const newStatus = (evt.data.status as string) || ''
+        if (sid && newStatus) {
+          updateSession(sid, { status: newStatus as SessionStatus })
+        }
+        break
+      }
 
       case 'agent_status': {
         agent.currentStep = (evt.data.current_step as number) ?? agent.currentStep
@@ -258,6 +296,27 @@ export function useTaskStore() {
             totalTokens: task.totalTokens,
           }
         }
+        break
+      }
+
+      case 'system_info': {
+        const infoType = evt.data.type as string
+        if (infoType === 'approval_required') {
+          pendingApproval.value = {
+            approvalId: (evt.data.approval_id as string) || '',
+            taskId: evt.task_id,
+            agentId: evt.agent_id || 'agent_default',
+            tool: (evt.data.tool as string) || 'unknown',
+            reason: (evt.data.reason as string) || 'Policy block',
+            input: (evt.data.input as Record<string, any>) || {},
+          }
+        }
+        break
+      }
+
+      case 'system_error': {
+        // Log system errors to console for debugging
+        console.error('[System Error]', evt.data.message || 'Unknown system error', evt.data)
         break
       }
 
@@ -420,15 +479,158 @@ export function useTaskStore() {
     activeTaskId.value = taskId
   }
 
-  /** Load a task from the backend into the cache */
+  /** Load a task from the backend into the cache, hydrating agents and steps */
   async function loadTask(taskId: string): Promise<void> {
+    console.log('[useTaskStore] loadTask started, taskId:', taskId)
     const resp = await fetch(`/api/tasks?id=${encodeURIComponent(taskId)}`)
+    console.log('[useTaskStore] loadTask response:', resp.status, resp.statusText)
     if (!resp.ok) {
       throw new Error(`Failed to load task: ${resp.status}`)
     }
-    // TODO: Phase 5 — hydrate taskCache from persisted task + steps
-    // For now we just mark activeTaskId so future events are routed here.
+    const data = (await resp.json()) as {
+      task: {
+        id: string
+        user_input: string
+        status: string
+        agent_ids: string[]
+        final_result: string
+        total_tokens: number
+        started_at: string
+        completed_at: string | null
+        session_id: string
+        parent_task_id: string
+        is_root: boolean
+      }
+      steps: Array<{
+        id: string
+        task_id: string
+        agent_id: string
+        step_index: number
+        type: string
+        status: string
+        content: string
+        tool_name: string
+        tool_input: Record<string, unknown>
+        tool_output: string
+        duration_ms: number
+        token_used: number
+      }>
+      child_tasks: Array<{
+        id: string
+        user_input: string
+        status: string
+        agent_ids: string[]
+        final_result: string
+        total_tokens: number
+        started_at: string
+        completed_at: string | null
+        session_id: string
+        parent_task_id: string
+        is_root: boolean
+      }>
+    }
+
+    const task = data.task
+    const steps = data.steps || []
+    const childTasks = data.child_tasks || []
+
+    // Build TaskState from persisted data
+    const taskState: TaskState = {
+      id: task.id,
+      status: (task.status as TaskStatus) || 'completed',
+      finalResult: task.final_result || null,
+      totalTokens: task.total_tokens || 0,
+      agents: {},
+      startedAt: task.started_at ? new Date(task.started_at).getTime() : Date.now(),
+      tokenUsage: {
+        promptTokens: 0,
+        promptCacheHitTokens: 0,
+        promptCacheMissTokens: 0,
+        completionTokens: 0,
+        totalTokens: task.total_tokens || 0,
+      },
+    }
+
+    // Group steps by agent_id to rebuild agent states
+    const agentStepsMap = new Map<string, typeof steps>()
+    const agentModelMap = new Map<string, string>()
+    for (const step of steps) {
+      const aid = step.agent_id || 'agent_default'
+      if (!agentStepsMap.has(aid)) {
+        agentStepsMap.set(aid, [])
+      }
+      agentStepsMap.get(aid)!.push(step)
+    }
+
+    // Build AgentState for each agent
+    let colorIdx = 0
+    for (const [agentId, agentSteps] of agentStepsMap) {
+      // Sort steps by step_index
+      agentSteps.sort((a, b) => a.step_index - b.step_index)
+
+      const agentState: AgentState = {
+        id: agentId,
+        name: agentId,
+        model: agentModelMap.get(agentId) || 'unknown',
+        steps: agentSteps.map((s): Step => {
+          const stepType: StepType =
+            s.type === 'tool_call' ? 'tool_call' :
+            s.type === 'observation' ? 'observation' : 'think'
+          return {
+            index: s.step_index,
+            type: stepType,
+            status: (s.status as StepStatus) || 'completed',
+            thinking: stepType === 'think' ? (s.content || '') : '',
+            toolCall: stepType === 'tool_call' ? {
+              name: s.tool_name || 'unknown',
+              input: s.tool_input || {},
+              output: s.tool_output || '',
+              duration: s.duration_ms || 0,
+            } : null,
+            tokens: s.token_used || 0,
+            durationMs: s.duration_ms || 0,
+            startedAt: 0, // historical steps don't have per-step timestamps
+          }
+        }),
+        color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
+      }
+
+      taskState.agents[agentId] = agentState
+    }
+
+    // Also process child tasks — add their agents too
+    for (const childTask of childTasks) {
+      if (childTask.agent_ids) {
+        for (const aid of childTask.agent_ids) {
+          if (!taskState.agents[aid]) {
+            taskState.agents[aid] = {
+              id: aid,
+              name: aid,
+              model: 'unknown',
+              steps: [],
+              color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
+            }
+          }
+        }
+      }
+      // Aggregate child task tokens
+      taskState.totalTokens += childTask.total_tokens || 0
+      if (taskState.tokenUsage) {
+        taskState.tokenUsage.totalTokens = taskState.totalTokens
+      }
+    }
+
+    // Store in cache and set as active
+    taskCache.value[taskId] = taskState
     activeTaskId.value = taskId
+    console.log('[useTaskStore] loadTask done, taskState:', {
+      id: taskState.id,
+      status: taskState.status,
+      agentCount: Object.keys(taskState.agents).length,
+      totalSteps: Object.values(taskState.agents).reduce((s, a) => s + a.steps.length, 0),
+      totalTokens: taskState.totalTokens,
+      finalResult: taskState.finalResult?.substring(0, 100),
+    })
   }
 
   /** Pause the active task */
@@ -464,6 +666,28 @@ export function useTaskStore() {
     }
   }
 
+  /** Approve a pending policy block — sent via WebSocket control message */
+  function approveTask(approvalId: string, taskId: string, agentId: string) {
+    sendControl({
+      action: 'approve',
+      task_id: taskId,
+      agent_id: agentId,
+      approval_id: approvalId,
+    })
+    pendingApproval.value = null
+  }
+
+  /** Deny a pending policy block — sent via WebSocket control message */
+  function denyTask(approvalId: string, taskId: string, agentId: string) {
+    sendControl({
+      action: 'deny',
+      task_id: taskId,
+      agent_id: agentId,
+      approval_id: approvalId,
+    })
+    pendingApproval.value = null
+  }
+
   return {
     // Reactive state
     taskCache,
@@ -471,6 +695,7 @@ export function useTaskStore() {
     isTaskPending,
     wsStatus: status,
     lastUserInput,
+    pendingApproval,
 
     // Actions
     connect,
@@ -484,5 +709,7 @@ export function useTaskStore() {
     pauseTask,
     resumeTask,
     cancelTask,
+    approveTask,
+    denyTask,
   }
 }

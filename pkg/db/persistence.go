@@ -8,62 +8,63 @@ import (
 
 // SessionRecord mirrors the sessions table
 type SessionRecord struct {
-	ID          string
-	Name        string
-	RootTaskID  string
-	Status      string
-	UserInput   string
-	TotalTokens int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	RootTaskID  string    `json:"root_task_id"`
+	Status      string    `json:"status"`
+	UserInput   string    `json:"user_input"`
+	TotalTokens int       `json:"total_tokens"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // TaskRecord mirrors the tasks table
 type TaskRecord struct {
-	ID           string
-	UserInput    string
-	Status       string
-	AgentIDs     []string
-	FinalResult  string
-	TotalTokens  int
-	StartedAt    time.Time
-	CompletedAt  *time.Time
-	SessionID    string
-	ParentTaskID string
-	IsRoot       bool
+	ID           string     `json:"id"`
+	UserInput    string     `json:"user_input"`
+	Status       string     `json:"status"`
+	AgentIDs     []string   `json:"agent_ids"`
+	FinalResult  string     `json:"final_result"`
+	TotalTokens  int        `json:"total_tokens"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at"`
+	SessionID    string     `json:"session_id"`
+	ParentTaskID string     `json:"parent_task_id"`
+	IsRoot       bool       `json:"is_root"`
 }
 
 // StepRecord mirrors the steps table
 type StepRecord struct {
-	ID        string
-	TaskID    string
-	AgentID   string
-	StepIndex int
-	Type      string
-	Status    string
-	Content   string
-	ToolName  string
-	ToolInput map[string]any
-	ToolOutput string
-	DurationMs int
-	TokenUsed int
+	ID         string         `json:"id"`
+	TaskID     string         `json:"task_id"`
+	AgentID    string         `json:"agent_id"`
+	StepIndex  int            `json:"step_index"`
+	Type       string         `json:"type"`
+	Status     string         `json:"status"`
+	Content    string         `json:"content"`
+	ToolName   string         `json:"tool_name"`
+	ToolInput  map[string]any `json:"tool_input"`
+	ToolOutput string         `json:"tool_output"`
+	DurationMs int            `json:"duration_ms"`
+	TokenUsed  int            `json:"token_used"`
 }
 
 // AgentRecord mirrors the agents table
 type AgentRecord struct {
-	ID           string
-	Name         string
-	Description  string
-	SystemPrompt string
-	Model        string
-	Temperature  float64
-	MaxTokens    int
-	APIEndpoint  string
-	APIKey       string
-	Tools        []string
-	Config       map[string]any
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	SystemPrompt string         `json:"system_prompt"`
+	Model        string         `json:"model"`
+	Temperature  float64        `json:"temperature"`
+	MaxTokens    int            `json:"max_tokens"`
+	APIEndpoint  string         `json:"api_endpoint"`
+	APIKey       string         `json:"api_key"`
+	Tools        []string       `json:"tools"`
+	Config       map[string]any `json:"config"`
+	IsDefault    bool           `json:"is_default"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // InsertTask creates a new task record
@@ -154,25 +155,40 @@ func UpdateSessionName(id, name string) error {
 	return err
 }
 
-// DeleteSession deletes a session by removing its root task first,
-// which cascades to steps, conversations, files, and the session row.
+// DeleteSession deletes a session and all its associated data.
+// It cleans up in order: conversations → steps → files → tasks → session.
+// This manual cascade is needed because SQLite foreign keys may not be enforced.
 func DeleteSession(id string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	sess, err := QuerySessionByID(id)
+
+	// Verify session exists before attempting deletion
+	_, err := QuerySessionByID(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("session not found: %w", err)
 	}
+
+	// Delete all data associated with tasks in this session, in dependency order:
+	// 1. Delete conversations for tasks in this session
+	_, _ = DB.Exec(`DELETE FROM conversations WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
+	// 2. Delete steps for tasks in this session
+	_, _ = DB.Exec(`DELETE FROM steps WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
+	// 3. Delete files for tasks in this session
+	_, _ = DB.Exec(`DELETE FROM files WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
+	// 4. Delete child tasks (those whose parent is in this session) first
+	_, _ = DB.Exec(`DELETE FROM tasks WHERE parent_task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
+	// 5. Delete all tasks in this session
 	_, err = DB.Exec(`DELETE FROM tasks WHERE session_id=?`, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete tasks: %w", err)
 	}
-	// Guard: if this session has no tasks, delete it directly
-	if sess.RootTaskID == "" {
-		_, err = DB.Exec(`DELETE FROM sessions WHERE id=?`, id)
+	// 6. Delete the session itself
+	_, err = DB.Exec(`DELETE FROM sessions WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
 	}
-	return err
+	return nil
 }
 
 // QuerySessions returns recent sessions ordered by updated_at DESC
@@ -391,15 +407,15 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 }
 
 // InsertAgent creates a new agent record
-func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
+func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string, isDefault bool) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	toolsJSON, _ := json.Marshal(tools)
 	_, err := DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON),
+		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON), isDefault,
 	)
 	return err
 }
@@ -412,8 +428,8 @@ func QueryAgents() ([]AgentRecord, error) {
 	rows, err := DB.Query(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
-		        COALESCE(tools,'[]'), COALESCE(config,'{}'), created_at, updated_at
-		 FROM agents ORDER BY created_at DESC`,
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
+		 FROM agents ORDER BY is_default DESC, created_at ASC`,
 	)
 	if err != nil {
 		return nil, err
@@ -426,7 +442,7 @@ func QueryAgents() ([]AgentRecord, error) {
 		var toolsJSON, configJSON string
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
 			&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
-			&toolsJSON, &configJSON, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(toolsJSON), &a.Tools)
@@ -446,11 +462,11 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	err := DB.QueryRow(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
-		        COALESCE(tools,'[]'), COALESCE(config,'{}'), created_at, updated_at
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
 		 FROM agents WHERE id=?`, id,
 	).Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
 		&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
-		&toolsJSON, &configJSON, &a.CreatedAt, &a.UpdatedAt)
+		&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +497,39 @@ func DeleteAgent(id string) error {
 	}
 	_, err := DB.Exec(`DELETE FROM agents WHERE id=?`, id)
 	return err
+}
+
+// SeedDefaultAgent ensures a default agent exists in the database.
+// If no agent with is_default=true exists, it creates one.
+// This is called at startup so the system always has a usable agent.
+func SeedDefaultAgent() error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+
+	// Check if a default agent already exists
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM agents WHERE is_default=1").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check default agent: %w", err)
+	}
+	if count > 0 {
+		return nil // Default agent already exists
+	}
+
+	// Create the default agent
+	toolsJSON := `["run_shell","write_file","read_file"]`
+	_, err = DB.Exec(
+		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"agent_default", "Default Agent", "The default agent for general-purpose tasks",
+		"You are a helpful AI assistant with access to tools. When you need to run commands, read files, or write files, use the available tools. Always explain your reasoning before using tools.",
+		"deepseek-v4-flash", 0.7, 4096, "", "", toolsJSON, true,
+	)
+	if err != nil {
+		return fmt.Errorf("create default agent: %w", err)
+	}
+	return nil
 }
 
 // ToolRecord mirrors the tools table for dynamic tool registration.

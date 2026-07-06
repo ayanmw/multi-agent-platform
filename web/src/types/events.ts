@@ -26,6 +26,7 @@ export type EventType =
   // System events
   | 'system_info'
   | 'system_error'
+  | 'session_status'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {
@@ -85,6 +86,10 @@ export interface Step {
   toolCall: ToolCallData | null
   /** Token usage for this step */
   tokens: number
+  /** Actual duration of this step in ms (set when step completes) */
+  durationMs: number
+  /** Timestamp when this step started (ms since epoch, internal tracking) */
+  startedAt: number
 }
 
 /** An agent within a task */
@@ -124,9 +129,10 @@ export interface TaskState {
 
 /** Control message sent from client to server via WebSocket */
 export interface ClientControlMessage {
-  action: 'pause' | 'resume' | 'cancel'
+  action: 'pause' | 'resume' | 'cancel' | 'approve' | 'deny'
   task_id: string
   agent_id: string
+  [key: string]: unknown
 }
 
 /** Chat request sent to POST /api/tasks */

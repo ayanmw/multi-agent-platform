@@ -941,6 +941,19 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			return e.handleApprovalRequired(tc, approvalErr, args, duration)
 		}
 
+		// Other Policy blocks (PathTraversalRule, FileScopeRule, TokenBudgetRule,
+		// ToolWhitelistRule) also route through approval flow instead of failing directly.
+		var policyErr *harness.ErrBlockedByPolicy
+		if errors.As(execErr, &policyErr) {
+			approval := &harness.ErrApprovalRequired{
+				ApprovalID: harness.GenerateApprovalID(),
+				Tool:       tc.Function.Name,
+				Reason:     policyErr.Reason,
+				Input:      args,
+			}
+			return e.handleApprovalRequired(tc, approval, args, duration)
+		}
+
 		// Tool execution failed — emit failure events and return the error.
 		// The UI will show the tool name, error message, and duration.
 		// The step is still marked as "complete" (not "running") because the

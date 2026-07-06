@@ -66,6 +66,10 @@ func main() {
 		log.Printf("Warning: DB init failed: %v (continuing without persistence)", err)
 	} else {
 		log.Println("Database initialized")
+		// Seed default agent if not exists
+		if err := db.SeedDefaultAgent(); err != nil {
+			log.Printf("Warning: Failed to seed default agent: %v", err)
+		}
 	}
 
 	// Initialize Memory infrastructure — Heartbeat for episode consolidation
@@ -184,6 +188,13 @@ func main() {
 
 				if persist != nil {
 					persist.SaveTaskMeta(taskID, sessionID, "", true)
+					// Bind the root task to the session so the frontend can load it after refresh
+					if sessionID != "" {
+						sess, err := db.QuerySessionByID(sessionID)
+						if err == nil && sess.RootTaskID == "" {
+							db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
+						}
+					}
 				}
 
 				hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
@@ -415,6 +426,13 @@ func main() {
 		if persist != nil {
 			persist.SaveTask(taskID, req.Input, agentIDs)
 			persist.SaveTaskMeta(taskID, sessionID, "", true)
+			// Bind the root task to the session so the frontend can load it after refresh
+			if sessionID != "" {
+				sess, err := db.QuerySessionByID(sessionID)
+				if err == nil && sess.RootTaskID == "" {
+					db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
+				}
+			}
 		}
 
 		// Emit orchestrator task started event
@@ -545,6 +563,19 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
 		persist.SaveTaskMeta(taskID, sessionID, "", true)
+		// Bind the root task to the session so the frontend can load it after refresh
+		if sessionID != "" {
+			log.Printf("[runAgentLoop] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
+			sess, err := db.QuerySessionByID(sessionID)
+			if err != nil {
+				log.Printf("[runAgentLoop] QuerySessionByID error: %v", err)
+			} else if sess.RootTaskID == "" {
+				log.Printf("[runAgentLoop] Setting session %s root_task_id = %s", sessionID, taskID)
+				db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
+			} else {
+				log.Printf("[runAgentLoop] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
+			}
+		}
 	}
 
 	// Build Harness policy gate with all safety rules:
@@ -605,7 +636,12 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	if err != nil {
 		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
 		if sessionID != "" {
-			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
+			newStatus := deriveSessionStatus(sessionID)
+			db.UpdateSessionStatus(sessionID, newStatus)
+			hub.SendEvent(event.NewEvent("session_status", taskID, agentID, 0, map[string]any{
+				"session_id": sessionID,
+				"status":     newStatus,
+			}))
 		}
 		if result == "" {
 			hub.SendEvent(event.NewEvent("task_failed", taskID, agentID, 0, map[string]any{
@@ -616,7 +652,12 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	}
 
 	if sessionID != "" {
-		db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
+		newStatus := deriveSessionStatus(sessionID)
+		db.UpdateSessionStatus(sessionID, newStatus)
+		hub.SendEvent(event.NewEvent("session_status", taskID, agentID, 0, map[string]any{
+			"session_id": sessionID,
+			"status":     newStatus,
+		}))
 	}
 
 	log.Printf("[Task %s] Completed successfully. Tokens: %d, Result: %s", taskID, totalTokens, truncate(result, 100))
@@ -691,7 +732,7 @@ func truncate(s string, maxLen int) string {
 
 // handleListCheckpoints returns a JSON array of all available checkpoint task IDs.
 // GET /api/checkpoints
-func handleListCheckpoints(w http.ResponseWriter, r *http.Request, cm *runtime.CheckpointManager) {
+func handleListCheckpoints(w http.ResponseWriter, _ *http.Request, cm *runtime.CheckpointManager) {
 	taskIDs, err := cm.List()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to list checkpoints: %v", err), http.StatusInternalServerError)

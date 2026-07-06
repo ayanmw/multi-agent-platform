@@ -232,7 +232,7 @@ func (r *ApprovalRule) Check(toolName string, input map[string]any, contract Tas
 	// 生成审批原因（中文描述，展示给前端用户）
 	reason := r.getApprovalReason(toolName, input)
 	// 生成唯一审批 ID
-	approvalID := generateApprovalID()
+	approvalID := GenerateApprovalID()
 
 	return input, &ErrApprovalRequired{
 		ApprovalID: approvalID,
@@ -293,8 +293,9 @@ func (r *ApprovalRule) getApprovalReason(toolName string, input map[string]any) 
 //
 // # 行为
 //
-//   - AllowShellDangerous = true:  允许所有命令（跳过此规则）
-//   - AllowShellDangerous = false: 检测并阻止危险命令模式
+//   - AllowShellDangerous = true:   允许所有命令（跳过此规则）
+//   - AllowShellDangerous = false:  检测危险命令模式，触发 ErrApprovalRequired 审批流程
+//   - AutoApprovePolicy = true:     自动批准所有 policy block，但事件仍然记录
 //   - 只对 run_shell 工具生效，其他工具直接放行
 //
 // 危险模式列表见 dangerousPatterns map，涵盖：
@@ -307,7 +308,8 @@ type DangerousCommandRule struct{}
 func (r *DangerousCommandRule) Name() string { return "DangerousCommandRule" }
 
 // Check 检测 shell 命令中的危险模式。如果 AllowShellDangerous 为 true，
-// 所有命令都被允许。否则，匹配危险模式的命令会被阻止。
+// 所有命令都被允许。如果 AutoApprovePolicy 为 true，自动批准但记录日志。
+// 否则，匹配危险模式的命令会触发 ErrApprovalRequired 审批流程。
 func (r *DangerousCommandRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	// 只对 run_shell 工具生效
 	if toolName != "run_shell" {
@@ -325,6 +327,11 @@ func (r *DangerousCommandRule) Check(toolName string, input map[string]any, cont
 		return input, nil
 	}
 
+	// Auto-approve policy: 自动批准所有 policy block，但事件由 Engine 记录
+	if contract.AutoApprovePolicy {
+		return input, nil
+	}
+
 	// 检查命令是否匹配危险模式
 	for pattern, desc := range dangerousPatterns {
 		matched, err := regexp.MatchString(pattern, cmd)
@@ -333,10 +340,15 @@ func (r *DangerousCommandRule) Check(toolName string, input map[string]any, cont
 			continue
 		}
 		if matched {
-			return input, &ErrBlockedByPolicy{
-				Rule:   r.Name(),
-				Reason: fmt.Sprintf("危险命令被阻止: %s (匹配模式: %s)", desc, pattern),
-				Tool:   toolName,
+			// 返回 ErrApprovalRequired 而非 ErrBlockedByPolicy，
+			// 让 Engine 走 handleApprovalRequired 审批流程。
+			// 前端会显示被拦截的命令，用户可 approve/deny。
+			approvalID := GenerateApprovalID()
+			return input, &ErrApprovalRequired{
+				ApprovalID: approvalID,
+				Tool:       toolName,
+				Reason:     fmt.Sprintf("危险命令被策略检测: %s (匹配模式: %s)", desc, pattern),
+				Input:      input,
 			}
 		}
 	}
@@ -357,7 +369,7 @@ var highRiskShellPatterns = map[string]string{
 	`(?i)git\s+push\s+.*-f\b`:        "Git 强制推送 (git push -f)",
 	`(?i)\bsudo\b`:                   "提权操作 (sudo)",
 	`(?i)chmod\s+777`:                "宽松权限 (chmod 777)",
-	`>\s*/dev/`:                      "写入磁盘设备 (>/dev/...)",
+	`>\s*/dev/(?:sd[a-z]+\d*|hd[a-z]+\d*|nvme\d+n\d+|xvd[a-z]+|vd[a-z]+|disk/|mapper/)`: "写入磁盘设备 (>/dev/...)",
 	`(?i)\bmkfs\b`:                   "创建文件系统 (mkfs)",
 	`(?i)\bdd\s+if=`:                 "磁盘镜像操作 (dd)",
 	`:\(\)\s*\{\s*:\|:&\s*\}`:       "Fork 炸弹 (:(){ :|:& };:)",
@@ -397,7 +409,7 @@ var dangerousPatterns = map[string]string{
 	`(?i)chmod\s+-R\b`:           "递归修改权限 (chmod -R)",
 
 	// === 磁盘操作 ===
-	`>\s*/dev/`:                  "写入磁盘设备",
+	`>\s*/dev/(?:sd[a-z]+\d*|hd[a-z]+\d*|nvme\d+n\d+|xvd[a-z]+|vd[a-z]+|disk/|mapper/)`: "写入磁盘设备",
 	`(?i)\bdd\s+if=`:             "磁盘镜像操作 (dd)",
 	`(?i)\bmkfs\b`:               "创建文件系统 (mkfs)",
 
@@ -524,9 +536,9 @@ func isHighRiskFilePath(path string) bool {
 	return false
 }
 
-// generateApprovalID 生成唯一的审批请求 ID。
+// GenerateApprovalID 生成唯一的审批请求 ID。
 // 格式: "approval_" + 8 字节随机十六进制字符串。
-func generateApprovalID() string {
+func GenerateApprovalID() string {
 	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {
 		// 降级：使用时间戳作为 ID

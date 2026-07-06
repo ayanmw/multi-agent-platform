@@ -25,6 +25,7 @@ export interface AgentRecord {
   api_key: string
   tools: string[]
   config: Record<string, unknown>
+  is_default: boolean
   created_at: string
   updated_at: string
 }

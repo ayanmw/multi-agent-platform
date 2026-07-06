@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
@@ -81,6 +82,19 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 		}
 		if err := persist.SaveTaskMeta(taskID, sessionID, "", true); err != nil {
 			return "", "", fmt.Errorf("bind task to session: %w", err)
+		}
+	}
+	// Bind the root task to the session so the frontend can load it after page refresh
+	if sessionID != "" {
+		log.Printf("[resolveSession] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
+		sess, err := db.QuerySessionByID(sessionID)
+		if err != nil {
+			log.Printf("[resolveSession] QuerySessionByID error: %v", err)
+		} else if sess.RootTaskID == "" {
+			log.Printf("[resolveSession] Setting session %s root_task_id = %s", sessionID, taskID)
+			db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
+		} else {
+			log.Printf("[resolveSession] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
 		}
 	}
 

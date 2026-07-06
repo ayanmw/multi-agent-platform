@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ func handleListTasks(w http.ResponseWriter, r *http.Request) {
 // handleGetTask returns a single task with its steps (GET /api/tasks?id=xxx)
 func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
+	log.Printf("[API] GET /api/tasks?id=%s", taskID)
 	if taskID == "" {
 		http.Error(w, "id query parameter required", http.StatusBadRequest)
 		return
@@ -38,12 +40,14 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 
 	task, err := db.QueryTaskByID(taskID)
 	if err != nil {
+		log.Printf("[API] GET /api/tasks?id=%s: task not found: %v", taskID, err)
 		http.Error(w, "task not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
 
 	steps, err := db.QueryStepsByTask(taskID)
 	if err != nil {
+		log.Printf("[API] GET /api/tasks?id=%s: steps query error: %v", taskID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -85,6 +89,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		sessions, err := db.QuerySessions(50)
 		if err != nil {
+			log.Printf("[API] GET /api/sessions error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -96,6 +101,26 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				sessions[i].TotalTokens = total
 			}
+			// Fallback: if root_task_id is empty, discover it from the session's tasks.
+			// This handles sessions created before the root_task_id binding was implemented.
+			if sessions[i].RootTaskID == "" {
+				tasks, tErr := db.QueryTasksBySession(sessions[i].ID)
+				if tErr == nil {
+					for _, t := range tasks {
+						if t.IsRoot {
+							sessions[i].RootTaskID = t.ID
+							// Persist the discovered root_task_id so we don't need to rediscover
+							db.UpdateSession(sessions[i].ID, t.ID, sessions[i].Status, sessions[i].UserInput)
+							log.Printf("[API] GET /api/sessions: auto-discovered root_task_id=%s for session %s", t.ID, sessions[i].ID)
+							break
+						}
+					}
+				}
+			}
+		}
+		log.Printf("[API] GET /api/sessions: returning %d sessions", len(sessions))
+		for _, s := range sessions {
+			log.Printf("[API]   session: id=%s name=%s root_task_id=%q status=%s", s.ID, s.Name, s.RootTaskID, s.Status)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessions)
@@ -262,7 +287,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := uuid.New().String()
-		if err := db.InsertAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools); err != nil {
+		if err := db.InsertAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools, false); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
