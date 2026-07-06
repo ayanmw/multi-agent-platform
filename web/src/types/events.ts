@@ -136,11 +136,43 @@ export interface ChatRequest {
   input: string
   system_prompt?: string
   max_steps?: number
+  session_id?: string
 }
 
 /** Chat response from POST /api/tasks */
 export interface ChatResponse {
+  session_id: string
   task_id: string
   agent_id: string
   action: string
+}
+
+/** Session summary returned from GET /api/sessions */
+export interface SessionSummary {
+  id: string
+  name: string
+  root_task_id: string | null
+  status: 'empty' | 'running' | 'completed' | 'failed'
+  user_input: string
+  total_tokens: number
+  created_at: number
+  updated_at: number
+}
+
+/** Session detail from GET /api/sessions/:id */
+export interface SessionDetail {
+  session: SessionSummary
+  tasks: TaskSummary[]
+}
+
+/** Task summary for session lists */
+export interface TaskSummary {
+  id: string
+  user_input: string
+  status: TaskStatus
+  total_tokens: number
+  started_at: number
+  is_root: boolean
+  session_id: string
+  parent_task_id: string | null
 }

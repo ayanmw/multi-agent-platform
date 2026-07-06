@@ -55,13 +55,18 @@ func createTables() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
-			user_input TEXT NOT NULL,
-			status TEXT DEFAULT 'running',
+			user_input TEXT DEFAULT '',
+			status TEXT DEFAULT 'empty',
 			agent_ids JSON DEFAULT '[]',
 			final_result TEXT,
 			total_tokens INTEGER DEFAULT 0,
 			started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			completed_at DATETIME
+			completed_at DATETIME,
+			session_id TEXT,
+			parent_task_id TEXT,
+			is_root BOOLEAN DEFAULT 0,
+			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+			FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS steps (
 			id TEXT PRIMARY KEY,
@@ -104,10 +109,33 @@ func createTables() error {
 			metadata JSON DEFAULT '{}',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			root_task_id TEXT,
+			status TEXT NOT NULL DEFAULT 'empty',
+			user_input TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, schema := range schemas {
 		if _, err := DB.Exec(schema); err != nil {
+			return err
+		}
+	}
+
+	// Phase 5: indexes for session and task hierarchy queries
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_root_task_id ON sessions(root_task_id)`,
+	}
+	for _, idx := range indexes {
+		if _, err := DB.Exec(idx); err != nil {
 			return err
 		}
 	}

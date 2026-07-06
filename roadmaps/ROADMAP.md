@@ -201,25 +201,23 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 | 概念 | 说明 |
 |------|------|
-| **Session** | 前端的一次"对话上下文"。一个 Session 关联零个或一个 Task。新建 Session 时回到主界面（预设任务卡片 + 输入框）；已有关联 Task 的 Session 显示该任务的 AgentTree 和结果。 |
-| **Active Session** | 当前用户正在查看的 Session。切换 Session 不影响正在运行的其他任务，因为后端任务本身是独立的 goroutine。 |
-| **Task History** | 所有已完成 / 失败 / 进行中的 Task 列表，从 SQLite `tasks` 表读取。历史任务可以被重新打开查看，也可以"Continue"继续执行。 |
+| **Session** | 前端的一次"对话上下文"，在后端持久化。每个 Session 有一个根 Task，根 Task 可派生多个子 Task。 |
+| **Root Task** | 用户发起的主 Agent 任务（`tasks.is_root = 1`）。Session 的 `root_task_id` 指向它。 |
+| **Child Task** | 由根 Task 或 Agent 派生的子任务（`tasks.parent_task_id`），形成 Task 金字塔。 |
+| **Active Session** | 当前用户正在查看的 Session。切换 Session 不影响正在运行的其他任务。 |
+| **Task History** | 所有已完成 / 失败 / 进行中的 Task 列表，按 Session 组织。 |
 
 #### 前端状态设计
 
 ```ts
 interface Session {
-  id: string           // 前端生成的 session id
-  name: string         // 默认 "Session N" 或取 user_input 前 20 字符
-  taskId: string | null
+  id: string           // 后端生成的 session id
+  name: string         // 默认取 user_input 前 30 字符或 "New Session"
+  rootTaskId: string | null
   status: 'empty' | 'running' | 'completed' | 'failed'
+  totalTokens: number  // 聚合该 Session 下所有 Task 的 token
   createdAt: number
   updatedAt: number
-}
-
-interface SessionState {
-  sessions: Session[]
-  activeSessionId: string | null
 }
 ```
 
@@ -229,23 +227,29 @@ const taskCache = ref<Record<string, TaskState>>({})  // taskId -> TaskState
 const activeTaskId = ref<string | null>(null)
 ```
 
-每个 Session 展示时从 `taskCache` 取对应的 `TaskState`。
-
 #### 用户交互流程
 
-1. **新建会话**：侧边栏 / 顶部 `+ New Session` 按钮 → 创建空 Session → 回到主界面（预设 Cases + 输入框）
-2. **发送消息**：在 Session 内启动任务 → 后端生成 task_id → WebSocket 事件更新 `taskCache[taskId]`
-3. **会话列表**：左侧边栏展示所有 Session，每个显示名称、状态、耗时、总 token
-4. **切换会话**：点击历史 Session → 只切换 `activeSessionId`，显示对应 AgentTree
-5. **继续执行**：在历史失败 Session 上可 Retry / Continue（复用 lastUserInput，可调整 max_steps）
-6. **服务端恢复**：刷新页面后，前端调用 `GET /api/tasks` 拉取历史 task 列表，重建 Session 列表
+1. **新建会话**：侧边栏 `+ New Session` → 后端创建空 Session → 回到主界面（预设 Cases + 输入框）
+2. **发送消息**：在 Session 内启动根 Task → WebSocket 事件更新 `taskCache[taskId]`
+3. **子任务生成**：多 Agent 执行时，子 Agent 的子 Task 作为 child task 绑定同一 Session
+4. **会话列表**：左侧边栏展示所有 Session，显示名称、状态、总 token
+5. **切换会话**：点击历史 Session → 显示根 Task 及子 Task 的 AgentTree
+6. **删除会话**：删除 Session 及其下所有 Task/Steps/Files（级联）→ 自动切换到其他 Session
+7. **继续执行**：在历史失败 Session 上 Continue → 用原始输入 + 新 max_steps 创建新的根 Task
+8. **服务端恢复**：刷新后前端调用 `GET /api/sessions` 拉取历史 Session 列表
+
+#### 后端数据模型
+
+-新增 `sessions` 表：`id`, `name`, `root_task_id`, `status`, `user_input`, `created_at`, `updated_at`
+- `tasks` 表新增：`session_id`, `parent_task_id`, `is_root`
+- 新增索引：`idx_tasks_session_id`, `idx_tasks_parent_task_id`
 
 #### 与现有功能的关系
 
-- `lastUserInput`（刚实现） → Session 级别保存，用于 Continue
-- Continue with max steps ×2（刚实现） → 在 Session 上下文内重新启动
-- Task 历史侧边栏（Phase 3 遗留） → 作为 Session 列表的数据源
-- 后端 API 基本就绪：`GET /api/tasks` 列表 + `GET /api/tasks?id=xxx` 详情
+- `lastUserInput`（Phase 4+） → Session 级别保存，用于 Continue
+- Continue with max steps ×2（Phase 4+） → 在 Session 上下文内重新启动
+- Task 历史侧边栏（Phase 3 遗留） → 升级为 Session 列表
+- 后端新增 API：`/api/sessions` CRUD，`/api/tasks` 与 `/api/multi-agent` 增加 `session_id` 参数
 
 ### Phase 4 延迟项
 - Agent 配置 CRUD 前端页面

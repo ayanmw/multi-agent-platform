@@ -1,23 +1,23 @@
 <!-- App.vue — root layout component
      Structure:
        ┌─────────────────────────────────────────────┐
-       │  MetricsPanel (connection, task, tokens)      │
-       ├─────────────────────────────────────────────┤
-       │  TaskInput (chat input + control buttons)     │
-       ├─────────────────────────────────────────────┤
-       │  AgentTree × N (one per agent, side-by-side)  │
-       ├─────────────────────────────────────────────┤
-       │  Final result (shown when task completed)     │
+       │  Sidebar: Session list + New Session button   │
+       │  Main:                                        │
+       │    MetricsPanel (connection, task, tokens)    │
+       │    TaskInput (chat input + control buttons)   │
+       │    AgentTree × N (one per agent)              │
+       │    Final result / Failed actions              │
        └─────────────────────────────────────────────┘
 
      Lifecycle:
-       onMounted → connect WebSocket → onEvent → update task state
-       user types → startTask → POST /api/tasks → WebSocket events flow
-       events → handleEvent → task reactive → AgentTree re-renders
+       onMounted → connect WebSocket, load sessions/cases/version
+       user input → startTask → POST /api/tasks → WS events → taskCache update
+       session click → switch activeSessionId + load task from history
 -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useTaskStore } from './composables/useTaskStore'
+import { useSessionStore } from './composables/useSessionStore'
 import MetricsPanel from './components/MetricsPanel.vue'
 import TaskInput from './components/TaskInput.vue'
 import AgentTree from './components/AgentTree.vue'
@@ -27,6 +27,7 @@ import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
+import type { Session } from './composables/useSessionStore'
 
 // Preset case type
 interface PresetCase {
@@ -52,7 +53,8 @@ interface PresetCase {
 }
 
 const {
-  task,
+  taskCache,
+  activeTaskId,
   isTaskPending,
   wsStatus,
   lastUserInput,
@@ -60,11 +62,24 @@ const {
   disconnect,
   startTask,
   startTaskWithCase,
-  clearTask,
+  startMultiAgentTask,
+  clearActiveTask,
+  setActiveTaskId,
+  loadTask,
   pauseTask,
   resumeTask,
   cancelTask,
 } = useTaskStore()
+
+const {
+  sessions,
+  activeSessionId,
+  activeSession,
+  loadSessions,
+  createSession,
+  setActiveSession,
+  deleteSession,
+} = useSessionStore()
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
 
@@ -72,7 +87,7 @@ const { toasts, showError, showInfo, dismissToast } = useToast()
 const { isRunning: kbIsRunning, showTips } = useKeyboard({
   onCancel: cancelTask,
   onPause: () => {
-    if (task.value?.status === 'running') {
+    if (currentTask.value?.status === 'running') {
       pauseTask()
     } else {
       resumeTask()
@@ -90,9 +105,20 @@ const appVersion = ref('v0.4 Alpha')
 const selectedCase = ref<PresetCase | null>(null)
 const showCaseModal = ref(false)
 
+const currentTask = computed(() => {
+  if (!activeTaskId.value) return null
+  return taskCache.value[activeTaskId.value] || null
+})
+
+const isAgentRunning = computed(() => {
+  if (!currentTask.value) return false
+  return currentTask.value.status === 'running'
+})
+
 // Connect WebSocket on mount, disconnect on unmount
 onMounted(async () => {
   connect()
+  await loadSessions().catch(err => console.error('Failed to load sessions:', err))
   // Load preset cases
   casesLoading.value = true
   try {
@@ -124,9 +150,21 @@ onUnmounted(() => {
 /** Handle task submission from TaskInput */
 async function handleSend(text: string, options: { maxSteps?: number }) {
   try {
-    // Clear previous task state before starting a new one
-    clearTask()
-    await startTask(text, undefined, undefined, options.maxSteps)
+    const session = activeSession.value
+    if (!session || session.status !== 'empty') {
+      // Create a new session for the new task
+      const newSession = await createSession(undefined, text)
+      setActiveSession(newSession.id)
+    } else {
+      // Update name if still empty default
+      if (session.name === 'New Session') {
+        // TODO: rename via PUT if needed
+      }
+    }
+    await startTask(text, {
+      maxSteps: options.maxSteps,
+      sessionId: activeSessionId.value || undefined,
+    })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
   }
@@ -134,14 +172,13 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
 
 /** Compute the next max steps when continuing a failed task */
 function nextMaxSteps(): number {
-  // Prefer the failed task's own max_steps; fall back to the default
-  const currentMax = Object.values(task.value?.agents ?? {}).find(a => a.maxSteps)?.maxSteps ?? 10
+  const currentMax = Object.values(currentTask.value?.agents ?? {}).find(a => a.maxSteps)?.maxSteps ?? 10
   return currentMax * 2
 }
 
 /** Whether the failure was caused by max_steps_exceeded */
 function isMaxStepsFailure(): boolean {
-  return task.value?.finalResult?.includes('max steps') ?? false
+  return currentTask.value?.finalResult?.includes('max steps') ?? false
 }
 
 /** Continue a max-steps-exceeded task with doubled max_steps */
@@ -153,22 +190,18 @@ async function handleContinue() {
   try {
     const newMaxSteps = nextMaxSteps()
     showInfo(`Continuing with max steps ×2 = ${newMaxSteps}`)
-    clearTask()
-    await startTask(lastUserInput.value, undefined, undefined, newMaxSteps)
+    await startTask(lastUserInput.value, {
+      maxSteps: newMaxSteps,
+      sessionId: activeSessionId.value || undefined,
+    })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to continue task')
   }
 }
 
-/** Check if any agent is currently running */
-function isAgentRunning(): boolean {
-  if (!task.value) return false
-  return task.value.status === 'running'
-}
-
 // Sync keyboard shortcut state with task running state
 watch(
-  () => task.value?.status,
+  () => currentTask.value?.status,
   (status) => {
     kbIsRunning.value = status === 'running'
   }
@@ -178,8 +211,12 @@ watch(
 async function handleCaseRun(caseId: string) {
   try {
     showCaseModal.value = false
-    clearTask()
-    await startTaskWithCase(caseId)
+    const session = activeSession.value
+    if (!session || session.status !== 'empty') {
+      const newSession = await createSession(undefined, `Case: ${caseId}`)
+      setActiveSession(newSession.id)
+    }
+    await startTaskWithCase(caseId, { sessionId: activeSessionId.value || undefined })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start case')
   }
@@ -193,126 +230,331 @@ function handleCaseView(caseId: string) {
     showCaseModal.value = true
   }
 }
+
+/** Switch to a different session from the sidebar */
+async function handleSessionSelect(session: Session) {
+  setActiveSession(session.id)
+  if (session.rootTaskId) {
+    clearActiveTask()
+    await loadTask(session.rootTaskId)
+  } else {
+    clearActiveTask()
+  }
+}
+
+/** Create a new empty session */
+async function handleNewSession() {
+  try {
+    const session = await createSession()
+    setActiveSession(session.id)
+    clearActiveTask()
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to create session')
+  }
+}
+
+/** Delete current session and create a new empty one */
+async function handleDeleteSession(session: Session) {
+  try {
+    await deleteSession(session.id)
+    if (activeSessionId.value === session.id) {
+      const first = sessions.value[0]
+      if (first) {
+        setActiveSession(first.id)
+        if (first.rootTaskId) {
+          await loadTask(first.rootTaskId)
+        } else {
+          clearActiveTask()
+        }
+      } else {
+        const empty = await createSession()
+        setActiveSession(empty.id)
+        clearActiveTask()
+      }
+    }
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to delete session')
+  }
+}
 </script>
 
 <template>
   <div class="app">
-    <!-- Header -->
-    <header class="app-header">
-      <h1 class="app-title">🤖 Multi-Agent Platform</h1>
-      <div class="app-header-right">
-        <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
-        <span class="app-version">{{ appVersion }}</span>
+    <!-- Sidebar: Session list -->
+    <aside class="session-sidebar">
+      <div class="sidebar-header">
+        <h2 class="sidebar-title">Sessions</h2>
+        <button class="new-session-btn" @click="handleNewSession" title="New Session">+</button>
       </div>
-    </header>
-
-    <!-- Metrics bar -->
-    <MetricsPanel :task="task" :ws-status="wsStatus" />
-
-    <!-- Task input -->
-    <TaskInput
-      :disabled="isAgentRunning()"
-      :is-running="isAgentRunning()"
-      :is-pending="isTaskPending"
-      @send="handleSend"
-      @pause="pauseTask"
-      @resume="resumeTask"
-      @cancel="cancelTask"
-    />
-
-    <!-- Preset case cards — shown when no task is running and not pending -->
-    <div v-if="!task && !isTaskPending && presetCases.length > 0" class="cases-section">
-      <h2 class="section-title">📋 预设任务</h2>
-      <div v-if="casesLoading" class="cases-loading">Loading...</div>
-      <div v-else class="cases-grid">
-        <CaseCard
-          v-for="c in presetCases"
-          :key="c.id"
-          :case-data="c"
-          :disabled="isAgentRunning()"
-          @run="handleCaseRun"
-          @view="handleCaseView"
-        />
+      <div class="session-list">
+        <div
+          v-for="session in sessions"
+          :key="session.id"
+          :class="['session-item', { active: session.id === activeSessionId }]"
+          @click="handleSessionSelect(session)"
+        >
+          <div class="session-name">{{ session.name }}</div>
+          <div class="session-meta">
+            <span :class="['session-status', session.status]">{{ session.status }}</span>
+            <span v-if="session.totalTokens > 0" class="session-tokens">
+              {{ session.totalTokens }} tokens
+            </span>
+          </div>
+          <button
+            class="session-delete"
+            @click.stop="handleDeleteSession(session)"
+            title="Delete session"
+          >
+            ×
+          </button>
+        </div>
       </div>
-    </div>
+    </aside>
 
-    <!-- Agent trees — one per agent, side by side if multiple -->
-    <div v-if="task" class="agent-trees">
-      <div
-        v-for="agent in Object.values(task.agents)"
-        :key="agent.id"
-        class="agent-tree-wrapper"
-      >
-        <AgentTree
-          :agent="agent"
-          :is-running="task.status === 'running'"
-        />
+    <!-- Main content -->
+    <main class="main-content">
+      <!-- Header -->
+      <header class="app-header">
+        <h1 class="app-title">🤖 Multi-Agent Platform</h1>
+        <div class="app-header-right">
+          <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
+          <span class="app-version">{{ appVersion }}</span>
+        </div>
+      </header>
+
+      <!-- Metrics bar -->
+      <MetricsPanel :task="currentTask" :ws-status="wsStatus" />
+
+      <!-- Task input -->
+      <TaskInput
+        :disabled="isAgentRunning"
+        :is-running="isAgentRunning"
+        :is-pending="isTaskPending"
+        @send="handleSend"
+        @pause="pauseTask"
+        @resume="resumeTask"
+        @cancel="cancelTask"
+      />
+
+      <!-- Preset case cards — shown when active session has no task / task is empty -->
+      <div v-if="!currentTask && !isTaskPending && presetCases.length > 0" class="cases-section">
+        <h2 class="section-title">📋 预设任务</h2>
+        <div v-if="casesLoading" class="cases-loading">Loading...</div>
+        <div v-else class="cases-grid">
+          <CaseCard
+            v-for="c in presetCases"
+            :key="c.id"
+            :case-data="c"
+            :disabled="isAgentRunning"
+            @run="handleCaseRun"
+            @view="handleCaseView"
+          />
+        </div>
       </div>
-    </div>
 
-    <!-- Loading indicator — shown while waiting for WebSocket events after sending -->
-    <div v-else-if="isTaskPending" class="loading-area">
-      <div class="loading-spinner"></div>
-      <div class="loading-text">Agent is starting...</div>
-      <div class="loading-subtext">Waiting for LLM response</div>
-    </div>
-
-    <!-- Empty state: shown when no task is active and not pending -->
-    <div v-else-if="!isTaskPending && presetCases.length === 0" class="empty-state">
-      <div class="empty-icon">🚀</div>
-      <h2>Ready to start</h2>
-      <p>Enter a task description above to see the agent in action.</p>
-      <p class="text-muted">
-        The agent can write code, run shell commands, read files, and more.
-        Every step of the ReAct loop is visualized in real time.
-      </p>
-    </div>
-
-    <!-- Final result (shown when task completed) -->
-    <div v-if="task?.status === 'completed' && task?.finalResult" class="final-result">
-      <div class="final-result-header">✅ Task Complete</div>
-      <pre class="final-result-text">{{ task.finalResult }}</pre>
-    </div>
-
-    <!-- Task failed (shown when task failed) -->
-    <div v-if="task?.status === 'failed'" class="final-result final-result-failed">
-      <div class="final-result-header">❌ Task Failed</div>
-      <div v-if="task.finalResult" class="final-result-text">{{ task.finalResult }}</div>
-      <div v-else class="final-result-text final-result-subtle">
-        The task failed. Check the agent tree above for details.
+      <!-- Agent trees -->
+      <div v-if="currentTask" class="agent-trees">
+        <div
+          v-for="agent in Object.values(currentTask.agents)"
+          :key="agent.id"
+          class="agent-tree-wrapper"
+        >
+          <AgentTree
+            :agent="agent"
+            :is-running="currentTask.status === 'running'"
+          />
+        </div>
       </div>
-      <div v-if="isMaxStepsFailure()" class="failed-actions">
-        <button class="btn-continue" @click="handleContinue">
-          🚀 Continue with max steps ×2 ({{ nextMaxSteps() }})
-        </button>
-        <span class="continue-hint">Resume from the last input with doubled step budget</span>
+
+      <!-- Loading indicator -->
+      <div v-else-if="isTaskPending" class="loading-area">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Agent is starting...</div>
+        <div class="loading-subtext">Waiting for LLM response</div>
       </div>
-    </div>
 
-    <!-- Global toast notifications -->
-    <Toast :toasts="toasts" @dismiss="dismissToast" />
+      <!-- Empty state -->
+      <div v-else-if="!isTaskPending && presetCases.length === 0" class="empty-state">
+        <div class="empty-icon">🚀</div>
+        <h2>Ready to start</h2>
+        <p>Enter a task description above to see the agent in action.</p>
+      </div>
 
-    <!-- Case detail modal -->
-    <CaseDetailModal
-      :case-data="selectedCase"
-      :visible="showCaseModal"
-      @close="showCaseModal = false"
-      @run="handleCaseRun"
-    />
+      <!-- Final result (shown when task completed) -->
+      <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
+        <div class="final-result-header">✅ Task Complete</div>
+        <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
+      </div>
 
-    <!-- Keyboard shortcuts panel -->
-    <KeyboardTips
-      :visible="showTips"
-      :shortcuts="SHORTCUTS"
-      :is-running="isAgentRunning()"
-      @close="showTips = false"
-    />
+      <!-- Task failed (shown when task failed) -->
+      <div v-if="currentTask?.status === 'failed'" class="final-result final-result-failed">
+        <div class="final-result-header">❌ Task Failed</div>
+        <div v-if="currentTask.finalResult" class="final-result-text">{{ currentTask.finalResult }}</div>
+        <div v-else class="final-result-text final-result-subtle">
+          The task failed. Check the agent tree above for details.
+        </div>
+        <div v-if="isMaxStepsFailure()" class="failed-actions">
+          <button class="btn-continue" @click="handleContinue">
+            🚀 Continue with max steps ×2 ({{ nextMaxSteps() }})
+          </button>
+          <span class="continue-hint">Resume from the last input with doubled step budget</span>
+        </div>
+      </div>
+
+      <!-- Global toast notifications -->
+      <Toast :toasts="toasts" @dismiss="dismissToast" />
+
+      <!-- Case detail modal -->
+      <CaseDetailModal
+        :case-data="selectedCase"
+        :visible="showCaseModal"
+        @close="showCaseModal = false"
+        @run="handleCaseRun"
+      />
+
+      <!-- Keyboard shortcuts panel -->
+      <KeyboardTips
+        :visible="showTips"
+        :shortcuts="SHORTCUTS"
+        :is-running="isAgentRunning"
+        @close="showTips = false"
+      />
+    </main>
   </div>
 </template>
 
 <style scoped>
 .app {
+  display: flex;
   min-height: calc(100vh - 40px);
+}
+
+/* Session sidebar */
+.session-sidebar {
+  width: 260px;
+  min-width: 260px;
+  border-right: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.sidebar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.new-session-btn {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.new-session-btn:hover {
+  background: #3a8eef;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-item {
+  position: relative;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.session-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.session-item.active {
+  background: rgba(74, 158, 255, 0.15);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+}
+
+.session-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 18px;
+}
+
+.session-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+.session-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.session-status.empty { background: #333; color: #aaa; }
+.session-status.running { background: rgba(74, 158, 255, 0.2); color: #4a9eff; }
+.session-status.completed { background: rgba(81, 207, 102, 0.2); color: #51cf66; }
+.session-status.failed { background: rgba(231, 76, 60, 0.2); color: #e74c3c; }
+
+.session-tokens {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.session-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  color: #e74c3c;
+}
+
+/* Main content */
+.main-content {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 20px;
 }
 
 /* Header */
@@ -370,7 +612,7 @@ function handleCaseView(caseId: string) {
 }
 
 .agent-tree-wrapper {
-  min-width: 0; /* prevent grid blowout */
+  min-width: 0;
 }
 
 /* Empty state */
@@ -450,7 +692,7 @@ function handleCaseView(caseId: string) {
   border-bottom-color: #4a2a2a;
 }
 
-/* Loading area (waiting for WebSocket events) */
+/* Loading area */
 .loading-area {
   display: flex;
   flex-direction: column;

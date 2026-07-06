@@ -182,6 +182,19 @@ type EngineConfig struct {
 	// permissions, budget, and acceptance criteria for this task.
 	// Used by PolicyGate for enforcement and Progress for tracking.
 	Contract harness.TaskContract
+
+	// SessionID identifies the session this task belongs to.
+	// Empty for tasks not yet associated with a session.
+	SessionID string
+
+	// ParentTaskID identifies the parent task for sub-tasks spawned by agents.
+	// Empty for root tasks.
+	ParentTaskID string
+
+	// IsRoot indicates whether this task is the root task of its session.
+	// Root tasks represent the primary user request; child tasks represent
+	// sub-agent work delegated from the root.
+	IsRoot bool
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -349,6 +362,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		"agent_name": e.cfg.AgentID,
 		"model":      e.cfg.Model,
 		"max_steps":  e.cfg.MaxSteps,
+		"session_id": e.cfg.SessionID,
+		"is_root":    e.cfg.IsRoot,
 	}))
 
 	// =========================================================================

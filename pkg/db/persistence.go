@@ -6,16 +6,31 @@ import (
 	"time"
 )
 
+// SessionRecord mirrors the sessions table
+type SessionRecord struct {
+	ID          string
+	Name        string
+	RootTaskID  string
+	Status      string
+	UserInput   string
+	TotalTokens int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // TaskRecord mirrors the tasks table
 type TaskRecord struct {
-	ID          string
-	UserInput   string
-	Status      string
-	AgentIDs    []string
-	FinalResult string
-	TotalTokens int
-	StartedAt   time.Time
-	CompletedAt *time.Time
+	ID           string
+	UserInput    string
+	Status       string
+	AgentIDs     []string
+	FinalResult  string
+	TotalTokens  int
+	StartedAt    time.Time
+	CompletedAt  *time.Time
+	SessionID    string
+	ParentTaskID string
+	IsRoot       bool
 }
 
 // StepRecord mirrors the steps table
@@ -58,9 +73,9 @@ func InsertTask(t TaskRecord) error {
 	}
 	agentIDsJSON, _ := json.Marshal(t.AgentIDs)
 	_, err := DB.Exec(
-		`INSERT INTO tasks (id, user_input, status, agent_ids, started_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		t.ID, t.UserInput, t.Status, string(agentIDsJSON), t.StartedAt,
+		`INSERT INTO tasks (id, user_input, status, agent_ids, started_at, session_id, parent_task_id, is_root)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.UserInput, t.Status, string(agentIDsJSON), t.StartedAt, t.SessionID, t.ParentTaskID, t.IsRoot,
 	)
 	return err
 }
@@ -76,6 +91,200 @@ func UpdateTask(id string, status string, finalResult string, totalTokens int) e
 		status, finalResult, totalTokens, now, id,
 	)
 	return err
+}
+
+// UpdateTaskSession updates a task's session and parent relationships
+func UpdateTaskSession(id, sessionID, parentTaskID string, isRoot bool) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE tasks SET session_id=?, parent_task_id=?, is_root=? WHERE id=?`,
+		sessionID, parentTaskID, isRoot, id,
+	)
+	return err
+}
+
+// InsertSession creates a new session record
+func InsertSession(s SessionRecord) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`INSERT INTO sessions (id, name, root_task_id, status, user_input, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Name, s.RootTaskID, s.Status, s.UserInput, s.CreatedAt, s.UpdatedAt,
+	)
+	return err
+}
+
+// UpdateSession updates a session's root task and status
+func UpdateSession(id, rootTaskID, status, userInput string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE sessions SET root_task_id=?, status=?, user_input=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		rootTaskID, status, userInput, id,
+	)
+	return err
+}
+
+// UpdateSessionStatus updates a session's status and timestamp
+func UpdateSessionStatus(id, status string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE sessions SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		status, id,
+	)
+	return err
+}
+
+// UpdateSessionName updates a session's display name
+func UpdateSessionName(id, name string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE sessions SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		name, id,
+	)
+	return err
+}
+
+// DeleteSession deletes a session by removing its root task first,
+// which cascades to steps, conversations, files, and the session row.
+func DeleteSession(id string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	sess, err := QuerySessionByID(id)
+	if err != nil {
+		return err
+	}
+	_, err = DB.Exec(`DELETE FROM tasks WHERE session_id=?`, id)
+	if err != nil {
+		return err
+	}
+	// Guard: if this session has no tasks, delete it directly
+	if sess.RootTaskID == "" {
+		_, err = DB.Exec(`DELETE FROM sessions WHERE id=?`, id)
+	}
+	return err
+}
+
+// QuerySessions returns recent sessions ordered by updated_at DESC
+func QuerySessions(limit int) ([]SessionRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), created_at, updated_at
+		 FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []SessionRecord
+	for rows.Next() {
+		var s SessionRecord
+		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+// QuerySessionByID returns a single session by ID
+func QuerySessionByID(id string) (*SessionRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	var s SessionRecord
+	err := DB.QueryRow(
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), created_at, updated_at
+		 FROM sessions WHERE id=?`, id,
+	).Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// QueryTasksBySession returns all tasks belonging to a session (root + children),
+// ordered by is_root DESC then created_at ASC.
+func QueryTasksBySession(sessionID string) ([]TaskRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		 FROM tasks WHERE session_id=? ORDER BY is_root DESC, started_at ASC`, sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []TaskRecord
+	for rows.Next() {
+		var t TaskRecord
+		var agentIDsJSON string
+		var completedAt *time.Time
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
+		t.CompletedAt = completedAt
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// QueryChildTasks returns all child tasks for a parent task
+func QueryChildTasks(parentTaskID string) ([]TaskRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		 FROM tasks WHERE parent_task_id=? ORDER BY started_at ASC`, parentTaskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []TaskRecord
+	for rows.Next() {
+		var t TaskRecord
+		var agentIDsJSON string
+		var completedAt *time.Time
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
+		t.CompletedAt = completedAt
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// AggregateSessionTokens sums total tokens across all tasks in a session
+func AggregateSessionTokens(sessionID string) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	var total int
+	err := DB.QueryRow(
+		`SELECT COALESCE(SUM(total_tokens),0) FROM tasks WHERE session_id=?`, sessionID,
+	).Scan(&total)
+	return total, err
 }
 
 // InsertStep creates a new step record
@@ -111,7 +320,7 @@ func QueryTasks(limit int) ([]TaskRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks ORDER BY started_at DESC LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -124,7 +333,7 @@ func QueryTasks(limit int) ([]TaskRecord, error) {
 		var t TaskRecord
 		var agentIDsJSON string
 		var completedAt *time.Time
-		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
@@ -143,9 +352,9 @@ func QueryTaskByID(id string) (*TaskRecord, error) {
 	var agentIDsJSON string
 	var completedAt *time.Time
 	err := DB.QueryRow(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks WHERE id=?`, id,
-	).Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt)
+	).Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot)
 	if err != nil {
 		return nil, err
 	}

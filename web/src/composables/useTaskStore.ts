@@ -1,42 +1,19 @@
-// useTaskStore — reactive task state management composable
-//
-// This is the central state manager for the frontend. It:
-//  1. Listens for WebSocket events via useWebSocket().onEvent()
-//  2. Routes events to the correct agent/step based on task_id, agent_id, step_index
-//  3. Maintains reactive TaskState that Vue components can render
-//  4. Provides helper functions to start tasks and send control messages
-//
-// Event routing logic (mirrors the Go backend's ReAct loop):
-//   task_started        → create TaskState, set status='running'
-//   agent_ready         → register agent in task.agents
-//   step_started        → create new Step object in agent.steps[]
-//   llm_thinking/delta  → append to current step's thinking text
-//   llm_message_complete → mark current step as completed
-//   tool_call_started   → create ToolCallData on current step
-//   tool_call_output    → set tool output on current step
-//   tool_call_complete  → set tool duration, mark step completed
-//   observation         → create observation step (LLM feedback)
-//   task_completed      → set final result + total tokens
-//   task_failed         → set status='failed' with reason
-//
-// Design rationale:
-//   - All state is reactive (Vue refs) so components auto-update on changes
-//   - Multiple agents are tracked independently in task.agents map
-//   - Steps are ordered by index, not by arrival time (handles out-of-order events)
-//   - The store is a singleton — one instance per app, shared via provide/inject
-
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
+import { useSessionStore } from './useSessionStore'
 import type { AgentEvent, TaskState, AgentState, Step, ToolCallData } from '../types/events'
 
-/** The reactive task state — null when no task is active */
-const task = ref<TaskState | null>(null)
+/** Per-task reactive cache */
+const taskCache = ref<Record<string, TaskState>>({})
 
-/** Remember the last user input so we can retry/continue a task */
-const lastUserInput = ref<string>('')
+/** ID of the task currently being viewed */
+const activeTaskId = ref<string | null>(null)
 
 /** Whether a task has been sent but not yet confirmed by WebSocket events */
 const isTaskPending = ref(false)
+
+/** Remember the last user input so we can retry/continue a task */
+const lastUserInput = ref<string>('')
 
 /** Whether the store has been initialized (WebSocket listener registered) */
 let initialized = false
@@ -56,6 +33,7 @@ let colorIdx = 0
 
 export function useTaskStore() {
   const { status, connect, disconnect, sendControl, onEvent } = useWebSocket()
+  const { updateSession } = useSessionStore()
 
   // Initialize event listener once
   if (!initialized) {
@@ -64,19 +42,12 @@ export function useTaskStore() {
   }
 
   /**
-   * Route an incoming WebSocket event to the correct state mutation.
-   * This is the event router — it maps event types to state changes.
+   * Ensure a task exists in the cache.
    */
-  function handleEvent(evt: AgentEvent) {
-    // Clear pending state now that we have a real event from the server
-    if (isTaskPending.value) {
-      isTaskPending.value = false
-    }
-
-    // First event for a task initializes the task state
-    if (!task.value && evt.type === 'task_started') {
-      task.value = {
-        id: evt.task_id,
+  function ensureTask(taskId: string): TaskState {
+    if (!taskCache.value[taskId]) {
+      taskCache.value[taskId] = {
+        id: taskId,
         status: 'running',
         finalResult: null,
         totalTokens: 0,
@@ -84,15 +55,39 @@ export function useTaskStore() {
         startedAt: Date.now(),
       }
     }
+    return taskCache.value[taskId]!
+  }
 
-    // If we don't have a task yet, ignore events (shouldn't happen in normal flow)
-    if (!task.value) return
+  /**
+   * Route an incoming WebSocket event to the correct state mutation.
+   */
+  function handleEvent(evt: AgentEvent) {
+    // Clear pending state now that we have a real event from the server
+    if (isTaskPending.value) {
+      isTaskPending.value = false
+    }
+
+    const taskId = evt.task_id
+    if (!taskId) return
+
+    if (evt.type === 'task_started') {
+      activeTaskId.value = taskId
+      ensureTask(taskId)
+      updateSession((evt.data.session_id as string) || '', {
+        rootTaskId: taskId,
+        status: 'running',
+        userInput: (evt.data.input as string) || '',
+      })
+    }
+
+    const task = taskCache.value[taskId]
+    if (!task) return
 
     const agentId = evt.agent_id || 'agent_default'
 
     // Ensure agent state exists
-    if (!task.value.agents[agentId]) {
-      task.value.agents[agentId] = {
+    if (!task.agents[agentId]) {
+      task.agents[agentId] = {
         id: agentId,
         name: agentId,
         model: (evt.data.model as string) || 'unknown',
@@ -100,11 +95,11 @@ export function useTaskStore() {
         color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
       }
     }
-    const agent = task.value.agents[agentId]
+    const agent = task.agents[agentId]
 
     switch (evt.type) {
       case 'task_started':
-        task.value.status = 'running'
+        task.status = 'running'
         break
 
       case 'agent_ready':
@@ -159,7 +154,6 @@ export function useTaskStore() {
       case 'tool_call_output': {
         const lastStep = getLastStep(agent)
         if (lastStep && lastStep.toolCall) {
-          // Serialize result for display — if it's an object, pretty-print as JSON
           const result = evt.data.result
           lastStep.toolCall.output =
             typeof result === 'string' ? result : JSON.stringify(result, null, 2)
@@ -185,7 +179,6 @@ export function useTaskStore() {
       }
 
       case 'observation': {
-        // Observation is displayed as a separate step showing what the LLM saw
         agent.steps.push({
           index: agent.steps.length,
           type: 'observation',
@@ -198,20 +191,19 @@ export function useTaskStore() {
       }
 
       case 'step_complete': {
-        // The step_complete event marks the end of a step
-        // The step's status is already set by tool_call_complete or llm_message_complete
+        // step status already handled by earlier events
         break
       }
 
       case 'task_completed': {
-        task.value.status = 'completed'
-        task.value.finalResult = (evt.data.result as string) || null
-        task.value.totalTokens = (evt.data.total_tokens as number) || 0
+        task.status = 'completed'
+        task.finalResult = (evt.data.result as string) || null
+        task.totalTokens = (evt.data.total_tokens as number) || 0
         break
       }
 
       case 'task_failed':
-        task.value.status = 'failed'
+        task.status = 'failed'
         {
           const reason = (evt.data.reason as string) || 'unknown error'
           const maxSteps = evt.data.max_steps as number | undefined
@@ -223,15 +215,14 @@ export function useTaskStore() {
               msg += ` at step ${currentStep}`
             }
           }
-          task.value.finalResult = msg
+          task.finalResult = msg
           if (evt.data.error) {
-            task.value.finalResult += `\n${evt.data.error}`
+            task.finalResult += `\n${evt.data.error}`
           }
         }
         break
 
       case 'agent_status': {
-        // Real-time token usage and step progress update
         agent.currentStep = (evt.data.current_step as number) ?? agent.currentStep
         agent.maxSteps = (evt.data.max_steps as number) ?? agent.maxSteps
         agent.tokenUsage = {
@@ -242,37 +233,35 @@ export function useTaskStore() {
           totalTokens: (evt.data.total_tokens as number) || 0,
         }
 
-        // Also update task-level token usage from aggregate
-        if (task.value) {
-          task.value.totalTokens = Object.values(task.value.agents).reduce(
+        if (task) {
+          task.totalTokens = Object.values(task.agents).reduce(
             (sum, a) => sum + (a.tokenUsage?.totalTokens || 0),
             0
           )
-          task.value.tokenUsage = {
-            promptTokens: Object.values(task.value.agents).reduce(
+          task.tokenUsage = {
+            promptTokens: Object.values(task.agents).reduce(
               (sum, a) => sum + (a.tokenUsage?.promptTokens || 0),
               0
             ),
-            promptCacheHitTokens: Object.values(task.value.agents).reduce(
+            promptCacheHitTokens: Object.values(task.agents).reduce(
               (sum, a) => sum + (a.tokenUsage?.promptCacheHitTokens || 0),
               0
             ),
-            promptCacheMissTokens: Object.values(task.value.agents).reduce(
+            promptCacheMissTokens: Object.values(task.agents).reduce(
               (sum, a) => sum + (a.tokenUsage?.promptCacheMissTokens || 0),
               0
             ),
-            completionTokens: Object.values(task.value.agents).reduce(
+            completionTokens: Object.values(task.agents).reduce(
               (sum, a) => sum + (a.tokenUsage?.completionTokens || 0),
               0
             ),
-            totalTokens: task.value.totalTokens,
+            totalTokens: task.totalTokens,
           }
         }
         break
       }
 
       default:
-        // Unknown event types are silently ignored
         break
     }
   }
@@ -287,11 +276,17 @@ export function useTaskStore() {
    * Start a chat task by POSTing to /api/tasks.
    * The WebSocket events will update the task state in real time.
    */
-  async function startTask(input: string, agentId?: string, systemPrompt?: string, maxSteps?: number): Promise<string> {
-    // Remember input for retry/continue actions
+  async function startTask(
+    input: string,
+    options: {
+      agentId?: string
+      systemPrompt?: string
+      maxSteps?: number
+      sessionId?: string
+    } = {}
+  ): Promise<{ sessionId: string; taskId: string }> {
     lastUserInput.value = input
     isTaskPending.value = true
-    // Safety timeout: clear pending state after 15s even if no event arrives
     const safetyTimeout = setTimeout(() => {
       if (isTaskPending.value) {
         isTaskPending.value = false
@@ -301,11 +296,12 @@ export function useTaskStore() {
     try {
       const body: Record<string, unknown> = {
         action: 'chat',
-        agent_id: agentId || 'agent_default',
+        agent_id: options.agentId || 'agent_default',
         input,
+        session_id: options.sessionId || '',
       }
-      if (systemPrompt) body.system_prompt = systemPrompt
-      if (maxSteps && maxSteps > 0) body.max_steps = maxSteps
+      if (options.systemPrompt) body.system_prompt = options.systemPrompt
+      if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
 
       const resp = await fetch('/api/tasks', {
         method: 'POST',
@@ -320,8 +316,10 @@ export function useTaskStore() {
         throw new Error(`Failed to start task: ${resp.status} ${errText}`)
       }
 
-      const data = await resp.json()
-      return data.task_id as string
+      const data = (await resp.json()) as { session_id: string; task_id: string }
+      activeTaskId.value = data.task_id
+      ensureTask(data.task_id)
+      return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
       clearTimeout(safetyTimeout)
@@ -329,16 +327,11 @@ export function useTaskStore() {
     }
   }
 
-  /** Clear the current task state (for starting a new task) */
-  function clearTask() {
-    task.value = null
-  }
-
-  /**
-   * Start a task from a preset case by case ID.
-   * The case's system prompt and default input are loaded from the backend.
-   */
-  async function startTaskWithCase(caseId: string, agentId?: string): Promise<string> {
+  /** Start a task from a preset case by case ID. */
+  async function startTaskWithCase(
+    caseId: string,
+    options: { agentId?: string; sessionId?: string } = {}
+  ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
       if (isTaskPending.value) {
@@ -352,9 +345,9 @@ export function useTaskStore() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'chat',
-          agent_id: agentId || 'agent_default',
-          // Input and system_prompt are filled by the backend from the case definition
-          input: '', // backend fills from case
+          agent_id: options.agentId || 'agent_default',
+          input: '',
+          session_id: options.sessionId || '',
         }),
       })
 
@@ -365,8 +358,10 @@ export function useTaskStore() {
         throw new Error(`Failed to start case: ${resp.status} ${errText}`)
       }
 
-      const data = await resp.json()
-      return data.task_id as string
+      const data = (await resp.json()) as { session_id: string; task_id: string }
+      activeTaskId.value = data.task_id
+      ensureTask(data.task_id)
+      return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
       clearTimeout(safetyTimeout)
@@ -374,39 +369,11 @@ export function useTaskStore() {
     }
   }
 
-  /** Pause the current task */
-  function pauseTask() {
-    if (!task.value) return
-    const agents = Object.keys(task.value.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'pause', task_id: task.value.id, agent_id: agentId })
-    }
-  }
-
-  /** Resume the current task */
-  function resumeTask() {
-    if (!task.value) return
-    const agents = Object.keys(task.value.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'resume', task_id: task.value.id, agent_id: agentId })
-    }
-  }
-
-  /** Cancel the current task */
-  function cancelTask() {
-    if (!task.value) return
-    const agents = Object.keys(task.value.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'cancel', task_id: task.value.id, agent_id: agentId })
-    }
-  }
-
-  /**
-   * Start a multi-agent orchestration task.
-   * Sends the input to /api/multi-agent which decomposes the task
-   * and runs multiple agents concurrently.
-   */
-  async function startMultiAgentTask(input: string, caseType?: string): Promise<string> {
+  /** Start a multi-agent task via /api/multi-agent. */
+  async function startMultiAgentTask(
+    input: string,
+    options: { caseType?: string; sessionId?: string } = {}
+  ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
       if (isTaskPending.value) {
@@ -420,7 +387,8 @@ export function useTaskStore() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           input,
-          case_type: caseType || '',
+          case_type: options.caseType || '',
+          session_id: options.sessionId || '',
         }),
       })
 
@@ -431,8 +399,10 @@ export function useTaskStore() {
         throw new Error(`Failed to start multi-agent task: ${resp.status} ${errText}`)
       }
 
-      const data = await resp.json()
-      return data.task_id as string
+      const data = (await resp.json()) as { session_id: string; task_id: string }
+      activeTaskId.value = data.task_id
+      ensureTask(data.task_id)
+      return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
       clearTimeout(safetyTimeout)
@@ -440,9 +410,64 @@ export function useTaskStore() {
     }
   }
 
+  /** Clear the active task reference without deleting data */
+  function clearActiveTask() {
+    activeTaskId.value = null
+  }
+
+  /** Set which task is being viewed */
+  function setActiveTaskId(taskId: string | null) {
+    activeTaskId.value = taskId
+  }
+
+  /** Load a task from the backend into the cache */
+  async function loadTask(taskId: string): Promise<void> {
+    const resp = await fetch(`/api/tasks?id=${encodeURIComponent(taskId)}`)
+    if (!resp.ok) {
+      throw new Error(`Failed to load task: ${resp.status}`)
+    }
+    // TODO: Phase 5 — hydrate taskCache from persisted task + steps
+    // For now we just mark activeTaskId so future events are routed here.
+    activeTaskId.value = taskId
+  }
+
+  /** Pause the active task */
+  function pauseTask() {
+    if (!activeTaskId.value) return
+    const task = taskCache.value[activeTaskId.value]
+    if (!task) return
+    const agents = Object.keys(task.agents)
+    for (const agentId of agents) {
+      sendControl({ action: 'pause', task_id: task.id, agent_id: agentId })
+    }
+  }
+
+  /** Resume the active task */
+  function resumeTask() {
+    if (!activeTaskId.value) return
+    const task = taskCache.value[activeTaskId.value]
+    if (!task) return
+    const agents = Object.keys(task.agents)
+    for (const agentId of agents) {
+      sendControl({ action: 'resume', task_id: task.id, agent_id: agentId })
+    }
+  }
+
+  /** Cancel the active task */
+  function cancelTask() {
+    if (!activeTaskId.value) return
+    const task = taskCache.value[activeTaskId.value]
+    if (!task) return
+    const agents = Object.keys(task.agents)
+    for (const agentId of agents) {
+      sendControl({ action: 'cancel', task_id: task.id, agent_id: agentId })
+    }
+  }
+
   return {
-    // Reactive state — components should treat this as read-only
-    task,
+    // Reactive state
+    taskCache,
+    activeTaskId,
     isTaskPending,
     wsStatus: status,
     lastUserInput,
@@ -453,7 +478,9 @@ export function useTaskStore() {
     startTask,
     startTaskWithCase,
     startMultiAgentTask,
-    clearTask,
+    clearActiveTask,
+    setActiveTaskId,
+    loadTask,
     pauseTask,
     resumeTask,
     cancelTask,

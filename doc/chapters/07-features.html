@@ -135,49 +135,53 @@
                 <li>扩展点设计（Plugin 架构）</li>
                 <li>性能基准测试结果</li>
                 <li>错误处理策略文档</li>
-                <li>会话与任务历史管理设计（Session & Task History，Phase 5）</li>
             </ul>
         </div>
 
         <h2>7.4 会话与任务历史管理（Phase 5）</h2>
-        <p><strong>目标</strong>：解决当前"完成任务后必须刷新页面才能回到主界面"的问题，让用户可以在一个页面内管理多个对话上下文。</p>
+        <p><strong>目标</strong>：解决"完成任务后必须刷新页面才能回到主界面"的问题，并支持一个 Session 下多个 Task 的金字塔结构。</p>
 
         <h3>7.4.1 Session 概念</h3>
-        <p>Session 是前端的一次<strong>对话上下文</strong>，与后端的 Task 是一对一或零对一关系。</p>
+        <p>Session 是前端的一次<strong>对话上下文</strong>，在后端持久化。每个 Session 关联一个根 Task；根 Task 可以再派生子 Task。</p>
         <ul style="padding-left:20px;">
-            <li><strong>空 Session</strong>：刚创建的会话，展示预设任务卡片 + 输入框，可以开始新任务。</li>
-            <li><strong>运行中 Session</strong>：关联了一个正在执行的 Task，实时显示 AgentTree。</li>
-            <li><strong>已完成/失败 Session</strong>：关联的 Task 已结束，可以查看结果、Retry 或 Continue。</li>
+            <li><strong>空 Session</strong>：刚创建，无根 Task，展示预设 Cases + 输入框。</li>
+            <li><strong>运行中 Session</strong>：根 Task 或任意子 Task 正在执行，实时显示 AgentTree。</li>
+            <li><strong>已完成/失败 Session</strong>：所有 Task 结束，可查看结果、Retry 或 Continue。</li>
         </ul>
 
         <h3>7.4.2 用户操作流程</h3>
         <ol style="padding-left:20px;">
-            <li>用户点击左侧会话列表的 <strong>+ New Session</strong>，创建空会话，自动回到主界面。</li>
-            <li>用户输入任务或点击 Case Card，启动后端 Task；当前 Session 与该 Task 绑定。</li>
+            <li>点击左侧会话列表的 <strong>+ New Session</strong>，创建空 Session，自动回到主界面。</li>
+            <li>输入任务或点击 Case Card，启动后端根 Task；Session 状态变为 running。</li>
+            <li>多 Agent 执行时，根 Task 下可能产生多个子 Task；前端通过 task_id 接收并渲染多棵树。</li>
             <li>任务完成后，点击会话列表中的其他 Session，可以切换回看历史执行过程。</li>
-            <li>在历史失败 Session 上点击 <strong>Continue</strong>，用原始输入 + 新 max_steps 重新启动任务。</li>
-            <li>页面刷新后，前端通过 <code>GET /api/tasks</code> 拉取历史记录，重建会话列表。</li>
+            <li>在历史失败 Session 上点击 <strong>Continue</strong>，用原始输入 + 新 max_steps 重新启动（创建新根 Task）。</li>
+            <li>页面刷新后，前端通过 <code>GET /api/sessions</code> 拉取历史 Session 列表。</li>
         </ol>
 
         <h3>7.4.3 前端状态调整</h3>
-        <p>当前 <code>useTaskStore</code> 是单任务状态（<code>task: TaskState | null</code>）。Phase 5 需要改为：</p>
+        <p>当前 <code>useTaskStore</code> 从单任务改为任务缓存 + 活跃任务 ID：</p>
         <pre>
 const taskCache = ref&lt;Record&lt;string, TaskState&gt;&gt;({})  // taskId -> TaskState
 const activeTaskId = ref&lt;string | null&gt;(null)
         </pre>
-        <p>Session 列表独立管理，每个 Session 保存 <code>taskId</code>、状态、名称、创建/更新时间。</p>
+        <p>新增 <code>useSessionStore</code> 管理 Session 列表、活跃 Session、新建/删除/切换：</p>
+        <pre>
+const sessions = ref&lt;Session[]&gt;([])
+const activeSessionId = ref&lt;string | null&gt;(null)
+        </pre>
 
         <h3>7.4.4 与现有功能的关系</h3>
         <ul style="padding-left:20px;">
             <li><code>lastUserInput</code>（Phase 4+）：提升到 Session 级别，用于 Continue / Retry。</li>
             <li>Continue with max steps ×2（Phase 4+）：在 Session 上下文内重新启动 Task。</li>
-            <li>Task 历史侧边栏（Phase 3 遗留）：升级为 Session 列表 + 任务历史数据源。</li>
-            <li>后端 API：当前 <code>GET /api/tasks</code> 和 <code>GET /api/tasks?id=xxx</code> 已支持。</li>
+            <li>Task 历史侧边栏（Phase 3 遗留）：升级为 Session 列表。</li>
+            <li>后端 API：新增 <code>/api/sessions</code> / <code>/api/sessions/:id</code>，<code>/api/tasks</code> 增加 <code>session_id</code> 参数。</li>
         </ul>
 
         <div class="callout info">
-            <div class="callout-title">占位提示</div>
-            本章节在 Phase 5 实现后会替换为包含 Vue 组件设计、本地缓存策略、与服务端同步逻辑的完整文档。
+            <div class="callout-title">实现说明</div>
+            Session 列表目前存储在后端 <code>sessions</code> 表，前端在 localStorage 做本地缓存；刷新页面后通过 API 重新拉取并合并。
         </div>
 
         <div class="footer">

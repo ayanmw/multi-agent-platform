@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/google/uuid"
@@ -48,11 +49,174 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 		steps = []db.StepRecord{}
 	}
 
+	childTasks, err := db.QueryChildTasks(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if childTasks == nil {
+		childTasks = []db.TaskRecord{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"task":  task,
-		"steps": steps,
+		"task":          task,
+		"steps":         steps,
+		"child_tasks":   childTasks,
 	})
+}
+
+// === Session API ===
+
+type createSessionRequest struct {
+	Name      string `json:"name"`
+	UserInput string `json:"user_input"`
+}
+
+type renameSessionRequest struct {
+	Name string `json:"name"`
+}
+
+// handleSessions handles GET/POST /api/sessions
+func handleSessions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		sessions, err := db.QuerySessions(50)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if sessions == nil {
+			sessions = []db.SessionRecord{}
+		}
+		for i := range sessions {
+			total, err := db.AggregateSessionTokens(sessions[i].ID)
+			if err == nil {
+				sessions[i].TotalTokens = total
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessions)
+
+	case http.MethodPost:
+		var req createSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		sessionID := "sess_" + uuid.New().String()
+		name := req.Name
+		if name == "" {
+			name = extractSessionName(req.UserInput)
+		}
+
+		now := time.Now()
+		sess := db.SessionRecord{
+			ID:        sessionID,
+			Name:      name,
+			Status:    "empty",
+			UserInput: req.UserInput,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := db.InsertSession(sess); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"session_id": sessionID,
+			"status":     "empty",
+		})
+
+	default:
+		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSessionByID handles GET/PUT/DELETE /api/sessions/{id}
+func handleSessionByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" || id == "/" {
+		http.Error(w, "session ID required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		sess, err := db.QuerySessionByID(id)
+		if err != nil {
+			http.Error(w, "session not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
+
+		tasks, err := db.QueryTasksBySession(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if tasks == nil {
+			tasks = []db.TaskRecord{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"session": sess,
+			"tasks":   tasks,
+		})
+
+	case http.MethodPut:
+		var req renameSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		if err := db.UpdateSessionName(id, req.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess, err := db.QuerySessionByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sess)
+
+	case http.MethodDelete:
+		if err := db.DeleteSession(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      id,
+			"message": "Session deleted successfully",
+		})
+
+	default:
+		http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
+	}
+}
+
+// extractSessionName generates a display name from user input.
+func extractSessionName(input string) string {
+	if input == "" {
+		return "New Session"
+	}
+	// Remove newlines and extra spaces
+	clean := strings.Join(strings.Fields(input), " ")
+	if len(clean) > 30 {
+		return clean[:30] + "..."
+	}
+	return clean
 }
 
 // === Agent CRUD API ===

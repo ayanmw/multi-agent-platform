@@ -93,6 +93,7 @@ func main() {
 			SystemPrompt string                       `json:"system_prompt"`
 			CaseType     string                       `json:"case_type"`
 			MaxSteps     int                          `json:"max_steps"`
+			SessionID    string                       `json:"session_id"`
 			Agents       []orchestrator.AgentSpec     `json:"agents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,18 +112,25 @@ func main() {
 					specs = result.Agents
 				}
 
-				taskID := "task_" + time.Now().Format("20060102150405")
+				// Resolve or create session
+				sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
 				agentIDs := make([]string, len(specs))
 				for i, s := range specs {
 					agentIDs[i] = s.AgentID
 				}
 
 				if persist != nil {
-					persist.SaveTask(taskID, req.Input, agentIDs)
+					persist.SaveTaskMeta(taskID, sessionID, "", true)
 				}
 
 				hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
 					"task_id":     taskID,
+					"session_id":  sessionID,
 					"input":       req.Input,
 					"agent_ids":   agentIDs,
 					"agent_count": len(specs),
@@ -132,21 +140,30 @@ func main() {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
 					orch.RunBlocking(ctx, taskID, specs)
+					db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 					log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
 				}()
 
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{
+					"session_id":  sessionID,
 					"task_id":     taskID,
 					"agent_count": len(specs),
 					"agent_ids":   agentIDs,
 					"status":      "started",
 				})
 		case "stream-demo":
-			taskID := "task_" + time.Now().Format("20060102150405")
+			sessionID, taskID, err := resolveSession(req.SessionID, "", persist)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 			go streamTask(hub, taskID)
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"task_id": taskID})
+			json.NewEncoder(w).Encode(map[string]any{
+				"session_id": sessionID,
+				"task_id":    taskID,
+			})
 
 		case "chat":
 		// Check if a preset case was specified — load its contract,
@@ -194,13 +211,14 @@ func main() {
 		}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"task_id":  taskID,
-				"agent_id": agentID,
-				"action":   "chat",
+				"session_id": req.SessionID,
+				"task_id":    taskID,
+				"agent_id":   agentID,
+				"action":     "chat",
 			})
 
 		default:
@@ -214,6 +232,14 @@ func main() {
 	})
 	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
 		handleAgentByID(w, r)
+	})
+
+	// Session API
+	http.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		handleSessions(w, r)
+	})
+	http.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		handleSessionByID(w, r)
 	})
 
 	// Health check
@@ -250,10 +276,11 @@ func main() {
 		}
 
 		var req struct {
-			Input    string                       `json:"input"`
-			CaseType string                       `json:"case_type"` // "multi_agent", "code_gen", or empty
-			MaxSteps int                          `json:"max_steps"` // override max steps for all agents
-			Agents   []orchestrator.AgentSpec     `json:"agents"`    // direct agent specs (optional)
+			Input     string                       `json:"input"`
+			CaseType  string                       `json:"case_type"` // "multi_agent", "code_gen", or empty
+			MaxSteps  int                          `json:"max_steps"` // override max steps for all agents
+			SessionID string                       `json:"session_id"`
+			Agents    []orchestrator.AgentSpec     `json:"agents"`    // direct agent specs (optional)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -286,7 +313,13 @@ func main() {
 			}
 		}
 
-		taskID := "task_" + time.Now().Format("20060102150405")
+		// Resolve or create session
+		sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		agentIDs := make([]string, len(specs))
 		for i, s := range specs {
 			agentIDs[i] = s.AgentID
@@ -295,11 +328,13 @@ func main() {
 		// Persist orchestrator task
 		if persist != nil {
 			persist.SaveTask(taskID, req.Input, agentIDs)
+			persist.SaveTaskMeta(taskID, sessionID, "", true)
 		}
 
 		// Emit orchestrator task started event
 		hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
 			"task_id":    taskID,
+			"session_id": sessionID,
 			"input":      req.Input,
 			"agent_ids":  agentIDs,
 			"agent_count": len(specs),
@@ -310,11 +345,13 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			orch.RunBlocking(ctx, taskID, specs)
+			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 			log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
+			"session_id":  sessionID,
 			"task_id":     taskID,
 			"agent_count": len(specs),
 			"agent_ids":   agentIDs,
@@ -372,10 +409,11 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string) {
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
+		persist.SaveTaskMeta(taskID, sessionID, "", true)
 	}
 
 	// Build Harness policy gate with all safety rules:
@@ -410,12 +448,15 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		PolicyGate:   policyGate,
 		Progress:     progressManager,
 		Contract:     contract,
+		SessionID:    sessionID,
+		IsRoot:       true,
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
-		"task_id":  taskID,
-		"agent_id": agentID,
-		"input":    userInput,
+		"task_id":    taskID,
+		"agent_id":   agentID,
+		"session_id": sessionID,
+		"input":      userInput,
 	}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -424,12 +465,19 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	result, totalTokens, err := engine.Run(ctx, userInput)
 	if err != nil {
 		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
+		if sessionID != "" {
+			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
+		}
 		if result == "" {
 			hub.SendEvent(event.NewEvent("task_failed", taskID, agentID, 0, map[string]any{
 				"reason": err.Error(),
 			}))
 		}
 		return
+	}
+
+	if sessionID != "" {
+		db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 	}
 
 	log.Printf("[Task %s] Completed successfully. Tokens: %d, Result: %s", taskID, totalTokens, truncate(result, 100))

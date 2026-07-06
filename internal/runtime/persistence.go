@@ -4,6 +4,7 @@ package runtime
 // Implementations include db.Persistence or in-memory stores for testing.
 type Persistence interface {
 	SaveTask(taskID string, userInput string, agentIDs []string) error
+	SaveTaskMeta(taskID string, sessionID string, parentTaskID string, isRoot bool) error
 	UpdateTask(taskID string, status string, finalResult string, totalTokens int) error
 	SaveStep(step StepRecord) error
 	SaveConversation(conv ConversationRecord) error
