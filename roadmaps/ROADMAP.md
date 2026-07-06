@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-05
-> **Current version**: v0.4 Alpha (Phase 4 complete)
+> **Last updated**: 2026-07-06
+> **Current version**: v0.5 (Phase 5 Session 管理完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 🔜 → Phase 6
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 🔄 → Phase 6
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
 ```
 
@@ -181,7 +181,15 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 **目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理和记忆召回
 
+**完成日期**: 2026-07-06 (Session 管理部分)
+**Git commit**: `d63a0a8`
+
 ### 交付物
+- [x] **Session 管理 + Task 金字塔结构**（后端持久化 + 前端会话列表）
+- [x] **Session CRUD API**（`/api/sessions` + `/api/sessions/:id`）
+- [x] **前端 Session 侧边栏**（useSessionStore + localStorage 缓存）
+- [x] **useTaskStore 重构**（单任务 → taskCache + activeTaskId）
+- [x] **resolveSession + deriveSessionStatus**（自动创建/绑定 Session）
 - [ ] 运行时 Tool 注册 REST API
 - [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）
 - [ ] Docker 沙箱（run_shell 安全隔离）
@@ -308,3 +316,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |
 | v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
+| v0.5 | 2026-07-06 | Phase 5 Session 管理完成，Session CRUD + Task 金字塔 + 前端会话列表 |
