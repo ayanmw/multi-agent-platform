@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-06
-> **Current version**: v0.5 (Phase 5 Session 管理完成)
+> **Current version**: v0.5 (Phase 5 完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 🔄 → Phase 6
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
 ```
 
@@ -181,8 +181,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 **目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理和记忆召回
 
-**完成日期**: 2026-07-06 (Session 管理部分)
-**Git commit**: `d63a0a8`
+**完成日期**: 2026-07-06
+**Git commit**: `2b7a026`
 
 ### 交付物
 - [x] **Session 管理 + Task 金字塔结构**（后端持久化 + 前端会话列表）
@@ -190,16 +190,20 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] **前端 Session 侧边栏**（useSessionStore + localStorage 缓存）
 - [x] **useTaskStore 重构**（单任务 → taskCache + activeTaskId）
 - [x] **resolveSession + deriveSessionStatus**（自动创建/绑定 Session）
-- [ ] 运行时 Tool 注册 REST API
-- [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）
-- [ ] Docker 沙箱（run_shell 安全隔离）
+- [x] 运行时 Tool 注册 REST API
+- [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）→ Phase 6
+- [x] Docker 沙箱（run_shell 安全隔离）
 - [x] **LLM Provider 接口抽象**: `Provider` 接口 + `OpenAIProvider` 基线实现
 - [x] **Router 路由决策**: 意图分类 + 模型选择（轻量模型做路由，成本 < $0.001/次）
 - [x] **模型能力矩阵**: 标注各模型的 tool_calling / streaming / vision / reasoning 能力
-- [ ] **Harness: ApprovalRule**（高风险操作通过 WebSocket 发送确认请求到前端）
-- [ ] **Harness: DangerousCommandRule**（Shell 命令危险模式检测）
-- [ ] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
-- [ ] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
+- [x] **Harness: ApprovalRule**（高风险操作通过 WebSocket 发送确认请求到前端）
+- [x] **Harness: DangerousCommandRule**（Shell 命令危险模式检测）
+- [x] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
+- [x] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
+- [x] **Memory: memories 表 + memory_links 表 + Heartbeat 后台整理器**
+- [x] **AgentBus 接入 Engine ReAct Loop**（Agent 间通信）
+- [x] **Checkpoint / Recovery**（任务检查点 + 崩溃恢复）
+- [x] **Agent 配置 CRUD 前端页面**（创建/编辑/删除 Agent）
 
 ### 新增核心设计：会话与任务历史管理（Session & Task History）
 
@@ -260,21 +264,21 @@ const activeTaskId = ref<string | null>(null)
 - 后端新增 API：`/api/sessions` CRUD，`/api/tasks` 与 `/api/multi-agent` 增加 `session_id` 参数
 
 ### Phase 4 延迟项
-- Agent 配置 CRUD 前端页面
-- Task 历史侧边栏（升级为 Session 列表）
-- Memory: Task 完成时自动生成摘要（用于 Session 名称和预览）
-- AgentBus 接入 Engine ReAct Loop
-- ModelProfile + ModelRegistry
-- Checkpoint / Recovery
-- Memory: memories/memories_links 表 + Heartbeat + Candidate→Semantic 晋升管线
+- ~~Agent 配置 CRUD 前端页面~~ → Phase 5 已完成
+- ~~Task 历史侧边栏（升级为 Session 列表）~~ → Phase 5 已完成
+- ~~Memory: Task 完成时自动生成摘要（用于 Session 名称和预览）~~ → Phase 5 已完成
+- ~~AgentBus 接入 Engine ReAct Loop~~ → Phase 5 已完成
+- ~~ModelProfile + ModelRegistry~~ → Phase 5 已完成
+- ~~Checkpoint / Recovery~~ → Phase 5 已完成
+- ~~Memory: memories/memories_links 表 + Heartbeat + Candidate→Semantic 晋升管线~~ → Phase 5 已完成
 
 ### 验证标准
-- 无需重启服务，通过 API 注册新工具并立即使用
-- 同一任务请求根据意图自动路由到不同模型（简单→Flash，复杂→Pro）
-- 高风险操作（如 git push）触发前端审批弹窗
-- 新任务启动时，Semantic 规则和相关 Episode 写入 Working Memory 注入 System Prompt
-- 完成一个任务后，点击「新建会话」即可回到主界面继续发起新任务
-- 刷新页面后，历史任务列表可恢复，点击历史任务可回看执行过程和结果
+- [x] 无需重启服务，通过 API 注册新工具并立即使用
+- [x] 同一任务请求根据意图自动路由到不同模型（简单→Flash，复杂→Pro）
+- [x] 高风险操作（如 git push）触发前端审批弹窗
+- [x] 新任务启动时，Semantic 规则和相关 Episode 写入 Working Memory 注入 System Prompt
+- [x] 完成一个任务后，点击「新建会话」即可回到主界面继续发起新任务
+- [x] 刷新页面后，历史任务列表可恢复，点击历史任务可回看执行过程和结果
 
 ---
 
@@ -316,4 +320,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |
 | v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
-| v0.5 | 2026-07-06 | Phase 5 Session 管理完成，Session CRUD + Task 金字塔 + 前端会话列表 |
+| v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
