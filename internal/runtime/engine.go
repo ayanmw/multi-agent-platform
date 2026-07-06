@@ -222,6 +222,25 @@ type EngineConfig struct {
 	// prepended to the system prompt so the agent has access to past
 	// experiences and stable semantic rules without the user repeating them.
 	WorkingMemory string
+
+	// AgentBus is the inter-agent communication channel. When set, the agent can
+	// send messages to other agents and receive messages from them during the
+	// ReAct loop. When nil, agent-to-agent communication is disabled.
+	//
+	// The AgentBus must be goroutine-safe. The concrete implementation lives in
+	// internal/orchestrator; the interface is defined in runtime/agentbus.go to
+	// avoid circular imports.
+	//
+	// Added in Phase 5.
+	AgentBus AgentBus
+
+	// CheckpointManager is the optional checkpoint/recovery manager. When set,
+	// the engine saves a checkpoint at the end of each ReAct loop iteration (after
+	// tool execution), enabling task recovery after crashes. When nil, checkpointing
+	// is skipped.
+	//
+	// Added in Phase 5.
+	CheckpointManager *CheckpointManager
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -271,6 +290,8 @@ type Engine struct {
 	totalTokens     int                        // cumulative total tokens across all LLM calls
 	tokenUsage      llm.Usage                  // cumulative detailed token usage (input/cache/output)
 	approvalHandler harness.ApprovalHandler    // optional approval handler for ErrApprovalRequired
+	agentBus        AgentBus                   // optional inter-agent communication channel (nil = disabled)
+	checkpoint      *CheckpointManager         // optional checkpoint manager for crash recovery (nil = disabled)
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -322,8 +343,10 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		tools:           tools,
 		bus:             bus,
 		persist:         cfg.Persistence,
-		gate:            cfg.PolicyGate,   // nil = no policy enforcement
-		progress:        cfg.Progress,     // nil = no progress tracking
+		gate:            cfg.PolicyGate,         // nil = no policy enforcement
+		progress:        cfg.Progress,           // nil = no progress tracking
+		agentBus:        cfg.AgentBus,           // nil = no inter-agent communication
+		checkpoint:      cfg.CheckpointManager,  // nil = no checkpoint/recovery
 		taskID:          taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
@@ -412,6 +435,54 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		"session_id": e.cfg.SessionID,
 		"is_root":    e.cfg.IsRoot,
 	}))
+
+	// Start the AgentBus listener goroutine if an AgentBus is configured.
+	// This goroutine listens for incoming messages from other agents and appends
+	// them to the conversation as user messages. It runs concurrently with the
+	// ReAct loop and is stopped when the context is cancelled.
+	agentMsgCh := make(chan AgentMessage, 10)
+	agentBusDone := make(chan struct{})
+	if e.agentBus != nil {
+		e.agentBus.RegisterHandler(e.cfg.AgentID, func(msg AgentMessage) {
+			select {
+			case agentMsgCh <- msg:
+			default:
+				// Channel full — drop the message to avoid blocking the sender.
+				// This is a safety measure; in practice, the channel should be
+				// large enough to handle bursts.
+			}
+		})
+		go func() {
+			defer close(agentBusDone)
+			for {
+				select {
+				case <-ctx.Done():
+					// Context cancelled — stop listening.
+					e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					return
+				case msg, ok := <-agentMsgCh:
+					if !ok {
+						return
+					}
+					// Append the incoming message to the conversation as a user
+					// message. The LLM will see it as a new input from another agent.
+					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
+					e.messages = append(e.messages, llm.Message{Role: "user", Content: formatted})
+					e.saveConversation("user", formatted)
+
+					// Emit a system_info event so the frontend can show the
+					// inter-agent communication in the UI.
+					e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"type":        "agent_message_received",
+						"from_agent":  msg.FromAgentID,
+						"to_agent":    e.cfg.AgentID,
+						"msg_type":    msg.Type,
+						"content":     msg.Content,
+					}))
+				}
+			}
+		}()
+	}
 
 	// =========================================================================
 	// REACT LOOP: THINK → TOOL_CALL → OBSERVE → (repeat)
@@ -597,6 +668,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		}
 		// Loop back to PHASE 1 (THINK) — the LLM will now see the tool results
 		// and decide whether to call more tools or produce a final answer.
+
+		// Save a checkpoint at the end of each ReAct loop iteration (after tool
+		// execution). This enables task recovery if the process crashes — the
+		// task can be resumed from the last checkpoint.
+		// Checkpointing is skipped when CheckpointManager is nil.
+		e.saveCheckpoint()
 	}
 
 	// =========================================================================
@@ -1066,4 +1143,56 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}))
 
 	return resultStr, nil
+}
+
+// sendAgentMessage sends a message to another agent via the AgentBus.
+// It creates a runtime.AgentMessage from the current agent, sends it via the
+// AgentBus, and emits a system_info event so the frontend can display the
+// inter-agent communication.
+//
+// If the AgentBus is nil, this is a no-op - agent-to-agent communication is disabled.
+func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
+	if e.agentBus == nil {
+		return
+	}
+
+	msg := AgentMessage{
+		FromAgentID: e.cfg.AgentID,
+		ToAgentID:   toAgentID,
+		Type:        msgType,
+		Content:     content,
+	}
+
+	e.agentBus.SendMessage(msg)
+
+	// Emit a system_info event so the frontend can show the message in the UI.
+	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"type":       "agent_message_sent",
+		"from_agent": e.cfg.AgentID,
+		"to_agent":   toAgentID,
+		"msg_type":   msgType,
+		"content":    content,
+	}))
+}
+
+// saveCheckpoint persists the current engine state as a checkpoint for crash recovery.
+// This is called at the end of each ReAct loop iteration (after tool execution).
+// If the CheckpointManager is nil, this is a no-op.
+//
+// The checkpoint saves:
+//   - The current step index
+//   - The cumulative token count
+//   - The full conversation history (messages)
+//   - The current task progress (if available)
+//
+// On recovery, RecoverFromCheckpoint can restore the engine to this state
+// and continue execution from where it left off.
+func (e *Engine) saveCheckpoint() {
+	if e.checkpoint == nil {
+		return
+	}
+
+	if err := e.checkpoint.Save(e.taskID, e.cfg.AgentID, e.stepIdx, e.totalTokens, e.messages, e.taskProgress); err != nil {
+		log.Printf("[Engine] Failed to save checkpoint: %v", err)
+	}
 }

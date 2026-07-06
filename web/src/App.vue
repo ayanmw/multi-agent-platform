@@ -18,9 +18,11 @@
 import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useTaskStore } from './composables/useTaskStore'
 import { useSessionStore } from './composables/useSessionStore'
+import { useAgentStore } from './composables/useAgentStore'
 import MetricsPanel from './components/MetricsPanel.vue'
 import TaskInput from './components/TaskInput.vue'
 import AgentTree from './components/AgentTree.vue'
+import AgentConfig from './components/AgentConfig.vue'
 import CaseCard from './components/CaseCard.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
@@ -80,6 +82,8 @@ const {
   setActiveSession,
   deleteSession,
 } = useSessionStore()
+
+const { showAgentConfig, loadAgents } = useAgentStore()
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
 
@@ -313,10 +317,16 @@ async function handleDeleteSession(session: Session) {
 
     <!-- Main content -->
     <main class="main-content">
+      <!-- Agent Config view — replaces main content when active -->
+      <AgentConfig v-if="showAgentConfig" @back="showAgentConfig = false" />
+
+      <!-- Normal main content -->
+      <template v-else>
       <!-- Header -->
       <header class="app-header">
         <h1 class="app-title">🤖 Multi-Agent Platform</h1>
         <div class="app-header-right">
+          <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
           <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
           <span class="app-version">{{ appVersion }}</span>
         </div>
@@ -419,6 +429,7 @@ async function handleDeleteSession(session: Session) {
         :is-running="isAgentRunning"
         @close="showTips = false"
       />
+      </template>
     </main>
   </div>
 </template>
@@ -591,6 +602,23 @@ async function handleDeleteSession(session: Session) {
 }
 
 .tips-btn:hover {
+  background: #444;
+  color: #fff;
+}
+
+.agents-btn {
+  background: #333;
+  border: 1px solid #444;
+  color: #ccc;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  font-weight: 500;
+}
+
+.agents-btn:hover {
   background: #444;
   color: #fff;
 }

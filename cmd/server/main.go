@@ -83,10 +83,38 @@ func main() {
 	// Initialize tool registry with built-in tools
 	toolRegistry := tool.NewRegistry()
 	tool.RegisterBuiltins(toolRegistry)
+
+	// Phase 5: Docker sandbox for run_shell tool.
+	// Check Docker availability at startup. If available, wrap the run_shell tool
+	// in a SandboxedShellTool. If not available, log a warning and use direct execution.
+	sandboxCfg := tool.DefaultSandboxConfig()
+	sandbox := tool.NewSandboxExecutor(sandboxCfg)
+	if sandbox.IsAvailable() {
+		log.Println("Docker sandbox: enabled — run_shell executes in isolated containers")
+		// Replace the built-in run_shell with the sandboxed version.
+		// First, unregister the original run_shell tool.
+		toolRegistry.Unregister("run_shell")
+		// Register the sandboxed version with the original as fallback.
+		sandboxedShell := tool.NewSandboxedShellTool(sandbox, tool.NewRunShellTool())
+		toolRegistry.Register(sandboxedShell)
+	} else {
+		log.Println("Docker sandbox: disabled — Docker not available, using direct execution")
+	}
 	log.Printf("Registered %d built-in tools", len(toolRegistry.List()))
 
+	// Phase 5: AgentBus for inter-agent communication.
+	// The AgentBus is shared across all agents and allows agents to send messages
+	// to each other during execution.
+	agentBus := orchestrator.NewAgentBus()
+	agentBusAdapter := orchestrator.NewAgentBusAdapter(agentBus)
+
+	// Phase 5: CheckpointManager for task recovery after crashes.
+	// Checkpoints are saved at the end of each ReAct loop iteration.
+	checkpointMgr := runtime.NewCheckpointManager("data/checkpoints")
+	log.Println("CheckpointManager: initialized (data/checkpoints)")
+
 	// Initialize multi-agent orchestrator
-	orch := orchestrator.New(hub, cfg, toolRegistry, persist)
+	orch := orchestrator.New(hub, cfg, toolRegistry, persist, agentBusAdapter, checkpointMgr)
 
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
@@ -247,7 +275,7 @@ func main() {
 			}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -418,7 +446,25 @@ func main() {
 		})
 	})
 
-	// Memory API (Phase 6)
+	// Phase 5: Checkpoint API endpoints for task recovery
+// GET /api/checkpoints — list all recoverable tasks
+http.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	handleListCheckpoints(w, r, checkpointMgr)
+})
+// POST /api/checkpoints/recover — resume a task from a checkpoint
+http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr)
+})
+
+// Memory API (Phase 6)
 	// GET /api/memories?tier=consolidated&project=default — list memories
 	// POST /api/memories/promote — manually trigger promotion
 	memGateway := harness.NewPromotionGate(memDB)
@@ -494,7 +540,7 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager) {
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
@@ -525,22 +571,24 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	progressManager := harness.NewProgressManager()
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:         agentID,
-		SystemPrompt:    systemPrompt,
-		Model:           cfg.LLMModel,
-		Endpoint:        cfg.LLMEndpoint,
-		APIKey:          cfg.LLMAPIKey,
-		Temperature:     0.7,
-		MaxTokens:       4096,
-		MaxSteps:        contract.MaxSteps,
-		Persistence:     persist,
-		PolicyGate:      policyGate,
-		Progress:        progressManager,
-		Contract:        contract,
-		SessionID:       sessionID,
-		IsRoot:          true,
-		ApprovalHandler: approvalHandler, // Phase 5: 审批处理器
-			WorkingMemory:   workingMemory,    // Phase 6: 工作记忆注入
+		AgentID:          agentID,
+		SystemPrompt:     systemPrompt,
+		Model:            cfg.LLMModel,
+		Endpoint:         cfg.LLMEndpoint,
+		APIKey:           cfg.LLMAPIKey,
+		Temperature:      0.7,
+		MaxTokens:        4096,
+		MaxSteps:         contract.MaxSteps,
+		Persistence:      persist,
+		PolicyGate:       policyGate,
+		Progress:         progressManager,
+		Contract:         contract,
+		SessionID:        sessionID,
+		IsRoot:           true,
+		ApprovalHandler:  approvalHandler,  // Phase 5: 审批处理器
+		WorkingMemory:    workingMemory,     // Phase 6: 工作记忆注入
+		AgentBus:         agentBus,          // Phase 5: 多Agent通信
+		CheckpointManager: checkpointMgr,    // Phase 5: 崩溃恢复
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
@@ -639,6 +687,122 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// handleListCheckpoints returns a JSON array of all available checkpoint task IDs.
+// GET /api/checkpoints
+func handleListCheckpoints(w http.ResponseWriter, r *http.Request, cm *runtime.CheckpointManager) {
+	taskIDs, err := cm.List()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to list checkpoints: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if taskIDs == nil {
+		taskIDs = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"checkpoints": taskIDs,
+	})
+}
+
+// handleRecoverCheckpoint resumes a task from a checkpoint.
+// POST /api/checkpoints/recover
+// Body: {"task_id": "task_xxx"}
+func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, agentBus runtime.AgentBus, cm *runtime.CheckpointManager) {
+	var req struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.TaskID == "" {
+		http.Error(w, "task_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Load the checkpoint from disk.
+	cp, err := cm.Load(req.TaskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load checkpoint: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Build the engine config from the checkpoint's agent ID and restore state.
+	// The system prompt is set to a generic recovery prompt since the original
+	// prompt is in the conversation history.
+	contract := harness.DefaultContract("resume")
+	contract.MaxSteps = cp.StepIdx + 10 // allow 10 more steps
+
+	progressManager := harness.NewProgressManager()
+	tokenBudgetRule := &harness.TokenBudgetRule{}
+	policyChain := harness.NewPolicyChain(
+		&harness.PathTraversalRule{},
+		&harness.FileScopeRule{},
+		&harness.DangerousCommandRule{},
+		harness.NewApprovalRule(approvalHandler),
+		tokenBudgetRule,
+		&harness.ToolWhitelistRule{},
+	)
+	policyGate := harness.NewPolicyGate(policyChain, contract)
+
+	cfg_ := runtime.EngineConfig{
+		AgentID:          cp.AgentID,
+		SystemPrompt:     "You are recovering from a checkpoint. Continue the task from where you left off.",
+		Model:            cfg.LLMModel,
+		Endpoint:         cfg.LLMEndpoint,
+		APIKey:           cfg.LLMAPIKey,
+		Temperature:      0.7,
+		MaxTokens:        4096,
+		MaxSteps:         contract.MaxSteps,
+		Persistence:      persist,
+		PolicyGate:       policyGate,
+		Progress:         progressManager,
+		Contract:         contract,
+		ApprovalHandler:  approvalHandler,
+		AgentBus:         agentBus,
+		CheckpointManager: cm,
+	}
+
+	engine := runtime.RecoverFromCheckpoint(cp, cfg_, tools, &hubAdapter{hub: hub}, req.TaskID)
+
+	// Emit recovery event for the frontend.
+	hub.SendEvent(event.NewEvent("task_started", req.TaskID, cp.AgentID, cp.StepIdx, map[string]any{
+		"task_id":    req.TaskID,
+		"agent_id":   cp.AgentID,
+		"recovered":  true,
+		"step_idx":   cp.StepIdx,
+		"total_tokens": cp.TotalTokens,
+	}))
+
+	// Run the engine in a goroutine. The input is empty because the conversation
+	// history already has the last user message.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		result, totalTokens, err := engine.Run(ctx, "")
+		if err != nil {
+			log.Printf("[Recovery %s] Agent loop failed: %v", req.TaskID, err)
+			hub.SendEvent(event.NewEvent("task_failed", req.TaskID, cp.AgentID, 0, map[string]any{
+				"reason": err.Error(),
+			}))
+			return
+		}
+
+		// Delete the checkpoint after successful completion.
+		cm.Delete(req.TaskID)
+		log.Printf("[Recovery %s] Completed. Tokens: %d, Result: %s", req.TaskID, totalTokens, truncate(result, 100))
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"task_id":    req.TaskID,
+		"agent_id":   cp.AgentID,
+		"step_idx":   cp.StepIdx,
+		"status":     "recovering",
+	})
 }
 
 // fileExists checks if a path exists in the embedded filesystem.

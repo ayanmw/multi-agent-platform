@@ -112,25 +112,31 @@ type AgentResult struct {
 //
 // # Usage
 //
-//	orch := orchestrator.New(hub, cfg, tools, persist)
+//	orch := orchestrator.New(hub, cfg, tools, persist, agentBus, checkpointMgr)
 //	results := orch.RunBlocking(ctx, specs)
 //	for _, r := range results {
 //	    fmt.Printf("%s: %s (%d tokens)\n", r.Name, r.Status, r.TotalTokens)
 //	}
 type Orchestrator struct {
-	hub     *ws.Hub
-	cfg     *config.Config
-	tools   *tool.Registry
-	persist runtime.Persistence
+	hub          *ws.Hub
+	cfg          *config.Config
+	tools        *tool.Registry
+	persist      runtime.Persistence
+	agentBus     *AgentBusAdapter         // Phase 5: inter-agent communication
+	checkpointMgr *runtime.CheckpointManager // Phase 5: crash recovery
 }
 
 // New creates a new Orchestrator.
-func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence) *Orchestrator {
+// agentBus and checkpointMgr may be nil — multi-agent communication and
+// checkpointing are disabled when nil.
+func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, agentBus *AgentBusAdapter, checkpointMgr *runtime.CheckpointManager) *Orchestrator {
 	return &Orchestrator{
-		hub:     hub,
-		cfg:     cfg,
-		tools:   tools,
-		persist: persist,
+		hub:          hub,
+		cfg:          cfg,
+		tools:        tools,
+		persist:      persist,
+		agentBus:     agentBus,
+		checkpointMgr: checkpointMgr,
 	}
 }
 
@@ -205,19 +211,21 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:      spec.AgentID,
-		SystemPrompt: spec.SystemPrompt,
-		Model:        model,
-		Endpoint:     o.cfg.LLMEndpoint,
-		APIKey:       o.cfg.LLMAPIKey,
-		Temperature:  0.7,
-		MaxTokens:    4096,
-		MaxSteps:     contract.MaxSteps,
-		Persistence:  o.persist,
-		PolicyGate:   policyGate,
-		Progress:     progressManager,
-		Contract:      contract,
-			WorkingMemory: spec.WorkingMemory, // Phase 6: 工作记忆注入
+		AgentID:          spec.AgentID,
+		SystemPrompt:     spec.SystemPrompt,
+		Model:            model,
+		Endpoint:         o.cfg.LLMEndpoint,
+		APIKey:           o.cfg.LLMAPIKey,
+		Temperature:      0.7,
+		MaxTokens:        4096,
+		MaxSteps:         contract.MaxSteps,
+		Persistence:      o.persist,
+		PolicyGate:       policyGate,
+		Progress:         progressManager,
+		Contract:         contract,
+		WorkingMemory:    spec.WorkingMemory, // Phase 6: 工作记忆注入
+		AgentBus:         o.agentBus,         // Phase 5: 多Agent通信
+		CheckpointManager: o.checkpointMgr,   // Phase 5: 崩溃恢复
 	}, o.tools, &hubAdapter{hub: o.hub}, taskID)
 
 	// Emit agent_started event for the orchestrator to track
