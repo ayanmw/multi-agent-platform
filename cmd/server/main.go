@@ -74,6 +74,9 @@ func main() {
 	go heartbeat.Start(context.Background())
 	log.Println("Memory Heartbeat started (5min interval, adaptive)")
 
+	// Initialize MemoryRecall for working memory injection on new tasks
+	memRecall := harness.NewMemoryRecall(memDB)
+
 	// Initialize persistence adapter
 	persist := &DBPersistence{}
 
@@ -129,6 +132,14 @@ func main() {
 					decomposer := &orchestrator.TaskDecomposer{}
 					result := decomposer.Decompose(req.Input, req.CaseType)
 					specs = result.Agents
+				}
+
+				// Build Working Memory for all agents in this orchestration
+				if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+					workingMemory := memRecall.FormatForSystemPrompt(wm)
+					for i := range specs {
+						specs[i].WorkingMemory = workingMemory
+					}
 				}
 
 				// Resolve or create session
@@ -229,8 +240,14 @@ func main() {
 			contract.MaxSteps = req.MaxSteps
 		}
 
+			// Build Working Memory from past experiences for this task
+			workingMemory := ""
+			if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+				workingMemory = memRecall.FormatForSystemPrompt(wm)
+			}
+
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -343,11 +360,19 @@ func main() {
 					specs[i].Contract = &contract
 				}
 				specs[i].Contract.MaxSteps = req.MaxSteps
+				}
 			}
-		}
 
-		// Resolve or create session
-		sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
+			// Build Working Memory for all agents in this orchestration
+			if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+				workingMemory := memRecall.FormatForSystemPrompt(wm)
+				for i := range specs {
+					specs[i].WorkingMemory = workingMemory
+				}
+			}
+
+			// Resolve or create session
+			sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -410,7 +435,15 @@ func main() {
 			return
 		}
 		handlePromoteMemories(w, r, memGateway)
-	})
+		})
+		// GET /api/memories/recall?task=xxx&project=default&max=3 — preview what would be recalled
+		http.HandleFunc("/api/memories/recall", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET only", http.StatusMethodNotAllowed)
+				return
+			}
+			handleRecallPreview(w, r, memRecall)
+		})
 
 	// Serve Vue SPA from embedded filesystem (production mode).
 	// In dev mode, users can run `cd web && npm run dev` to use Vite's dev server
@@ -461,7 +494,7 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string) {
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
@@ -507,6 +540,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		SessionID:       sessionID,
 		IsRoot:          true,
 		ApprovalHandler: approvalHandler, // Phase 5: 审批处理器
+			WorkingMemory:   workingMemory,    // Phase 6: 工作记忆注入
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

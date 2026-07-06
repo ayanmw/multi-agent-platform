@@ -215,6 +215,13 @@ type EngineConfig struct {
 	// See internal/harness for the ApprovalHandler interface.
 	// Added in Phase 5.
 	ApprovalHandler harness.ApprovalHandler
+
+	// WorkingMemory is optional context from prior tasks, injected into the
+	// system prompt before the agent starts. It is built by MemoryRecall
+	// (internal/harness/recall.go) before engine creation. When set, it is
+	// prepended to the system prompt so the agent has access to past
+	// experiences and stable semantic rules without the user repeating them.
+	WorkingMemory string
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -301,6 +308,14 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		provider = llm.NewOpenAIProvider("openai", cfg.Endpoint, cfg.APIKey, cfg.Model)
 	}
 
+	// Resolve the system prompt. If WorkingMemory is provided (built by
+	// MemoryRecall before engine creation), prepend it so the agent has
+	// access to past experiences and stable semantic rules.
+	systemPrompt := cfg.SystemPrompt
+	if cfg.WorkingMemory != "" {
+		systemPrompt = cfg.WorkingMemory + "\n\n" + cfg.SystemPrompt
+	}
+
 	return &Engine{
 		cfg:             cfg,
 		llm:             provider,
@@ -311,7 +326,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		progress:        cfg.Progress,     // nil = no progress tracking
 		taskID:          taskID,
 		messages: []llm.Message{
-			{Role: "system", Content: cfg.SystemPrompt},
+			{Role: "system", Content: systemPrompt},
 		},
 		stepIdx:         0,
 		totalTokens:     0,

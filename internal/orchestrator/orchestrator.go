@@ -81,6 +81,11 @@ type AgentSpec struct {
 	// ParentAgentID is the agent that spawned this agent (for agent-to-agent communication).
 	// Empty for root-level agents.
 	ParentAgentID string
+
+	// WorkingMemory is optional context from prior tasks, injected into the
+	// system prompt before the agent starts. Built by MemoryRecall before
+	// orchestration. When set, it is prepended to the system prompt.
+	WorkingMemory string
 }
 
 // AgentResult holds the result of a single agent's execution.
@@ -211,7 +216,8 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 		Persistence:  o.persist,
 		PolicyGate:   policyGate,
 		Progress:     progressManager,
-		Contract:     contract,
+		Contract:      contract,
+			WorkingMemory: spec.WorkingMemory, // Phase 6: 工作记忆注入
 	}, o.tools, &hubAdapter{hub: o.hub}, taskID)
 
 	// Emit agent_started event for the orchestrator to track

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -385,4 +386,58 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(report)
+}
+
+// handleRecallPreview previews what memories would be recalled for a given task.
+// GET /api/memories/recall?task=xxx&project=default&max=3
+// This is a debugging endpoint — it shows the WorkingMemory that would be injected
+// for a task without actually running the agent.
+func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness.MemoryRecall) {
+	taskGoal := r.URL.Query().Get("task")
+	if taskGoal == "" {
+		http.Error(w, "task query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	projectID := r.URL.Query().Get("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	maxEpisodes := 3
+	if maxStr := r.URL.Query().Get("max"); maxStr != "" {
+		if n, err := parseInt(maxStr); err == nil && n > 0 {
+			maxEpisodes = n
+		}
+	}
+
+	wm, err := recall.BuildWorkingMemory(projectID, taskGoal, maxEpisodes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Detect conflicts among the recalled memories
+	allMemories := append(wm.StableRules, wm.RelatedEpisodes...)
+	conflicts := recall.DetectConflicts(allMemories)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"working_memory": wm,
+		"formatted":      recall.FormatForSystemPrompt(wm),
+		"conflicts":      conflicts,
+	})
+}
+
+// parseInt parses a simple integer string. Used for URL query parameter parsing
+// where we don't need the full strconv import for a single value.
+func parseInt(s string) (int, error) {
+	var n int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, errors.New("not a valid integer")
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
 }
