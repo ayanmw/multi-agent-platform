@@ -44,6 +44,27 @@ func (r *Registry) List() []Tool {
 	return list
 }
 
+// Unregister removes a tool from the registry by name.
+// Returns an error if the tool is not found.
+func (r *Registry) Unregister(name string) error {
+	if _, ok := r.tools[name]; !ok {
+		return fmt.Errorf("tool not found: %s", name)
+	}
+	delete(r.tools, name)
+	return nil
+}
+
+// IsBuiltin returns true if the given tool name is one of the built-in tools
+// (run_shell, write_file, read_file). Built-in tools cannot be deleted via the
+// dynamic tool registration API.
+func (r *Registry) IsBuiltin(name string) bool {
+	switch name {
+	case "run_shell", "write_file", "read_file":
+		return true
+	}
+	return false
+}
+
 func (r *Registry) ToJSON() ([]byte, error) {
 	schema := make([]map[string]any, 0)
 	for _, tool := range r.tools {

@@ -482,3 +482,61 @@ func DeleteAgent(id string) error {
 	_, err := DB.Exec(`DELETE FROM agents WHERE id=?`, id)
 	return err
 }
+
+// ToolRecord mirrors the tools table for dynamic tool registration.
+type ToolRecord struct {
+	Name        string
+	Description string
+	Schema      map[string]any
+	Enabled     bool
+	CreatedAt   time.Time
+}
+
+// InsertTool persists a new dynamic tool into the tools table.
+func InsertTool(name, description string, schema map[string]any, enabled bool) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	schemaJSON, _ := json.Marshal(schema)
+	_, err := DB.Exec(
+		`INSERT INTO tools (name, description, schema, enabled) VALUES (?, ?, ?, ?)`,
+		name, description, string(schemaJSON), enabled,
+	)
+	return err
+}
+
+// DeleteTool removes a dynamic tool from the tools table by name.
+func DeleteTool(name string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(`DELETE FROM tools WHERE name=?`, name)
+	return err
+}
+
+// QueryTools returns all tools from the tools table, ordered by creation time.
+func QueryTools() ([]ToolRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT name, COALESCE(description,''), COALESCE(schema,'{}'), COALESCE(enabled,1), created_at
+		 FROM tools ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tools []ToolRecord
+	for rows.Next() {
+		var tr ToolRecord
+		var schemaJSON string
+		if err := rows.Scan(&tr.Name, &tr.Description, &schemaJSON, &tr.Enabled, &tr.CreatedAt); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(schemaJSON), &tr.Schema)
+		tools = append(tools, tr)
+	}
+	return tools, rows.Err()
+}

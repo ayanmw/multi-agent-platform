@@ -280,6 +280,20 @@ func main() {
 		json.NewEncoder(w).Encode(cases.All())
 	})
 
+	// Dynamic Tool Registration API (Phase 2+)
+	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handleRegisterTool(w, r, toolRegistry)
+		case http.MethodGet:
+			handleListTools(w, r, toolRegistry)
+		case http.MethodDelete:
+			handleDeleteTool(w, r, toolRegistry)
+		default:
+			http.Error(w, "GET, POST, or DELETE only", http.StatusMethodNotAllowed)
+		}
+	})
+
 	// Multi-Agent orchestration endpoint (Phase 4)
 	// POST /api/multi-agent — runs multiple agents concurrently
 	http.HandleFunc("/api/multi-agent", func(w http.ResponseWriter, r *http.Request) {
