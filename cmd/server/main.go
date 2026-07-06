@@ -41,11 +41,24 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// Register control handler for client-side pause/resume/cancel
+	// Initialize approval handler for Phase 5 Harness
+	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
+
+	// Register control handler for client-side pause/resume/cancel and approval decisions
 	hub.SetControlHandler(func(msg ws.ClientControlMsg) {
-		log.Printf("[Control] Received: action=%s task=%s agent=%s", msg.Action, msg.TaskID, msg.AgentID)
+		log.Printf("[Control] Received: action=%s task=%s agent=%s approval_id=%s", msg.Action, msg.TaskID, msg.AgentID, msg.ApprovalID)
+		// Phase 5: 路由审批决定到 ApprovalHandler
+		switch msg.Action {
+		case "approve":
+			if msg.ApprovalID != "" {
+				approvalHandler.HandleDecision(msg.ApprovalID, true)
+			}
+		case "deny":
+			if msg.ApprovalID != "" {
+				approvalHandler.HandleDecision(msg.ApprovalID, false)
+			}
+		}
 		// TODO: Phase 4+ — implement actual engine control via context cancellation
-		// For now, we just log the control message
 	})
 
 	// Initialize database
@@ -211,7 +224,7 @@ func main() {
 		}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -409,7 +422,7 @@ func main() {
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string) {
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler) {
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
@@ -417,16 +430,20 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	}
 
 	// Build Harness policy gate with all safety rules:
-	//   PathTraversalRule  — blocks ".." in file paths
-	//   FileScopeRule      — restricts file ops to contract scope
-	//   TokenBudgetRule    — blocks tool calls when token budget exceeded
-	//   ToolWhitelistRule  — only allows tools listed in the contract
+	//   PathTraversalRule      — blocks ".." in file paths
+	//   FileScopeRule          — restricts file ops to contract scope
+	//   DangerousCommandRule   — blocks dangerous shell commands (Phase 5)
+	//   ApprovalRule           — requires frontend approval for high-risk ops (Phase 5)
+	//   TokenBudgetRule        — blocks tool calls when token budget exceeded
+	//   ToolWhitelistRule      — only allows tools listed in the contract
 	//
 	// Rules are checked in order. The first rule that blocks stops the chain.
 	tokenBudgetRule := &harness.TokenBudgetRule{}
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
+		&harness.DangerousCommandRule{},
+		harness.NewApprovalRule(approvalHandler),
 		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
 	)
@@ -436,20 +453,21 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 	progressManager := harness.NewProgressManager()
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:      agentID,
-		SystemPrompt: systemPrompt,
-		Model:        cfg.LLMModel,
-		Endpoint:     cfg.LLMEndpoint,
-		APIKey:       cfg.LLMAPIKey,
-		Temperature:  0.7,
-		MaxTokens:    4096,
-		MaxSteps:     contract.MaxSteps,
-		Persistence:  persist,
-		PolicyGate:   policyGate,
-		Progress:     progressManager,
-		Contract:     contract,
-		SessionID:    sessionID,
-		IsRoot:       true,
+		AgentID:         agentID,
+		SystemPrompt:    systemPrompt,
+		Model:           cfg.LLMModel,
+		Endpoint:        cfg.LLMEndpoint,
+		APIKey:          cfg.LLMAPIKey,
+		Temperature:     0.7,
+		MaxTokens:       4096,
+		MaxSteps:        contract.MaxSteps,
+		Persistence:     persist,
+		PolicyGate:      policyGate,
+		Progress:        progressManager,
+		Contract:        contract,
+		SessionID:       sessionID,
+		IsRoot:          true,
+		ApprovalHandler: approvalHandler, // Phase 5: 审批处理器
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

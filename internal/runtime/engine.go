@@ -89,6 +89,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -206,6 +207,14 @@ type EngineConfig struct {
 	// Root tasks represent the primary user request; child tasks represent
 	// sub-agent work delegated from the root.
 	IsRoot bool
+
+	// ApprovalHandler is the optional Harness approval handler. When set,
+	// the Engine can handle ErrApprovalRequired errors from the PolicyGate
+	// by sending approval requests to the frontend and waiting for user decisions.
+	// When nil, ErrApprovalRequired errors cause immediate task failure.
+	// See internal/harness for the ApprovalHandler interface.
+	// Added in Phase 5.
+	ApprovalHandler harness.ApprovalHandler
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -241,19 +250,20 @@ type EngineConfig struct {
 // The * suffix indicates events that may repeat multiple times (streaming tokens,
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
-	cfg         EngineConfig            // immutable configuration set at creation
-	llm         llm.Provider           // LLM Provider interface (abstracts API protocol)
-	tools       *tool.Registry          // the tool registry shared across agents
-	bus         EventBus                // event transport for real-time frontend updates
-	persist     Persistence             // optional persistence backend (nil = no persistence)
-	gate        *harness.PolicyGate     // optional policy enforcement (nil = allow all)
-	progress    *harness.ProgressManager // optional progress tracking (nil = skip)
-	taskProgress *harness.TaskProgress   // current progress state (nil if progress is nil)
-	taskID      string                  // unique task identifier for correlation
-	messages    []llm.Message           // full conversation history (system + user + assistant + tool)
-	stepIdx     int                     // current ReAct loop iteration (0-based)
-	totalTokens int                     // cumulative total tokens across all LLM calls
-	tokenUsage  llm.Usage               // cumulative detailed token usage (input/cache/output)
+	cfg             EngineConfig              // immutable configuration set at creation
+	llm             llm.Provider               // LLM Provider interface (abstracts API protocol)
+	tools           *tool.Registry             // the tool registry shared across agents
+	bus             EventBus                   // event transport for real-time frontend updates
+	persist         Persistence                // optional persistence backend (nil = no persistence)
+	gate            *harness.PolicyGate        // optional policy enforcement (nil = allow all)
+	progress        *harness.ProgressManager   // optional progress tracking (nil = skip)
+	taskProgress    *harness.TaskProgress      // current progress state (nil if progress is nil)
+	taskID          string                     // unique task identifier for correlation
+	messages        []llm.Message              // full conversation history (system + user + assistant + tool)
+	stepIdx         int                        // current ReAct loop iteration (0-based)
+	totalTokens     int                        // cumulative total tokens across all LLM calls
+	tokenUsage      llm.Usage                  // cumulative detailed token usage (input/cache/output)
+	approvalHandler harness.ApprovalHandler    // optional approval handler for ErrApprovalRequired
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -292,20 +302,21 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 
 	return &Engine{
-		cfg:         cfg,
-		llm:         provider,
-		tools:       tools,
-		bus:         bus,
-		persist:     cfg.Persistence,
-		gate:        cfg.PolicyGate,   // nil = no policy enforcement
-		progress:    cfg.Progress,     // nil = no progress tracking
-		taskID:      taskID,
+		cfg:             cfg,
+		llm:             provider,
+		tools:           tools,
+		bus:             bus,
+		persist:         cfg.Persistence,
+		gate:            cfg.PolicyGate,   // nil = no policy enforcement
+		progress:        cfg.Progress,     // nil = no progress tracking
+		taskID:          taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: cfg.SystemPrompt},
 		},
-		stepIdx:     0,
-		totalTokens: 0,
-		tokenUsage:  llm.Usage{},
+		stepIdx:         0,
+		totalTokens:     0,
+		tokenUsage:      llm.Usage{},
+		approvalHandler: cfg.ApprovalHandler, // nil = approval not supported
 	}
 }
 
@@ -446,23 +457,23 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		e.tokenUsage.CompletionTokens += usage.CompletionTokens
 		e.tokenUsage.TotalTokens += usage.TotalTokens
 
-	// Update the PolicyGate with the latest token usage so TokenBudgetRule
-	// can enforce the budget before the next tool execution.
-	if e.gate != nil {
-		e.gate.SetTokenUsage(e.totalTokens)
-	}
+		// Update the PolicyGate with the latest token usage so TokenBudgetRule
+		// can enforce the budget before the next tool execution.
+		if e.gate != nil {
+			e.gate.SetTokenUsage(e.totalTokens)
+		}
 
-	// Emit an agent_status event so the frontend can display real-time
-	// token consumption detail (input / cache / output) and progress.
-	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"prompt_tokens":            e.tokenUsage.PromptTokens,
-		"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
-		"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
-		"completion_tokens":        e.tokenUsage.CompletionTokens,
-		"total_tokens":             e.tokenUsage.TotalTokens,
-		"max_steps":                e.cfg.MaxSteps,
-		"current_step":             e.stepIdx,
-	}))
+		// Emit an agent_status event so the frontend can display real-time
+		// token consumption detail (input / cache / output) and progress.
+		e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"prompt_tokens":            e.tokenUsage.PromptTokens,
+			"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
+			"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
+			"completion_tokens":        e.tokenUsage.CompletionTokens,
+			"total_tokens":             e.tokenUsage.TotalTokens,
+			"max_steps":                e.cfg.MaxSteps,
+			"current_step":             e.stepIdx,
+		}))
 
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), usage)
@@ -579,10 +590,10 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// infinite loops (e.g., the LLM keeps calling the same tool with the same
 	// arguments without making progress).
 	e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"reason":        "max_steps_exceeded",
-		"max_steps":     e.cfg.MaxSteps,
-		"current_step":  e.stepIdx,
-		"total_tokens":  e.totalTokens,
+		"reason":       "max_steps_exceeded",
+		"max_steps":    e.cfg.MaxSteps,
+		"current_step": e.stepIdx,
+		"total_tokens": e.totalTokens,
 	}))
 	e.updateTask("failed", "", e.totalTokens)
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
@@ -776,6 +787,14 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 // executeTool manages the full step lifecycle (started → executing → completed).
 // Each tool execution is a distinct step with its own events, and the stepIdx
 // must be correct when those events are emitted.
+//
+// # Phase 5: Approval Handling
+//
+// When the PolicyGate returns ErrApprovalRequired (from ApprovalRule), the engine
+// catches this error and routes it to handleApprovalRequired. This method emits
+// a system_info event to the frontend and waits for the user to approve or deny
+// the high-risk operation. If approved, the tool is executed directly (bypassing
+// the PolicyGate). If denied, the task fails with an approval_denied error.
 func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// Increment stepIdx — each tool execution is a new step. This is done here
 	// (not in the caller) so that the step_started and tool_call_started events
@@ -821,6 +840,15 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	duration := time.Since(start).Milliseconds()
 
 	if execErr != nil {
+		// === Phase 5: 审批请求处理 ===
+		// 检查 PolicyGate 是否返回了 ErrApprovalRequired。
+		// 如果 ApprovalRule 检测到高风险操作，会返回此错误。
+		// Engine 需要发射 system_info 事件到前端，等待用户批准/拒绝。
+		var approvalErr *harness.ErrApprovalRequired
+		if errors.As(execErr, &approvalErr) {
+			return e.handleApprovalRequired(tc, approvalErr, args, duration)
+		}
+
 		// Tool execution failed — emit failure events and return the error.
 		// The UI will show the tool name, error message, and duration.
 		// The step is still marked as "complete" (not "running") because the
@@ -865,6 +893,159 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		"content": resultStr,
 	}))
 
+	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"type": "tool_call",
+	}))
+
+	return resultStr, nil
+}
+
+// handleApprovalRequired 处理 PolicyGate 返回的 ErrApprovalRequired 错误。
+// 如果配置了 ApprovalHandler，发射 system_info 事件到前端，等待用户批准/拒绝决定。
+// 如果用户批准，绕过 PolicyGate 直接执行工具调用。
+// 如果用户拒绝或超时，返回错误导致任务失败。
+// 如果没有配置 ApprovalHandler，直接返回错误。
+//
+// # 审批流程
+//
+//  1. 检查是否配置了 ApprovalHandler（未配置则直接拒绝）
+//  2. 发射 system_info(type="approval_required") 事件到前端
+//  3. 调用 ApprovalHandler.RequestApproval 发送审批请求
+//  4. 调用 ApprovalHandler.WaitForDecision 等待用户决定（默认 30 秒超时）
+//  5. 批准：绕过 PolicyGate 直接执行工具，发射正常事件流
+//  6. 拒绝/超时：发射失败事件，返回错误
+func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.ErrApprovalRequired, args map[string]any, duration int64) (string, error) {
+	// 如果未配置审批处理器，直接返回错误
+	if e.approvalHandler == nil {
+		errMsg := fmt.Sprintf("[APPROVAL REQUIRED] %s: %s (未配置审批处理器，操作被拒绝)",
+			approvalErr.Tool, approvalErr.Reason)
+		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type":        "approval_blocked",
+			"approval_id": approvalErr.ApprovalID,
+			"tool":        approvalErr.Tool,
+			"reason":      approvalErr.Reason,
+			"message":     "审批处理器未配置，操作被自动拒绝",
+		}))
+		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type": "tool_call",
+		}))
+		return "", fmt.Errorf("%s", errMsg)
+	}
+
+	// 发射 system_info 事件，通知前端显示审批对话框
+	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"type":        "approval_required",
+		"approval_id": approvalErr.ApprovalID,
+		"tool":        approvalErr.Tool,
+		"reason":      approvalErr.Reason,
+		"input":       approvalErr.Input,
+		"duration_ms": duration,
+	}))
+
+	// 发射 tool_call_output 事件，让前端显示工具调用信息
+	e.bus.SendEvent(event.NewEvent("tool_call_output", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"tool":        tc.Function.Name,
+		"result":      map[string]any{"status": "pending_approval", "approval_id": approvalErr.ApprovalID},
+		"duration_ms": duration,
+	}))
+
+	// 向前端发起审批请求
+	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input); err != nil {
+		log.Printf("[Engine] 审批请求发送失败: %v", err)
+		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"tool":        tc.Function.Name,
+			"error":       fmt.Sprintf("审批请求发送失败: %v", err),
+			"duration_ms": duration,
+		}))
+		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type": "tool_call",
+		}))
+		return "", fmt.Errorf("approval request failed: %w", err)
+	}
+
+	// 等待前端审批决定（默认超时 30 秒）
+	approved, waitErr := e.approvalHandler.WaitForDecision(approvalErr.ApprovalID, 30*time.Second)
+	if waitErr != nil {
+		// 超时或等待错误 — 视为拒绝
+		log.Printf("[Engine] 审批等待失败: %v", waitErr)
+		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type":        "approval_timeout",
+			"approval_id": approvalErr.ApprovalID,
+			"tool":        approvalErr.Tool,
+			"reason":      "审批超时，操作被自动拒绝",
+		}))
+		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"tool":        tc.Function.Name,
+			"error":       fmt.Sprintf("审批超时: %v", waitErr),
+			"duration_ms": duration,
+		}))
+		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type": "tool_call",
+		}))
+		return "", fmt.Errorf("approval timeout: %w", waitErr)
+	}
+
+	if !approved {
+		// 用户拒绝了审批请求
+		log.Printf("[Engine] 审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
+		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type":        "approval_denied",
+			"approval_id": approvalErr.ApprovalID,
+			"tool":        approvalErr.Tool,
+			"reason":      "用户拒绝了此操作",
+		}))
+		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"tool":        tc.Function.Name,
+			"error":       "用户拒绝了高风险操作",
+			"duration_ms": duration,
+		}))
+		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type": "tool_call",
+		}))
+		return "", fmt.Errorf("user denied approval for %s: %s", approvalErr.Tool, approvalErr.Reason)
+	}
+
+	// 用户批准 — 绕过 PolicyGate 直接执行工具调用
+	log.Printf("[Engine] 审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
+	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"type":        "approval_granted",
+		"approval_id": approvalErr.ApprovalID,
+		"tool":        approvalErr.Tool,
+		"message":     "审批通过，正在执行工具调用",
+	}))
+
+	// 直接执行工具（不经过 PolicyGate，因为用户已批准）
+	execStart := time.Now()
+	result, execErr := e.tools.Execute(tc.Function.Name, args)
+	execDuration := time.Since(execStart).Milliseconds()
+
+	if execErr != nil {
+		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"tool":        tc.Function.Name,
+			"error":       execErr.Error(),
+			"duration_ms": execDuration,
+		}))
+		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type": "tool_call",
+		}))
+		return "", execErr
+	}
+
+	// 工具执行成功 — 发射正常的事件流
+	resultJSON, _ := json.Marshal(result)
+	resultStr := string(resultJSON)
+
+	e.bus.SendEvent(event.NewEvent("tool_call_output", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"tool":   tc.Function.Name,
+		"result": result,
+	}))
+	e.bus.SendEvent(event.NewEvent("tool_call_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"tool":        tc.Function.Name,
+		"duration_ms": execDuration,
+	}))
+	e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"content": resultStr,
+	}))
 	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))

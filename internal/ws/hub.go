@@ -31,9 +31,10 @@ type Client struct {
 
 // ClientControlMsg represents a control message sent from the client
 type ClientControlMsg struct {
-	Action string `json:"action"` // pause, resume, cancel
-	TaskID string `json:"task_id"`
-	AgentID string `json:"agent_id"`
+	Action     string `json:"action"`      // pause, resume, cancel, approve, deny
+	TaskID     string `json:"task_id"`
+	AgentID    string `json:"agent_id"`
+	ApprovalID string `json:"approval_id"` // Phase 5: 审批请求 ID
 }
 
 // ControlHandler is called when a client sends a control message
