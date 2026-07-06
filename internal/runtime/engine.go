@@ -144,7 +144,18 @@ type EngineConfig struct {
 
 	// APIKey is the Bearer token for authenticating with the LLM API.
 	// It is sent as the Authorization header on every request.
+	//
+	// Deprecated: Prefer using Provider instead. When Provider is nil, Endpoint and
+	// APIKey are used to create a default OpenAIProvider. In Phase 6+, these fields
+	// will be removed in favor of the Provider abstraction.
 	APIKey string
+
+	// Provider is the LLM Provider implementation. When set, it takes precedence
+	// over Endpoint/APIKey/Model. This enables multi-provider support where
+	// different agents use different providers (OpenAI, Anthropic, DeepSeek, etc.).
+	// When nil, an OpenAIProvider is created from Endpoint, APIKey, and Model.
+	// Added in Phase 5.
+	Provider llm.Provider
 
 	// Temperature controls the randomness of LLM output (0.0–2.0).
 	// Lower values produce more deterministic responses; higher values produce
@@ -231,7 +242,7 @@ type EngineConfig struct {
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
 	cfg         EngineConfig            // immutable configuration set at creation
-	llm         *llm.Client             // HTTP client for the LLM API (one per engine)
+	llm         llm.Provider           // LLM Provider interface (abstracts API protocol)
 	tools       *tool.Registry          // the tool registry shared across agents
 	bus         EventBus                // event transport for real-time frontend updates
 	persist     Persistence             // optional persistence backend (nil = no persistence)
@@ -256,9 +267,12 @@ type Engine struct {
 // The engine initializes the conversation with the system prompt as the first
 // message. The user's input will be appended when Run() is called.
 //
-// The LLM client is created per-engine (not shared) so that each agent can use
+// The LLM provider is created per-engine (not shared) so that each agent can use
 // a different endpoint, API key, or model — this is essential for multi-agent
 // setups where different agents may talk to different LLM providers.
+//
+// If cfg.Provider is set, it is used directly (enabling custom providers).
+// Otherwise, an OpenAIProvider is created from cfg.Endpoint, cfg.APIKey, cfg.Model.
 func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID string) *Engine {
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 10
@@ -270,9 +284,16 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		cfg.MaxTokens = 4096
 	}
 
+	// Resolve the LLM Provider: use the explicit Provider if set, otherwise
+	// create a default OpenAIProvider from the legacy Endpoint/APIKey/Model fields.
+	provider := cfg.Provider
+	if provider == nil {
+		provider = llm.NewOpenAIProvider("openai", cfg.Endpoint, cfg.APIKey, cfg.Model)
+	}
+
 	return &Engine{
 		cfg:         cfg,
-		llm:         llm.NewClient(cfg.Endpoint, cfg.APIKey, cfg.Model),
+		llm:         provider,
 		tools:       tools,
 		bus:         bus,
 		persist:     cfg.Persistence,
@@ -634,7 +655,7 @@ func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
 //     The LLM uses this to decide whether and how to call tools.
 //  3. Constructs a ChatRequest with the full conversation history, tool
 //     definitions, model, temperature, and max tokens.
-//  4. Calls llm.Client.ChatStream with a streaming callback. Each text delta
+//  4. Calls llm.Provider.ChatStream with a streaming callback. Each text delta
 //     from the LLM is forwarded to the frontend as an llm_delta event, creating
 //     the typewriter effect in the UI.
 //  5. After the stream completes, emits llm_message_complete and step_complete

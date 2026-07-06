@@ -193,7 +193,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [ ] 运行时 Tool 注册 REST API
 - [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）
 - [ ] Docker 沙箱（run_shell 安全隔离）
-- [ ] **LLM Provider 接口抽象**: `Provider` 接口 + `OpenAIProvider` 基线实现
+- [x] **LLM Provider 接口抽象**: `Provider` 接口 + `OpenAIProvider` 基线实现
 - [ ] **Router 路由决策**: 意图分类 + 模型选择（轻量模型做路由，成本 < $0.001/次）
 - [ ] **模型能力矩阵**: 标注各模型的 tool_calling / streaming / vision / reasoning 能力
 - [ ] **Harness: ApprovalRule**（高风险操作通过 WebSocket 发送确认请求到前端）
