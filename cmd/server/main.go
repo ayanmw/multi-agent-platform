@@ -68,6 +68,12 @@ func main() {
 		log.Println("Database initialized")
 	}
 
+	// Initialize Memory infrastructure — Heartbeat for episode consolidation
+	memDB := &harness.SqliteMemoryDB{}
+	heartbeat := harness.NewHeartbeat(memDB)
+	go heartbeat.Start(context.Background())
+	log.Println("Memory Heartbeat started (5min interval, adaptive)")
+
 	// Initialize persistence adapter
 	persist := &DBPersistence{}
 
@@ -385,6 +391,25 @@ func main() {
 			"max_steps":   req.MaxSteps,
 			"status":      "started",
 		})
+	})
+
+	// Memory API (Phase 6)
+	// GET /api/memories?tier=consolidated&project=default — list memories
+	// POST /api/memories/promote — manually trigger promotion
+	memGateway := harness.NewPromotionGate(memDB)
+	http.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		handleListMemories(w, r)
+	})
+	http.HandleFunc("/api/memories/promote", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		handlePromoteMemories(w, r, memGateway)
 	})
 
 	// Serve Vue SPA from embedded filesystem (production mode).

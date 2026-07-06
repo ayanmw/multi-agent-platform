@@ -118,6 +118,36 @@ func createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// Phase 6: Memory infrastructure tables
+		//   memories — consolidated episodic summaries and semantic/policy rules
+		//   memory_links — relationships between memory records
+		`CREATE TABLE IF NOT EXISTS memories (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL DEFAULT 'default',
+			type TEXT NOT NULL,
+			tier TEXT NOT NULL,
+			content TEXT NOT NULL,
+			embedding BLOB,
+			confidence REAL DEFAULT 1.0,
+			status TEXT DEFAULT 'active',
+			source_task_ids JSON,
+			source_event_ids JSON,
+			promotion_reason TEXT,
+			access_count INT DEFAULT 0,
+			last_accessed DATETIME,
+			last_reviewed DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS memory_links (
+			source_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (source_id, target_id),
+			FOREIGN KEY (source_id) REFERENCES memories(id),
+			FOREIGN KEY (target_id) REFERENCES memories(id)
+		)`,
 	}
 
 	for _, schema := range schemas {
@@ -135,6 +165,21 @@ func createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_root_task_id ON sessions(root_task_id)`,
 	}
 	for _, idx := range indexes {
+		if _, err := DB.Exec(idx); err != nil {
+			return err
+		}
+	}
+
+	// Phase 6: Memory infrastructure indexes
+	memoryIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier)`,
+		`CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id)`,
+	}
+	for _, idx := range memoryIndexes {
 		if _, err := DB.Exec(idx); err != nil {
 			return err
 		}

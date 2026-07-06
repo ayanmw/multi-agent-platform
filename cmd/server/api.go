@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/google/uuid"
 )
@@ -329,4 +330,59 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
 	}
+}
+
+// === Memory API (Phase 6) ===
+
+// handleListMemories returns memory records filtered by tier and project.
+// GET /api/memories?tier=consolidated&project=default
+func handleListMemories(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+	tier := r.URL.Query().Get("tier")
+
+	var memories []db.MemoryRecord
+	var err error
+	if tier != "" {
+		memories, err = db.QueryMemoriesByTier(projectID, tier)
+	} else {
+		memories, err = db.QueryMemoriesByProject(projectID)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if memories == nil {
+		memories = []db.MemoryRecord{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(memories)
+}
+
+// handlePromoteMemories triggers the promotion pipeline manually.
+// POST /api/memories/promote
+// Body: {"project_id": "default"}
+func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness.PromotionGate) {
+	var req struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Accept empty body — use default project
+		req.ProjectID = "default"
+	}
+	if req.ProjectID == "" {
+		req.ProjectID = "default"
+	}
+
+	report, err := gate.PromoteCandidates(req.ProjectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
 }
