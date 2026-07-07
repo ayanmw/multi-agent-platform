@@ -150,6 +150,26 @@ func (s *SqliteMemoryDB) UpdateMemoryTier(id, tier, promotionReason string) erro
 	return db.UpdateMemoryTier(id, tier, promotionReason)
 }
 
+// QuerySessionMessages delegates to db.QuerySessionMessages.
+func (s *SqliteMemoryDB) QuerySessionMessages(sessionID string) ([]db.SessionMessageRecord, error) {
+	return db.QuerySessionMessages(sessionID)
+}
+
+// QuerySessionByID delegates to db.QuerySessionByID.
+func (s *SqliteMemoryDB) QuerySessionByID(sessionID string) (*db.SessionRecord, error) {
+	return db.QuerySessionByID(sessionID)
+}
+
+// DeleteSessionMessagesBeforeTurn delegates to db.DeleteSessionMessagesBeforeTurn.
+func (s *SqliteMemoryDB) DeleteSessionMessagesBeforeTurn(sessionID string, turnIndex int) error {
+	return db.DeleteSessionMessagesBeforeTurn(sessionID, turnIndex)
+}
+
+// UpdateSessionContextSize delegates to db.UpdateSessionContextSize.
+func (s *SqliteMemoryDB) UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int) error {
+	return db.UpdateSessionContextSize(sessionID, totalTokens, contextSize)
+}
+
 // NewHeartbeat creates a new Heartbeat with the default 5-minute interval.
 // The database parameter implements the MemoryDB interface for all DB operations.
 func NewHeartbeat(database MemoryDB) *Heartbeat {

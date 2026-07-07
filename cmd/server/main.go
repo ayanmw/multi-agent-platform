@@ -173,7 +173,7 @@ func main() {
 				}
 
 				// Build Working Memory for all agents in this orchestration
-				if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+				if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
 					workingMemory := memRecall.FormatForSystemPrompt(wm)
 					for i := range specs {
 						specs[i].WorkingMemory = workingMemory
@@ -287,9 +287,10 @@ func main() {
 
 			// Build Working Memory from past experiences for this task
 			workingMemory := ""
-			if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
 				workingMemory = memRecall.FormatForSystemPrompt(wm)
 			}
+
 
 			taskID := "task_" + time.Now().Format("20060102150405")
 			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr)
@@ -323,7 +324,7 @@ func main() {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat — multi-turn chat within a session
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB)
 			return
 		}
 		// GET /api/sessions/{id}/messages — session message history
@@ -430,7 +431,7 @@ func main() {
 			}
 
 			// Build Working Memory for all agents in this orchestration
-			if wm, err := memRecall.BuildWorkingMemory("default", req.Input, 3); err == nil {
+			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
 				workingMemory := memRecall.FormatForSystemPrompt(wm)
 				for i := range specs {
 					specs[i].WorkingMemory = workingMemory
@@ -527,6 +528,31 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 		}
 		handlePromoteMemories(w, r, memGateway)
 		})
+		// PUT /api/memories/{id}/scope — update memory scope
+		// DELETE /api/memories/{id} — delete memory
+		http.HandleFunc("/api/memories/", func(w http.ResponseWriter, r *http.Request) {
+			path := strings.TrimPrefix(r.URL.Path, "/api/memories/")
+			if path == "" || path == "/" {
+				http.Error(w, "memory ID required", http.StatusBadRequest)
+				return
+			}
+			if strings.HasSuffix(path, "/scope") {
+				id := strings.TrimSuffix(path, "/scope")
+				if r.Method != http.MethodPut {
+					http.Error(w, "PUT only", http.StatusMethodNotAllowed)
+					return
+				}
+				handleUpdateMemoryScope(w, r, id)
+				return
+			}
+			// DELETE /api/memories/{id}
+			if r.Method != http.MethodDelete {
+				http.Error(w, "DELETE only", http.StatusMethodNotAllowed)
+				return
+			}
+			handleDeleteMemory(w, r, path)
+		})
+
 		// GET /api/memories/recall?task=xxx&project=default&max=3 — preview what would be recalled
 		http.HandleFunc("/api/memories/recall", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {

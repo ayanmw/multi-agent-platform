@@ -27,22 +27,24 @@ import (
 // It holds either a consolidated episodic summary (tier=consolidated) or a
 // stable semantic rule/preference (tier=semantic).
 type MemoryRecord struct {
-	ID              string    `json:"id"`
-	ProjectID       string    `json:"project_id"`
-	Type            string    `json:"type"` // preference | rule | fact | lesson | reflection
-	Tier            string    `json:"tier"` // consolidated | semantic
-	Content         string    `json:"content"`
-	Embedding       []byte    `json:"embedding,omitempty"` // Phase 6+ vector
-	Confidence      float64   `json:"confidence"`
-	Status          string    `json:"status"` // active | obsolete | cold | invalid
-	SourceTaskIDs   []string  `json:"source_task_ids"`
-	SourceEventIDs  []string  `json:"source_event_ids"`
-	PromotionReason string    `json:"promotion_reason"`
-	AccessCount     int       `json:"access_count"`
+	ID              string     `json:"id"`
+	ProjectID       string     `json:"project_id"`
+	Scope           string     `json:"scope"` // session | project | global (Phase 5-B)
+	SessionID       string     `json:"session_id"`
+	Type            string     `json:"type"` // preference | rule | fact | lesson | reflection
+	Tier            string     `json:"tier"` // consolidated | semantic
+	Content         string     `json:"content"`
+	Embedding       []byte     `json:"embedding,omitempty"` // Phase 6+ vector
+	Confidence      float64    `json:"confidence"`
+	Status          string     `json:"status"` // active | obsolete | cold | invalid
+	SourceTaskIDs   []string   `json:"source_task_ids"`
+	SourceEventIDs  []string   `json:"source_event_ids"`
+	PromotionReason string     `json:"promotion_reason"`
+	AccessCount     int        `json:"access_count"`
 	LastAccessed    *time.Time `json:"last_accessed"`
 	LastReviewed    *time.Time `json:"last_reviewed"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // MemoryLinkRecord mirrors the memory_links table.
@@ -65,11 +67,11 @@ func InsertMemory(record MemoryRecord) error {
 	sourceTaskIDsJSON, _ := json.Marshal(record.SourceTaskIDs)
 	sourceEventIDsJSON, _ := json.Marshal(record.SourceEventIDs)
 	_, err := DB.Exec(
-		`INSERT INTO memories (id, project_id, type, tier, content, embedding, confidence,
+		`INSERT INTO memories (id, project_id, scope, session_id, type, tier, content, embedding, confidence,
 		 status, source_task_ids, source_event_ids, promotion_reason,
 		 access_count, last_accessed, last_reviewed, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.ID, record.ProjectID, record.Type, record.Tier, record.Content,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.ProjectID, record.Scope, record.SessionID, record.Type, record.Tier, record.Content,
 		record.Embedding, record.Confidence, record.Status,
 		string(sourceTaskIDsJSON), string(sourceEventIDsJSON), record.PromotionReason,
 		record.AccessCount, record.LastAccessed, record.LastReviewed,
@@ -85,7 +87,7 @@ func QueryMemoriesByProject(projectID string) ([]MemoryRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, project_id, type, tier, content, COALESCE(embedding,''),
+		`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
 		 COALESCE(confidence,1.0), COALESCE(status,'active'),
 		 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
 		 COALESCE(promotion_reason,''),
@@ -104,7 +106,7 @@ func QueryMemoriesByProject(projectID string) ([]MemoryRecord, error) {
 		var embedding []byte
 		var sourceTaskIDsJSON, sourceEventIDsJSON string
 		var lastAccessed, lastReviewed sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Tier, &r.Content,
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Scope, &r.SessionID, &r.Type, &r.Tier, &r.Content,
 			&embedding, &r.Confidence, &r.Status,
 			&sourceTaskIDsJSON, &sourceEventIDsJSON, &r.PromotionReason,
 			&r.AccessCount, &lastAccessed, &lastReviewed,
@@ -132,7 +134,7 @@ func QueryMemoriesByTier(projectID, tier string) ([]MemoryRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, project_id, type, tier, content, COALESCE(embedding,''),
+		`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
 		 COALESCE(confidence,1.0), COALESCE(status,'active'),
 		 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
 		 COALESCE(promotion_reason,''),
@@ -152,7 +154,7 @@ func QueryMemoriesByTier(projectID, tier string) ([]MemoryRecord, error) {
 		var embedding []byte
 		var sourceTaskIDsJSON, sourceEventIDsJSON string
 		var lastAccessed, lastReviewed sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Tier, &r.Content,
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Scope, &r.SessionID, &r.Type, &r.Tier, &r.Content,
 			&embedding, &r.Confidence, &r.Status,
 			&sourceTaskIDsJSON, &sourceEventIDsJSON, &r.PromotionReason,
 			&r.AccessCount, &lastAccessed, &lastReviewed,
@@ -181,7 +183,7 @@ func QueryMemoriesByTaskID(taskID string) ([]MemoryRecord, error) {
 	}
 	// Use json_each to check if the taskID appears in source_task_ids array
 	rows, err := DB.Query(
-		`SELECT id, project_id, type, tier, content, COALESCE(embedding,''),
+		`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
 		 COALESCE(confidence,1.0), COALESCE(status,'active'),
 		 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
 		 COALESCE(promotion_reason,''),
@@ -202,7 +204,7 @@ func QueryMemoriesByTaskID(taskID string) ([]MemoryRecord, error) {
 		var embedding []byte
 		var sourceTaskIDsJSON, sourceEventIDsJSON string
 		var lastAccessed, lastReviewed sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Tier, &r.Content,
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Scope, &r.SessionID, &r.Type, &r.Tier, &r.Content,
 			&embedding, &r.Confidence, &r.Status,
 			&sourceTaskIDsJSON, &sourceEventIDsJSON, &r.PromotionReason,
 			&r.AccessCount, &lastAccessed, &lastReviewed,
@@ -233,14 +235,14 @@ func QueryMemoryByID(id string) (*MemoryRecord, error) {
 	var sourceTaskIDsJSON, sourceEventIDsJSON string
 	var lastAccessed, lastReviewed sql.NullTime
 	err := DB.QueryRow(
-		`SELECT id, project_id, type, tier, content, COALESCE(embedding,''),
+		`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
 		 COALESCE(confidence,1.0), COALESCE(status,'active'),
 		 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
 		 COALESCE(promotion_reason,''),
 		 COALESCE(access_count,0), last_accessed, last_reviewed,
 		 created_at, updated_at
 		 FROM memories WHERE id=?`, id,
-	).Scan(&r.ID, &r.ProjectID, &r.Type, &r.Tier, &r.Content,
+	).Scan(&r.ID, &r.ProjectID, &r.Scope, &r.SessionID, &r.Type, &r.Tier, &r.Content,
 		&embedding, &r.Confidence, &r.Status,
 		&sourceTaskIDsJSON, &sourceEventIDsJSON, &r.PromotionReason,
 		&r.AccessCount, &lastAccessed, &lastReviewed,

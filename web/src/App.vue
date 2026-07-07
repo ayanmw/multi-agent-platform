@@ -33,6 +33,7 @@ import TaskInput from './components/TaskInput.vue'
 import TurnList from './components/TurnList.vue'
 import AgentConfig from './components/AgentConfig.vue'
 import ProjectConfig from './components/ProjectConfig.vue'
+import MemoryBrowser from './components/MemoryBrowser.vue'
 import CaseCard from './components/CaseCard.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
@@ -113,6 +114,7 @@ const autoApprovePolicy = ref(false)
 
 // Project config view toggle
 const showProjectConfig = ref(false)
+const showMemoryBrowser = ref(false)
 
 // Collapsed state for project groups in sidebar
 const collapsedProjects = ref<Set<string>>(new Set())
@@ -548,6 +550,9 @@ function handleProjectConfigBack() {
       <!-- Project Config view — replaces main content when active -->
       <ProjectConfig v-else-if="showProjectConfig" @back="handleProjectConfigBack" />
 
+      <!-- Memory Browser view — replaces main content when active -->
+      <MemoryBrowser v-else-if="showMemoryBrowser" />
+
       <!-- Normal main content -->
       <template v-else>
       <!-- Header -->
@@ -555,6 +560,7 @@ function handleProjectConfigBack() {
         <h1 class="app-title">🤖 Multi-Agent Platform</h1>
         <div class="app-header-right">
           <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
+          <button class="agents-btn" @click="showMemoryBrowser = true" title="Memory Browser">🧠 Memory</button>
           <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
           <span class="app-version">{{ appVersion }}</span>
         </div>

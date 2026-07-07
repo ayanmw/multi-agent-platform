@@ -10,18 +10,20 @@
 //
 // The recall system implements the first tier of the 4-tier memory system:
 //
-//  1. Working Memory      — per-task context (in-memory)              <-- THIS
-//  2. Raw Episodic        — conversation records (conversations table)
-//  3. Consolidated Episodic — task summaries (memories, tier=consolidated)
-//  4. Semantic/Policy     — stable rules (memories, tier=semantic)
+//	1. Working Memory      — per-task context (in-memory)              <-- THIS
+//	2. Raw Episodic        — conversation records (conversations table)
+//	3. Consolidated Episodic — task summaries (memories, tier=consolidated)
+//	4. Semantic/Policy     — stable rules (memories, tier=semantic)
 //
 // # Recall Process
 //
 // When BuildWorkingMemory is called:
-//  1. Load ALL semantic rules (unlimited — they are stable and few)
-//  2. Load top N consolidated episodes by keyword match against the task goal
-//  3. Update access_count and last_accessed for each recalled memory
-//  4. Build a WorkingMemory struct ready for system prompt injection
+//	1. Load session-scoped memories (highest priority, for current session)
+//	2. Load project-scoped semantic rules (stable policies)
+//	3. Load top N project-scoped consolidated episodes by keyword match
+//	4. Load global-scoped semantic rules (cross-project preferences)
+//	5. Update access_count and last_accessed for each recalled memory
+//	6. Build a WorkingMemory struct ready for system prompt injection
 //
 // # Conflict Detection
 //
@@ -39,20 +41,29 @@ import (
 )
 
 // WorkingMemory is the context injected into the system prompt for a new task.
-// It contains stable semantic rules and the most relevant past episodes,
-// giving the agent access to institutional knowledge without requiring the
-// user to repeat instructions.
+// It contains layered memories from session, project, and global scopes, giving
+// the agent access to the most relevant institutional knowledge without
+// requiring the user to repeat instructions.
 type WorkingMemory struct {
 	// TaskGoal is the user's task description, used for relevance scoring.
 	TaskGoal string `json:"task_goal"`
 
-	// StableRules are the semantic-tier memories that represent stable policies,
-	// preferences, and rules. These are always loaded (unlimited count).
-	StableRules []MemoryItem `json:"stable_rules"`
+	// SessionMemories are session-scoped memories tied to the current session.
+	// These have the highest priority because they reflect the immediate
+	// conversational context.
+	SessionMemories []MemoryItem `json:"session_memories"`
 
-	// RelatedEpisodes are the top N consolidated episodic memories that are
+	// ProjectRules are project-scoped semantic-tier memories that represent
+	// stable policies, preferences, and rules for the current project.
+	ProjectRules []MemoryItem `json:"project_rules"`
+
+	// ProjectEpisodes are project-scoped consolidated episodic memories that are
 	// most relevant to the current task goal, scored by keyword overlap.
-	RelatedEpisodes []MemoryItem `json:"related_episodes"`
+	ProjectEpisodes []MemoryItem `json:"project_episodes"`
+
+	// GlobalRules are global-scoped semantic-tier memories that represent
+	// cross-project preferences and stable conventions.
+	GlobalRules []MemoryItem `json:"global_rules"`
 
 	// BuiltAt is the timestamp when this WorkingMemory was constructed.
 	BuiltAt time.Time `json:"built_at"`
@@ -71,7 +82,7 @@ type MemoryItem struct {
 	// Content is the full text of the memory.
 	Content string `json:"content"`
 
-	// Confidence is the reliability score of the memory (0.0–1.0).
+	// Confidence is the reliability score of the memory (0.0--1.0).
 	Confidence float64 `json:"confidence"`
 
 	// Reason describes why this memory was recalled for the current task.
@@ -100,7 +111,7 @@ type ConflictPair struct {
 // Usage:
 //
 //	recall := NewMemoryRecall(memDB)
-//	wm, err := recall.BuildWorkingMemory("default", "write a Go test", 3)
+//	wm, err := recall.BuildWorkingMemory("default", "session_abc", "write a Go test", 3)
 //	if err == nil {
 //	    prompt := recall.FormatForSystemPrompt(wm)
 //	    // prepend prompt to the agent's system prompt
@@ -117,38 +128,58 @@ func NewMemoryRecall(database MemoryDB) *MemoryRecall {
 	return &MemoryRecall{db: database}
 }
 
-// BuildWorkingMemory loads all semantic rules and the top N most relevant
-// consolidated episodes for the given project and task goal. The result is a
-// WorkingMemory struct ready for injection into the system prompt.
+// BuildWorkingMemory loads layered memories for the given project, session, and
+// task goal. The result is a WorkingMemory struct ready for injection into the
+// system prompt.
+//
+// Recall priority (most specific first):
+//
+//	1. Session-scoped memories (scope=session, session_id=xxx)
+//	2. Project-scoped semantic rules (scope=project, tier=semantic)
+//	3. Project-scoped consolidated episodes (scope=project, tier=consolidated, keyword top N)
+//	4. Global-scoped semantic rules (scope=global, tier=semantic)
+//	5. Session history messages are injected separately by the Engine layer
 //
 // Parameters:
 //   - projectID: the project to recall memories for (e.g., "default")
+//   - sessionID: the current session ID; may be empty if not in a session
 //   - taskGoal: the user's task description, used for keyword matching
 //   - maxEpisodes: maximum number of consolidated episodes to recall
 //
 // Returns a WorkingMemory even if no memories are found (empty slices).
 // Errors are returned only for database failures.
-func (mr *MemoryRecall) BuildWorkingMemory(projectID, taskGoal string, maxEpisodes int) (*WorkingMemory, error) {
-	// 1. Load ALL semantic rules (unlimited — they're stable and few in number).
-	//    Semantic rules are always relevant because they represent enduring
-	//    policies and preferences that apply to every task.
-	rules, err := mr.loadSemanticRules(projectID)
+func (mr *MemoryRecall) BuildWorkingMemory(projectID, sessionID, taskGoal string, maxEpisodes int) (*WorkingMemory, error) {
+	// 1. Load session-scoped memories (highest priority).
+	//    These capture facts/rules that only apply to the current session.
+	sessionMems, err := mr.loadSessionMemories(projectID, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("load semantic rules: %w", err)
+		return nil, fmt.Errorf("load session memories: %w", err)
 	}
 
-	// 2. Load top N consolidated episodes by keyword match against taskGoal.
-	//    Consolidated episodes are scored by word overlap with the task goal
-	//    so that only the most relevant past experiences are recalled.
-	episodes, err := mr.recallEpisodes(projectID, taskGoal, maxEpisodes)
+	// 2. Load project-scoped semantic rules (stable policies for this project).
+	projectRules, err := mr.loadSemanticRules(projectID, "project")
 	if err != nil {
-		return nil, fmt.Errorf("recall episodes: %w", err)
+		return nil, fmt.Errorf("load project semantic rules: %w", err)
+	}
+
+	// 3. Load top N project-scoped consolidated episodes by keyword match.
+	projectEpisodes, err := mr.recallEpisodes(projectID, "project", taskGoal, maxEpisodes)
+	if err != nil {
+		return nil, fmt.Errorf("recall project episodes: %w", err)
+	}
+
+	// 4. Load global-scoped semantic rules (cross-project conventions).
+	globalRules, err := mr.loadSemanticRules(projectID, "global")
+	if err != nil {
+		return nil, fmt.Errorf("load global semantic rules: %w", err)
 	}
 
 	return &WorkingMemory{
 		TaskGoal:        taskGoal,
-		StableRules:     rules,
-		RelatedEpisodes: episodes,
+		SessionMemories: sessionMems,
+		ProjectRules:    projectRules,
+		ProjectEpisodes: projectEpisodes,
+		GlobalRules:     globalRules,
 		BuiltAt:         time.Now(),
 	}, nil
 }
@@ -161,39 +192,90 @@ func (mr *MemoryRecall) BuildWorkingMemory(projectID, taskGoal string, maxEpisod
 //
 //	## Working Memory (from previous tasks)
 //
-//	### Stable Rules
-//	- [rule content]
+//	### Session Context
+//	- [memory content]
+//
+//	### Project Rules
 //	- [rule content]
 //
-//	### Related Past Experiences
+//	### Related Experiences
 //	- [episode summary]
-//	- [episode summary]
+//
+//	### Global Preferences
+//	- [rule content]
 func (mr *MemoryRecall) FormatForSystemPrompt(wm *WorkingMemory) string {
 	var sb strings.Builder
 	sb.WriteString("## Working Memory (from previous tasks)\n")
 
-	if len(wm.StableRules) > 0 {
-		sb.WriteString("\n### Stable Rules\n")
-		for _, rule := range wm.StableRules {
+	if len(wm.SessionMemories) > 0 {
+		sb.WriteString("\n### Session Context\n")
+		for _, m := range wm.SessionMemories {
+			sb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+		}
+	}
+
+	if len(wm.ProjectRules) > 0 {
+		sb.WriteString("\n### Project Rules\n")
+		for _, rule := range wm.ProjectRules {
 			sb.WriteString(fmt.Sprintf("- %s\n", rule.Content))
 		}
 	}
 
-	if len(wm.RelatedEpisodes) > 0 {
-		sb.WriteString("\n### Related Past Experiences\n")
-		for _, ep := range wm.RelatedEpisodes {
+	if len(wm.ProjectEpisodes) > 0 {
+		sb.WriteString("\n### Related Experiences\n")
+		for _, ep := range wm.ProjectEpisodes {
 			sb.WriteString(fmt.Sprintf("- %s\n", ep.Content))
+		}
+	}
+
+	if len(wm.GlobalRules) > 0 {
+		sb.WriteString("\n### Global Preferences\n")
+		for _, rule := range wm.GlobalRules {
+			sb.WriteString(fmt.Sprintf("- %s\n", rule.Content))
 		}
 	}
 
 	return sb.String()
 }
 
-// loadSemanticRules loads all active semantic-tier memories for the project,
-// ordered by confidence descending (most reliable first). Updates access_count
-// and last_accessed for each recalled memory to track usage patterns.
-func (mr *MemoryRecall) loadSemanticRules(projectID string) ([]MemoryItem, error) {
-	records, err := mr.db.QueryMemoriesByTier(projectID, "semantic")
+// loadSessionMemories loads active session-scoped memories for the given
+// project and session. These are the highest-priority memories because they
+// reflect the immediate conversational context.
+func (mr *MemoryRecall) loadSessionMemories(projectID, sessionID string) ([]MemoryItem, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+
+	records, err := db.QueryMemoriesByScopeAndSession(projectID, sessionID, "session")
+	if err != nil {
+		return nil, err
+	}
+
+	var items []MemoryItem
+	for _, r := range records {
+		if r.Status != "active" {
+			continue
+		}
+		if err := db.UpdateMemoryAccess(r.ID); err != nil {
+			continue
+		}
+		items = append(items, MemoryItem{
+			ID:         r.ID,
+			Type:       r.Type,
+			Content:    r.Content,
+			Confidence: r.Confidence,
+			Reason:     "session-scoped memory (current session)",
+		})
+	}
+	return items, nil
+}
+
+// loadSemanticRules loads active semantic-tier memories for the given project
+// and scope, ordered by confidence descending (most reliable first). Updates
+// access_count and last_accessed for each recalled memory to track usage
+// patterns.
+func (mr *MemoryRecall) loadSemanticRules(projectID, scope string) ([]MemoryItem, error) {
+	records, err := db.QueryMemoriesByScopeAndTier(projectID, scope, "semantic")
 	if err != nil {
 		return nil, err
 	}
@@ -216,22 +298,22 @@ func (mr *MemoryRecall) loadSemanticRules(projectID string) ([]MemoryItem, error
 			Type:       r.Type,
 			Content:    r.Content,
 			Confidence: r.Confidence,
-			Reason:     "semantic rule (stable policy)",
+			Reason:     fmt.Sprintf("%s semantic rule (stable policy)", scope),
 		})
 	}
 	return items, nil
 }
 
-// recallEpisodes loads consolidated episodic memories, scores each by keyword
-// overlap with the task goal, and returns the top N most relevant. Updates
-// access tracking for each recalled memory.
+// recallEpisodes loads consolidated episodic memories filtered by scope, scores
+// each by keyword overlap with the task goal, and returns the top N most
+// relevant. Updates access tracking for each recalled memory.
 //
 // The scoring algorithm is simple word-frequency overlap: each word in the
 // task goal is checked against the memory content. The score is the percentage
 // of query words that appear in the content. This is intentionally lightweight
 // — Phase 6+ will add vector similarity scoring for semantic relevance.
-func (mr *MemoryRecall) recallEpisodes(projectID, taskGoal string, maxN int) ([]MemoryItem, error) {
-	records, err := mr.db.QueryMemoriesByTier(projectID, "consolidated")
+func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN int) ([]MemoryItem, error) {
+	records, err := db.QueryMemoriesByScopeAndTier(projectID, scope, "consolidated")
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +337,7 @@ func (mr *MemoryRecall) recallEpisodes(projectID, taskGoal string, maxN int) ([]
 				Type:       r.Type,
 				Content:    r.Content,
 				Confidence: r.Confidence,
-				Reason:     fmt.Sprintf("keyword match (score: %.1f)", score),
+				Reason:     fmt.Sprintf("%s keyword match (score: %.1f)", scope, score),
 			},
 			score: score,
 		})

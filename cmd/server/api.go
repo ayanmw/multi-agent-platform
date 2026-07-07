@@ -368,20 +368,26 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 // === Memory API (Phase 6) ===
 
-// handleListMemories returns memory records filtered by tier and project.
-// GET /api/memories?tier=consolidated&project=default
+// handleListMemories returns memory records filtered by scope, tier, and project.
+// GET /api/memories?scope=session&tier=consolidated&project=default
 func handleListMemories(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
 		projectID = "default"
 	}
+	scope := r.URL.Query().Get("scope")
 	tier := r.URL.Query().Get("tier")
 
 	var memories []db.MemoryRecord
 	var err error
-	if tier != "" {
+	switch {
+	case scope != "" && tier != "":
+		memories, err = db.QueryMemoriesByScopeAndTier(projectID, scope, tier)
+	case scope != "":
+		memories, err = db.QueryMemoriesByScope(projectID, scope)
+	case tier != "":
 		memories, err = db.QueryMemoriesByTier(projectID, tier)
-	} else {
+	default:
 		memories, err = db.QueryMemoriesByProject(projectID)
 	}
 	if err != nil {
@@ -394,6 +400,54 @@ func handleListMemories(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(memories)
+}
+
+// handleUpdateMemoryScope updates the scope (and optional session_id) of a memory.
+// PUT /api/memories/{id}/scope
+// Body: {"scope": "project", "session_id": ""}
+func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) {
+	var req struct {
+		Scope     string `json:"scope"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Scope != "session" && req.Scope != "project" && req.Scope != "global" {
+		http.Error(w, "scope must be session, project, or global", http.StatusBadRequest)
+		return
+	}
+	// Clear session_id when scope is not session so we don't leave stale values.
+	sessionID := req.SessionID
+	if req.Scope != "session" {
+		sessionID = ""
+	}
+	if err := db.UpdateMemoryScope(id, req.Scope, sessionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":         id,
+		"scope":      req.Scope,
+		"session_id": sessionID,
+		"message":    "Scope updated successfully",
+	})
+}
+
+// handleDeleteMemory removes a memory record by ID.
+// DELETE /api/memories/{id}
+func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
+	if err := db.DeleteMemory(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":      id,
+		"message": "Memory deleted successfully",
+	})
 }
 
 // handlePromoteMemories triggers the promotion pipeline manually.
@@ -444,14 +498,16 @@ func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness
 		}
 	}
 
-	wm, err := recall.BuildWorkingMemory(projectID, taskGoal, maxEpisodes)
+	wm, err := recall.BuildWorkingMemory(projectID, "", taskGoal, maxEpisodes)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Detect conflicts among the recalled memories
-	allMemories := append(wm.StableRules, wm.RelatedEpisodes...)
+	allMemories := append(wm.ProjectRules, wm.ProjectEpisodes...)
+	allMemories = append(allMemories, wm.SessionMemories...)
+	allMemories = append(allMemories, wm.GlobalRules...)
 	conflicts := recall.DetectConflicts(allMemories)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -702,7 +758,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionChat handles POST /api/sessions/{id}/chat
 // 在已有 Session 中发起新轮对话，自动注入历史消息上下文
-func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager) {
+func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -752,6 +808,15 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 			"After using tools, analyze the results and continue until the task is complete."
 	}
 
+	// 上下文压缩：在创建新 Task 前检查是否需要压缩
+	compressor := harness.NewContextCompressor(memDB)
+	if result, err := compressor.CompressIfNeeded(id); err != nil {
+		log.Printf("[SessionChat] Compression failed: %v", err)
+	} else if result.Compressed {
+		log.Printf("[SessionChat] Compressed %d turns for session %s, kept %d messages",
+			result.TurnsCompressed, id, result.MessagesKept)
+	}
+
 	// 加载历史消息
 	historyMessages, err := db.QuerySessionMessages(id)
 	if err != nil {
@@ -771,7 +836,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	if projectID == "" {
 		projectID = "default"
 	}
-	if wm, err := memRecall.BuildWorkingMemory(projectID, req.Input, 3); err == nil {
+	if wm, err := memRecall.BuildWorkingMemory(projectID, id, req.Input, 3); err == nil {
 		workingMemory = memRecall.FormatForSystemPrompt(wm)
 	}
 

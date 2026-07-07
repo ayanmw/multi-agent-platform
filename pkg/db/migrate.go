@@ -107,15 +107,15 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project'`,
 	},
 
-	// v8: Backfill existing sessions and memories with default values.
-	// Ensures pre-existing data conforms to the new schema expectations.
+	// v9: Add session_id column to memories table for session-scoped memories
 	{
-		Version:     8,
-		Description: "Backfill project_id for sessions and scope for memories",
-		SQL: `UPDATE sessions SET project_id = 'default' WHERE project_id = '' OR project_id IS NULL;
-		UPDATE memories SET scope = 'project' WHERE scope = '' OR scope IS NULL`,
+		Version:     9,
+		Description: "Add session_id column to memories table for session-scoped memories",
+		SQL:         `ALTER TABLE memories ADD COLUMN session_id TEXT DEFAULT ''`,
 	},
 }
+
+// createMigrationsTable ensures the schema_migrations tracking table exists.
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
 func createMigrationsTable() error {
