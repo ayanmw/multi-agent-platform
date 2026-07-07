@@ -58,13 +58,12 @@ func (r *CostBudgetRule) Check(toolName string, input map[string]any, contract T
 	}
 
 	r.mu.Lock()
-	cost := r.currentCostUSD
-	r.mu.Unlock()
+	defer r.mu.Unlock()
 
-	if cost >= contract.CostBudgetUSD {
+	if r.currentCostUSD >= contract.CostBudgetUSD {
 		return input, &ErrBlockedByPolicy{
 			Rule:   r.Name(),
-			Reason: fmt.Sprintf("cost budget exceeded: $%.4f/$%.2f USD used", cost, contract.CostBudgetUSD),
+			Reason: fmt.Sprintf("cost budget exceeded: $%.4f/$%.2f USD used", r.currentCostUSD, contract.CostBudgetUSD),
 			Tool:   toolName,
 		}
 	}

@@ -302,19 +302,30 @@ const activeTaskId = ref<string | null>(null)
 
 **目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理
 
+**完成日期**: 2026-07-07
+**Git commit**: `1bc2830`
+**版本**: v0.6 Alpha
+
 ### 交付物
-- [ ] RAG 向量检索（Embedding + 向量数据库）
-- [ ] 用户认证 / 多租户（OAuth2 / JWT）
-- [ ] gRPC 协议迁移（EventBus 接口切换）
-- [ ] 可观测性（OpenTelemetry + Prometheus）
-- [ ] Prompt Template 引擎
-- [ ] API Key 加密存储
-- [ ] **多厂商 LLM Provider**: Anthropic Provider + DeepSeek Provider（reasoning_content 支持）
-- [ ] **Worker Pool 并发调度**: 多 Agent 并发管理 + 模型分配 + 限流控制
-- [ ] **CostTracker 成本追踪**: 按模型/分层/任务维度的 API 成本报告
-- [ ] **降级策略**: 主模型不可用时自动 fallback（Opus→Sonnet→DeepSeek→本地）
-- [ ] **模型能力矩阵完整实现**: 根据任务所需能力自动筛选可用模型
-- [ ] **Harness: Eval 回归闭环**（失败 Trace → 回归测试集 → 自动化回归）
+- [x] **多厂商 LLM Provider**: AnthropicProvider + DeepSeek reasoning_content + Provider 工厂
+- [x] **Router 接入 Engine**: 动态模型选择 + Fallback 降级重试 + model_routed 白盒事件
+- [x] **Worker Pool 并发调度**: 优先级队列 + 信号量限流 + 任务取消
+- [x] **CostTracker 成本追踪**: cost_records 表 + 多维度聚合 + HTTP API
+- [x] **CostBudgetRule**: 集成到 PolicyChain + TaskContract.CostBudgetUSD
+- [x] **降级策略**: ResolveFallbackChain + IsRetryableError + 自动 fallback
+
+### 待后续迭代修复（Technical Debt）
+
+| 优先级 | # | 问题 | 文件 | 说明 |
+|--------|---|------|------|------|
+| P1 | 1 | Fallback context 未传递 | engine.go:1019 | fallback 请求不受主 ctx 取消影响，可能 goroutine 泄漏 |
+| P1 | 2 | Fallback provider 硬编码 endpoint | engine.go:1007 | Anthropic fallback 会错误使用 OpenAI endpoint |
+| P1 | 3 | model_routed 事件缺 fallback 字段 | engine.go:953 | 前端无法预显示降级目标模型 |
+| P1 | 4 | anthropic tool_result Content 类型 | anthropic_provider.go | string 而非 content block 数组，复杂结果可能丢数据 |
+| P1 | 5 | cost_budget_rule.go 非原子读-改-写 | cost_budget_rule.go:60 | Check 的 cost 比较在锁外 |
+| P2 | 6 | provider_registry.go List 无序 | provider_registry.go | map 迭代顺序不确定 |
+| P2 | 7 | cost_tracker float64 精度漂移 | cost_tracker.go | 大量累积时浮点精度问题 |
+| P2 | 8 | migrate.go 版本跳跃 | migrate.go | v5→v6→v7→v9→v10，缺 v8 需确认 |
 - [ ] **Harness: 完整治理与审计**（身份 + 审批 + 成本 + 合规日志）
 - [ ] **Memory: 向量检索增强**（LanceDB / ChromaDB 语义召回）
 - [ ] **Memory: 遗忘曲线 + 冷存储**（超过 30 天未 access → status=cold）
