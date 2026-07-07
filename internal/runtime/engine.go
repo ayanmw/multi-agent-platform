@@ -257,6 +257,27 @@ type EngineConfig struct {
 	// The caller should increment this between user turns (e.g., after each
 	// call to Engine.Run() completes).
 	TurnIndex int
+
+	// Router is the optional LLM model router. When set, the Engine uses it
+	// to select the best model for each think step based on the user's intent
+	// and task context. The Router classifies the request, maps it to a model
+	// tier, and selects the primary model with a fallback. When nil, the Engine
+	// uses cfg.Model directly (legacy behavior).
+	// Added in Phase 6.
+	Router *llm.Router
+
+	// Registry is the optional model registry. Required when Router is set —
+	// the Router queries the registry to select models by tier and capability.
+	// When Router is nil, this field is ignored.
+	// Added in Phase 6.
+	Registry *llm.ModelRegistry
+
+	// Providers is the map of provider name → Provider instance, used by the
+	// Router to look up the correct provider for a selected model profile.
+	// When Router is set, this must include entries for the models the Router
+	// might select. When Router is nil, this field is ignored.
+	// Added in Phase 6.
+	Providers map[string]llm.Provider
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -310,6 +331,7 @@ type Engine struct {
 	checkpoint         *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
 	sessionMsgWriter   func(SessionMessageRecord) error // optional session message writer (nil = skip)
 	turnIndex          int                              // current turn index within the session (0-based)
+	providers          map[string]llm.Provider         // provider lookup map for Router decision (empty = not using Router)
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -871,11 +893,77 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		})
 	}
 
-	// Construct the chat request. The full conversation history is sent on every
-	// call — this is the "stateless" design where the LLM has no memory between
-	// calls. The conversation history serves as the agent's memory.
+	// =========================================================================
+	// Phase 6 Router: dynamic model selection
+	// =========================================================================
+	// If Router and Registry are configured, classify the user's intent and
+	// select the best model tier before each LLM call. This enables cost-
+	// efficient routing: simple chat uses cheap models, complex reasoning uses
+	// premium models.
+	var (
+		selectedModel    string
+		selectedProvider llm.Provider
+		routeDecision    *llm.RouteDecision
+	)
+
+	// Default to cfg.Model / e.llm
+	selectedModel = e.cfg.Model
+	selectedProvider = e.llm
+
+	if e.cfg.Router != nil && e.cfg.Registry != nil {
+		// Estimate context length from conversation history.
+		contextLen := 0
+		for _, msg := range e.messages {
+			contextLen += len(msg.Content) / 4 // rough: 4 chars ~ 1 token
+		}
+		userInput := ""
+		if len(e.messages) > 0 {
+			userInput = e.messages[len(e.messages)-1].Content
+		}
+
+		routeReq := &llm.RouteRequest{
+			UserInput:    userInput,
+			ContextLen:   contextLen,
+			RequiredCaps: []llm.ModelCapability{llm.CapToolCalling, llm.CapStreaming},
+		}
+
+		var errRoute error
+		routeDecision, errRoute = e.cfg.Router.Select(ctx, routeReq)
+		if errRoute != nil {
+			log.Printf("[Engine] Router selection failed: %v, falling back to default model", errRoute)
+		} else if routeDecision != nil && routeDecision.Primary != nil {
+			selectedModel = routeDecision.Primary.Name
+
+			// Resolve the provider for the selected model from the providers map.
+			// Keys can be provider name (e.g., "deepseek") or model name.
+			if p, ok := e.providers[routeDecision.Primary.Provider]; ok {
+				selectedProvider = p
+			} else if e.providers != nil {
+				if p, ok := e.providers[routeDecision.Primary.Name]; ok {
+					selectedProvider = p
+				}
+			}
+
+			if selectedProvider == nil {
+				selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
+					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
+			}
+
+			// Emit model_routed event for white-box transparency
+			e.bus.SendEvent(event.NewEvent("model_routed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"model":    selectedModel,
+				"intent":   routeDecision.Intent,
+				"tier":     routeDecision.Tier.String(),
+				"reason":   routeDecision.Reason,
+				"provider": routeDecision.Primary.Provider,
+			}))
+			log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
+				selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
+		}
+	}
+
 	req := llm.ChatRequest{
-		Model:       e.cfg.Model,
+		Model:       selectedModel,
 		Messages:    e.messages,
 		Tools:       toolDefs,
 		Temperature: e.cfg.Temperature,
@@ -885,7 +973,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// Call the LLM with streaming. The onChunk callback is invoked for each SSE
 	// chunk. Each text delta is forwarded to the frontend as an llm_delta event
 	// so the UI can render tokens in real time (typewriter effect).
-	content, usage, toolCalls, err := e.llm.ChatStream(req, func(chunk llm.StreamChunk) error {
+	content, usage, toolCalls, err := selectedProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
 		// Stream each delta to the frontend
 		if chunk.Delta.Content != "" {
 			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -894,16 +982,53 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		}
 		return nil
 	})
+
+	// Fallback retry: if primary model failed and a fallback is configured, retry.
+	if err != nil && routeDecision != nil && routeDecision.Fallback != nil {
+		log.Printf("[Engine] Primary model %s failed (%v), trying fallback %s",
+			selectedModel, err, routeDecision.Fallback.Name)
+
+		var fallbackProvider llm.Provider
+		if p, ok := e.providers[routeDecision.Fallback.Provider]; ok {
+			fallbackProvider = p
+		} else if e.providers != nil {
+			if p, ok := e.providers[routeDecision.Fallback.Name]; ok {
+				fallbackProvider = p
+			}
+		}
+		if fallbackProvider == nil {
+			fallbackProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
+				e.cfg.Endpoint, e.cfg.APIKey, routeDecision.Fallback.Name)
+		}
+
+		req.Model = routeDecision.Fallback.Name
+		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"type":     "model_fallback",
+			"primary":  selectedModel,
+			"fallback": routeDecision.Fallback.Name,
+			"reason":   err.Error(),
+		}))
+
+		content, usage, toolCalls, err = fallbackProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
+			if chunk.Delta.Content != "" {
+				e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"content": chunk.Delta.Content,
+				}))
+			}
+			return nil
+		})
+		if err == nil {
+			log.Printf("[Engine] Fallback model %s succeeded", routeDecision.Fallback.Name)
+		} else {
+			log.Printf("[Engine] Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
+		}
+	}
+
 	if err != nil {
 		return "", usage, nil, err
 	}
 
-	// Emit llm_message_complete: the LLM has finished generating. The UI can
-	// stop the "thinking" animation and show the complete message.
 	e.bus.SendEvent(event.NewEvent("llm_message_complete", e.taskID, e.cfg.AgentID, e.stepIdx, nil))
-
-	// Emit step_complete: this think phase is done. The UI transitions this
-	// step to "completed" state.
 	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "think",
 	}))

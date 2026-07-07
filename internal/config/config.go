@@ -2,18 +2,35 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 )
 
 // Config holds application configuration loaded from environment and .env
+//
+// Backward-compatible design: existing single-model fields (LLMEndpoint, LLMAPIKey,
+// LLMModel) remain for the simple case. Multi-model support is added via the Models
+// slice and ProviderDefault field, loaded from LLM_MODELS (JSON) and
+// LLM_PROVIDER_DEFAULT environment variables.
 type Config struct {
-	LLMEndpoint string
-	LLMAPIKey   string
-	LLMModel    string
-	DBPath      string
-	ServerPort  string
+	LLMEndpoint   string
+	LLMAPIKey     string
+	LLMModel      string
+	DBPath        string
+	ServerPort    string
+	ProviderDefault string           // default provider name for multi-model routing
+	Models        []ModelConfig     // multi-model configuration list
+}
+
+// ModelConfig describes a single model's configuration for multi-model setups.
+// Each model is associated with a provider type and its own endpoint/credentials.
+type ModelConfig struct {
+	Name     string // model identifier (e.g., "deepseek-v4-flash", "claude-sonnet-4-6")
+	Provider string // provider type: "openai", "anthropic", "deepseek"
+	Endpoint string // provider API base URL
+	APIKey   string // provider API key
 }
 
 // Load reads .env file and environment variables to populate Config
@@ -46,6 +63,11 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("SERVER_PORT"); v != "" {
 		cfg.ServerPort = v
+	}
+
+	// Load multi-model configuration
+	if err := cfg.LoadMultiModelConfig(); err != nil {
+		return nil, fmt.Errorf("load multi-model config: %w", err)
 	}
 
 	return cfg, nil
@@ -99,4 +121,82 @@ type AgentConfig struct {
 	Temperature  float32
 	MaxTokens    int
 	Tools        []string
+}
+
+// LoadMultiModelConfig loads multi-model configuration from environment variables.
+//
+// Supported methods (in priority order):
+//  1. LLM_MODELS — JSON array of ModelConfig objects (preferred for complex setups)
+//  2. LLM_MODEL_<INDEX>_PROVIDER / ENDPOINT / API_KEY — indexed environment variables
+//     for simpler, declarative configuration without JSON
+//
+// Example LLM_MODELS:
+//  LLM_MODELS=[
+//    {"name":"deepseek-v4-flash","provider":"deepseek","endpoint":"https://aicoding.dobest.com/v1","api_key":"sk-xxx"},
+//    {"name":"gpt-4o","provider":"openai","endpoint":"https://api.openai.com/v1","api_key":"sk-yyy"}
+//  ]
+//
+// Example indexed vars:
+//  LLM_MODEL_0_PROVIDER=deepseek
+//  LLM_MODEL_0_ENDPOINT=https://aicoding.dobest.com/v1
+//  LLM_MODEL_0_API_KEY=sk-xxx
+//  LLM_MODEL_0_NAME=deepseek-v4-flash
+//
+// LLM_PROVIDER_DEFAULT sets the default provider name (defaults to the first model's name).
+func (cfg *Config) LoadMultiModelConfig() error {
+	// Method 1: Try JSON array from LLM_MODELS
+	if jsonStr := os.Getenv("LLM_MODELS"); jsonStr != "" {
+		var models []ModelConfig
+		if err := json.Unmarshal([]byte(jsonStr), &models); err != nil {
+			return fmt.Errorf("parse LLM_MODELS JSON: %w", err)
+		}
+		cfg.Models = models
+	} else {
+		// Method 2: Try indexed environment variables
+		cfg.Models = loadIndexedModelConfigs()
+	}
+
+	// Set default provider name
+	if v := os.Getenv("LLM_PROVIDER_DEFAULT"); v != "" {
+		cfg.ProviderDefault = v
+	} else if len(cfg.Models) > 0 {
+		// Default to the first model's name
+		cfg.ProviderDefault = cfg.Models[0].Name
+	}
+
+	return nil
+}
+
+// loadIndexedModelConfigs scans environment variables for LLM_MODEL_<INDEX>_* prefix
+// to build a slice of ModelConfig. This allows multi-model configuration without JSON.
+//
+// Variables are grouped by integer index: LLM_MODEL_0_PROVIDER, LLM_MODEL_0_NAME, etc.
+// Index scanning stops at the first gap (e.g., if index 2 is missing, only 0 and 1 are loaded).
+func loadIndexedModelConfigs() []ModelConfig {
+	var models []ModelConfig
+	for i := 0; ; i++ {
+		provider := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_PROVIDER", i))
+		if provider == "" {
+			break // stop at first gap
+		}
+		name := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_NAME", i))
+		if name == "" {
+			name = fmt.Sprintf("model-%d", i)
+		}
+		endpoint := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_ENDPOINT", i))
+		apiKey := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_API_KEY", i))
+		if endpoint == "" {
+			endpoint = os.Getenv("LLM_ENDPOINT") // fall back to default
+		}
+		if apiKey == "" {
+			apiKey = os.Getenv("LLM_API_KEY") // fall back to default
+		}
+		models = append(models, ModelConfig{
+			Name:     name,
+			Provider: provider,
+			Endpoint: endpoint,
+			APIKey:   apiKey,
+		})
+	}
+	return models
 }

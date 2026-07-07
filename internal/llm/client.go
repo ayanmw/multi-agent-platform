@@ -117,16 +117,18 @@ type Choice struct {
 }
 
 // Delta is a single SSE delta chunk. Content accumulates text tokens;
+// ReasoningContent accumulates chain-of-thought tokens (for DeepSeek R1/V4).
 // ToolCalls accumulate function call fragments.
 //
-// TODO: Phase 3-4 — 增加 ReasoningContent 字段
-//   DeepSeek R1 / Qwen3 等推理模型在 delta 中返回 reasoning_content（思维链内容），
-//   与 content 并列。当前 Delta 未包含此字段，后续扩展时需向后兼容。
+// TODO: Phase 5-6 — 增加 ReasoningContent 字段
+//   DeepSeek R1 / V4 等推理模型在 delta 中返回 reasoning_content（思维链内容），
+//   与 content 并列。Delta 已包含此字段，向后兼容（空字符串时不影响旧逻辑）。
 //   参见 doc/chapters/09-llm-api-comparison.html §4.2。
 type Delta struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls"`
+	Role           string     `json:"role"`
+	Content        string     `json:"content"`
+	ToolCalls      []ToolCall `json:"tool_calls"`
+	ReasoningContent string `json:"reasoning_content"` // DeepSeek R1/V4 思维链字段
 }
 
 // Usage tracks token consumption as reported by the API.
@@ -309,6 +311,11 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		// Accumulate text content — each delta may contain 1+ tokens
 		if choice.Delta.Content != "" {
 			contentBuilder.WriteString(choice.Delta.Content)
+		}
+
+		// Accumulate reasoning content (chain-of-thought) from DeepSeek R1/V4 models
+		if choice.Delta.ReasoningContent != "" {
+			contentBuilder.WriteString(choice.Delta.ReasoningContent)
 		}
 
 		// Accumulate tool call deltas — they arrive incrementally:

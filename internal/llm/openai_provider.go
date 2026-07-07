@@ -197,6 +197,13 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 			contentBuilder.WriteString(choice.Delta.Content)
 		}
 
+		// Accumulate reasoning content (chain-of-thought) from DeepSeek R1/V4 models.
+		// reasoning_content is emitted alongside content in the same delta by DeepSeek's
+		// reasoning models; we merge it into the full text accumulation.
+		if choice.Delta.ReasoningContent != "" {
+			contentBuilder.WriteString(choice.Delta.ReasoningContent)
+		}
+
 		for _, tc := range choice.Delta.ToolCalls {
 			idx := tc.Idx
 			if existing, ok := toolCallMap[idx]; ok {
