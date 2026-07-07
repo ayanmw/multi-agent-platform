@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-07
-> **Current version**: v0.5 Alpha (Phase 5-A 完成)
+> **Current version**: v0.5 Beta (Phase 5-B 完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -216,10 +216,10 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] **任务层级架构**（root → turn_2, turn_3 (siblings) → child_of_turn_2 (children)）
 - [x] **DB 迁移 v5-v8**（projects 表 + session_messages 表 + sessions/tasks/memories 新增字段）
 
-### Phase 5-B: 上下文压缩 + 记忆作用域（规划中）
-- [ ] Memory 作用域扩展（scope 字段 + session/project/global 召回优先级）
-- [ ] 上下文压缩引擎（阈值检测 turn_count>=20 或 total_tokens>=100KB + 摘要生成）
-- [ ] 前端 Memory 浏览页（按 scope/project 查看记忆）
+### Phase 5-B: 上下文压缩 + 记忆作用域（优化）✅ COMPLETED (2026-07-07)
+- [x] Memory 作用域扩展（scope 字段 + session/project/global 召回优先级）
+- [x] 上下文压缩引擎（阈值检测 turn_count>=20 或 total_tokens>=100KB + 摘要生成）
+- [x] 前端 Memory 浏览页（按 scope/project 查看记忆）
 
 ### 新增核心设计：会话与任务历史管理（Session & Task History）
 
@@ -338,3 +338,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
 | v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
 | v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
+| v0.5 Beta | 2026-07-07 | Phase 5-B 完成: 上下文压缩引擎 + Memory 作用域三层 + 召回优先级 + 前端 Memory 浏览页 |

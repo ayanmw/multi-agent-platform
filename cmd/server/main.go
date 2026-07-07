@@ -510,9 +510,12 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 	handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr)
 })
 
-// Memory API (Phase 6)
-	// GET /api/memories?tier=consolidated&project=default — list memories
+// Memory API (Phase 6 / Phase 5-B)
+	// GET /api/memories?scope=...&tier=...&project=... — list memories
+	// PUT /api/memories/{id}/scope — update memory scope
+	// DELETE /api/memories/{id} — delete memory
 	// POST /api/memories/promote — manually trigger promotion
+	// GET /api/memories/recall?task=xxx&project=default&max=3 — preview what would be recalled
 	memGateway := harness.NewPromotionGate(memDB)
 	http.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -521,47 +524,42 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 		}
 		handleListMemories(w, r)
 	})
-	http.HandleFunc("/api/memories/promote", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+	http.HandleFunc("/api/memories/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/memories/")
+		// POST /api/memories/promote — manually trigger promotion
+		if path == "promote" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST only", http.StatusMethodNotAllowed)
+				return
+			}
+			handlePromoteMemories(w, r, memGateway)
 			return
 		}
-		handlePromoteMemories(w, r, memGateway)
-		})
-		// PUT /api/memories/{id}/scope — update memory scope
-		// DELETE /api/memories/{id} — delete memory
-		http.HandleFunc("/api/memories/", func(w http.ResponseWriter, r *http.Request) {
-			path := strings.TrimPrefix(r.URL.Path, "/api/memories/")
-			if path == "" || path == "/" {
-				http.Error(w, "memory ID required", http.StatusBadRequest)
-				return
-			}
-			if strings.HasSuffix(path, "/scope") {
-				id := strings.TrimSuffix(path, "/scope")
-				if r.Method != http.MethodPut {
-					http.Error(w, "PUT only", http.StatusMethodNotAllowed)
-					return
-				}
-				handleUpdateMemoryScope(w, r, id)
-				return
-			}
-			// DELETE /api/memories/{id}
-			if r.Method != http.MethodDelete {
-				http.Error(w, "DELETE only", http.StatusMethodNotAllowed)
-				return
-			}
-			handleDeleteMemory(w, r, path)
-		})
-
-		// GET /api/memories/recall?task=xxx&project=default&max=3 — preview what would be recalled
-		http.HandleFunc("/api/memories/recall", func(w http.ResponseWriter, r *http.Request) {
+		// GET /api/memories/recall?task=xxx&project=default&max=3
+		if path == "recall" {
 			if r.Method != http.MethodGet {
 				http.Error(w, "GET only", http.StatusMethodNotAllowed)
 				return
 			}
 			handleRecallPreview(w, r, memRecall)
-		})
-
+			return
+		}
+		// /api/memories/{id}/scope or /api/memories/{id}
+		parts := strings.Split(path, "/")
+		id := parts[0]
+		if id == "" {
+			http.Error(w, "memory ID required", http.StatusBadRequest)
+			return
+		}
+		switch {
+		case len(parts) == 2 && parts[1] == "scope" && r.Method == http.MethodPut:
+			handleUpdateMemoryScope(w, r, id)
+		case len(parts) == 1 && r.Method == http.MethodDelete:
+			handleDeleteMemory(w, r, id)
+		default:
+			http.Error(w, "unsupported memory operation", http.StatusMethodNotAllowed)
+		}
+	})
 	// Serve Vue SPA from embedded filesystem (production mode).
 	// In dev mode, users can run `cd web && npm run dev` to use Vite's dev server
 	// with HMR. The embedded dist/ is used when building the Go binary.
