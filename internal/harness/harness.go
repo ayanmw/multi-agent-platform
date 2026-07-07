@@ -529,7 +529,11 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 	// Resolve the scope to an absolute path
 	scopeAbs, err := filepath.Abs(contract.Scope)
 	if err != nil {
-		return input, fmt.Errorf("FileScopeRule: resolve scope: %w", err)
+		return input, &ErrBlockedByPolicy{
+			Rule:   "FileScopeRule",
+			Reason: fmt.Sprintf("resolve scope: %v", err),
+			Tool:   toolName,
+		}
 	}
 
 	// Resolve the requested path

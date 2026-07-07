@@ -336,6 +336,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 			} else {
 				// New tool call
 				toolCallMap[idx] = &ToolCall{
+					Idx:      idx,
 					ID:       tc.ID,
 					Type:     tc.Type,
 					Function: FunctionCall{

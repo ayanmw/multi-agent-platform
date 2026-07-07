@@ -55,11 +55,11 @@ type ProviderConfig struct {
 // Supported provider names:
 //   - "openai"   → OpenAIProvider (OpenAI-compatible API)
 //   - "deepseek" → OpenAIProvider (DeepSeek's API is OpenAI-compatible)
-//   - "anthropic" → returns an error (not yet implemented; different API format)
+//   - "anthropic" → AnthropicProvider (Claude Messages API, Phase 6)
 //   - anything else → OpenAIProvider (safe fallback for OpenAI-compatible providers)
 //
-// Returns an error if the factory cannot create the provider (e.g., missing API key
-// for anthropic, which requires different config semantics).
+// Returns an error only if the provider name is recognized but the underlying
+// constructor fails (e.g., missing API key).
 func NewProvider(cfg ProviderConfig) (Provider, error) {
 	switch cfg.Name {
 	case "openai":

@@ -981,6 +981,12 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				"content": chunk.Delta.Content,
 			}))
 		}
+		if chunk.Delta.ReasoningContent != "" {
+			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"content":           chunk.Delta.Content,
+				"reasoning_content": chunk.Delta.ReasoningContent,
+			}))
+		}
 		return nil
 	})
 
