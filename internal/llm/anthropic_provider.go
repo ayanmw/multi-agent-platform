@@ -35,7 +35,7 @@ import (
 // anthropicMessage represents a single message in Anthropic's Messages API.
 // Roles are: "user", "assistant". "system" is extracted to the top-level field.
 type anthropicMessage struct {
-	Role    string              `json:"role"`
+	Role    string             `json:"role"`
 	Content []anthropicContent `json:"content"`
 }
 
@@ -48,9 +48,9 @@ type anthropicContent struct {
 	Text string `json:"text,omitempty"`
 
 	// For tool_use blocks:
-	ID         string                 `json:"id,omitempty"`
-	Name       string                 `json:"name,omitempty"`
-	InputJSON  map[string]interface{} `json:"input,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	InputJSON map[string]interface{} `json:"input,omitempty"`
 
 	// For tool_use outcome blocks (tool-result sent to Anthropic):
 	ToolUseID string `json:"tool_use_id,omitempty"`
@@ -72,15 +72,15 @@ type anthropicChatRequest struct {
 // anthropicToolDef defines a tool in Anthropic's format.
 // Key difference: "input_schema" instead of "parameters".
 type anthropicToolDef struct {
-	Type        string `json:"type"`         // always "function"
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Type        string                 `json:"type"` // always "function"
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema"` // JSON Schema (not "parameters")
 }
 
 // anthropicToolChoice specifies tool selection behavior in Anthropic's object format.
 type anthropicToolChoice struct {
-	Type string `json:"type"` // "auto", "any", "tool", "none"
+	Type string `json:"type"`           // "auto", "any", "tool", "none"
 	Name string `json:"name,omitempty"` // used when Type == "tool"
 }
 
@@ -105,17 +105,17 @@ type messageStartEvent struct {
 
 // contentBlockStartEvent signals the beginning of a content block.
 type contentBlockStartEvent struct {
-	Type  string `json:"type"`
-	Index int    `json:"index"`
+	Type         string                      `json:"type"`
+	Index        int                         `json:"index"`
 	ContentBlock anthropicStreamContentBlock `json:"content_block"`
 }
 
 // anthropicStreamContentBlock is an initialized content block in streaming.
 type anthropicStreamContentBlock struct {
-	Type string `json:"type"` // "text" or "tool_use"
-	Text string `json:"text,omitempty"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Type  string   `json:"type"` // "text" or "tool_use"
+	Text  string   `json:"text,omitempty"`
+	ID    string   `json:"id,omitempty"`
+	Name  string   `json:"name,omitempty"`
 	Input struct{} `json:"input,omitempty"` // empty — input comes via deltas
 }
 
@@ -209,7 +209,7 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", p.endpoint+"/v1/messages", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(req.Context, "POST", p.endpoint+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -231,11 +231,11 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	// Parse Anthropic's non-streaming response into unified ChatResponse.
 	var anthropicResp struct {
 		Content []struct {
-			Type     string `json:"type"` // "text" or "tool_use"
-			Text     string `json:"text,omitempty"`
-			ID       string `json:"id,omitempty"`
-			Name     string `json:"name,omitempty"`
-			Input    map[string]interface{} `json:"input,omitempty"`
+			Type  string                 `json:"type"` // "text" or "tool_use"
+			Text  string                 `json:"text,omitempty"`
+			ID    string                 `json:"id,omitempty"`
+			Name  string                 `json:"name,omitempty"`
+			Input map[string]interface{} `json:"input,omitempty"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -321,7 +321,7 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 		return "", Usage{}, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", p.endpoint+"/v1/messages", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(req.Context, "POST", p.endpoint+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, nil, fmt.Errorf("create request: %w", err)
 	}
@@ -345,13 +345,13 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 		usage          Usage
 		// Track the content block index that each tool call belongs to.
 		// Anthropic sends deltas with an "index" field identifying the content block.
-		toolCallMap    = make(map[int]*ToolCall)
+		toolCallMap = make(map[int]*ToolCall)
 		// Accumulate partial_json for tool_use blocks until block is complete.
 		toolArgBuilder = make(map[int]*strings.Builder)
 		// Track which content blocks are tool_use (vs text).
-		isToolBlock    = make(map[int]bool)
+		isToolBlock = make(map[int]bool)
 		// Track tool name and ID for each tool_use block.
-		toolBlockMeta  = make(map[int]struct{ name, id string })
+		toolBlockMeta = make(map[int]struct{ name, id string })
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -620,9 +620,9 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 					var argsMap map[string]interface{}
 					_ = json.Unmarshal([]byte(tc.Function.Arguments), &argsMap)
 					am.Content[i] = anthropicContent{
-						Type:    "tool_use",
-						ID:      tc.ID,
-						Name:    tc.Function.Name,
+						Type:      "tool_use",
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
 						InputJSON: argsMap,
 					}
 				}

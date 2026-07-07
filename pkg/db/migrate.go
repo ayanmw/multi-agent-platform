@@ -107,6 +107,13 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project'`,
 	},
 
+	// v8: Placeholder migration (no-op) — v8 reserved for future schema change
+	{
+		Version:     8,
+		Description: "Placeholder migration (no-op) — v8 reserved for future schema change",
+		SQL:         `SELECT 1`,
+	},
+
 	// v9: Add session_id column to memories table for session-scoped memories
 	{
 		Version:     9,

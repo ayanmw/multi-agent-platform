@@ -78,7 +78,7 @@ func (p *OpenAIProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", p.endpoint+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(req.Context, "POST", p.endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -124,7 +124,7 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 		return "", Usage{}, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", p.endpoint+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(req.Context, "POST", p.endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, nil, fmt.Errorf("create request: %w", err)
 	}

@@ -21,7 +21,10 @@
 // use read locks (fast, concurrent), while Register uses write locks (serialized).
 package llm
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // ProviderRegistry manages a pool of Provider instances keyed by provider name.
 // It supports registration, lookup, and lazy creation of providers.
@@ -66,7 +69,7 @@ func (r *ProviderRegistry) Get(name string) Provider {
 	return r.providers[name]
 }
 
-// List returns the names of all registered providers.
+// List returns the names of all registered providers, sorted alphabetically.
 func (r *ProviderRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -75,6 +78,7 @@ func (r *ProviderRegistry) List() []string {
 	for name := range r.providers {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

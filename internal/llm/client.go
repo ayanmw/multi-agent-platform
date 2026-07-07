@@ -29,6 +29,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,6 +99,10 @@ type ChatRequest struct {
 	Temperature float32   `json:"temperature"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream"`
+	// Context carries the caller's cancellation and timeout signals.
+	// Providers use it to cancel in-flight HTTP requests. If nil,
+	// providers fall back to their default timeout.
+	Context context.Context
 }
 
 // ChatResponse is the non-streaming response body from /chat/completions.
@@ -125,10 +130,10 @@ type Choice struct {
 //   与 content 并列。Delta 已包含此字段，向后兼容（空字符串时不影响旧逻辑）。
 //   参见 doc/chapters/09-llm-api-comparison.html §4.2。
 type Delta struct {
-	Role           string     `json:"role"`
-	Content        string     `json:"content"`
-	ToolCalls      []ToolCall `json:"tool_calls"`
-	ReasoningContent string `json:"reasoning_content"` // DeepSeek R1/V4 思维链字段
+	Role             string     `json:"role"`
+	Content          string     `json:"content"`
+	ToolCalls        []ToolCall `json:"tool_calls"`
+	ReasoningContent string     `json:"reasoning_content"` // DeepSeek R1/V4 思维链字段
 }
 
 // Usage tracks token consumption as reported by the API.
@@ -139,11 +144,11 @@ type Delta struct {
 // Anthropic and DeepSeek also provide these fields. We store them for display
 // and cost tracking.
 type Usage struct {
-	PromptTokens           int `json:"prompt_tokens"`
-	CompletionTokens       int `json:"completion_tokens"`
-	TotalTokens            int `json:"total_tokens"`
-	PromptCacheHitTokens   int `json:"prompt_cache_hit_tokens"`   // tokens read from cache
-	PromptCacheMissTokens  int `json:"prompt_cache_miss_tokens"`  // tokens not in cache
+	PromptTokens          int `json:"prompt_tokens"`
+	CompletionTokens      int `json:"completion_tokens"`
+	TotalTokens           int `json:"total_tokens"`
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`  // tokens read from cache
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"` // tokens not in cache
 }
 
 // StreamChunk is a parsed SSE chunk passed to the onChunk callback.
@@ -252,9 +257,9 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 	}
 
 	var (
-		contentBuilder strings.Builder      // accumulates all text content
-		toolCalls      []ToolCall           // final assembled tool calls
-		usage          Usage                // from the final chunk
+		contentBuilder strings.Builder           // accumulates all text content
+		toolCalls      []ToolCall                // final assembled tool calls
+		usage          Usage                     // from the final chunk
 		toolCallMap    = make(map[int]*ToolCall) // index → partially accumulated tool call
 	)
 
@@ -280,7 +285,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		// Parse the SSE data as a JSON chunk
 		var chunk struct {
 			Choices []struct {
-				Delta        Delta `json:"delta"`
+				Delta        Delta  `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *Usage `json:"usage"`
@@ -336,9 +341,9 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 			} else {
 				// New tool call
 				toolCallMap[idx] = &ToolCall{
-					Idx:      idx,
-					ID:       tc.ID,
-					Type:     tc.Type,
+					Idx:  idx,
+					ID:   tc.ID,
+					Type: tc.Type,
 					Function: FunctionCall{
 						Name:      tc.Function.Name,
 						Arguments: tc.Function.Arguments,

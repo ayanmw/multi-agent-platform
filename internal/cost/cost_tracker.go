@@ -73,7 +73,11 @@ type CostRecord struct {
 	// TotalTokens is the total token count (input + output).
 	TotalTokens int
 
-	// CostUSD is the calculated cost in US dollars for this call.
+	// CostCents is the calculated cost stored as integer cents for precision.
+	CostCents int64
+
+	// CostUSD is the calculated cost in US dollars (derived from CostCents).
+	// Retained for backward-compatible display purposes.
 	CostUSD float64
 
 	// CreatedAt is the timestamp when this record was created.
@@ -83,7 +87,10 @@ type CostRecord struct {
 // CostReport is an aggregated cost report across a set of CostRecords.
 // It provides top-level totals plus breakdowns by model, tier, and agent.
 type CostReport struct {
-	// TotalCostUSD is the sum of all CostUSD values in the report.
+	// TotalCostCents is the sum of all CostCents values in the report (precise integer aggregation).
+	TotalCostCents int64
+
+	// TotalCostUSD is the derived display value equal to TotalCostCents / 100.0.
 	TotalCostUSD float64
 
 	// TotalTokens is the sum of all TotalTokens values.
@@ -95,14 +102,14 @@ type CostReport struct {
 	// TotalOutputTokens is the sum of all output tokens.
 	TotalOutputTokens int
 
-	// ByModel maps model name → total cost for that model.
-	ByModel map[string]float64
+	// ByModel maps model name → total cost (in cents).
+	ByModel map[string]int64
 
-	// ByTier maps tier name → total cost for that tier.
-	ByTier map[string]float64
+	// ByTier maps tier name → total cost (in cents).
+	ByTier map[string]int64
 
-	// ByAgent maps agent ID → total cost for that agent.
-	ByAgent map[string]float64
+	// ByAgent maps agent ID → total cost (in cents).
+	ByAgent map[string]int64
 
 	// RecordCount is the number of records included in this report.
 	RecordCount int
@@ -111,9 +118,9 @@ type CostReport struct {
 // newCostReport creates a zero-valued CostReport with initialized maps.
 func newCostReport() *CostReport {
 	return &CostReport{
-		ByModel: make(map[string]float64),
-		ByTier:  make(map[string]float64),
-		ByAgent: make(map[string]float64),
+		ByModel: make(map[string]int64),
+		ByTier:  make(map[string]int64),
+		ByAgent: make(map[string]int64),
 	}
 }
 
@@ -273,29 +280,32 @@ func (ct *CostTracker) DailyReport(days int) (*CostReport, error) {
 	return report, nil
 }
 
-// CalculateCost computes the USD cost for a single LLM call based on the
-// model's pricing profile and the API-reported token usage.
+// CalculateCost computes the USD cost in cents (integer) for a single LLM call
+// based on the model's pricing profile and the API-reported token usage.
 //
-// The prices in ModelProfile are per 1M tokens. The function normalizes
-// the arithmetic as:
+// The prices in ModelProfile are per 1M tokens in USD cents. The function uses
+// pure integer arithmetic to avoid floating-point drift:
 //
-//	cost = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+//	cost_cents = (input_tokens * input_price_cents + output_tokens * output_price_cents) / 1_000_000
 //
 // This strictly uses the API-returned Usage — no local token estimation.
 //
-// Returns the cost in USD as a float64. Returns 0.0 if profile is nil or
+// Returns the cost in cents (1 cent = $0.01 USD). Returns 0 if profile is nil or
 // usage has zero tokens.
-func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage) float64 {
+func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage) int64 {
 	if profile == nil {
-		return 0.0
+		return 0
 	}
 	if usage.TotalTokens == 0 {
-		return 0.0
+		return 0
 	}
 
-	// Cost = (input_tokens * input_price + output_tokens * output_price) / 1M
-	inputCost := float64(usage.PromptTokens) * profile.InputPrice
-	outputCost := float64(usage.CompletionTokens) * profile.OutputPrice
+	// Convert USD-per-1M to cents-per-M (multiply by 100), then do integer arithmetic.
+	// cost_cents = (input_tokens * input_price_cents + output_tokens * output_price_cents) / 1_000_000
+	inputPriceCents := int64(profile.InputPrice * 100)
+	outputPriceCents := int64(profile.OutputPrice * 100)
+	inputCost := int64(usage.PromptTokens) * inputPriceCents
+	outputCost := int64(usage.CompletionTokens) * outputPriceCents
 	return (inputCost + outputCost) / 1_000_000
 }
 
@@ -319,7 +329,7 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		}
 	}
 
-	cost := ct.CalculateCost(profile, usage)
+	costCents := ct.CalculateCost(profile, usage)
 
 	return CostRecord{
 		ID:           fmt.Sprintf("cr_%d_%d", time.Now().UnixNano(), stepIndex),
@@ -334,7 +344,8 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
-		CostUSD:      cost,
+		CostCents:    costCents,
+		CostUSD:      float64(costCents) / 100.0, // derived display value
 		CreatedAt:    time.Now(),
 	}
 }
@@ -343,13 +354,14 @@ func (ct *CostTracker) BuildRecordFromProfile(
 // the report aggregates. It is called by the public query methods while
 // holding the read lock.
 func (r *CostReport) add(record CostRecord) {
+	r.TotalCostCents += record.CostCents
 	r.TotalCostUSD += record.CostUSD
 	r.TotalTokens += record.TotalTokens
 	r.TotalInputTokens += record.InputTokens
 	r.TotalOutputTokens += record.OutputTokens
 	r.RecordCount++
 
-	r.ByModel[record.Model] += record.CostUSD
-	r.ByTier[record.Tier] += record.CostUSD
-	r.ByAgent[record.AgentID] += record.CostUSD
+	r.ByModel[record.Model] += record.CostCents
+	r.ByTier[record.Tier] += record.CostCents
+	r.ByAgent[record.AgentID] += record.CostCents
 }

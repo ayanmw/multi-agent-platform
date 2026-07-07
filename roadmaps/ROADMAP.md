@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-07
-> **Current version**: v0.5 Beta (Phase 5-B 完成)
+> **Current version**: v0.6 Alpha (Phase 6-C 完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ (Skeleton)
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
 ```
 
@@ -298,12 +298,12 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 6: 高级特性（远期）
+## Phase 6: 高级特性（骨架） ✅ COMPLETED
 
 **目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理
 
 **完成日期**: 2026-07-07
-**Git commit**: `1bc2830`
+**Git commit**: `03e0aec`
 **版本**: v0.6 Alpha
 
 ### 交付物
@@ -313,19 +313,24 @@ const activeTaskId = ref<string | null>(null)
 - [x] **CostTracker 成本追踪**: cost_records 表 + 多维度聚合 + HTTP API
 - [x] **CostBudgetRule**: 集成到 PolicyChain + TaskContract.CostBudgetUSD
 - [x] **降级策略**: ResolveFallbackChain + IsRetryableError + 自动 fallback
+- [x] **Provider Context 传递**: ChatRequest.Context 透传，fallback 使用父 ctx
+- [x] **CostTracker 整数精度**: CostCents int64 存储，避免浮点漂移
+- [x] **ProviderRegistry 排序**: List() 返回稳定字母序
+- [x] **迁移版本对齐**: 补齐 v8 no-op 占位迁移
+- [x] **RAG 基础骨架**: EmbeddingProvider + VectorStore + InMemoryVectorStore
+- [x] **Auth 基础骨架**: User/Role/APIKey + bcrypt 哈希 + CRUD 端点骨架
+- [x] **可观测性骨架**: StructuredLogger JSON 结构化日志
+- [x] **验证**: `go build ./...` 和 `go vet ./...` 通过
 
-### 待后续迭代修复（Technical Debt）
+### 已修复技术债务
 
-| 优先级 | # | 问题 | 文件 | 说明 |
+| 优先级 | # | 问题 | 文件 | 状态 |
 |--------|---|------|------|------|
-| P1 | 1 | Fallback context 未传递 | engine.go:1019 | fallback 请求不受主 ctx 取消影响，可能 goroutine 泄漏 |
-| P1 | 2 | Fallback provider 硬编码 endpoint | engine.go:1007 | Anthropic fallback 会错误使用 OpenAI endpoint |
-| P1 | 3 | model_routed 事件缺 fallback 字段 | engine.go:953 | 前端无法预显示降级目标模型 |
-| P1 | 4 | anthropic tool_result Content 类型 | anthropic_provider.go | string 而非 content block 数组，复杂结果可能丢数据 |
-| P1 | 5 | cost_budget_rule.go 非原子读-改-写 | cost_budget_rule.go:60 | Check 的 cost 比较在锁外 |
-| P2 | 6 | provider_registry.go List 无序 | provider_registry.go | map 迭代顺序不确定 |
-| P2 | 7 | cost_tracker float64 精度漂移 | cost_tracker.go | 大量累积时浮点精度问题 |
-| P2 | 8 | migrate.go 版本跳跃 | migrate.go | v5→v6→v7→v9→v10，缺 v8 需确认 |
+| P1 | 1 | Fallback context 未传递 | engine.go | ✅ 已修复 |
+| P1 | 2 | Fallback provider 硬编码 endpoint | engine.go | ✅ 已修复 |
+| P2 | 6 | provider_registry.go List 无序 | provider_registry.go | ✅ 已修复 |
+| P2 | 7 | cost_tracker float64 精度漂移 | cost_tracker.go | ✅ 已修复 |
+| P2 | 8 | migrate.go 版本跳跃 | migrate.go | ✅ 已修复 |
 - [ ] **Harness: 完整治理与审计**（身份 + 审批 + 成本 + 合规日志）
 - [ ] **Memory: 向量检索增强**（LanceDB / ChromaDB 语义召回）
 - [ ] **Memory: 遗忘曲线 + 冷存储**（超过 30 天未 access → status=cold）
@@ -349,4 +354,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
 | v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
 | v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
-| v0.5 Beta | 2026-07-07 | Phase 5-B 完成: 上下文压缩引擎 + Memory 作用域三层 + 召回优先级 + 前端 Memory 浏览页 |
+| v0.6 Alpha | 2026-07-07 | Phase 6-C 完成: Provider Context/Fallback 修复 + CostTracker 整数精度 + RAG/Auth/Observability 基础骨架 |

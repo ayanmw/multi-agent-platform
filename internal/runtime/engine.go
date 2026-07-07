@@ -313,25 +313,25 @@ type EngineConfig struct {
 // The * suffix indicates events that may repeat multiple times (streaming tokens,
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
-	cfg             EngineConfig              // immutable configuration set at creation
-	llm             llm.Provider               // LLM Provider interface (abstracts API protocol)
-	tools           *tool.Registry             // the tool registry shared across agents
-	bus             EventBus                   // event transport for real-time frontend updates
-	persist         Persistence                // optional persistence backend (nil = no persistence)
-	gate            *harness.PolicyGate        // optional policy enforcement (nil = allow all)
-	progress        *harness.ProgressManager   // optional progress tracking (nil = skip)
-	taskProgress    *harness.TaskProgress      // current progress state (nil if progress is nil)
-	taskID          string                     // unique task identifier for correlation
-	messages        []llm.Message              // full conversation history (system + user + assistant + tool)
-	stepIdx         int                        // current ReAct loop iteration (0-based)
-	totalTokens     int                        // cumulative total tokens across all LLM calls
-	tokenUsage      llm.Usage                  // cumulative detailed token usage (input/cache/output)
-	approvalHandler    harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
-	agentBus           AgentBus                         // optional inter-agent communication channel (nil = disabled)
-	checkpoint         *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
-	sessionMsgWriter   func(SessionMessageRecord) error // optional session message writer (nil = skip)
-	turnIndex          int                              // current turn index within the session (0-based)
-	providers          map[string]llm.Provider         // provider lookup map for Router decision (empty = not using Router)
+	cfg              EngineConfig                     // immutable configuration set at creation
+	llm              llm.Provider                     // LLM Provider interface (abstracts API protocol)
+	tools            *tool.Registry                   // the tool registry shared across agents
+	bus              EventBus                         // event transport for real-time frontend updates
+	persist          Persistence                      // optional persistence backend (nil = no persistence)
+	gate             *harness.PolicyGate              // optional policy enforcement (nil = allow all)
+	progress         *harness.ProgressManager         // optional progress tracking (nil = skip)
+	taskProgress     *harness.TaskProgress            // current progress state (nil if progress is nil)
+	taskID           string                           // unique task identifier for correlation
+	messages         []llm.Message                    // full conversation history (system + user + assistant + tool)
+	stepIdx          int                              // current ReAct loop iteration (0-based)
+	totalTokens      int                              // cumulative total tokens across all LLM calls
+	tokenUsage       llm.Usage                        // cumulative detailed token usage (input/cache/output)
+	approvalHandler  harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
+	agentBus         AgentBus                         // optional inter-agent communication channel (nil = disabled)
+	checkpoint       *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
+	sessionMsgWriter func(SessionMessageRecord) error // optional session message writer (nil = skip)
+	turnIndex        int                              // current turn index within the session (0-based)
+	providers        map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -383,10 +383,10 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		tools:            tools,
 		bus:              bus,
 		persist:          cfg.Persistence,
-		gate:             cfg.PolicyGate,          // nil = no policy enforcement
-		progress:         cfg.Progress,            // nil = no progress tracking
-		agentBus:         cfg.AgentBus,            // nil = no inter-agent communication
-		checkpoint:       cfg.CheckpointManager,   // nil = no checkpoint/recovery
+		gate:             cfg.PolicyGate,           // nil = no policy enforcement
+		progress:         cfg.Progress,             // nil = no progress tracking
+		agentBus:         cfg.AgentBus,             // nil = no inter-agent communication
+		checkpoint:       cfg.CheckpointManager,    // nil = no checkpoint/recovery
 		sessionMsgWriter: cfg.SessionMessageWriter, // nil = skip session message persistence
 		turnIndex:        cfg.TurnIndex,            // turn index within the session
 		taskID:           taskID,
@@ -397,7 +397,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		totalTokens:     0,
 		tokenUsage:      llm.Usage{},
 		approvalHandler: cfg.ApprovalHandler, // nil = approval not supported
-		providers:         cfg.Providers,       // provider lookup map for Router decisions
+		providers:       cfg.Providers,       // provider lookup map for Router decisions
 	}
 }
 
@@ -518,16 +518,16 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
 					e.messages = append(e.messages, llm.Message{Role: "user", Content: formatted})
 					e.saveConversation("user", formatted)
-						e.writeSessionMessage("user", formatted, "", "", 0)
+					e.writeSessionMessage("user", formatted, "", "", 0)
 
 					// Emit a system_info event so the frontend can show the
 					// inter-agent communication in the UI.
 					e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-						"type":        "agent_message_received",
-						"from_agent":  msg.FromAgentID,
-						"to_agent":    e.cfg.AgentID,
-						"msg_type":    msg.Type,
-						"content":     msg.Content,
+						"type":       "agent_message_received",
+						"from_agent": msg.FromAgentID,
+						"to_agent":   e.cfg.AgentID,
+						"msg_type":   msg.Type,
+						"content":    msg.Content,
 					}))
 				}
 			}
@@ -705,7 +705,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 			// Persist the tool result for audit trail.
 			e.saveConversation("tool", result)
-				e.writeSessionMessage("tool", result, tc.ID, "", 0)
+			e.writeSessionMessage("tool", result, tc.ID, "", 0)
 
 			// =================================================================
 			// PHASE 3: OBSERVE — Feed the tool result back into the conversation.
@@ -950,13 +950,15 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
 			}
 
-			// Emit model_routed event for white-box transparency
+			// model_routed event includes fallback info so the frontend can
+			// pre-display the fallback target model (white-box transparency).
 			e.bus.SendEvent(event.NewEvent("model_routed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":    selectedModel,
 				"intent":   routeDecision.Intent,
 				"tier":     routeDecision.Tier.String(),
 				"reason":   routeDecision.Reason,
 				"provider": routeDecision.Primary.Provider,
+				"fallback": routeDecision.Fallback,
 			}))
 			log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
 				selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
@@ -1003,9 +1005,19 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				fallbackProvider = p
 			}
 		}
+		//复用 primary provider 的同款查找逻辑，去掉硬编码 NewOpenAIProvider。
+		//if fallbackProvider == nil {
+		//	fallbackProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
+		//		e.cfg.Endpoint, e.cfg.APIKey, routeDecision.Fallback.Name)
+		//}
 		if fallbackProvider == nil {
-			fallbackProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
-				e.cfg.Endpoint, e.cfg.APIKey, routeDecision.Fallback.Name)
+			if p, ok := e.providers[routeDecision.Fallback.Provider]; ok {
+				fallbackProvider = p
+			} else if e.providers != nil {
+				if p, ok := e.providers[routeDecision.Fallback.Name]; ok {
+					fallbackProvider = p
+				}
+			}
 		}
 
 		req.Model = routeDecision.Fallback.Name
@@ -1016,6 +1028,18 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			"reason":   err.Error(),
 		}))
 
+		// Fallback should respect a cancellation signal; if the task is
+		// cancelled while the fallback model is streaming, we must propagate
+		// that cancellation into the HTTP request. Create a child context so
+		// the goroutine is reaped when the parent is done (prevents leak).
+		fallbackCtx := ctx
+		if ctx != nil {
+			var cancel context.CancelFunc
+			fallbackCtx, cancel = context.WithCancel(ctx)
+			defer cancel()
+		}
+
+		req.Context = fallbackCtx
 		content, usage, toolCalls, err = fallbackProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
 			if chunk.Delta.Content != "" {
 				e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -1201,7 +1225,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		Type: "tool_call", Status: "completed",
 		ToolName: tc.Function.Name, ToolInput: args, ToolOutput: resultStr,
 		DurationMs: int(duration),
-		TokenUsed: 0, // tool call itself doesn't consume LLM tokens
+		TokenUsed:  0, // tool call itself doesn't consume LLM tokens
 	})
 
 	// Emit observation — this is the key event that connects the tool execution
