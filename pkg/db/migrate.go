@@ -113,6 +113,33 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		Description: "Add session_id column to memories table for session-scoped memories",
 		SQL:         `ALTER TABLE memories ADD COLUMN session_id TEXT DEFAULT ''`,
 	},
+
+	// v10: Create cost_records table for LLM cost tracking.
+	// Tracks every LLM call's token consumption and USD cost, indexed by
+	// task, session, and project for multi-dimensional cost reporting.
+	{
+		Version: 10,
+		Description: "Create cost_records table for LLM call cost tracking",
+		SQL: `CREATE TABLE IF NOT EXISTS cost_records (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			session_id TEXT DEFAULT '',
+			project_id TEXT DEFAULT 'default',
+			agent_id TEXT NOT NULL,
+			step_index INTEGER DEFAULT 0,
+			model TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			tier TEXT DEFAULT 'standard',
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			cost_usd REAL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_cost_records_task ON cost_records(task_id);
+		CREATE INDEX IF NOT EXISTS idx_cost_records_session ON cost_records(session_id);
+		CREATE INDEX IF NOT EXISTS idx_cost_records_project ON cost_records(project_id);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

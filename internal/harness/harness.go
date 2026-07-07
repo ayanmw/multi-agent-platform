@@ -120,6 +120,11 @@ type TaskContract struct {
 	// Metadata carries arbitrary key-value pairs for the harness (e.g., case name,
 	// expected output, tags). Not used for enforcement.
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// CostBudgetUSD is the maximum USD cost allowed for this task. When the
+	// cumulative cost exceeds this budget, CostBudgetRule blocks further tool calls.
+	// 0 means unlimited (no cost constraint).
+	CostBudgetUSD float64 `json:"cost_budget_usd,omitempty"`
 }
 
 // TaskPermissions defines the agent's operational permissions.
