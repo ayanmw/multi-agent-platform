@@ -132,7 +132,10 @@ func (p *WorkerPool) Submit(task PoolTask) error {
 		item.createdAt = time.Now()
 	}
 
+	// Enqueue the task under lock to protect the heap from concurrent mutation.
+	p.mu.Lock()
 	heap.Push(p.taskQueue, item)
+	p.mu.Unlock()
 	log.Printf("[Pool] Task %s queued (priority=%d)", task.ID, task.Priority)
 	go p.dispatch()
 	return nil

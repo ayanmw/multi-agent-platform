@@ -397,6 +397,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		totalTokens:     0,
 		tokenUsage:      llm.Usage{},
 		approvalHandler: cfg.ApprovalHandler, // nil = approval not supported
+		providers:         cfg.Providers,       // provider lookup map for Router decisions
 	}
 }
 
