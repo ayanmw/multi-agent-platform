@@ -182,7 +182,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 **目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理、记忆召回、Project 管理、多轮对话
 
 **完成日期**: 2026-07-07
-**Git commit**: _待提交_
+**Git commit**: `c224906`
 
 ### 交付物
 - [x] **Session 管理 + Task 金字塔结构**（后端持久化 + 前端会话列表）

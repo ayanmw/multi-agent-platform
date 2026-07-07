@@ -116,8 +116,6 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
-
-// createMigrationsTable ensures the schema_migrations tracking table exists.
 func createMigrationsTable() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
