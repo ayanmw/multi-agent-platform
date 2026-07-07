@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-06
-> **Current version**: v0.5 (Phase 5 完成)
+> **Last updated**: 2026-07-07
+> **Current version**: v0.5 Alpha (Phase 5-A 完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -177,12 +177,12 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 5: 运行时注册 + Provider + Router + 记忆召回 + 会话历史
+## Phase 5: 运行时注册 + Provider + Router + 记忆召回 + 会话历史 + 多轮对话
 
-**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理和记忆召回
+**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理、记忆召回、Project 管理、多轮对话
 
-**完成日期**: 2026-07-06
-**Git commit**: `2b7a026`
+**完成日期**: 2026-07-07
+**Git commit**: _待提交_
 
 ### 交付物
 - [x] **Session 管理 + Task 金字塔结构**（后端持久化 + 前端会话列表）
@@ -204,6 +204,22 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] **AgentBus 接入 Engine ReAct Loop**（Agent 间通信）
 - [x] **Checkpoint / Recovery**（任务检查点 + 崩溃恢复）
 - [x] **Agent 配置 CRUD 前端页面**（创建/编辑/删除 Agent）
+
+### Phase 5-A: Project 管理 + 多轮对话 ✅ COMPLETED (2026-07-07)
+- [x] **Project CRUD API**（`/api/projects` + `/api/projects/:id`）
+- [x] **Project 管理前端**（useProjectStore + 侧边栏 Project 分组 + ProjectConfig 组件）
+- [x] **session_messages 表**（Session 级消息持久化，Engine 通过 SessionMessageWriter 同步写入）
+- [x] **多轮对话 API**（`POST /api/sessions/:id/chat` + `GET /api/sessions/:id/messages`）
+- [x] **多轮对话上下文注入**（新 Task 启动时自动注入历史 messages + Working Memory）
+- [x] **前端多轮时间线**（TurnList + TurnItem 组件，展开/折叠，时间线展示）
+- [x] **Session 内继续聊天**（COMPLETED/FAILED 的 Session 也可继续发送消息）
+- [x] **任务层级架构**（root → turn_2, turn_3 (siblings) → child_of_turn_2 (children)）
+- [x] **DB 迁移 v5-v8**（projects 表 + session_messages 表 + sessions/tasks/memories 新增字段）
+
+### Phase 5-B: 上下文压缩 + 记忆作用域（规划中）
+- [ ] Memory 作用域扩展（scope 字段 + session/project/global 召回优先级）
+- [ ] 上下文压缩引擎（阈值检测 turn_count>=20 或 total_tokens>=100KB + 摘要生成）
+- [ ] 前端 Memory 浏览页（按 scope/project 查看记忆）
 
 ### 新增核心设计：会话与任务历史管理（Session & Task History）
 
@@ -321,3 +337,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
 | v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
+| v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |

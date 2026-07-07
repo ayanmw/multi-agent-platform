@@ -10,6 +10,8 @@ export interface Session {
   status: SessionStatus
   userInput: string
   totalTokens: number
+  projectId: string
+  turnCount: number
   createdAt: number
   updatedAt: number
 }
@@ -50,9 +52,14 @@ export function useSessionStore() {
     sessions.value.find(s => s.id === activeSessionId.value) || null
   )
 
-  /** Load list of sessions from backend and replace local cache */
-  async function loadSessions(): Promise<void> {
-    const resp = await fetch('/api/sessions')
+  /** Load list of sessions from backend and replace local cache.
+   *  If projectId is provided, filters sessions by project. */
+  async function loadSessions(projectId?: string): Promise<void> {
+    let url = '/api/sessions'
+    if (projectId) {
+      url += `?project_id=${encodeURIComponent(projectId)}`
+    }
+    const resp = await fetch(url)
     if (!resp.ok) {
       throw new Error(`Failed to load sessions: ${resp.status}`)
     }
@@ -63,6 +70,8 @@ export function useSessionStore() {
       status: string
       user_input: string
       total_tokens: number
+      project_id: string
+      turn_count: number
       created_at: string
       updated_at: string
     }>
@@ -81,6 +90,8 @@ export function useSessionStore() {
         status: s.status as SessionStatus,
         userInput: s.user_input || '',
         totalTokens: s.total_tokens || 0,
+        projectId: s.project_id || 'default',
+        turnCount: s.turn_count || 0,
         createdAt: new Date(s.created_at).getTime(),
         updatedAt: new Date(s.updated_at).getTime(),
       }))
@@ -91,12 +102,17 @@ export function useSessionStore() {
     saveToStorage()
   }
 
-  /** Create a new empty session on the backend */
-  async function createSession(name?: string, userInput?: string): Promise<Session> {
+  /** Create a new empty session on the backend.
+   *  projectId is optional — defaults to the active project or 'default'. */
+  async function createSession(name?: string, userInput?: string, projectId?: string): Promise<Session> {
+    const body: Record<string, string> = { name: name || '', user_input: userInput || '' }
+    if (projectId) {
+      body.project_id = projectId
+    }
     const resp = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name || '', user_input: userInput || '' }),
+      body: JSON.stringify(body),
     })
     if (!resp.ok) {
       const text = await resp.text()
@@ -111,6 +127,8 @@ export function useSessionStore() {
       status: data.status,
       userInput: userInput || '',
       totalTokens: 0,
+      projectId: projectId || 'default',
+      turnCount: 0,
       createdAt: now,
       updatedAt: now,
     }

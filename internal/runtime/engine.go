@@ -241,6 +241,22 @@ type EngineConfig struct {
 	//
 	// Added in Phase 5.
 	CheckpointManager *CheckpointManager
+
+	// SessionMessageWriter is called whenever a new message is added to the
+	// conversation. When set, every message (system/user/assistant/tool) is
+	// persisted to the session_messages table for multi-turn conversation history.
+	// When nil, session message persistence is skipped.
+	//
+	// This is a best-effort persistence layer — errors from the writer are logged
+	// but do not interrupt the engine's execution. The TurnIndex field in the
+	// EngineConfig controls which turn the messages belong to.
+	SessionMessageWriter func(msg SessionMessageRecord) error
+
+	// TurnIndex is the current turn index within the session (0-based).
+	// It is used to tag session_messages with the turn they belong to.
+	// The caller should increment this between user turns (e.g., after each
+	// call to Engine.Run() completes).
+	TurnIndex int
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -289,9 +305,11 @@ type Engine struct {
 	stepIdx         int                        // current ReAct loop iteration (0-based)
 	totalTokens     int                        // cumulative total tokens across all LLM calls
 	tokenUsage      llm.Usage                  // cumulative detailed token usage (input/cache/output)
-	approvalHandler harness.ApprovalHandler    // optional approval handler for ErrApprovalRequired
-	agentBus        AgentBus                   // optional inter-agent communication channel (nil = disabled)
-	checkpoint      *CheckpointManager         // optional checkpoint manager for crash recovery (nil = disabled)
+	approvalHandler    harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
+	agentBus           AgentBus                         // optional inter-agent communication channel (nil = disabled)
+	checkpoint         *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
+	sessionMsgWriter   func(SessionMessageRecord) error // optional session message writer (nil = skip)
+	turnIndex          int                              // current turn index within the session (0-based)
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -338,16 +356,18 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 
 	return &Engine{
-		cfg:             cfg,
-		llm:             provider,
-		tools:           tools,
-		bus:             bus,
-		persist:         cfg.Persistence,
-		gate:            cfg.PolicyGate,         // nil = no policy enforcement
-		progress:        cfg.Progress,           // nil = no progress tracking
-		agentBus:        cfg.AgentBus,           // nil = no inter-agent communication
-		checkpoint:      cfg.CheckpointManager,  // nil = no checkpoint/recovery
-		taskID:          taskID,
+		cfg:              cfg,
+		llm:              provider,
+		tools:            tools,
+		bus:              bus,
+		persist:          cfg.Persistence,
+		gate:             cfg.PolicyGate,          // nil = no policy enforcement
+		progress:         cfg.Progress,            // nil = no progress tracking
+		agentBus:         cfg.AgentBus,            // nil = no inter-agent communication
+		checkpoint:       cfg.CheckpointManager,   // nil = no checkpoint/recovery
+		sessionMsgWriter: cfg.SessionMessageWriter, // nil = skip session message persistence
+		turnIndex:        cfg.TurnIndex,            // turn index within the session
+		taskID:           taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -416,6 +436,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// Persist the user message for audit trail and conversation replay.
 	e.saveConversation("user", userInput)
 
+	// Write the system prompt and user message to session_messages for multi-turn
+	// conversation history. The system prompt is always the first message in e.messages.
+	// These writes are best-effort — failures are logged but do not interrupt the engine.
+	e.writeSessionMessage("system", e.messages[0].Content, "", "", 0)
+	e.writeSessionMessage("user", userInput, "", "", 0)
+
 	// Init Harness progress tracking if configured
 	if e.progress != nil {
 		tp, err := e.progress.Init(e.taskID, e.cfg.Contract)
@@ -469,6 +495,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
 					e.messages = append(e.messages, llm.Message{Role: "user", Content: formatted})
 					e.saveConversation("user", formatted)
+						e.writeSessionMessage("user", formatted, "", "", 0)
 
 					// Emit a system_info event so the frontend can show the
 					// inter-agent communication in the UI.
@@ -576,6 +603,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
 			})
 			e.saveConversation("assistant", content)
+			e.writeSessionMessage("assistant", content, "", "", usage.TotalTokens)
 
 			// Emit the final observation — the complete answer text along with
 			// token usage statistics. The frontend uses this to display the
@@ -586,6 +614,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 			}))
+
+			// Persist the final observation step for historical replay.
+			e.saveStep(StepRecord{
+				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+				Type: "observation", Status: "completed",
+				Content: content, TokenUsed: usage.TotalTokens,
+			})
 
 			// Emit task_completed — this tells the frontend that the agent
 			// has finished successfully. The UI transitions from the "running"
@@ -620,6 +655,9 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
 			})
 			e.saveConversation("assistant", content)
+			// Serialize tool calls to JSON for session_messages persistence.
+			tcJSON, _ := json.Marshal(toolCalls)
+			e.writeSessionMessage("assistant", content, "", string(tcJSON), usage.TotalTokens)
 
 			// Execute the tool. The engine dispatches the tool call to the
 			// Tool Registry, which looks up the tool by name and invokes its
@@ -644,6 +682,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 			// Persist the tool result for audit trail.
 			e.saveConversation("tool", result)
+				e.writeSessionMessage("tool", result, tc.ID, "", 0)
 
 			// =================================================================
 			// PHASE 3: OBSERVE — Feed the tool result back into the conversation.
@@ -709,6 +748,30 @@ func (e *Engine) saveConversation(role, content string) {
 		TaskID: e.taskID, Role: role, Content: content,
 	}); err != nil {
 		log.Printf("[Engine] Failed to save conversation: %v", err)
+	}
+}
+
+// writeSessionMessage writes a message to the session_messages table via the
+// SessionMessageWriter callback. This is a best-effort operation — failures
+// are logged but never interrupt the engine's execution.
+//
+// The SessionMessageWriter is configured in EngineConfig and typically wraps
+// db.InsertSessionMessage. When nil (e.g., in tests or when session persistence
+// is not needed), this is a no-op.
+func (e *Engine) writeSessionMessage(role, content string, toolCallID string, toolCallsJSON string, tokenCount int) {
+	if e.sessionMsgWriter == nil {
+		return
+	}
+	if err := e.sessionMsgWriter(SessionMessageRecord{
+		TaskID:     e.taskID,
+		TurnIndex:  e.turnIndex,
+		Role:       role,
+		Content:    content,
+		ToolCallID: toolCallID,
+		ToolCalls:  toolCallsJSON,
+		TokenCount: tokenCount,
+	}); err != nil {
+		log.Printf("[Engine] Failed to write session message: %v", err)
 	}
 }
 
@@ -966,6 +1029,15 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
+
+		// Persist the failed tool_call step so historical replay can show it.
+		e.saveStep(StepRecord{
+			TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+			Type: "tool_call", Status: "failed",
+			ToolName: tc.Function.Name, ToolInput: args,
+			DurationMs: int(duration),
+		})
+
 		return "", execErr
 	}
 
@@ -990,6 +1062,16 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		"duration_ms": duration,
 	}))
 
+	// Persist the tool_call step so historical replay via GET /api/tasks?id=xxx
+	// can restore tool_call steps correctly (not all as "think").
+	e.saveStep(StepRecord{
+		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+		Type: "tool_call", Status: "completed",
+		ToolName: tc.Function.Name, ToolInput: args, ToolOutput: resultStr,
+		DurationMs: int(duration),
+		TokenUsed: 0, // tool call itself doesn't consume LLM tokens
+	})
+
 	// Emit observation — this is the key event that connects the tool execution
 	// back to the ReAct loop. The frontend shows this as the "observation" phase
 	// in the Agent Tree visualization, making it clear what data the LLM will
@@ -997,6 +1079,13 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": resultStr,
 	}))
+
+	// Persist the observation step so the historical replay shows it too.
+	e.saveStep(StepRecord{
+		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+		Type: "observation", Status: "completed",
+		Content: resultStr,
+	})
 
 	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
@@ -1154,6 +1243,21 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))
+
+	// Persist the approved tool_call step so historical replay works.
+	e.saveStep(StepRecord{
+		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+		Type: "tool_call", Status: "completed",
+		ToolName: tc.Function.Name, ToolInput: args, ToolOutput: resultStr,
+		DurationMs: int(execDuration),
+	})
+
+	// Persist the observation step too.
+	e.saveStep(StepRecord{
+		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+		Type: "observation", Status: "completed",
+		Content: resultStr,
+	})
 
 	return resultStr, nil
 }

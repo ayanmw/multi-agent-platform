@@ -3,12 +3,17 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/anmingwei/multi-agent-platform/internal/runtime"
+	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/google/uuid"
 )
@@ -77,6 +82,7 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 type createSessionRequest struct {
 	Name      string `json:"name"`
 	UserInput string `json:"user_input"`
+	ProjectID string `json:"project_id"`
 }
 
 type renameSessionRequest struct {
@@ -87,7 +93,8 @@ type renameSessionRequest struct {
 func handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		sessions, err := db.QuerySessions(50)
+		projectID := r.URL.Query().Get("project_id")
+			sessions, err := db.QuerySessions(50, projectID)
 		if err != nil {
 			log.Printf("[API] GET /api/sessions error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -144,6 +151,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 			Name:      name,
 			Status:    "empty",
 			UserInput: req.UserInput,
+			ProjectID: req.ProjectID,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -465,4 +473,387 @@ func parseInt(s string) (int, error) {
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
+}
+
+// === Project API ===
+
+// projectRequest is the JSON body for project create/update
+type projectRequest struct {
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	WorkingDirectory string `json:"working_directory"`
+}
+
+// projectSummary is the compact view returned in list endpoints.
+// It includes counts computed from related tables.
+type projectSummary struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	WorkingDirectory string `json:"working_directory"`
+	SessionCount     int    `json:"session_count"`
+	MemoryCount      int    `json:"memory_count"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+// handleProjects handles GET/POST /api/projects
+// GET: 列出所有项目（含 sessions 计数和记忆统计）
+// POST: 创建新项目
+func handleProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		projects, err := db.QueryProjects()
+		if err != nil {
+			log.Printf("[API] GET /api/projects error: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if projects == nil {
+			projects = []db.ProjectRecord{}
+		}
+
+		// Build summaries with session and memory counts
+		summaries := make([]projectSummary, 0, len(projects))
+		for _, p := range projects {
+			summary := projectSummary{
+				ID:               p.ID,
+				Name:             p.Name,
+				Description:      p.Description,
+				WorkingDirectory: p.WorkingDirectory,
+				CreatedAt:        p.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:        p.UpdatedAt.Format(time.RFC3339),
+			}
+
+			// Count sessions for this project
+			sessions, err := db.QuerySessionsByProject(p.ID, 1000)
+			if err == nil {
+				summary.SessionCount = len(sessions)
+			}
+
+			// Count memories for this project
+			memories, err := db.QueryMemoriesByProject(p.ID)
+			if err == nil {
+				summary.MemoryCount = len(memories)
+			}
+
+			summaries = append(summaries, summary)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(summaries)
+
+	case http.MethodPost:
+		var req projectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+
+		id := uuid.New().String()
+		now := time.Now()
+		proj := db.ProjectRecord{
+			ID:               id,
+			Name:             req.Name,
+			Description:      req.Description,
+			WorkingDirectory: req.WorkingDirectory,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if err := db.InsertProject(proj); err != nil {
+			log.Printf("[API] POST /api/projects error: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		created, err := db.QueryProjectByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(created)
+
+	default:
+		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProjectByID handles GET/PUT/DELETE /api/projects/{id}
+// GET: 返回项目详情（含 sessions 列表、记忆统计）
+// PUT: 更新项目（名称、工作目录、描述）
+// DELETE: 删除项目（级联删除所有关联数据）
+func handleProjectByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/projects/")
+	if id == "" || id == "/" {
+		http.Error(w, "project ID required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		project, err := db.QueryProjectByID(id)
+		if err != nil {
+			http.Error(w, "project not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
+
+		sessions, err := db.QuerySessionsByProject(id, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if sessions == nil {
+			sessions = []db.SessionRecord{}
+		}
+
+		// Compute memory stats: total, consolidated, semantic
+		memories, err := db.QueryMemoriesByProject(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		totalMem := 0
+		consolidated := 0
+		semantic := 0
+		for _, m := range memories {
+			totalMem++
+			switch m.Tier {
+			case "consolidated":
+				consolidated++
+			case "semantic":
+				semantic++
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"project":  project,
+			"sessions": sessions,
+			"memory_stats": map[string]int{
+				"total":        totalMem,
+				"consolidated": consolidated,
+				"semantic":     semantic,
+			},
+		})
+
+	case http.MethodPut:
+		var req projectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+
+		// Fetch existing project to preserve its config
+		existing, err := db.QueryProjectByID(id)
+		if err != nil {
+			http.Error(w, "project not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
+
+		if err := db.UpdateProject(id, req.Name, req.Description, req.WorkingDirectory, existing.Config); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		updated, err := db.QueryProjectByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(updated)
+
+	case http.MethodDelete:
+		// Protect the default project from deletion
+		if id == "default" {
+			http.Error(w, "cannot delete the default project", http.StatusBadRequest)
+			return
+		}
+
+		if err := db.DeleteProject(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      id,
+			"message": "Project deleted successfully",
+		})
+
+	default:
+		http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
+	}
+}
+
+// === Multi-Turn Chat API ===
+
+// handleSessionChat handles POST /api/sessions/{id}/chat
+// 在已有 Session 中发起新轮对话，自动注入历史消息上下文
+func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 提取 session ID
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	id = strings.TrimSuffix(id, "/chat")
+	if id == "" || id == "/" {
+		http.Error(w, "session ID required", http.StatusBadRequest)
+		return
+	}
+
+	// 解析请求
+	var req struct {
+		Input        string `json:"input"`
+		AgentID      string `json:"agent_id"`
+		SystemPrompt string `json:"system_prompt"`
+		MaxSteps     int    `json:"max_steps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Input == "" {
+		http.Error(w, "input is required", http.StatusBadRequest)
+		return
+	}
+
+	// 查询 session
+	sess, err := db.QuerySessionByID(id)
+	if err != nil {
+		http.Error(w, "session not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = "agent_default"
+	}
+
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = "You are a helpful AI assistant with access to tools. " +
+			"When you need to run commands, read files, or write files, use the available tools. " +
+			"Always explain your reasoning before using tools. " +
+			"After using tools, analyze the results and continue until the task is complete."
+	}
+
+	// 加载历史消息
+	historyMessages, err := db.QuerySessionMessages(id)
+	if err != nil {
+		log.Printf("[SessionChat] Failed to load history messages: %v", err)
+		historyMessages = nil
+	}
+
+	// 构建历史上下文文本
+	var historyContext string
+	if len(historyMessages) > 0 {
+		historyContext = buildHistoryContext(historyMessages)
+	}
+
+	// 加载 Memory Recall
+	workingMemory := ""
+	projectID := sess.ProjectID
+	if projectID == "" {
+		projectID = "default"
+	}
+	if wm, err := memRecall.BuildWorkingMemory(projectID, req.Input, 3); err == nil {
+		workingMemory = memRecall.FormatForSystemPrompt(wm)
+	}
+
+	// 创建新 Task
+	taskID := "task_" + time.Now().Format("20060102150405")
+	turnIndex := sess.TurnCount // 当前轮次（0-based）
+
+	// 持久化 Task
+	if persist != nil {
+		persist.SaveTask(taskID, req.Input, []string{agentID})
+		persist.SaveTaskMeta(taskID, id, sess.RootTaskID, false) // 非 root task，parent = root
+	}
+
+	// 启动 Agent Loop
+	contract := harness.DefaultContract(req.Input)
+	if req.MaxSteps > 0 {
+		contract.MaxSteps = req.MaxSteps
+	}
+
+	go func() {
+		// 构建完整的 system prompt（Working Memory + 历史上下文 + 原始 system prompt）
+		fullSystemPrompt := systemPrompt
+		if workingMemory != "" {
+			fullSystemPrompt = workingMemory + "\n\n" + fullSystemPrompt
+		}
+		if historyContext != "" {
+			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
+		}
+
+		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"session_id":  id,
+		"task_id":     taskID,
+		"agent_id":    agentID,
+		"turn_index":  turnIndex,
+		"status":      "started",
+	})
+}
+
+// handleSessionMessages handles GET /api/sessions/{id}/messages
+// 返回指定 Session 的所有历史消息（按 turn_index ASC, created_at ASC）
+func handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	msgs, err := db.QuerySessionMessages(sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if msgs == nil {
+		msgs = []db.SessionMessageRecord{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(msgs)
+}
+
+// buildHistoryContext 将历史消息格式化为上下文文本，按轮次分组
+func buildHistoryContext(msgs []db.SessionMessageRecord) string {
+	var sb strings.Builder
+	sb.WriteString("## Previous Conversation History\n\n")
+	currentTurn := -1
+	for _, m := range msgs {
+		if m.TurnIndex != currentTurn {
+			currentTurn = m.TurnIndex
+			sb.WriteString(fmt.Sprintf("### Turn %d\n\n", currentTurn+1))
+		}
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n\n", m.Role, truncateContent(m.Content, 500)))
+	}
+	sb.WriteString("## Current Task\n\n")
+	return sb.String()
+}
+
+// truncateContent truncates a message content to maxLen characters.
+// If the content is longer than maxLen, it appends "...".
+func truncateContent(content string, maxLen int) string {
+	if len(content) <= maxLen {
+		return content
+	}
+	return content[:maxLen] + "..."
 }

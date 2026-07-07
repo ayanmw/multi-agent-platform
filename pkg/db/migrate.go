@@ -56,6 +56,65 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		Description: "Backfill root_task_id for existing sessions from their root tasks",
 		SQL: `UPDATE sessions SET root_task_id = (SELECT id FROM tasks WHERE tasks.session_id = sessions.id AND tasks.is_root = 1 LIMIT 1) WHERE (root_task_id = '' OR root_task_id IS NULL)`,
 	},
+
+	// v5: Create projects table and seed default project.
+	// Projects serve as the top-level organizational unit for grouping sessions.
+	{
+		Version:     5,
+		Description: "Create projects table and seed default project",
+		SQL: `CREATE TABLE IF NOT EXISTS projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			working_directory TEXT DEFAULT '',
+			config JSON DEFAULT '{}',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT OR IGNORE INTO projects (id, name, description) VALUES ('default', 'Default Project', 'Default project created during migration')`,
+	},
+
+	// v6: Create session_messages table for multi-turn conversation tracking.
+	{
+		Version:     6,
+		Description: "Create session_messages table for multi-turn conversations",
+		SQL: `CREATE TABLE IF NOT EXISTS session_messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			turn_index INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tool_call_id TEXT,
+			tool_calls JSON,
+			token_count INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (session_id) REFERENCES sessions(id),
+			FOREIGN KEY (task_id) REFERENCES tasks(id)
+		)`,
+	},
+
+	// v7: Extend sessions, tasks, and memories tables with new columns
+	// for project association, turn tracking, and memory scoping.
+	{
+		Version:     7,
+		Description: "Add project_id, turn_count, total_tokens, context_size to sessions; turn_index to tasks; scope to memories",
+		SQL: `ALTER TABLE sessions ADD COLUMN project_id TEXT DEFAULT 'default';
+		ALTER TABLE sessions ADD COLUMN turn_count INTEGER DEFAULT 0;
+		ALTER TABLE sessions ADD COLUMN total_tokens INTEGER DEFAULT 0;
+		ALTER TABLE sessions ADD COLUMN context_size INTEGER DEFAULT 0;
+		ALTER TABLE tasks ADD COLUMN turn_index INTEGER DEFAULT 0;
+		ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project'`,
+	},
+
+	// v8: Backfill existing sessions and memories with default values.
+	// Ensures pre-existing data conforms to the new schema expectations.
+	{
+		Version:     8,
+		Description: "Backfill project_id for sessions and scope for memories",
+		SQL: `UPDATE sessions SET project_id = 'default' WHERE project_id = '' OR project_id IS NULL;
+		UPDATE memories SET scope = 'project' WHERE scope = '' OR scope IS NULL`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

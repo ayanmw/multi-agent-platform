@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
@@ -22,6 +23,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 	"github.com/anmingwei/multi-agent-platform/web"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -69,6 +71,10 @@ func main() {
 		// Seed default agent if not exists
 		if err := db.SeedDefaultAgent(); err != nil {
 			log.Printf("Warning: Failed to seed default agent: %v", err)
+		}
+		// Seed default project if not exists
+		if err := db.SeedDefaultProject(); err != nil {
+			log.Printf("Warning: Failed to seed default project: %v", err)
 		}
 	}
 
@@ -314,7 +320,28 @@ func main() {
 		handleSessions(w, r)
 	})
 	http.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		// POST /api/sessions/{id}/chat — multi-turn chat within a session
+		if strings.HasSuffix(path, "/chat") {
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr)
+			return
+		}
+		// GET /api/sessions/{id}/messages — session message history
+		if strings.HasSuffix(path, "/messages") {
+			sessionID := strings.TrimSuffix(path, "/messages")
+			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
+			handleSessionMessages(w, r, sessionID)
+			return
+		}
 		handleSessionByID(w, r)
+	})
+
+	// Project API
+	http.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
+		handleProjects(w, r)
+	})
+	http.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
+		handleProjectByID(w, r)
 	})
 
 	// Health check
@@ -557,23 +584,34 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 	}
 }
 
-// runAgentLoop executes the full ReAct loop for a chat request
+// runAgentLoop executes the full ReAct loop for a chat request.
+// It is a convenience wrapper around runAgentLoopWithTurn for the initial (root) turn.
 func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "")
+}
+
+// runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
+// multi-turn session. It accepts turnIndex and parentTaskID to support subsequent
+// turns in a conversation (turnIndex >= 0). The root task binding is only done
+// when turnIndex == 0 (first turn).
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string) {
+	isRoot := turnIndex == 0
+
 	// Persist task creation
 	if persist != nil {
 		persist.SaveTask(taskID, userInput, []string{agentID})
-		persist.SaveTaskMeta(taskID, sessionID, "", true)
+		persist.SaveTaskMeta(taskID, sessionID, parentTaskID, isRoot)
 		// Bind the root task to the session so the frontend can load it after refresh
-		if sessionID != "" {
-			log.Printf("[runAgentLoop] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
+		if sessionID != "" && isRoot {
+			log.Printf("[runAgentLoopWithTurn] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
 			sess, err := db.QuerySessionByID(sessionID)
 			if err != nil {
-				log.Printf("[runAgentLoop] QuerySessionByID error: %v", err)
+				log.Printf("[runAgentLoopWithTurn] QuerySessionByID error: %v", err)
 			} else if sess.RootTaskID == "" {
-				log.Printf("[runAgentLoop] Setting session %s root_task_id = %s", sessionID, taskID)
+				log.Printf("[runAgentLoopWithTurn] Setting session %s root_task_id = %s", sessionID, taskID)
 				db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
 			} else {
-				log.Printf("[runAgentLoop] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
+				log.Printf("[runAgentLoopWithTurn] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
 			}
 		}
 	}
@@ -615,11 +653,26 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		Progress:         progressManager,
 		Contract:         contract,
 		SessionID:        sessionID,
-		IsRoot:           true,
+		IsRoot:           isRoot,
+		ParentTaskID:     parentTaskID,
 		ApprovalHandler:  approvalHandler,  // Phase 5: 审批处理器
 		WorkingMemory:    workingMemory,     // Phase 6: 工作记忆注入
 		AgentBus:         agentBus,          // Phase 5: 多Agent通信
 		CheckpointManager: checkpointMgr,    // Phase 5: 崩溃恢复
+		TurnIndex:        turnIndex,         // 当前轮次
+		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
+			return db.InsertSessionMessage(db.SessionMessageRecord{
+				ID:         "msg_" + uuid.New().String(),
+				SessionID:  sessionID,
+				TaskID:     msg.TaskID,
+				TurnIndex:  msg.TurnIndex,
+				Role:       msg.Role,
+				Content:    msg.Content,
+				ToolCallID: msg.ToolCallID,
+				ToolCalls:  msg.ToolCalls,
+				TokenCount: msg.TokenCount,
+			})
+		},
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
@@ -627,6 +680,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		"agent_id":   agentID,
 		"session_id": sessionID,
 		"input":      userInput,
+		"turn_index": turnIndex,
 	}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -651,7 +705,9 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 		return
 	}
 
+	// 完成后递增 session.turn_count（多轮对话）
 	if sessionID != "" {
+		db.UpdateSessionTurnCount(sessionID)
 		newStatus := deriveSessionStatus(sessionID)
 		db.UpdateSessionStatus(sessionID, newStatus)
 		hub.SendEvent(event.NewEvent("session_status", taskID, agentID, 0, map[string]any{

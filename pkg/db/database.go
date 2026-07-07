@@ -124,6 +124,32 @@ func createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// Phase 5-A: Project management and multi-turn conversation tables
+		//   projects — top-level organizational unit for grouping sessions
+		//   session_messages — per-turn message history for multi-turn conversations
+		`CREATE TABLE IF NOT EXISTS projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			working_directory TEXT DEFAULT '',
+			config JSON DEFAULT '{}',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			turn_index INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tool_call_id TEXT,
+			tool_calls JSON,
+			token_count INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (session_id) REFERENCES sessions(id),
+			FOREIGN KEY (task_id) REFERENCES tasks(id)
+		)`,
 		// Phase 6: Memory infrastructure tables
 		//   memories — consolidated episodic summaries and semantic/policy rules
 		//   memory_links — relationships between memory records
@@ -162,7 +188,20 @@ func createTables() error {
 		}
 	}
 
-	// Phase 5: indexes for session and task hierarchy queries
+	// Phase 5-A: Session messages indexes for multi-turn conversation queries
+		phase5AIndexes := []string{
+			`CREATE INDEX IF NOT EXISTS idx_session_messages_session_id ON session_messages(session_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_session_messages_task_id ON session_messages(task_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_session_messages_turn_index ON session_messages(session_id, turn_index)`,
+			`CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC)`,
+		}
+		for _, idx := range phase5AIndexes {
+			if _, err := DB.Exec(idx); err != nil {
+				return err
+			}
+		}
+
+		// Phase 5: indexes for session and task hierarchy queries
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)`,

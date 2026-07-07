@@ -428,6 +428,56 @@ export function useTaskStore() {
     }
   }
 
+  /**
+   * Start a new turn in an existing multi-turn session.
+   * POSTs to /api/sessions/{sessionId}/chat — used for subsequent turns
+   * after the session already has a root task.
+   */
+  async function startTurn(
+    input: string,
+    options: {
+      sessionId: string
+      agentId?: string
+      maxSteps?: number
+    }
+  ): Promise<{ sessionId: string; taskId: string; turnIndex: number }> {
+    lastUserInput.value = input
+    isTaskPending.value = true
+    const safetyTimeout = setTimeout(() => {
+      if (isTaskPending.value) isTaskPending.value = false
+    }, 15000)
+
+    try {
+      const body: Record<string, unknown> = {
+        input,
+        agent_id: options.agentId || 'agent_default',
+      }
+      if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
+
+      const resp = await fetch(`/api/sessions/${encodeURIComponent(options.sessionId)}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      if (!resp.ok) {
+        isTaskPending.value = false
+        clearTimeout(safetyTimeout)
+        const errText = await resp.text()
+        throw new Error(`Failed to start turn: ${resp.status} ${errText}`)
+      }
+
+      const data = (await resp.json()) as { session_id: string; task_id: string; turn_index: number }
+      activeTaskId.value = data.task_id
+      ensureTask(data.task_id)
+      return { sessionId: data.session_id, taskId: data.task_id, turnIndex: data.turn_index }
+    } catch (err) {
+      isTaskPending.value = false
+      clearTimeout(safetyTimeout)
+      throw err
+    }
+  }
+
   /** Start a multi-agent task via /api/multi-agent. */
   async function startMultiAgentTask(
     input: string,
@@ -701,6 +751,7 @@ export function useTaskStore() {
     connect,
     disconnect,
     startTask,
+    startTurn,
     startTaskWithCase,
     startMultiAgentTask,
     clearActiveTask,

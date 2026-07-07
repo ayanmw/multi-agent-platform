@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -13,6 +14,8 @@ type SessionRecord struct {
 	RootTaskID  string    `json:"root_task_id"`
 	Status      string    `json:"status"`
 	UserInput   string    `json:"user_input"`
+	ProjectID   string    `json:"project_id"`
+	TurnCount   int       `json:"turn_count"`
 	TotalTokens int       `json:"total_tokens"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -111,10 +114,14 @@ func InsertSession(s SessionRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	projectID := s.ProjectID
+	if projectID == "" {
+		projectID = "default"
+	}
 	_, err := DB.Exec(
-		`INSERT INTO sessions (id, name, root_task_id, status, user_input, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Name, s.RootTaskID, s.Status, s.UserInput, s.CreatedAt, s.UpdatedAt,
+		`INSERT INTO sessions (id, name, root_task_id, status, user_input, project_id, turn_count, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Name, s.RootTaskID, s.Status, s.UserInput, projectID, s.TurnCount, s.CreatedAt, s.UpdatedAt,
 	)
 	return err
 }
@@ -191,15 +198,25 @@ func DeleteSession(id string) error {
 	return nil
 }
 
-// QuerySessions returns recent sessions ordered by updated_at DESC
-func QuerySessions(limit int) ([]SessionRecord, error) {
+// QuerySessions returns recent sessions ordered by updated_at DESC.
+// If projectID is non-empty, filters by project_id.
+func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
-	rows, err := DB.Query(
-		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), created_at, updated_at
-		 FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit,
-	)
+	var rows *sql.Rows
+	var err error
+	if projectID != "" {
+		rows, err = DB.Query(
+			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), created_at, updated_at
+			 FROM sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT ?`, projectID, limit,
+		)
+	} else {
+		rows, err = DB.Query(
+			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), created_at, updated_at
+			 FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +225,7 @@ func QuerySessions(limit int) ([]SessionRecord, error) {
 	var sessions []SessionRecord
 	for rows.Next() {
 		var s SessionRecord
-		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)
@@ -223,9 +240,9 @@ func QuerySessionByID(id string) (*SessionRecord, error) {
 	}
 	var s SessionRecord
 	err := DB.QueryRow(
-		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), created_at, updated_at
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), created_at, updated_at
 		 FROM sessions WHERE id=?`, id,
-	).Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -588,4 +605,269 @@ func QueryTools() ([]ToolRecord, error) {
 		tools = append(tools, tr)
 	}
 	return tools, rows.Err()
+}
+
+// ProjectRecord mirrors the projects table.
+// Projects are the top-level organizational unit — each session belongs to a project.
+type ProjectRecord struct {
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Description      string         `json:"description"`
+	WorkingDirectory string         `json:"working_directory"`
+	Config           map[string]any `json:"config"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+// InsertProject creates a new project record.
+func InsertProject(p ProjectRecord) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	configJSON, _ := json.Marshal(p.Config)
+	_, err := DB.Exec(
+		`INSERT INTO projects (id, name, description, working_directory, config)
+		 VALUES (?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Description, p.WorkingDirectory, string(configJSON),
+	)
+	return err
+}
+
+// QueryProjects returns all projects ordered by updated_at DESC.
+func QueryProjects() ([]ProjectRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, name, COALESCE(description,''), COALESCE(working_directory,''), COALESCE(config,'{}'), created_at, updated_at
+		 FROM projects ORDER BY updated_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []ProjectRecord
+	for rows.Next() {
+		var p ProjectRecord
+		var configJSON string
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.WorkingDirectory, &configJSON, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(configJSON), &p.Config)
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
+}
+
+// QueryProjectByID returns a single project by ID.
+func QueryProjectByID(id string) (*ProjectRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	var p ProjectRecord
+	var configJSON string
+	err := DB.QueryRow(
+		`SELECT id, name, COALESCE(description,''), COALESCE(working_directory,''), COALESCE(config,'{}'), created_at, updated_at
+		 FROM projects WHERE id=?`, id,
+	).Scan(&p.ID, &p.Name, &p.Description, &p.WorkingDirectory, &configJSON, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal([]byte(configJSON), &p.Config)
+	return &p, nil
+}
+
+// UpdateProject updates an existing project's metadata.
+func UpdateProject(id, name, description, workingDirectory string, config map[string]any) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	configJSON, _ := json.Marshal(config)
+	_, err := DB.Exec(
+		`UPDATE projects SET name=?, description=?, working_directory=?, config=?, updated_at=CURRENT_TIMESTAMP
+		 WHERE id=?`,
+		name, description, workingDirectory, string(configJSON), id,
+	)
+	return err
+}
+
+// DeleteProject deletes a project and all associated data.
+// Cascade order: session_messages → conversations → steps → files → tasks
+//   → sessions → memories (scope=project with matching project_id) → project.
+// This manual cascade is needed because SQLite foreign keys may not be enforced.
+func DeleteProject(id string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+
+	// Verify project exists before attempting deletion
+	_, err := QueryProjectByID(id)
+	if err != nil {
+		return fmt.Errorf("project not found: %w", err)
+	}
+
+	// Delete session_messages for sessions in this project
+	_, _ = DB.Exec(`DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id=?)`, id)
+	// Delete conversations for tasks in sessions in this project
+	_, _ = DB.Exec(`DELETE FROM conversations WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
+	// Delete steps for tasks in sessions in this project
+	_, _ = DB.Exec(`DELETE FROM steps WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
+	// Delete files for tasks in sessions in this project
+	_, _ = DB.Exec(`DELETE FROM files WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
+	// Delete child tasks first (those whose parent is in sessions in this project)
+	_, _ = DB.Exec(`DELETE FROM tasks WHERE parent_task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
+	// Delete all tasks in sessions in this project
+	_, _ = DB.Exec(`DELETE FROM tasks WHERE session_id IN (SELECT id FROM sessions WHERE project_id=?)`, id)
+	// Delete all sessions in this project
+	_, _ = DB.Exec(`DELETE FROM sessions WHERE project_id=?`, id)
+	// Delete project-scoped memories for this project
+	_, _ = DB.Exec(`DELETE FROM memories WHERE scope='project' AND project_id=?`, id)
+	// Delete the project itself
+	_, err = DB.Exec(`DELETE FROM projects WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return nil
+}
+
+// SessionMessageRecord mirrors the session_messages table.
+// Each row represents one message in a multi-turn conversation within a session.
+type SessionMessageRecord struct {
+	ID         string    `json:"id"`
+	SessionID  string    `json:"session_id"`
+	TaskID     string    `json:"task_id"`
+	TurnIndex  int       `json:"turn_index"`
+	Role       string    `json:"role"`
+	Content    string    `json:"content"`
+	ToolCallID string    `json:"tool_call_id"`
+	ToolCalls  string    `json:"tool_calls"`
+	TokenCount int       `json:"token_count"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// InsertSessionMessage creates a new session message record.
+func InsertSessionMessage(m SessionMessageRecord) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`INSERT INTO session_messages (id, session_id, task_id, turn_index, role, content, tool_call_id, tool_calls, token_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.SessionID, m.TaskID, m.TurnIndex, m.Role, m.Content, m.ToolCallID, m.ToolCalls, m.TokenCount,
+	)
+	return err
+}
+
+// QuerySessionMessages returns all messages for a session, ordered by turn_index ASC, created_at ASC.
+func QuerySessionMessages(sessionID string) ([]SessionMessageRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, session_id, task_id, turn_index, role, content, COALESCE(tool_call_id,''), COALESCE(tool_calls,''), COALESCE(token_count,0), created_at
+		 FROM session_messages WHERE session_id=? ORDER BY turn_index ASC, created_at ASC`, sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []SessionMessageRecord
+	for rows.Next() {
+		var m SessionMessageRecord
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.TaskID, &m.TurnIndex, &m.Role, &m.Content, &m.ToolCallID, &m.ToolCalls, &m.TokenCount, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+// DeleteSessionMessages deletes all messages for a session.
+func DeleteSessionMessages(sessionID string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(`DELETE FROM session_messages WHERE session_id=?`, sessionID)
+	return err
+}
+
+// UpdateSessionTurnCount increments the turn_count for a session.
+func UpdateSessionTurnCount(sessionID string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE sessions SET turn_count = turn_count + 1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		sessionID,
+	)
+	return err
+}
+
+// UpdateSessionContextSize updates context_size and total_tokens for a session.
+func UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE sessions SET total_tokens = ?, context_size = ?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		totalTokens, contextSize, sessionID,
+	)
+	return err
+}
+
+// QuerySessionsByProject returns sessions filtered by project_id, ordered by updated_at DESC.
+func QuerySessionsByProject(projectID string, limit int) ([]SessionRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), created_at, updated_at
+		 FROM sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT ?`, projectID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []SessionRecord
+	for rows.Next() {
+		var s SessionRecord
+		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+// SeedDefaultProject ensures a default project exists in the database.
+// If no project with id='default' exists, it creates one.
+// This is called at startup so the system always has a usable project.
+func SeedDefaultProject() error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+
+	// Check if the default project already exists
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM projects WHERE id='default'").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check default project: %w", err)
+	}
+	if count > 0 {
+		return nil // Default project already exists
+	}
+
+	// Create the default project
+	_, err = DB.Exec(
+		`INSERT INTO projects (id, name, description, working_directory, config)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"default", "Default Project", "Default project created by seed", "", "{}",
+	)
+	if err != nil {
+		return fmt.Errorf("create default project: %w", err)
+	}
+	return nil
 }
