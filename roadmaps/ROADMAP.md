@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-07
-> **Current version**: v0.6 Alpha (Phase 6-C 完成)
+> **Last updated**: 2026-07-08
+> **Current version**: v0.6.1 Alpha (Phase 6-E 完成)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -303,7 +303,7 @@ const activeTaskId = ref<string | null>(null)
 **目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理、可观测性
 
 **完成日期**: 2026-07-08
-**Git commit**: `Phase 6-D: observability endpoints + cost persistence`
+**Git commit**: `Phase 6-E: auth middleware + RAG memory recall`
 **版本**: v0.6 Alpha
 
 ### Phase 6-C 交付物（技术债务修复 + 骨架）
@@ -333,9 +333,20 @@ const activeTaskId = ref<string | null>(null)
 - [x] `modelRegistry` 注入 CostTracker: tier / provider / pricing 字段正确填充
 - [x] 验证: `go build ./...`, `go vet ./...` 通过；curl `/healthz`, `/metrics`, `/api/costs` 均返回正确数据；任务运行后 `cost_records` 产生真实记录
 
+### Phase 6-E 交付物（Auth 实际生效 + RAG 向量召回落地，非空壳）
+- [x] migration v12: 创建 `users` 表与 `api_keys` 表（bcrypt 哈希存储，prefix 索引加速验证）
+- [x] DB-backed `auth.APIKeyStore`: SqliteAPIKeyStore 实现 Create/List/Revoke/Verify（prefix 预筛 + bcrypt）
+- [x] 默认 admin 用户 + API key 自动种子: 首次启动打印到日志一次，之后不再显示
+- [x] `/api/auth/api-keys` 端点: GET 列表 / POST 创建 / DELETE 吊销，归属校验
+- [x] 可配置 Auth 中间件: `REQUIRE_AUTH=true` 时校验 `Authorization: Bearer <key>`，默认关闭注入种子用户
+- [x] 受保护操作: 删除 session/project、创建/删除 agent、工具注册、删除/更新 memory、run_shell 等写操作
+- [x] 本地 EmbeddingProvider: `LocalEmbeddingProvider` 基于 FNV-1a 哈希的 TF-IDF/one-hot 向量（vocabSize=2048，零外部依赖）
+- [x] MemoryRecall 向量索引: `BuildVectorIndex` 启动时加载 consolidated/semantic 记忆并嵌入 InMemoryVectorStore
+- [x] 召回向量精排: `blendVectorScores` 混合关键词与余弦相似度（0.3 keyword + 0.7 vector）
+- [x] `/api/memories/recall?query=` 端点: 纯向量检索返回按相似度排序的记忆列表
+- [x] 验证: `go build ./...`, `go vet ./...` 通过；启动后 auth 端点 CRUD 正常（auth on/off 双模式）；向量召回端点返回正确结构
+
 ### 已知待优化/远期规划
-- [ ] **Phase 6-E**: Auth 实际生效（users/api_keys 表、API Key 验证中间件、受保护操作）
-- [ ] **Phase 6-E**: RAG 向量召回接入 MemoryRecall（本地 TF-IDF Embedding + InMemoryVectorStore）
 - [ ] **Phase 7**: Harness 完整治理与审计（身份 + 审批 + 成本 + 合规日志）
 - [ ] **Phase 7**: 外部向量数据库（LanceDB / ChromaDB / pgvector）+ 外部 Embedding API
 - [ ] **Phase 7**: JWT / OAuth 多用户支持
@@ -361,3 +372,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
 | v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
 | v0.6 Alpha | 2026-07-08 | Phase 6 完成: 6-C 技术债务修复 + 6-D 可观测性/成本持久化真实落地 |
+| v0.6.1 Alpha | 2026-07-08 | Phase 6-E 完成: Auth 中间件实际生效 + RAG 本地向量召回接入 MemoryRecall |

@@ -13,11 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/auth"
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/memory"
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
@@ -63,9 +65,9 @@ func main() {
 	// Register control handler for client-side pause/resume/cancel and approval decisions
 	hub.SetControlHandler(func(msg ws.ClientControlMsg) {
 		observability.DefaultLogger.Debug("control", "received client control message", map[string]any{
-			"action":     msg.Action,
-			"task_id":    msg.TaskID,
-			"agent_id":   msg.AgentID,
+			"action":      msg.Action,
+			"task_id":     msg.TaskID,
+			"agent_id":    msg.AgentID,
 			"approval_id": msg.ApprovalID,
 		})
 		// Phase 5: 路由审批决定到 ApprovalHandler
@@ -86,6 +88,10 @@ func main() {
 	var costRepo cost.CostRepository = cost.NewInMemoryCostRepository()
 	_ = costRepo
 
+	// Auth store and API — initialized after DB setup (API key authentication).
+	var authStore auth.APIKeyStore
+	var authAPI *auth.AuthAPI
+
 	// Initialize database
 	if err := db.Init(cfg.DBPath); err != nil {
 		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
@@ -97,6 +103,17 @@ func main() {
 			observability.DefaultLogger.Warn("cost", "failed to create sqlite cost repository, falling back to memory", map[string]any{"error": repoErr.Error()})
 			costRepo = cost.NewInMemoryCostRepository()
 		}
+		// Initialize auth store and seed default admin + API key on first startup.
+		if db.DB != nil {
+			authStore = auth.NewSqliteAPIKeyStore(db.DB)
+			authAPI = auth.NewAuthAPI(authStore)
+			seedDefaultAdminIfNeeded(authStore)
+			// Establish a stable fallback user ID for unauthenticated mode. The
+			// seed user is used by the auth middleware and /api/auth/api-keys when
+			// REQUIRE_AUTH is disabled.
+			authAPI.SetSeedUserIDFromStore(authStore)
+		}
+
 		// Seed default agent if not exists
 		if err := db.SeedDefaultAgent(); err != nil {
 			observability.DefaultLogger.Warn("database", "failed to seed default agent", map[string]any{"error": err.Error()})
@@ -113,8 +130,18 @@ func main() {
 	go heartbeat.Start(context.Background())
 	log.Println("Memory Heartbeat started (5min interval, adaptive)")
 
-	// Initialize MemoryRecall for working memory injection on new tasks
-	memRecall := harness.NewMemoryRecall(memDB)
+	// Initialize MemoryRecall with vector store for semantic memory recall.
+	// The local embedding provider (TF-IDF/one-hot hash) and in-memory vector
+	// store enable cosine-similarity search over consolidated and semantic memories.
+	embedProvider := llm.NewLocalEmbeddingProvider(2048)
+	vectorStore := memory.NewInMemoryVectorStore(embedProvider)
+	memRecall := harness.NewMemoryRecallWithVectorStore(memDB, embedProvider, vectorStore)
+
+	// Build the vector index from existing memories (best-effort — failures
+	// only degrade recall quality, they do not break startup).
+	if err := memRecall.BuildVectorIndex(); err != nil {
+		log.Printf("MemoryRecall: failed to build vector index: %v", err)
+	}
 
 	// Initialize persistence adapter
 	persist := &DBPersistence{}
@@ -185,14 +212,14 @@ func main() {
 		}
 
 		var req struct {
-			Action       string                       `json:"action"`
-			AgentID      string                       `json:"agent_id"`
-			Input        string                       `json:"input"`
-			SystemPrompt string                       `json:"system_prompt"`
-			CaseType     string                       `json:"case_type"`
-			MaxSteps     int                          `json:"max_steps"`
-			SessionID    string                       `json:"session_id"`
-			Agents       []orchestrator.AgentSpec     `json:"agents"`
+			Action       string                   `json:"action"`
+			AgentID      string                   `json:"agent_id"`
+			Input        string                   `json:"input"`
+			SystemPrompt string                   `json:"system_prompt"`
+			CaseType     string                   `json:"case_type"`
+			MaxSteps     int                      `json:"max_steps"`
+			SessionID    string                   `json:"session_id"`
+			Agents       []orchestrator.AgentSpec `json:"agents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -201,70 +228,70 @@ func main() {
 
 		switch req.Action {
 
-			case "multi-agent":
-				// Multi-agent orchestration: decompose task and run agents concurrently
-				specs := req.Agents
-				if len(specs) == 0 {
-					decomposer := &orchestrator.TaskDecomposer{}
-					result := decomposer.Decompose(req.Input, req.CaseType)
-					specs = result.Agents
-				}
+		case "multi-agent":
+			// Multi-agent orchestration: decompose task and run agents concurrently
+			specs := req.Agents
+			if len(specs) == 0 {
+				decomposer := &orchestrator.TaskDecomposer{}
+				result := decomposer.Decompose(req.Input, req.CaseType)
+				specs = result.Agents
+			}
 
-				// Build Working Memory for all agents in this orchestration
-				if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-					workingMemory := memRecall.FormatForSystemPrompt(wm)
-					for i := range specs {
-						specs[i].WorkingMemory = workingMemory
+			// Build Working Memory for all agents in this orchestration
+			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
+				workingMemory := memRecall.FormatForSystemPrompt(wm)
+				for i := range specs {
+					specs[i].WorkingMemory = workingMemory
+				}
+			}
+
+			// Resolve or create session
+			sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			agentIDs := make([]string, len(specs))
+			for i, s := range specs {
+				agentIDs[i] = s.AgentID
+			}
+
+			if persist != nil {
+				persist.SaveTaskMeta(taskID, sessionID, "", true)
+				// Bind the root task to the session so the frontend can load it after refresh
+				if sessionID != "" {
+					sess, err := db.QuerySessionByID(sessionID)
+					if err == nil && sess.RootTaskID == "" {
+						db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
 					}
 				}
+			}
 
-				// Resolve or create session
-				sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
+			hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
+				"task_id":     taskID,
+				"session_id":  sessionID,
+				"input":       req.Input,
+				"agent_ids":   agentIDs,
+				"agent_count": len(specs),
+			}))
 
-				agentIDs := make([]string, len(specs))
-				for i, s := range specs {
-					agentIDs[i] = s.AgentID
-				}
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+				orch.RunBlocking(ctx, taskID, specs)
+				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
+				log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
+			}()
 
-				if persist != nil {
-					persist.SaveTaskMeta(taskID, sessionID, "", true)
-					// Bind the root task to the session so the frontend can load it after refresh
-					if sessionID != "" {
-						sess, err := db.QuerySessionByID(sessionID)
-						if err == nil && sess.RootTaskID == "" {
-							db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
-						}
-					}
-				}
-
-				hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
-					"task_id":     taskID,
-					"session_id":  sessionID,
-					"input":       req.Input,
-					"agent_ids":   agentIDs,
-					"agent_count": len(specs),
-				}))
-
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-					defer cancel()
-					orch.RunBlocking(ctx, taskID, specs)
-					db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
-					log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
-				}()
-
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]any{
-					"session_id":  sessionID,
-					"task_id":     taskID,
-					"agent_count": len(specs),
-					"agent_ids":   agentIDs,
-					"status":      "started",
-				})
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"session_id":  sessionID,
+				"task_id":     taskID,
+				"agent_count": len(specs),
+				"agent_ids":   agentIDs,
+				"status":      "started",
+			})
 		case "stream-demo":
 			sessionID, taskID, err := resolveSession(req.SessionID, "", persist)
 			if err != nil {
@@ -279,56 +306,55 @@ func main() {
 			})
 
 		case "chat":
-		// Check if a preset case was specified — load its contract,
-		// default input, and system prompt before validating the request.
-		var contract harness.TaskContract
-		caseID := r.URL.Query().Get("case")
-		if caseID != "" {
-			if c := cases.Get(caseID); c != nil {
-				contract = c.Contract
-				// Use case's default input if none provided in request
-				if req.Input == "" {
-					req.Input = c.DefaultInput
-				}
-				// Use case's system prompt if none provided in request
-				if req.SystemPrompt == "" {
-					req.SystemPrompt = c.SystemPrompt
+			// Check if a preset case was specified — load its contract,
+			// default input, and system prompt before validating the request.
+			var contract harness.TaskContract
+			caseID := r.URL.Query().Get("case")
+			if caseID != "" {
+				if c := cases.Get(caseID); c != nil {
+					contract = c.Contract
+					// Use case's default input if none provided in request
+					if req.Input == "" {
+						req.Input = c.DefaultInput
+					}
+					// Use case's system prompt if none provided in request
+					if req.SystemPrompt == "" {
+						req.SystemPrompt = c.SystemPrompt
+					}
 				}
 			}
-		}
 
-		if req.Input == "" {
-			http.Error(w, "input is required for chat action", http.StatusBadRequest)
-			return
-		}
+			if req.Input == "" {
+				http.Error(w, "input is required for chat action", http.StatusBadRequest)
+				return
+			}
 
-		agentID := req.AgentID
-		if agentID == "" {
-			agentID = "agent_default"
-		}
+			agentID := req.AgentID
+			if agentID == "" {
+				agentID = "agent_default"
+			}
 
-		systemPrompt := req.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = "You are a helpful AI assistant with access to tools. " +
-				"When you need to run commands, read files, or write files, use the available tools. " +
-				"Always explain your reasoning before using tools. " +
-				"After using tools, analyze the results and continue until the task is complete."
-		}
+			systemPrompt := req.SystemPrompt
+			if systemPrompt == "" {
+				systemPrompt = "You are a helpful AI assistant with access to tools. " +
+					"When you need to run commands, read files, or write files, use the available tools. " +
+					"Always explain your reasoning before using tools. " +
+					"After using tools, analyze the results and continue until the task is complete."
+			}
 
-		if contract.Goal == "" {
-			contract = harness.DefaultContract(req.Input)
-		}
-		// Override MaxSteps from request if provided (>0)
-		if req.MaxSteps > 0 {
-			contract.MaxSteps = req.MaxSteps
-		}
+			if contract.Goal == "" {
+				contract = harness.DefaultContract(req.Input)
+			}
+			// Override MaxSteps from request if provided (>0)
+			if req.MaxSteps > 0 {
+				contract.MaxSteps = req.MaxSteps
+			}
 
 			// Build Working Memory from past experiences for this task
 			workingMemory := ""
 			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
 				workingMemory = memRecall.FormatForSystemPrompt(wm)
 			}
-
 
 			taskID := "task_" + time.Now().Format("20060102150405")
 			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, costRepo, modelRegistry)
@@ -430,6 +456,14 @@ func main() {
 		fmt.Fprintln(w, "ok")
 	})
 
+	// Auth API endpoints (API key management)
+	if authAPI == nil {
+		authAPI = auth.NewAuthAPI(authStore)
+	}
+	if authStore != nil {
+		authAPI.RegisterRoutes(http.DefaultServeMux)
+	}
+
 	// Version API: returns the current version from version.txt
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -472,11 +506,11 @@ func main() {
 		}
 
 		var req struct {
-			Input     string                       `json:"input"`
-			CaseType  string                       `json:"case_type"` // "multi_agent", "code_gen", or empty
-			MaxSteps  int                          `json:"max_steps"` // override max steps for all agents
-			SessionID string                       `json:"session_id"`
-			Agents    []orchestrator.AgentSpec     `json:"agents"`    // direct agent specs (optional)
+			Input     string                   `json:"input"`
+			CaseType  string                   `json:"case_type"` // "multi_agent", "code_gen", or empty
+			MaxSteps  int                      `json:"max_steps"` // override max steps for all agents
+			SessionID string                   `json:"session_id"`
+			Agents    []orchestrator.AgentSpec `json:"agents"` // direct agent specs (optional)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -506,19 +540,19 @@ func main() {
 					specs[i].Contract = &contract
 				}
 				specs[i].Contract.MaxSteps = req.MaxSteps
-				}
 			}
+		}
 
-			// Build Working Memory for all agents in this orchestration
-			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-				workingMemory := memRecall.FormatForSystemPrompt(wm)
-				for i := range specs {
-					specs[i].WorkingMemory = workingMemory
-				}
+		// Build Working Memory for all agents in this orchestration
+		if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
+			workingMemory := memRecall.FormatForSystemPrompt(wm)
+			for i := range specs {
+				specs[i].WorkingMemory = workingMemory
 			}
+		}
 
-			// Resolve or create session
-			sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
+		// Resolve or create session
+		sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -544,10 +578,10 @@ func main() {
 
 		// Emit orchestrator task started event
 		hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
-			"task_id":    taskID,
-			"session_id": sessionID,
-			"input":      req.Input,
-			"agent_ids":  agentIDs,
+			"task_id":     taskID,
+			"session_id":  sessionID,
+			"input":       req.Input,
+			"agent_ids":   agentIDs,
 			"agent_count": len(specs),
 		}))
 
@@ -572,24 +606,24 @@ func main() {
 	})
 
 	// Phase 5: Checkpoint API endpoints for task recovery
-// GET /api/checkpoints — list all recoverable tasks
-http.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
-		return
-	}
-	handleListCheckpoints(w, r, checkpointMgr)
-})
-// POST /api/checkpoints/recover — resume a task from a checkpoint
-http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr)
-})
+	// GET /api/checkpoints — list all recoverable tasks
+	http.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		handleListCheckpoints(w, r, checkpointMgr)
+	})
+	// POST /api/checkpoints/recover — resume a task from a checkpoint
+	http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr)
+	})
 
-// Memory API (Phase 6 / Phase 5-B)
+	// Memory API (Phase 6 / Phase 5-B)
 	// GET /api/memories?scope=...&tier=...&project=... — list memories
 	// PUT /api/memories/{id}/scope — update memory scope
 	// DELETE /api/memories/{id} — delete memory
@@ -671,6 +705,8 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 		log.Println("Frontend embedded: serving from embedded dist/")
 	}
 
+	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
+
 	log.Printf("========================================")
 	log.Printf("Multi-Agent Platform %s", version.Version)
 	log.Printf("========================================")
@@ -679,10 +715,15 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
 	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
 	log.Printf("LLM:         %s (%s)", cfg.LLMEndpoint, cfg.LLMModel)
+	log.Printf("Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
 	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
 	log.Printf("========================================")
 
-	if err := http.ListenAndServe(":"+cfg.ServerPort, nil); err != nil {
+	// Wrap the default mux with auth middleware. It protects state-changing routes
+	// when REQUIRE_AUTH is true and injects a seed user ID for all routes otherwise.
+	handler := auth.NewAuthMiddleware(authStore, authAPI.SeedUserID(), requireAuth, auth.DefaultProtectedRoutes(), http.DefaultServeMux)
+
+	if err := http.ListenAndServe(":"+cfg.ServerPort, handler); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -785,27 +826,27 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:          agentID,
-		SystemPrompt:     systemPrompt,
-		Model:            cfg.LLMModel,
-		Endpoint:         cfg.LLMEndpoint,
-		APIKey:           cfg.LLMAPIKey,
-		Temperature:      0.7,
-		MaxTokens:        4096,
-		MaxSteps:         contract.MaxSteps,
-		Persistence:      persist,
-		PolicyGate:       policyGate,
-		Progress:         progressManager,
-		Contract:         contract,
-		SessionID:        sessionID,
-		IsRoot:           isRoot,
-		ParentTaskID:     parentTaskID,
-		ApprovalHandler:  approvalHandler,  // Phase 5: 审批处理器
-		WorkingMemory:    workingMemory,     // Phase 6: 工作记忆注入
-		AgentBus:         agentBus,          // Phase 5: 多Agent通信
-		CheckpointManager: checkpointMgr,    // Phase 5: 崩溃恢复
-		TurnIndex:        turnIndex,         // 当前轮次
-		OnLLMUsage:       onUsage,           // Phase 6-D: 成本/指标上报
+		AgentID:           agentID,
+		SystemPrompt:      systemPrompt,
+		Model:             cfg.LLMModel,
+		Endpoint:          cfg.LLMEndpoint,
+		APIKey:            cfg.LLMAPIKey,
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		MaxSteps:          contract.MaxSteps,
+		Persistence:       persist,
+		PolicyGate:        policyGate,
+		Progress:          progressManager,
+		Contract:          contract,
+		SessionID:         sessionID,
+		IsRoot:            isRoot,
+		ParentTaskID:      parentTaskID,
+		ApprovalHandler:   approvalHandler, // Phase 5: 审批处理器
+		WorkingMemory:     workingMemory,   // Phase 6: 工作记忆注入
+		AgentBus:          agentBus,        // Phase 5: 多Agent通信
+		CheckpointManager: checkpointMgr,   // Phase 5: 崩溃恢复
+		TurnIndex:         turnIndex,       // 当前轮次
+		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
 		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
 			return db.InsertSessionMessage(db.SessionMessageRecord{
 				ID:         "msg_" + uuid.New().String(),
@@ -996,20 +1037,20 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 
 	cfg_ := runtime.EngineConfig{
-		AgentID:          cp.AgentID,
-		SystemPrompt:     "You are recovering from a checkpoint. Continue the task from where you left off.",
-		Model:            cfg.LLMModel,
-		Endpoint:         cfg.LLMEndpoint,
-		APIKey:           cfg.LLMAPIKey,
-		Temperature:      0.7,
-		MaxTokens:        4096,
-		MaxSteps:         contract.MaxSteps,
-		Persistence:      persist,
-		PolicyGate:       policyGate,
-		Progress:         progressManager,
-		Contract:         contract,
-		ApprovalHandler:  approvalHandler,
-		AgentBus:         agentBus,
+		AgentID:           cp.AgentID,
+		SystemPrompt:      "You are recovering from a checkpoint. Continue the task from where you left off.",
+		Model:             cfg.LLMModel,
+		Endpoint:          cfg.LLMEndpoint,
+		APIKey:            cfg.LLMAPIKey,
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		MaxSteps:          contract.MaxSteps,
+		Persistence:       persist,
+		PolicyGate:        policyGate,
+		Progress:          progressManager,
+		Contract:          contract,
+		ApprovalHandler:   approvalHandler,
+		AgentBus:          agentBus,
 		CheckpointManager: cm,
 	}
 
@@ -1017,10 +1058,10 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 
 	// Emit recovery event for the frontend.
 	hub.SendEvent(event.NewEvent("task_started", req.TaskID, cp.AgentID, cp.StepIdx, map[string]any{
-		"task_id":    req.TaskID,
-		"agent_id":   cp.AgentID,
-		"recovered":  true,
-		"step_idx":   cp.StepIdx,
+		"task_id":      req.TaskID,
+		"agent_id":     cp.AgentID,
+		"recovered":    true,
+		"step_idx":     cp.StepIdx,
 		"total_tokens": cp.TotalTokens,
 	}))
 
@@ -1046,11 +1087,38 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"task_id":    req.TaskID,
-		"agent_id":   cp.AgentID,
-		"step_idx":   cp.StepIdx,
-		"status":     "recovering",
+		"task_id":  req.TaskID,
+		"agent_id": cp.AgentID,
+		"step_idx": cp.StepIdx,
+		"status":   "recovering",
 	})
+}
+
+// seedDefaultAdminIfNeeded creates a default admin user and API key when no
+// users exist in the database. The raw API key is printed once to the console.
+func seedDefaultAdminIfNeeded(store auth.APIKeyStore) {
+	sqliteStore, ok := store.(*auth.SqliteAPIKeyStore)
+	if !ok {
+		return
+	}
+	count, err := sqliteStore.CountUsers()
+	if err != nil || count > 0 {
+		return
+	}
+	admin, err := sqliteStore.AddUser("Admin", auth.RoleAdmin)
+	if err != nil {
+		log.Printf("Auth: failed to create default admin user: %v", err)
+		return
+	}
+	_, rawKey, err := sqliteStore.Create(admin.ID, "default")
+	if err != nil {
+		log.Printf("Auth: failed to create default API key: %v", err)
+		return
+	}
+	log.Printf("========================================")
+	log.Printf("DEFAULT ADMIN API KEY: %s", rawKey)
+	log.Printf("  (save this key — it will not be shown again)")
+	log.Printf("========================================")
 }
 
 // fileExists checks if a path exists in the embedded filesystem.

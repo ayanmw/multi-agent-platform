@@ -73,9 +73,9 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"task":          task,
-		"steps":         steps,
-		"child_tasks":   childTasks,
+		"task":        task,
+		"steps":       steps,
+		"child_tasks": childTasks,
 	})
 }
 
@@ -96,7 +96,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		projectID := r.URL.Query().Get("project_id")
-			sessions, err := db.QuerySessions(50, projectID)
+		sessions, err := db.QuerySessions(50, projectID)
 		if err != nil {
 			log.Printf("[API] GET /api/sessions error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -479,15 +479,10 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 
 // handleRecallPreview previews what memories would be recalled for a given task.
 // GET /api/memories/recall?task=xxx&project=default&max=3
+// GET /api/memories/recall?query=xxx&project=default&max=3 — pure vector search
 // This is a debugging endpoint — it shows the WorkingMemory that would be injected
 // for a task without actually running the agent.
 func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness.MemoryRecall) {
-	taskGoal := r.URL.Query().Get("task")
-	if taskGoal == "" {
-		http.Error(w, "task query parameter required", http.StatusBadRequest)
-		return
-	}
-
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
 		projectID = "default"
@@ -498,6 +493,29 @@ func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness
 		if n, err := parseInt(maxStr); err == nil && n > 0 {
 			maxEpisodes = n
 		}
+	}
+
+	// Vector query mode: GET /api/memories/recall?query=xxx
+	// Performs pure vector similarity search and returns ranked MemoryItems.
+	if queryParam := r.URL.Query().Get("query"); queryParam != "" {
+		items, err := recall.RecallWithQuery(projectID, "", queryParam, maxEpisodes)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": items,
+			"query":   queryParam,
+			"method":  "vector",
+		})
+		return
+	}
+
+	taskGoal := r.URL.Query().Get("task")
+	if taskGoal == "" {
+		http.Error(w, "task or query parameter required", http.StatusBadRequest)
+		return
 	}
 
 	wm, err := recall.BuildWorkingMemory(projectID, "", taskGoal, maxEpisodes)
@@ -873,11 +891,11 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"session_id":  id,
-		"task_id":     taskID,
-		"agent_id":    agentID,
-		"turn_index":  turnIndex,
-		"status":      "started",
+		"session_id": id,
+		"task_id":    taskID,
+		"agent_id":   agentID,
+		"turn_index": turnIndex,
+		"status":     "started",
 	})
 }
 
@@ -974,7 +992,6 @@ func costReportFromRecords(records []cost.CostRecord) map[string]any {
 		"records":          records,
 	}
 }
-
 
 // truncateContent truncates a message content to maxLen characters.
 // If the content is longer than maxLen, it appends "...".

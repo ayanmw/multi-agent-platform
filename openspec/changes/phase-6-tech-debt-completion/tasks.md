@@ -36,24 +36,24 @@
 > 占坑项在 6-E 实现，6-D 不引入。
 
 ### 6-E.1 认证实际生效
-- [ ] DB migration v12：创建 `users` 表和 `api_keys` 表
-- [ ] 实现 DB-backed `auth.APIKeyStore`
-- [ ] `cmd/server/main.go` 启动时创建默认 admin 用户 + 默认 API key（首次启动打印到日志）
-- [ ] 在 `main.go` 注册 `/api/auth/api-keys` 端点（create/list/revoke）
-- [ ] 新增可配置 Auth 中间件：默认关闭，`REQUIRE_AUTH=true` 时检查 `Authorization: Bearer <key>`
-- [ ] 受保护操作：删除 session/project、run_shell、创建/删除 agent、工具注册
+- [x] DB migration v12：创建 `users` 表和 `api_keys` 表
+- [x] 实现 DB-backed `auth.APIKeyStore`
+- [x] `cmd/server/main.go` 启动时创建默认 admin 用户 + 默认 API key（首次启动打印到日志）
+- [x] 在 `main.go` 注册 `/api/auth/api-keys` 端点（create/list/revoke）
+- [x] 新增可配置 Auth 中间件：默认关闭，`REQUIRE_AUTH=true` 时检查 `Authorization: Bearer <key>`
+- [x] 受保护操作：删除 session/project、run_shell、创建/删除 agent、工具注册
 
 ### 6-E.2 RAG 记忆向量召回
-- [ ] 实现本地 EmbeddingProvider（TF-IDF / 关键词 one-hot，无外部模型依赖）作为 v0
-- [ ] 在 `MemoryRecall` 启动时把 consolidated/semantic memories 加载到 `InMemoryVectorStore`
-- [ ] 召回逻辑增加向量相似度排序：先关键词粗筛，再用向量精排 topK
-- [ ] `/api/memories/recall` 增加 `query` 参数，返回按相似度排序的记忆列表
-- [ ] 在 working memory 注入中优先使用向量召回结果
+- [x] 实现本地 EmbeddingProvider（TF-IDF / 关键词 one-hot，无外部模型依赖）作为 v0
+- [x] 在 `MemoryRecall` 启动时把 consolidated/semantic memories 加载到 `InMemoryVectorStore`
+- [x] 召回逻辑增加向量相似度排序：先关键词粗筛，再用向量精排 topK
+- [x] `/api/memories/recall` 增加 `query` 参数，返回按相似度排序的记忆列表
+- [x] 在 working memory 注入中优先使用向量召回结果
 
 ### 6-E.3 收尾
-- [ ] 编译、vet、集成测试
-- [ ] 更新 ROADMAP 标记 6-E 完成
-- [ ] Git commit: `Phase 6-E: auth middleware + RAG memory recall`
+- [x] 编译、vet、集成测试
+- [x] 更新 ROADMAP 标记 6-E 完成
+- [x] Git commit: `Phase 6-E: auth middleware + RAG memory recall`
 
 ## Phase 7（远期，仅规划）
 - 接入外部向量数据库（LanceDB / ChromaDB / pgvector）

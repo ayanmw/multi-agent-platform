@@ -5,9 +5,6 @@
 // The platform uses API key authentication (no passwords in Phase 6). Each user
 // can have multiple API keys; keys are stored as bcrypt hashes. Three RBAC roles
 // are supported: admin, user, viewer.
-//
-// This single-file design consolidates model types and operations to avoid
-// split-package duplicate declarations across auth/model.go and auth/apikey.go.
 package auth
 
 import (
@@ -16,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -45,23 +43,24 @@ func (r Role) IsValid() bool {
 
 // User represents a registered platform user.
 type User struct {
-	ID        string
-	Name      string
-	Role      Role
-	CreatedAt time.Time
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Role      Role      `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // APIKey represents a key used for programmatic authentication.
 // The raw key is NEVER stored — only the bcrypt hash.
+// KeyHash is tagged with json:"-" so it is never accidentally marshalled.
 type APIKey struct {
-	ID         string
-	UserID     string
-	Name       string
-	KeyHash    []byte
-	Prefix     string
-	CreatedAt  time.Time
-	LastUsedAt *time.Time
-	RevokedAt  *time.Time
+	ID         string     `json:"id"`
+	UserID     string     `json:"user_id"`
+	Name       string     `json:"name"`
+	KeyHash    []byte     `json:"-"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
 // IsRevoked reports whether this key has been revoked.
@@ -100,11 +99,11 @@ const DefaultBcryptCost = 12
 // Format: "sk_" + base64url(32 random bytes) = 44-char string.
 // Returns the raw key (shown to user exactly once) and the display prefix.
 func GenerateAPIKey() (rawKey, prefix string, err error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
 		return "", "", fmt.Errorf("generate random bytes: %w", err)
 	}
-	rawKey = "sk_" + base64.RawURLEncoding.EncodeToString(bytes)
+	rawKey = "sk_" + base64.RawURLEncoding.EncodeToString(b)
 	prefix = rawKey[:12]
 	return rawKey, prefix, nil
 }
@@ -143,10 +142,10 @@ func StripPrefix(key string) string {
 	return strings.TrimPrefix(key, "sk_")
 }
 
-// --- HTTP API --------------------------------------------------------------
+// --- Store Abstraction -----------------------------------------------------
 
 // APIKeyStore abstracts the persistence operations for API keys.
-// Replace with DB-backed implementation in later phases.
+// Implementations must store only bcrypt hashes, never raw keys.
 type APIKeyStore interface {
 	Create(userID, name string) (*APIKey, string, error)
 	List(userID string) ([]APIKey, error)
@@ -154,9 +153,13 @@ type APIKeyStore interface {
 	Verify(rawKey string) (*APIKey, error)
 }
 
+// --- HTTP API --------------------------------------------------------------
+
 // AuthAPI is the HTTP handler group for auth endpoints.
+// It exposes user-facing API key lifecycle operations under /api/auth/api-keys.
 type AuthAPI struct {
-	store APIKeyStore
+	store      APIKeyStore
+	seedUserID string
 }
 
 // NewAuthAPI returns an AuthAPI ready for route registration.
@@ -164,9 +167,29 @@ func NewAuthAPI(store APIKeyStore) *AuthAPI {
 	return &AuthAPI{store: store}
 }
 
+// GetStore returns the underlying APIKeyStore for use by middleware.
+func (a *AuthAPI) GetStore() APIKeyStore {
+	return a.store
+}
+
+// SetSeedUserID sets the fallback user ID used when authentication is disabled.
+func (a *AuthAPI) SetSeedUserID(userID string) {
+	a.seedUserID = userID
+}
+
+// SeedUserID returns the configured fallback user ID.
+func (a *AuthAPI) SeedUserID() string {
+	return a.seedUserID
+}
+
 // RegisterRoutes mounts auth endpoints on mux.
 func (a *AuthAPI) RegisterRoutes(mux any) {
-	_ = mux // skeleton — register handlers in main.go
+	mux_, ok := mux.(*http.ServeMux)
+	if !ok {
+		return
+	}
+	mux_.HandleFunc("/api/auth/api-keys", a.handleAPIKeys)
+	mux_.HandleFunc("/api/auth/api-keys/", a.handleAPIKeyByID)
 }
 
 // NewAPIKeyID generates a new unique ID for an API key record.
@@ -185,4 +208,3 @@ var (
 	ErrInvalidKey = errors.New("invalid API key")
 	ErrRevokedKey = errors.New("API key has been revoked")
 )
-

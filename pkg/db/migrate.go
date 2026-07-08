@@ -2,9 +2,9 @@
 //
 // SQLite's CREATE TABLE IF NOT EXISTS is idempotent but doesn't add new columns
 // to existing tables. We implement a lightweight migration system that:
-//   1. Tracks applied migrations in a `schema_migrations` table
-//   2. Runs pending migrations in order on startup
-//   3. Migrations are defined as a list of {version, description, sql} entries
+//  1. Tracks applied migrations in a `schema_migrations` table
+//  2. Runs pending migrations in order on startup
+//  3. Migrations are defined as a list of {version, description, sql} entries
 //
 // This mimics GORM's AutoMigrate behavior — add a column to an existing table
 // by adding a new migration entry. No manual DDL needed.
@@ -38,7 +38,7 @@ var migrations = []Migration{
 	{
 		Version:     2,
 		Description: "Add is_default BOOLEAN column to agents table",
-		SQL: `ALTER TABLE agents ADD COLUMN is_default BOOLEAN DEFAULT 0`,
+		SQL:         `ALTER TABLE agents ADD COLUMN is_default BOOLEAN DEFAULT 0`,
 	},
 
 	// v3: Add session_id, parent_task_id, is_root columns to tasks table
@@ -54,7 +54,7 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	{
 		Version:     4,
 		Description: "Backfill root_task_id for existing sessions from their root tasks",
-		SQL: `UPDATE sessions SET root_task_id = (SELECT id FROM tasks WHERE tasks.session_id = sessions.id AND tasks.is_root = 1 LIMIT 1) WHERE (root_task_id = '' OR root_task_id IS NULL)`,
+		SQL:         `UPDATE sessions SET root_task_id = (SELECT id FROM tasks WHERE tasks.session_id = sessions.id AND tasks.is_root = 1 LIMIT 1) WHERE (root_task_id = '' OR root_task_id IS NULL)`,
 	},
 
 	// v5: Create projects table and seed default project.
@@ -125,7 +125,7 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	// Tracks every LLM call's token consumption and USD cost, indexed by
 	// task, session, and project for multi-dimensional cost reporting.
 	{
-		Version: 10,
+		Version:     10,
 		Description: "Create cost_records table for LLM call cost tracking",
 		SQL: `CREATE TABLE IF NOT EXISTS cost_records (
 			id TEXT PRIMARY KEY,
@@ -155,10 +155,37 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	// ADD COLUMN IF NOT EXISTS, so failures because the column already exists
 	// are logged and ignored by RunMigrations.
 	{
-		Version: 11,
+		Version:     11,
 		Description: "Add cost_cents column to cost_records for integer precision",
 		SQL: `ALTER TABLE cost_records ADD COLUMN cost_cents INTEGER DEFAULT 0;
 		UPDATE cost_records SET cost_cents = CAST(ROUND(cost_usd * 100) AS INTEGER) WHERE cost_cents = 0 AND cost_usd <> 0;`,
+	},
+
+	// v12: Create users and api_keys tables for API key authentication.
+	// users stores user identity and role; api_keys stores bcrypt-hashed keys
+	// with prefix for fast lookup during verification.
+	{
+		Version:     12,
+		Description: "Create users and api_keys tables for API key auth",
+		SQL: `CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'user',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			prefix TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_used_at DATETIME,
+			revoked_at DATETIME,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+		CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);`,
 	},
 }
 

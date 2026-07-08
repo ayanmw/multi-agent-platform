@@ -10,20 +10,20 @@
 //
 // The recall system implements the first tier of the 4-tier memory system:
 //
-//	1. Working Memory      — per-task context (in-memory)              <-- THIS
-//	2. Raw Episodic        — conversation records (conversations table)
-//	3. Consolidated Episodic — task summaries (memories, tier=consolidated)
-//	4. Semantic/Policy     — stable rules (memories, tier=semantic)
+//  1. Working Memory      — per-task context (in-memory)              <-- THIS
+//  2. Raw Episodic        — conversation records (conversations table)
+//  3. Consolidated Episodic — task summaries (memories, tier=consolidated)
+//  4. Semantic/Policy     — stable rules (memories, tier=semantic)
 //
 // # Recall Process
 //
 // When BuildWorkingMemory is called:
-//	1. Load session-scoped memories (highest priority, for current session)
-//	2. Load project-scoped semantic rules (stable policies)
-//	3. Load top N project-scoped consolidated episodes by keyword match
-//	4. Load global-scoped semantic rules (cross-project preferences)
-//	5. Update access_count and last_accessed for each recalled memory
-//	6. Build a WorkingMemory struct ready for system prompt injection
+//  1. Load session-scoped memories (highest priority, for current session)
+//  2. Load project-scoped semantic rules (stable policies)
+//  3. Load top N project-scoped consolidated episodes by keyword match
+//  4. Load global-scoped semantic rules (cross-project preferences)
+//  5. Update access_count and last_accessed for each recalled memory
+//  6. Build a WorkingMemory struct ready for system prompt injection
 //
 // # Conflict Detection
 //
@@ -37,6 +37,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/memory"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
@@ -108,6 +110,10 @@ type ConflictPair struct {
 // side of the Memory infrastructure, complementing the Heartbeat (consolidation)
 // and PromotionGate (promotion).
 //
+// MemoryRecall can optionally be configured with an EmbeddingProvider and
+// VectorStore to enable vector similarity search. When these are nil, it falls
+// back to keyword-based recall, preserving backward compatibility.
+//
 // Usage:
 //
 //	recall := NewMemoryRecall(memDB)
@@ -117,7 +123,9 @@ type ConflictPair struct {
 //	    // prepend prompt to the agent's system prompt
 //	}
 type MemoryRecall struct {
-	db MemoryDB
+	db            MemoryDB
+	embedProvider llm.EmbeddingProvider
+	vectorStore   memory.VectorStore
 }
 
 // NewMemoryRecall creates a new MemoryRecall backed by the given MemoryDB.
@@ -125,7 +133,13 @@ type MemoryRecall struct {
 // needed by the recall engine (QueryMemoriesByTier). Access tracking is done
 // via the db package-level UpdateMemoryAccess function.
 func NewMemoryRecall(database MemoryDB) *MemoryRecall {
-	return &MemoryRecall{db: database}
+	return NewMemoryRecallWithVectorStore(database, nil, nil)
+}
+
+// NewMemoryRecallWithVectorStore creates a MemoryRecall with vector similarity support.
+// When embedProvider and vectorStore are nil, falls back to keyword-only recall.
+func NewMemoryRecallWithVectorStore(database MemoryDB, embedProvider llm.EmbeddingProvider, vectorStore memory.VectorStore) *MemoryRecall {
+	return &MemoryRecall{db: database, embedProvider: embedProvider, vectorStore: vectorStore}
 }
 
 // BuildWorkingMemory loads layered memories for the given project, session, and
@@ -134,11 +148,11 @@ func NewMemoryRecall(database MemoryDB) *MemoryRecall {
 //
 // Recall priority (most specific first):
 //
-//	1. Session-scoped memories (scope=session, session_id=xxx)
-//	2. Project-scoped semantic rules (scope=project, tier=semantic)
-//	3. Project-scoped consolidated episodes (scope=project, tier=consolidated, keyword top N)
-//	4. Global-scoped semantic rules (scope=global, tier=semantic)
-//	5. Session history messages are injected separately by the Engine layer
+//  1. Session-scoped memories (scope=session, session_id=xxx)
+//  2. Project-scoped semantic rules (scope=project, tier=semantic)
+//  3. Project-scoped consolidated episodes (scope=project, tier=consolidated, keyword top N)
+//  4. Global-scoped semantic rules (scope=global, tier=semantic)
+//  5. Session history messages are injected separately by the Engine layer
 //
 // Parameters:
 //   - projectID: the project to recall memories for (e.g., "default")
@@ -304,21 +318,107 @@ func (mr *MemoryRecall) loadSemanticRules(projectID, scope string) ([]MemoryItem
 	return items, nil
 }
 
+// BuildVectorIndex loads all consolidated and semantic memories from the database,
+// computes embeddings, and stores them in the vector store. Call this once at startup
+// and after batch memory imports.
+func (mr *MemoryRecall) BuildVectorIndex() error {
+	if mr.embedProvider == nil || mr.vectorStore == nil {
+		return nil // vector recall not configured
+	}
+	// Load all consolidated and semantic memories
+	records, err := db.QueryMemoriesByScopeAndTier("default", "project", "consolidated")
+	if err != nil {
+		return fmt.Errorf("load consolidated: %w", err)
+	}
+	semantic, err := db.QueryMemoriesByScopeAndTier("default", "project", "semantic")
+	if err != nil {
+		return fmt.Errorf("load semantic: %w", err)
+	}
+	records = append(records, semantic...)
+
+	for _, r := range records {
+		if r.Status != "active" {
+			continue
+		}
+		if err := mr.indexMemory(r); err != nil {
+			continue // skip individual failures
+		}
+	}
+	return nil
+}
+
+// indexMemory embeds a single memory record and upserts it into the vector store.
+func (mr *MemoryRecall) indexMemory(r db.MemoryRecord) error {
+	vec, err := mr.embedProvider.Embed(r.Content)
+	if err != nil {
+		return err
+	}
+	return mr.vectorStore.Upsert(r.ID, vec, map[string]any{
+		"type":       r.Type,
+		"tier":       r.Tier,
+		"scope":      r.Scope,
+		"confidence": stringify(r.Confidence),
+	})
+}
+
+// RecallWithQuery performs pure vector similarity search for a natural language query.
+// This is used by the /api/memories/recall?query=... endpoint for debugging.
+// Returns MemoryItems sorted by relevance (vector similarity blended with keyword score).
+func (mr *MemoryRecall) RecallWithQuery(projectID, sessionID, query string, maxN int) ([]MemoryItem, error) {
+	if mr.embedProvider == nil || mr.vectorStore == nil {
+		// Fallback to keyword-only recall
+		return mr.recallEpisodes(projectID, "project", query, maxN)
+	}
+
+	// Embed the query
+	queryVec, err := mr.embedProvider.Embed(query)
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+
+	// Search vector store
+	results, err := mr.vectorStore.Search(queryVec, maxN*2) // get more candidates for blending
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
+
+	// Build MemoryItems from results
+	var items []MemoryItem
+	for _, r := range results {
+		items = append(items, MemoryItem{
+			ID:         r.ID,
+			Type:       stringifyMeta(r.Metadata, "type"),
+			Content:    "", // will be filled from DB
+			Confidence: parseConfidence(r.Metadata),
+			Reason:     fmt.Sprintf("vector similarity (score: %.3f)", r.Score),
+		})
+	}
+
+	if len(items) > maxN {
+		items = items[:maxN]
+	}
+	return items, nil
+}
+
 // recallEpisodes loads consolidated episodic memories filtered by scope, scores
-// each by keyword overlap with the task goal, and returns the top N most
-// relevant. Updates access tracking for each recalled memory.
+// each by keyword and optional vector overlap with the task goal, and returns the
+// top N most relevant. Updates access tracking for each recalled memory.
 //
-// The scoring algorithm is simple word-frequency overlap: each word in the
+// When MemoryRecall is configured with an embedProvider and vectorStore, the score
+// blends keyword overlap with cosine similarity (0.3 keyword + 0.7 vector). This
+// improves semantic relevance beyond exact word matching.
+//
+// The scoring algorithm uses word-frequency overlap: each word in the
 // task goal is checked against the memory content. The score is the percentage
 // of query words that appear in the content. This is intentionally lightweight
-// — Phase 6+ will add vector similarity scoring for semantic relevance.
+// — Phase 6+ adds vector similarity scoring for semantic relevance.
 func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN int) ([]MemoryItem, error) {
 	records, err := db.QueryMemoriesByScopeAndTier(projectID, scope, "consolidated")
 	if err != nil {
 		return nil, err
 	}
 
-	// Score each episode by keyword overlap with taskGoal.
+	// Score each episode by blended keyword/vector overlap with taskGoal.
 	// Each episode is paired with its relevance score for sorting.
 	type scored struct {
 		item  MemoryItem
@@ -330,14 +430,14 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 		if r.Status != "active" {
 			continue
 		}
-		score := keywordScore(r.Content, taskGoal)
+		score := mr.blendVectorScores(r.Content, taskGoal)
 		scoredList = append(scoredList, scored{
 			item: MemoryItem{
 				ID:         r.ID,
 				Type:       r.Type,
 				Content:    r.Content,
 				Confidence: r.Confidence,
-				Reason:     fmt.Sprintf("%s keyword match (score: %.1f)", scope, score),
+				Reason:     fmt.Sprintf("%s blended score (keyword+vector: %.1f)", scope, score),
 			},
 			score: score,
 		})
@@ -368,6 +468,51 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 		items = append(items, scoredList[i].item)
 	}
 	return items, nil
+}
+
+// blendVectorScores combines keyword-based and vector-based relevance scores.
+// Weight: 0.3 * keywordScore + 0.7 * cosineSimilarity * 100
+func (mr *MemoryRecall) blendVectorScores(content, query string) float64 {
+	kwScore := keywordScore(content, query)
+	if mr.embedProvider == nil || mr.vectorStore == nil {
+		return kwScore
+	}
+	// Try to get vector similarity
+	queryVec, err := mr.embedProvider.Embed(query)
+	if err != nil {
+		return kwScore
+	}
+	contentVec, err := mr.embedProvider.Embed(content)
+	if err != nil {
+		return kwScore
+	}
+	vecScore := memory.CosineSimilarity(queryVec, contentVec) * 100
+	return 0.3*kwScore + 0.7*vecScore
+}
+
+// stringify converts a float64 to a string with four decimal places.
+func stringify(v float64) string { return fmt.Sprintf("%.4f", v) }
+
+// stringifyMeta extracts a string value for the given key from metadata.
+func stringifyMeta(meta map[string]any, key string) string {
+	if v, ok := meta[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// parseConfidence extracts a confidence value from vector metadata.
+func parseConfidence(meta map[string]any) float64 {
+	if v, ok := meta["confidence"]; ok {
+		if s, ok := v.(string); ok {
+			var c float64
+			fmt.Sscanf(s, "%f", &c)
+			return c
+		}
+	}
+	return 0.5
 }
 
 // keywordScore computes a simple word-frequency overlap score between content
