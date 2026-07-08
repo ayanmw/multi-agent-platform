@@ -347,16 +347,65 @@ const activeTaskId = ref<string | null>(null)
 - [x] 验证: `go build ./...`, `go vet ./...` 通过；启动后 auth 端点 CRUD 正常（auth on/off 双模式）；向量召回端点返回正确结构
 
 ### 已知待优化/远期规划
-- [ ] **Phase 7**: Harness 完整治理与审计（身份 + 审批 + 成本 + 合规日志）
-- [ ] **Phase 7**: 外部向量数据库（LanceDB / ChromaDB / pgvector）+ 外部 Embedding API
-- [ ] **Phase 7**: JWT / OAuth 多用户支持
-- [ ] **Phase 7**: OpenTelemetry / Prometheus SDK 深度可观测
+- [ ] **Phase 7**: 详见下方 Phase 7 章节规划
 
 ### 参考文档
 - `doc/chapters/09-llm-api-comparison.html` — LLM 厂商 API 差异分析
 - `doc/chapters/10-multi-model-layered-design.html` — 多模型分层设计
 - `doc/chapters/11-harness-memory-design.html` — Harness 与自进化记忆设计
 - `openspec/changes/phase-6-tech-debt-completion/` — Phase 6 变更产物
+
+---
+
+## Phase 7: 生产化与深度集成 🔜 PLANNING (暂不实施)
+
+**目标**: 在 Phase 6 落地的 Auth（API key + RBAC 骨架）与 RAG（本地 TF-IDF + 内存向量库）之上，推进生产化、多用户、深度可观测与外部集成。延续 6-D/6-E 的"非空壳、真实运行"原则。
+
+**状态**: 仅规划，暂不实施。各子阶段可独立交付，实施前需为每个 7-X 子阶段新建 OpenSpec change。
+
+### 7-A 身份与多用户体系
+- [ ] JWT access/refresh token，与现有 API key 并存（API key 保留为程序化访问通道）
+- [ ] OAuth2 第三方登录（GitHub / Google）
+- [ ] Web UI 登录页 + 用户管理界面（Vue 路由守卫）
+- [ ] 数据隔离: session / project / memory 按 `user_id` 隔离（DB 列 + 查询过滤）
+- [ ] 配额管理: 每用户 token / 成本 / 并发任务上限，接入 PolicyGate
+- [ ] RBAC 细化: 角色权限下沉到 Tool / 端点级
+
+### 7-B 外部向量与 Embedding 集成
+- [ ] `EmbeddingProvider` 远程实现: OpenAI text-embedding-3 / Cohere（复用现有接口，无侵入）
+- [ ] `VectorStore` 持久化后端: pgvector（推荐，配合 SQLite→Postgres 迁移）或 ChromaDB
+- [ ] 混合检索: 向量召回 + BM25 关键词 + 重排（替换当前 `blendVectorScores` 的线性混合）
+- [ ] 增量索引: memory 写入时实时 upsert，替代启动全量 `BuildVectorIndex`
+- [ ] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
+
+### 7-C 深度可观测
+- [ ] OpenTelemetry trace: 跨 Agent / Tool / LLM 调用链路 span
+- [ ] Prometheus SDK 替换手写 metrics，增加延迟直方图
+- [ ] 审计日志: 所有写操作记录 actor / target / before / after
+- [ ] 多 Agent 协作 trace 树可视化（前端复用 AgentTree）
+- [ ] 事件回放: 基于 SQLite 事件流重建任务执行过程
+
+### 7-D Harness 治理与合规
+- [ ] 成本预算硬限制: 触发阈值自动暂停 + 告警（强化 CostBudgetRule）
+- [ ] 审批工作流增强: 多级审批 / 超时升级 / 代理审批
+- [ ] 合规快照: tool call 输入输出录制、文件变更 diff
+- [ ] 数据保留策略: episodic memory TTL + 自动归档
+- [ ] PII 脱敏: memory / 日志敏感信息自动打码
+
+### 7-E 生产部署
+- [ ] Docker Compose / K8s 部署清单
+- [ ] Postgres 替换 SQLite（迁移工具，保留 SQLite 作单机兜底）
+- [ ] CI/CD: GitHub Actions build / test / vet / lint
+- [ ] 备份恢复: DB 定时备份 + 向量库快照
+- [ ] HA: 多实例 + 共享存储（可延后至 Phase 8）
+
+### 依赖与优先级
+- **7-A → 7-D**: 合规治理依赖多用户身份（actor 归属）
+- **7-B 独立**: 可先行，纯增强 RAG，无破坏性
+- **7-C 独立**: 可并行，与业务逻辑解耦
+- **7-E 最后**: 依赖前四项稳定
+
+**建议实施顺序**: 7-B / 7-C（并行）→ 7-A → 7-D → 7-E
 
 ---
 
