@@ -278,6 +278,16 @@ type EngineConfig struct {
 	// might select. When Router is nil, this field is ignored.
 	// Added in Phase 6.
 	Providers map[string]llm.Provider
+
+	// OnLLMUsage is an optional callback invoked after every successful LLM call
+	// in the ReAct loop. It receives the actual model selected (which may differ
+	// from cfg.Model when Router is active), the resolved ModelProfile, and the
+	// API-reported Usage. This callback is used by the cost tracker and metrics
+	// collector in Phase 6-D without coupling the Engine to those subsystems.
+	//
+	// The callback is best-effort: panics are recovered and logged, and errors
+	// from the callback do not interrupt the ReAct loop.
+	OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -610,6 +620,33 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			"max_steps":                e.cfg.MaxSteps,
 			"current_step":             e.stepIdx,
 		}))
+
+		// Phase 6-D: Report cost and observability metrics for this LLM call.
+		// The Engine remains cost-agnostic; the callback is supplied by cmd/server
+		// and wired to the CostTracker + MetricsCollector. Panics in the callback
+		// are recovered so observability bugs cannot crash the agent loop.
+		if e.cfg.OnLLMUsage != nil {
+			var profile *llm.ModelProfile
+			if e.cfg.Registry != nil {
+				profile = e.cfg.Registry.Get(e.cfg.Model)
+			}
+			if profile == nil {
+				profile = &llm.ModelProfile{
+					Name:        e.cfg.Model,
+					Provider:    "unknown",
+					InputPrice:  0,
+					OutputPrice: 0,
+				}
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+					}
+				}()
+				e.cfg.OnLLMUsage(e.cfg.Model, profile, usage)
+			}()
+		}
 
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), usage)
@@ -971,6 +1008,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		Tools:       toolDefs,
 		Temperature: e.cfg.Temperature,
 		MaxTokens:   e.cfg.MaxTokens,
+		Context:     ctx,
 	}
 
 	// Call the LLM with streaming. The onChunk callback is invoked for each SSE

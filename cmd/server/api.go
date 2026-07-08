@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -758,7 +760,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionChat handles POST /api/sessions/{id}/chat
 // 在已有 Session 中发起新轮对话，自动注入历史消息上下文
-func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB) {
+func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -866,7 +868,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
 		}
 
-		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID)
+		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID, costRepo, modelRegistry)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -913,6 +915,66 @@ func buildHistoryContext(msgs []db.SessionMessageRecord) string {
 	sb.WriteString("## Current Task\n\n")
 	return sb.String()
 }
+
+// handleCostQuery handles GET /api/costs with dimension filtering.
+// Supported query parameters: task_id, session_id, project_id, days.
+func handleCostQuery(w http.ResponseWriter, r *http.Request, repo cost.CostRepository) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	report := costReportFromRecords(func() []cost.CostRecord {
+		if taskID := r.URL.Query().Get("task_id"); taskID != "" {
+			records, _ := repo.QueryByTask(taskID)
+			return records
+		}
+		if sessionID := r.URL.Query().Get("session_id"); sessionID != "" {
+			records, _ := repo.QueryBySession(sessionID)
+			return records
+		}
+		if projectID := r.URL.Query().Get("project_id"); projectID != "" {
+			records, _ := repo.QueryByProject(projectID)
+			return records
+		}
+		records, _ := repo.QueryRecent(100)
+		return records
+	}())
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
+}
+
+// costReportFromRecords builds a JSON-friendly cost summary from a slice of records.
+func costReportFromRecords(records []cost.CostRecord) map[string]any {
+	if records == nil {
+		records = []cost.CostRecord{}
+	}
+	var totalCents int64
+	var totalTokens, totalInput, totalOutput int
+	byModel := make(map[string]int64)
+	byAgent := make(map[string]int64)
+	for _, rec := range records {
+		totalCents += rec.CostCents
+		totalTokens += rec.TotalTokens
+		totalInput += rec.InputTokens
+		totalOutput += rec.OutputTokens
+		byModel[rec.Model] += rec.CostCents
+		byAgent[rec.AgentID] += rec.CostCents
+	}
+	return map[string]any{
+		"record_count":     len(records),
+		"total_cost_cents": totalCents,
+		"total_cost_usd":   float64(totalCents) / 100.0,
+		"total_tokens":     totalTokens,
+		"input_tokens":     totalInput,
+		"output_tokens":    totalOutput,
+		"by_model":         byModel,
+		"by_agent":         byAgent,
+		"records":          records,
+	}
+}
+
 
 // truncateContent truncates a message content to maxLen characters.
 // If the content is longer than maxLen, it appends "...".

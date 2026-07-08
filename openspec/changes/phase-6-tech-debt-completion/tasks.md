@@ -1,52 +1,62 @@
-## 1. Provider Context 传递修复
+## Phase 6-C
+- [x] Provider Context/Fallback 修复
+- [x] CostTracker 整数精度
+- [x] ProviderRegistry 排序
+- [x] migrate v8 对齐
+- [x] RAG/Auth/Observability 骨架
 
-- [x] 1.1 在 ChatRequest 结构体增加 Context context.Context 字段（provider.go）
-- [x] 1.2 OpenAIProvider.ChatStream 使用 http.NewRequestWithContext(req.Context)（openai_provider.go）
-- [ ] 1.3 AnthropicProvider.ChatStream 使用 http.NewRequestWithContext(req.Context)（anthropic_provider.go）
-- [ ] 1.4 Engine fallback 逻辑移除多余的 context.WithCancel（engine.go）
-- [ [ ] 1.5 验证编译通过（go build ./...）
+## Phase 6-D 目标：可观测性与成本持久化落地
 
-## 2. Fallback Provider 选择优化
+> **非空壳、真实运行**。不引入外部依赖（Prometheus/OTel/LanceDB 等）。
 
-- [ ] 2.1 Engine fallback 时先查 ProviderRegistry.Get(modelName)（engine.go）
-- [ ] 2.2 找不到时 fallback 到 llm.NewProvider(注册表配置) 而非硬编码 NewOpenAIProvider（engine.go）
+### 6-D.1 结构化日志接入业务流
+- [x] 在 `cmd/server/main.go` 初始化 `observability.DefaultLogger`，按 `LOG_LEVEL` env 配置级别
+- [x] 替换关键路径的 `log.Printf` 为结构化日志（server 启动、DB 初始化、任务启动/完成/失败）
+- [x] 新增 `/healthz` 端点：检查 DB ping、WS hub 状态，返回 JSON
+- [x] 新增 `/metrics` 端点：Prometheus 文本格式，暴露 `agent_tasks_total`, `llm_calls_total`, `llm_tokens_total`, `cost_cents_total`
+- [x] 新增 `/api/costs` 查询端点：按 task_id/session_id/project_id 聚合成本
+- [x] 验证：curl `/healthz` 和 `/metrics` 返回正确
 
-## 3. CostTracker 精度修复
+### 6-D.2 成本持久化到 cost_records 表
+- [x] 新增 migration v11：在 `cost_records` 表加 `cost_cents` 列；若已存在数据则按 `cost_usd*100` 回填
+- [x] 在 `internal/cost` 新增 `CostRepository` 接口（内存 store + SQLite store）
+- [x] 实现 `SqliteCostRepository.Insert(record)` 写入 SQLite
+- [x] 在 Engine LLM 调用完成后调用 `OnLLMUsage` callback → CostTracker → Repository → MetricsCollector
+- [x] HTTP `/api/costs` 端点从 repository 查询（内存缓存做 fallback）
+- [x] 在 `cmd/server/main.go` 初始化 `modelRegistry` 并注入 CostTracker，使 tier/provider/pricing 字段正确填充
+- [x] 验证：运行一次任务后 `cost_records` 表有真实记录；curl cost API 返回数据
 
-- [ ] 3.1 CostRecord 增加 CostCents int64 字段，计算时使用整数分（cost_tracker.go）
-- [ ] 3.2 HTTP API 响应同时返回 CostCents 和 CostUSD（cost_http.go）
-- [ ] 3.3 前端展示使用 CostCents 格式化显示（如 "$1.23"）
+### 6-D.3 收尾
+- [x] `go build ./...`, `go vet ./...` 通过
+- [x] 更新 `roadmaps/ROADMAP.md` 标记 6-D 完成
+- [x] Git commit: `Phase 6-D: observability endpoints + cost persistence`
 
-## 4. ProviderRegistry.List 排序
+## Phase 6-E 目标：Auth 与 RAG 实际集成
 
-- [ ] 4.1 List() 方法返回排序后的 provider 名称切片（provider_registry.go）
+> 占坑项在 6-E 实现，6-D 不引入。
 
-## 5. 迁移版本对齐
+### 6-E.1 认证实际生效
+- [ ] DB migration v12：创建 `users` 表和 `api_keys` 表
+- [ ] 实现 DB-backed `auth.APIKeyStore`
+- [ ] `cmd/server/main.go` 启动时创建默认 admin 用户 + 默认 API key（首次启动打印到日志）
+- [ ] 在 `main.go` 注册 `/api/auth/api-keys` 端点（create/list/revoke）
+- [ ] 新增可配置 Auth 中间件：默认关闭，`REQUIRE_AUTH=true` 时检查 `Authorization: Bearer <key>`
+- [ ] 受保护操作：删除 session/project、run_shell、创建/删除 agent、工具注册
 
-- [ ] 5.1 确认 v8 迁移用途，补齐或注释说明（pkg/db/migrate.go）
+### 6-E.2 RAG 记忆向量召回
+- [ ] 实现本地 EmbeddingProvider（TF-IDF / 关键词 one-hot，无外部模型依赖）作为 v0
+- [ ] 在 `MemoryRecall` 启动时把 consolidated/semantic memories 加载到 `InMemoryVectorStore`
+- [ ] 召回逻辑增加向量相似度排序：先关键词粗筛，再用向量精排 topK
+- [ ] `/api/memories/recall` 增加 `query` 参数，返回按相似度排序的记忆列表
+- [ ] 在 working memory 注入中优先使用向量召回结果
 
-## 6. RAG 基础设计（骨架）
+### 6-E.3 收尾
+- [ ] 编译、vet、集成测试
+- [ ] 更新 ROADMAP 标记 6-E 完成
+- [ ] Git commit: `Phase 6-E: auth middleware + RAG memory recall`
 
-- [ ] 6.1 定义 EmbeddingProvider 接口（internal/llm/embedding.go）
-- [ ] 6.2 定义 VectorStore 接口（internal/memory/vector_store.go）
-- [ ] 6.3 实现 InMemoryVectorStore（内部使用 sync.Map + 余弦相似度）
-
-## 7. Auth 基础设计（骨架）
-
-- [ ] 7.1 定义 User/Role 模型（internal/auth/model.go）
-- [ ] 7.2 实现 API Key 生成/验证/哈希（internal/auth/apikey.go）
-- [ ] 7.3 实现 /api/auth/api-keys CRUD 端点（cmd/server/api.go）
-- [ ] 7.4 创建 api_keys 表和 users 表 DB 迁移
-
-## 8. 可观测性基础
-
-- [ ] 8.1 实现结构化日志包（internal/observability/logger.go）
-- [ ] 8.2 实现 /healthz 端点（包含 DB/LLM 检查）
-- [ ] 8.3 实现 /metrics 端点（Prometheus 格式：任务计数、成本总计）
-
-## 9. 代码审查与验证
-
-- [ ] 9.1 运行 go build ./... 确保编译通过
-- [ ] 9.2 运行 go vet ./... 检查潜在问题
-- [ ] 9.3 提交 Git（Commit: "Phase 6-C: 技术债务修复 + 高级特性设计"）
-- [ ] 9.4 更新 ROADMAP.md 标记完成任务
+## Phase 7（远期，仅规划）
+- 接入外部向量数据库（LanceDB / ChromaDB / pgvector）
+- 接入外部 Embedding API（OpenAI/Cohere）
+- JWT / OAuth 多用户支持
+- OpenTelemetry / Prometheus SDK 深度可观测

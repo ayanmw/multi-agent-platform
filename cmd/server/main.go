@@ -9,12 +9,16 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
@@ -30,9 +34,13 @@ func main() {
 	port := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
 
+	// Phase 6-D: Initialize structured logging level from configuration.
+	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(os.Getenv("LOG_LEVEL")))
+
 	// Load configuration from .env and environment
 	cfg, err := config.Load()
 	if err != nil {
+		observability.DefaultLogger.Error("server", "failed to load config", map[string]any{"error": err.Error()})
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	if *port != "8080" || cfg.ServerPort == "" {
@@ -46,9 +54,20 @@ func main() {
 	// Initialize approval handler for Phase 5 Harness
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
 
+	observability.DefaultLogger.Info("server", "initializing subsystems", map[string]any{
+		"port":      cfg.ServerPort,
+		"db_path":   cfg.DBPath,
+		"llm_model": cfg.LLMModel,
+	})
+
 	// Register control handler for client-side pause/resume/cancel and approval decisions
 	hub.SetControlHandler(func(msg ws.ClientControlMsg) {
-		log.Printf("[Control] Received: action=%s task=%s agent=%s approval_id=%s", msg.Action, msg.TaskID, msg.AgentID, msg.ApprovalID)
+		observability.DefaultLogger.Debug("control", "received client control message", map[string]any{
+			"action":     msg.Action,
+			"task_id":    msg.TaskID,
+			"agent_id":   msg.AgentID,
+			"approval_id": msg.ApprovalID,
+		})
 		// Phase 5: 路由审批决定到 ApprovalHandler
 		switch msg.Action {
 		case "approve":
@@ -63,18 +82,28 @@ func main() {
 		// TODO: Phase 4+ — implement actual engine control via context cancellation
 	})
 
+	// Initialize cost repository (SQLite if available, else in-memory fallback).
+	var costRepo cost.CostRepository = cost.NewInMemoryCostRepository()
+	_ = costRepo
+
 	// Initialize database
 	if err := db.Init(cfg.DBPath); err != nil {
-		log.Printf("Warning: DB init failed: %v (continuing without persistence)", err)
+		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
 	} else {
-		log.Println("Database initialized")
+		observability.DefaultLogger.Info("database", "initialized", map[string]any{"path": cfg.DBPath})
+		var repoErr error
+		costRepo, repoErr = cost.NewSqliteCostRepository(db.DB)
+		if repoErr != nil {
+			observability.DefaultLogger.Warn("cost", "failed to create sqlite cost repository, falling back to memory", map[string]any{"error": repoErr.Error()})
+			costRepo = cost.NewInMemoryCostRepository()
+		}
 		// Seed default agent if not exists
 		if err := db.SeedDefaultAgent(); err != nil {
-			log.Printf("Warning: Failed to seed default agent: %v", err)
+			observability.DefaultLogger.Warn("database", "failed to seed default agent", map[string]any{"error": err.Error()})
 		}
 		// Seed default project if not exists
 		if err := db.SeedDefaultProject(); err != nil {
-			log.Printf("Warning: Failed to seed default project: %v", err)
+			observability.DefaultLogger.Warn("database", "failed to seed default project", map[string]any{"error": err.Error()})
 		}
 	}
 
@@ -89,6 +118,15 @@ func main() {
 
 	// Initialize persistence adapter
 	persist := &DBPersistence{}
+
+	// Phase 6-D: Initialize model registry with default profiles for cost tracking
+	// and future multi-provider routing. The registry is used by the CostTracker
+	// to resolve tier/pricing information when building CostRecords.
+	modelRegistry := llm.NewModelRegistry()
+	for _, profile := range llm.DefaultProfiles() {
+		modelRegistry.Register(profile)
+	}
+	log.Printf("ModelRegistry: loaded %d default profiles", len(llm.DefaultProfiles()))
 
 	// Initialize tool registry with built-in tools
 	toolRegistry := tool.NewRegistry()
@@ -293,7 +331,7 @@ func main() {
 
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, costRepo, modelRegistry)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -324,7 +362,7 @@ func main() {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat — multi-turn chat within a session
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry)
 			return
 		}
 		// GET /api/sessions/{id}/messages — session message history
@@ -345,7 +383,48 @@ func main() {
 		handleProjectByID(w, r)
 	})
 
-	// Health check
+	// Phase 6-D: Cost query API (task/session/project/daily aggregation).
+	// Data is read from the CostRepository so persisted records are included.
+	http.HandleFunc("/api/costs", func(w http.ResponseWriter, r *http.Request) {
+		handleCostQuery(w, r, costRepo)
+	})
+
+	// Phase 6-D: Health check endpoint (JSON, checks DB + WS hub).
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		status := map[string]any{
+			"status":    "ok",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"checks": map[string]any{
+				"websocket": map[string]string{"status": "ok"},
+			},
+		}
+		dbStatus := "ok"
+		if db.DB != nil {
+			if err := db.DB.Ping(); err != nil {
+				dbStatus = "error: " + err.Error()
+				status["status"] = "degraded"
+			}
+		} else {
+			dbStatus = "not initialized"
+		}
+		status["checks"].(map[string]any)["database"] = map[string]string{"status": dbStatus}
+
+		w.Header().Set("Content-Type", "application/json")
+		if status["status"] == "ok" {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		json.NewEncoder(w).Encode(status)
+	})
+
+	// Phase 6-D: Metrics endpoint in Prometheus text format.
+	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		fmt.Fprint(w, observability.DefaultMetrics.PrometheusText())
+	})
+
+	// Legacy plaintext health check retained for backward compatibility.
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -610,15 +689,15 @@ http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.
 
 // runAgentLoop executes the full ReAct loop for a chat request.
 // It is a convenience wrapper around runAgentLoopWithTurn for the initial (root) turn.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "")
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", costRepo, modelRegistry)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
 // multi-turn session. It accepts turnIndex and parentTaskID to support subsequent
 // turns in a conversation (turnIndex >= 0). The root task binding is only done
 // when turnIndex == 0 (first turn).
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string) {
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
 	isRoot := turnIndex == 0
 
 	// Persist task creation
@@ -663,6 +742,48 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	// Set up progress tracking for the task
 	progressManager := harness.NewProgressManager()
 
+	// Phase 6-D: Wire engine usage/cost callback to CostTracker, Repository
+	// and MetricsCollector. This is the single integration point where the
+	// cost-agnostic Engine hands off per-LLM-call usage data for persistence
+	// and observability. We create one CostTracker per process (not per task)
+	// so metrics accumulate globally.
+	costTracker := cost.NewCostTracker(cost.WithRegistry(modelRegistry))
+	onUsage := func(model string, profile *llm.ModelProfile, usage llm.Usage) {
+		observability.DefaultMetrics.RecordLLMCall(
+			uint64(usage.PromptTokens),
+			uint64(usage.CompletionTokens),
+			uint64(usage.TotalTokens),
+		)
+		projectID := "default"
+		if sessionID != "" {
+			if sess, err := db.QuerySessionByID(sessionID); err == nil {
+				projectID = sess.ProjectID
+			}
+		}
+		// If the Engine did not provide a profile (legacy fallback), resolve one
+		// from the registry so pricing/tier fields are populated.
+		if profile == nil || profile.Provider == "unknown" {
+			if p := modelRegistry.Get(model); p != nil {
+				profile = p
+			}
+		}
+		record := costTracker.BuildRecordFromProfile(
+			taskID, sessionID, projectID, agentID,
+			0, // step_index is populated from usage aggregation perspective
+			model, profile, usage,
+		)
+		// Best-effort persistence; failures are logged but don't break the task.
+		if costRepo != nil {
+			if err := costRepo.Insert(record); err != nil {
+				observability.DefaultLogger.Warn("cost", "failed to persist cost record", map[string]any{
+					"task_id": taskID,
+					"error":   err.Error(),
+				})
+			}
+		}
+		observability.DefaultMetrics.RecordCost(record.CostCents)
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:          agentID,
 		SystemPrompt:     systemPrompt,
@@ -684,6 +805,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		AgentBus:         agentBus,          // Phase 5: 多Agent通信
 		CheckpointManager: checkpointMgr,    // Phase 5: 崩溃恢复
 		TurnIndex:        turnIndex,         // 当前轮次
+		OnLLMUsage:       onUsage,           // Phase 6-D: 成本/指标上报
 		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
 			return db.InsertSessionMessage(db.SessionMessageRecord{
 				ID:         "msg_" + uuid.New().String(),
@@ -710,8 +832,11 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	observability.DefaultMetrics.IncrTasksStarted()
+
 	result, totalTokens, err := engine.Run(ctx, userInput)
 	if err != nil {
+		observability.DefaultMetrics.IncrTasksFailed()
 		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
 		if sessionID != "" {
 			newStatus := deriveSessionStatus(sessionID)
@@ -728,6 +853,8 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		}
 		return
 	}
+
+	observability.DefaultMetrics.IncrTasksCompleted()
 
 	// 完成后递增 session.turn_count（多轮对话）
 	if sessionID != "" {

@@ -300,8 +300,10 @@ func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage)
 		return 0
 	}
 
-	// Convert USD-per-1M to cents-per-M (multiply by 100), then do integer arithmetic.
-	// cost_cents = (input_tokens * input_price_cents + output_tokens * output_price_cents) / 1_000_000
+	// Prices in ModelProfile are USD per 1M tokens. To keep precision while using
+	// integer arithmetic, multiply by 100 to convert dollars to cents first, then
+	// divide by 1_000_000 to scale from "per 1M" to per-token:
+	//   cost_cents = (input_tokens * input_price_cents_per_1M + output_tokens * output_price_cents_per_1M) / 1_000_000
 	inputPriceCents := int64(profile.InputPrice * 100)
 	outputPriceCents := int64(profile.OutputPrice * 100)
 	inputCost := int64(usage.PromptTokens) * inputPriceCents

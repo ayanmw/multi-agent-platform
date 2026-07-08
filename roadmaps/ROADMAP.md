@@ -298,48 +298,54 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 6: 高级特性（骨架） ✅ COMPLETED
+## Phase 6: 高级特性 ✅ COMPLETED
 
-**目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理
+**目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理、可观测性
 
-**完成日期**: 2026-07-07
-**Git commit**: `03e0aec`
+**完成日期**: 2026-07-08
+**Git commit**: `Phase 6-D: observability endpoints + cost persistence`
 **版本**: v0.6 Alpha
 
-### 交付物
-- [x] **多厂商 LLM Provider**: AnthropicProvider + DeepSeek reasoning_content + Provider 工厂
-- [x] **Router 接入 Engine**: 动态模型选择 + Fallback 降级重试 + model_routed 白盒事件
-- [x] **Worker Pool 并发调度**: 优先级队列 + 信号量限流 + 任务取消
-- [x] **CostTracker 成本追踪**: cost_records 表 + 多维度聚合 + HTTP API
-- [x] **CostBudgetRule**: 集成到 PolicyChain + TaskContract.CostBudgetUSD
-- [x] **降级策略**: ResolveFallbackChain + IsRetryableError + 自动 fallback
-- [x] **Provider Context 传递**: ChatRequest.Context 透传，fallback 使用父 ctx
-- [x] **CostTracker 整数精度**: CostCents int64 存储，避免浮点漂移
-- [x] **ProviderRegistry 排序**: List() 返回稳定字母序
-- [x] **迁移版本对齐**: 补齐 v8 no-op 占位迁移
-- [x] **RAG 基础骨架**: EmbeddingProvider + VectorStore + InMemoryVectorStore
-- [x] **Auth 基础骨架**: User/Role/APIKey + bcrypt 哈希 + CRUD 端点骨架
-- [x] **可观测性骨架**: StructuredLogger JSON 结构化日志
-- [x] **验证**: `go build ./...` 和 `go vet ./...` 通过
+### Phase 6-C 交付物（技术债务修复 + 骨架）
+- [x] 多厂商 LLM Provider: AnthropicProvider + DeepSeek reasoning_content + Provider 工厂
+- [x] Router 接入 Engine: 动态模型选择 + Fallback 降级重试 + model_routed 白盒事件
+- [x] Worker Pool 并发调度: 优先级队列 + 信号量限流 + 任务取消
+- [x] CostTracker 成本追踪: cost_records 表 + 多维度聚合
+- [x] CostBudgetRule: 集成到 PolicyChain + TaskContract.CostBudgetUSD
+- [x] 降级策略: ResolveFallbackChain + IsRetryableError + 自动 fallback
+- [x] Provider Context 传递: ChatRequest.Context 透传，fallback 使用父 ctx
+- [x] CostTracker 整数精度: CostCents int64 存储，避免浮点漂移
+- [x] ProviderRegistry 排序: List() 返回稳定字母序
+- [x] 迁移版本对齐: 补齐 v8 no-op 占位迁移
+- [x] RAG 基础骨架: EmbeddingProvider + VectorStore + InMemoryVectorStore
+- [x] Auth 基础骨架: User/Role/APIKey + bcrypt 哈希 + CRUD 端点骨架
+- [x] 可观测性骨架: StructuredLogger JSON 结构化日志
 
-### 已修复技术债务
+### Phase 6-D 交付物（可观测性 + 成本持久化落地，非空壳）
+- [x] 结构化日志接入业务流: `LOG_LEVEL` 配置 + server/DB/任务生命周期 JSON 日志
+- [x] `/healthz` 端点: DB ping + WS hub 状态 JSON 检查
+- [x] `/metrics` 端点: Prometheus 文本格式暴露 `agent_tasks_total`, `llm_calls_total`, `llm_tokens_total`, `cost_cents_total`
+- [x] 任务状态计数器: started / completed / failed 计数接入 MetricsCollector
+- [x] migration v11: `cost_records` 表新增 `cost_cents` 列并回填旧数据
+- [x] `CostRepository` 接口: 内存 store + SQLite store，任务运行时写入真实记录
+- [x] `OnLLMUsage` callback: Engine 与成本/指标子系统解耦的集成点
+- [x] `/api/costs` 查询端点: 按 task_id / session_id / project_id 聚合，从 repository 读取
+- [x] `modelRegistry` 注入 CostTracker: tier / provider / pricing 字段正确填充
+- [x] 验证: `go build ./...`, `go vet ./...` 通过；curl `/healthz`, `/metrics`, `/api/costs` 均返回正确数据；任务运行后 `cost_records` 产生真实记录
 
-| 优先级 | # | 问题 | 文件 | 状态 |
-|--------|---|------|------|------|
-| P1 | 1 | Fallback context 未传递 | engine.go | ✅ 已修复 |
-| P1 | 2 | Fallback provider 硬编码 endpoint | engine.go | ✅ 已修复 |
-| P2 | 6 | provider_registry.go List 无序 | provider_registry.go | ✅ 已修复 |
-| P2 | 7 | cost_tracker float64 精度漂移 | cost_tracker.go | ✅ 已修复 |
-| P2 | 8 | migrate.go 版本跳跃 | migrate.go | ✅ 已修复 |
-- [ ] **Harness: 完整治理与审计**（身份 + 审批 + 成本 + 合规日志）
-- [ ] **Memory: 向量检索增强**（LanceDB / ChromaDB 语义召回）
-- [ ] **Memory: 遗忘曲线 + 冷存储**（超过 30 天未 access → status=cold）
-- [ ] **Memory: 记忆审查 Agent**（定期扫描 Semantic 层，标记过期/冲突规则）
+### 已知待优化/远期规划
+- [ ] **Phase 6-E**: Auth 实际生效（users/api_keys 表、API Key 验证中间件、受保护操作）
+- [ ] **Phase 6-E**: RAG 向量召回接入 MemoryRecall（本地 TF-IDF Embedding + InMemoryVectorStore）
+- [ ] **Phase 7**: Harness 完整治理与审计（身份 + 审批 + 成本 + 合规日志）
+- [ ] **Phase 7**: 外部向量数据库（LanceDB / ChromaDB / pgvector）+ 外部 Embedding API
+- [ ] **Phase 7**: JWT / OAuth 多用户支持
+- [ ] **Phase 7**: OpenTelemetry / Prometheus SDK 深度可观测
 
 ### 参考文档
 - `doc/chapters/09-llm-api-comparison.html` — LLM 厂商 API 差异分析
 - `doc/chapters/10-multi-model-layered-design.html` — 多模型分层设计
 - `doc/chapters/11-harness-memory-design.html` — Harness 与自进化记忆设计
+- `openspec/changes/phase-6-tech-debt-completion/` — Phase 6 变更产物
 
 ---
 
@@ -354,4 +360,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
 | v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
 | v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
-| v0.6 Alpha | 2026-07-07 | Phase 6-C 完成: Provider Context/Fallback 修复 + CostTracker 整数精度 + RAG/Auth/Observability 基础骨架 |
+| v0.6 Alpha | 2026-07-08 | Phase 6 完成: 6-C 技术债务修复 + 6-D 可观测性/成本持久化真实落地 |

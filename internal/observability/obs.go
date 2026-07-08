@@ -1,4 +1,9 @@
 // Package observability provides structured logging and metrics for the platform.
+//
+// Phase 6-D: This package intentionally avoids external dependencies such as
+// Prometheus client SDK or OpenTelemetry. Metrics are kept as simple counters
+// exposed in Prometheus text format so operators can scrape them without
+// introducing new binaries or libraries.
 package observability
 
 import (
@@ -6,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -110,6 +116,123 @@ func levelEnabled(level, minLevel LogLevel) bool {
 	}
 	return order[level] >= order[minLevel]
 }
+
+// ParseLogLevel converts a string to a LogLevel. Unrecognized values default
+// to Info so a typo in configuration does not silence all logs.
+func ParseLogLevel(s string) LogLevel {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return LevelDebug
+	case "info":
+		return LevelInfo
+	case "warn", "warning":
+		return LevelWarn
+	case "error":
+		return LevelError
+	case "fatal":
+		return LevelFatal
+	default:
+		return LevelInfo
+	}
+}
+
+// --- Metrics ----------------------------------------------------------------
+
+// MetricsCollector holds simple thread-safe counters for observability.
+// All counters are monotonically increasing uint64 values rendered in
+// Prometheus exposition format.
+type MetricsCollector struct {
+	mu              sync.RWMutex
+	tasksStarted    uint64
+	tasksCompleted  uint64
+	tasksFailed     uint64
+	llmCalls        uint64
+	llmInputTokens  uint64
+	llmOutputTokens uint64
+	llmTotalTokens  uint64
+	costCents       int64
+}
+
+// NewMetricsCollector returns a zero-valued metrics collector.
+func NewMetricsCollector() *MetricsCollector {
+	return &MetricsCollector{}
+}
+
+// IncrTasksStarted increments the counter for agent tasks that have started.
+func (m *MetricsCollector) IncrTasksStarted() {
+	m.mu.Lock()
+	m.tasksStarted++
+	m.mu.Unlock()
+}
+
+// IncrTasksCompleted increments the counter for tasks that finished successfully.
+func (m *MetricsCollector) IncrTasksCompleted() {
+	m.mu.Lock()
+	m.tasksCompleted++
+	m.mu.Unlock()
+}
+
+// IncrTasksFailed increments the counter for tasks that failed or were cancelled.
+func (m *MetricsCollector) IncrTasksFailed() {
+	m.mu.Lock()
+	m.tasksFailed++
+	m.mu.Unlock()
+}
+
+// RecordLLMCall increments the LLM call counter and adds the token usage.
+func (m *MetricsCollector) RecordLLMCall(inputTokens, outputTokens, totalTokens uint64) {
+	m.mu.Lock()
+	m.llmCalls++
+	m.llmInputTokens += inputTokens
+	m.llmOutputTokens += outputTokens
+	m.llmTotalTokens += totalTokens
+	m.mu.Unlock()
+}
+
+// RecordCost adds the cost in cents to the total cost counter.
+func (m *MetricsCollector) RecordCost(cents int64) {
+	m.mu.Lock()
+	m.costCents += cents
+	m.mu.Unlock()
+}
+
+// PrometheusText returns the current metrics in Prometheus exposition format.
+// This is suitable for scraping by Prometheus, Grafana Agent, or curl.
+func (m *MetricsCollector) PrometheusText() string {
+	m.mu.RLock()
+	ts := uint64(time.Now().UnixMilli())
+	out := fmt.Sprintf(`# HELP agent_tasks_total Total number of agent tasks by final state.
+# TYPE agent_tasks_total counter
+agent_tasks_total{state="started"} %d %d
+agent_tasks_total{state="completed"} %d %d
+agent_tasks_total{state="failed"} %d %d
+# HELP llm_calls_total Total number of LLM API calls.
+# TYPE llm_calls_total counter
+llm_calls_total %d %d
+# HELP llm_tokens_total Total number of LLM tokens consumed.
+# TYPE llm_tokens_total counter
+llm_tokens_total{direction="input"} %d %d
+llm_tokens_total{direction="output"} %d %d
+llm_tokens_total{direction="total"} %d %d
+# HELP cost_cents_total Total LLM cost in integer cents.
+# TYPE cost_cents_total counter
+cost_cents_total %d %d
+`,
+		m.tasksStarted, ts,
+		m.tasksCompleted, ts,
+		m.tasksFailed, ts,
+		m.llmCalls, ts,
+		m.llmInputTokens, ts,
+		m.llmOutputTokens, ts,
+		m.llmTotalTokens, ts,
+		m.costCents, ts,
+	)
+	m.mu.RUnlock()
+	return out
+}
+
+// DefaultMetrics is the package-level shared metrics collector.
+var DefaultMetrics = NewMetricsCollector()
 
 // DefaultLogger is the package-level shared logger.
 var DefaultLogger = NewStructuredLogger()

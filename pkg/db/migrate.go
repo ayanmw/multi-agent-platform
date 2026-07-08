@@ -147,6 +147,19 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_cost_records_session ON cost_records(session_id);
 		CREATE INDEX IF NOT EXISTS idx_cost_records_project ON cost_records(project_id);`,
 	},
+
+	// v11: Add integer cost_cents column to cost_records for precise accounting.
+	//
+	// Existing rows are backfilled from cost_usd*100 so the CostRepository can
+	// read all rows with a non-null cost_cents value. SQLite does not have ALTER
+	// ADD COLUMN IF NOT EXISTS, so failures because the column already exists
+	// are logged and ignored by RunMigrations.
+	{
+		Version: 11,
+		Description: "Add cost_cents column to cost_records for integer precision",
+		SQL: `ALTER TABLE cost_records ADD COLUMN cost_cents INTEGER DEFAULT 0;
+		UPDATE cost_records SET cost_cents = CAST(ROUND(cost_usd * 100) AS INTEGER) WHERE cost_cents = 0 AND cost_usd <> 0;`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
