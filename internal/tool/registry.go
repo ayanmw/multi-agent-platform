@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // Tool represents a callable tool that agents can use
@@ -13,8 +14,11 @@ type Tool interface {
 	Execute(input map[string]any) (any, error)
 }
 
-// Registry manages available tools
+// Registry manages available tools. It is safe for concurrent use by multiple
+// goroutines. Built-in tools cannot be unregistered at the Registry level;
+// callers can use IsBuiltin to check before attempting Unregister.
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 }
 
@@ -25,11 +29,15 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[tool.Name()] = tool
 }
 
 func (r *Registry) Execute(name string, input map[string]any) (any, error) {
+	r.mu.RLock()
 	tool, ok := r.tools[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
@@ -37,6 +45,8 @@ func (r *Registry) Execute(name string, input map[string]any) (any, error) {
 }
 
 func (r *Registry) List() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	list := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		list = append(list, tool)
@@ -45,8 +55,14 @@ func (r *Registry) List() []Tool {
 }
 
 // Unregister removes a tool from the registry by name.
-// Returns an error if the tool is not found.
+// Returns an error if the tool is not found, or if the tool is built-in
+// (built-in tools cannot be removed via the Registry; use IsBuiltin to check).
 func (r *Registry) Unregister(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.IsBuiltin(name) {
+		return fmt.Errorf("cannot unregister built-in tool: %s", name)
+	}
 	if _, ok := r.tools[name]; !ok {
 		return fmt.Errorf("tool not found: %s", name)
 	}
@@ -66,6 +82,7 @@ func (r *Registry) IsBuiltin(name string) bool {
 }
 
 func (r *Registry) ToJSON() ([]byte, error) {
+	r.mu.RLock()
 	schema := make([]map[string]any, 0)
 	for _, tool := range r.tools {
 		schema = append(schema, map[string]any{
@@ -74,5 +91,6 @@ func (r *Registry) ToJSON() ([]byte, error) {
 			"parameters":  tool.Parameters(),
 		})
 	}
+	r.mu.RUnlock()
 	return json.Marshal(schema)
 }

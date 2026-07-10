@@ -12,7 +12,10 @@
 //   score = 1.0 → identical vectors
 //   score = 0.0 → orthogonal (unrelated)
 //   score = -1.0 → opposite (rare in practice)
+
 package memory
+
+import "math"
 
 // SearchResult represents a single result from a vector similarity search.
 type SearchResult struct {
@@ -61,7 +64,7 @@ func CosineSimilarity(a, b []float32) float64 {
 		magB += float64(b[i]) * float64(b[i])
 	}
 
-	denominator := magA * magB
+	denominator := math.Sqrt(magA) * math.Sqrt(magB)
 	if denominator == 0 {
 		return 0
 	}

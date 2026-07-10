@@ -9,21 +9,9 @@
 //   - ToolCall index tracking uses a map[int]*ToolCall because SSE deltas arrive out of order.
 //   - Usage is always read from the final SSE chunk, per OpenAI-compatible API convention.
 //
-// TODO: Phase 5-6 — Provider 接口抽象
-//   当前 Client 硬编码 OpenAI-compatible 协议。为支持 Anthropic（完全不兼容）和
-//   DeepSeek（reasoning_content 扩展），需要抽取 Provider 接口：
-//     type Provider interface {
-//         Name() string
-//         Endpoint() string
-//         BuildRequest(*ChatRequest) ([]byte, error)
-//         ParseStreamChunk([]byte) (*StreamDelta, error)
-//         BuildHeaders() map[string]string
-//     }
-//   参见 doc/chapters/09-llm-api-comparison.html 各厂商差异分析。
-//   实现分步走：
-//     Phase 3-4: Delta 结构体增加 ReasoningContent 字段（DeepSeek R1 思维链）
-//     Phase 5:   抽取 Provider 接口 + OpenAIProvider 基线实现
-//     Phase 6:   AnthropicProvider + DeepSeekProvider + Embeddings API
+// Provider 抽象已完成 (Phase 5-6)，参见 internal/llm/provider.go Provider 接口
+// 和 internal/llm/openai_provider.go / anthropic_provider.go / mock_provider.go。
+// 当前 Client 仍作为 OpenAIProvider 的底层传输层保留使用。
 package llm
 
 import (
@@ -83,13 +71,9 @@ type FunctionDefinition struct {
 // ChatRequest is the request body POSTed to /chat/completions.
 // When Stream=true, the response is SSE; otherwise it's a single JSON object.
 //
-// TODO: Phase 5-6 — 扩展为完整 OpenAI 参数集
-//   当前仅包含核心参数，后续 Provider 抽象时需支持：
-//   - max_completion_tokens (新版替代 max_tokens)
-//   - top_p, frequency_penalty, presence_penalty, seed
-//   - response_format (JSON Schema 结构化输出)
-//   - parallel_tool_calls (并行工具调用开关)
-//   - stream_options (include_usage)
+// ChatRequest 当前仅包含核心参数。Provider 抽象已完成（Phase 5-6，参见
+// internal/llm/provider.go），扩展参数（top_p, frequency_penalty 等）
+// 可在后续迭代中按需追加到该结构体。
 //   参见 doc/chapters/09-llm-api-comparison.html §2.1 完整参数列表。
 type ChatRequest struct {
 	Model       string    `json:"model"`
@@ -128,10 +112,9 @@ type Choice struct {
 // ReasoningContent accumulates chain-of-thought tokens (for DeepSeek R1/V4).
 // ToolCalls accumulate function call fragments.
 //
-// TODO: Phase 5-6 — 增加 ReasoningContent 字段
-//   DeepSeek R1 / V4 等推理模型在 delta 中返回 reasoning_content（思维链内容），
-//   与 content 并列。Delta 已包含此字段，向后兼容（空字符串时不影响旧逻辑）。
-//   参见 doc/chapters/09-llm-api-comparison.html §4.2。
+// ReasoningContent 字段已在 Phase 5-6 实现，DeepSeek R1/V4 推理模型
+// 的思维链内容与 content 并列返回。空字符串时不影响旧逻辑。
+// 参见 doc/chapters/09-llm-api-comparison.html §4.2。
 type Delta struct {
 	Role             string     `json:"role"`
 	Content          string     `json:"content"`
@@ -193,7 +176,9 @@ func (c *Client) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// TODO: Phase 5-6 — Provider 抽象后 URL 由 Provider.Endpoint() 决定
+	// Note: URL 路径硬编码为 /chat/completions（OpenAI 兼容协议）。
+	// Provider 抽象已在 Phase 5-6 完成：OpenAIProvider 包装本 Client 直接调用，
+	// AnthropicProvider 自行构建 /v1/messages 端点，无需修改 Client 的 URL 逻辑。
 	httpReq, err := http.NewRequest("POST", c.Endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -238,7 +223,9 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		return "", Usage{}, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// TODO: Phase 5-6 — Provider 抽象后 URL 由 Provider.Endpoint() 决定，
+	// Note: URL 路径硬编码为 /chat/completions（OpenAI 兼容协议）。
+	// Provider 抽象已在 Phase 5-6 完成：OpenAIProvider 包装本 Client 直接调用，
+	// AnthropicProvider 自行构建 /v1/messages 端点，无需修改 Client 的 URL 逻辑。，
 	//   Anthropic 使用 /v1/messages 而非 /v1/chat/completions。
 	httpReq, err := http.NewRequest("POST", c.Endpoint+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -400,7 +387,7 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 }
 
 // Index returns the tool call index from the struct field.
-// TODO: Phase 4+ — 多 Agent 并发时 ToolCall Index 用于追踪 tool_call 执行顺序
+// Phase 4+ — 多 Agent 并发时 ToolCall Index 用于追踪 tool_call 执行顺序
 // 和分布式 tracing，届时需要增强为确定性 ID 生成。
 func (tc ToolCall) Index() int {
 	return tc.Idx

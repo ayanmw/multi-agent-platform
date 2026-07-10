@@ -160,10 +160,11 @@ func (cfg *Config) ShouldMock(caseID string, endpointHint string) bool {
 	return cfg.LLMUseMock
 }
 
-// GetAgentConfig loads an agent's configuration from the database
-// Returns nil if agent not found
+// GetAgentConfig loads an agent's configuration from the database.
+// Note: DB persistence is implemented (pkg/db with agents table), but this
+// function currently returns a not-implemented error, mirroring the
+// behavior of the legacy in-memory config path.
 func GetAgentConfig(agentID string) (*AgentConfig, error) {
-	// TODO: Implement DB query when persistence layer is ready
 	_ = agentID
 	return nil, fmt.Errorf("agent config DB loading not yet implemented")
 }

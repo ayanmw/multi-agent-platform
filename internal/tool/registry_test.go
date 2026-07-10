@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -259,38 +260,32 @@ func TestUnregisterMissing(t *testing.T) {
 	}
 }
 
-// TestUnregisterBuiltinNotProtectedAtRegistryLevel documents an important design
-// fact: Registry.Unregister does NOT protect built-in tools. The built-in
-// protection lives in the HTTP handler (cmd/server/tool_api.go:handleDeleteTool,
-// which checks IsBuiltin before calling Unregister). At the Registry level,
-// Unregister("run_shell") succeeds.
-//
-// This is recorded as a design note: the Registry is a low-level store and the
-// API layer enforces the protection. Callers using the Registry directly must
-// check IsBuiltin themselves.
-func TestUnregisterBuiltinNotProtectedAtRegistryLevel(t *testing.T) {
+// TestUnregisterBuiltinRejected verifies that Unregister refuses to remove a
+// built-in tool, returning an error that mentions "built-in". This protects
+// run_shell, write_file, and read_file from accidental removal via the Registry.
+func TestUnregisterBuiltinRejected(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
 
-	// Precondition: run_shell is registered and recognized as built-in.
-	if !r.IsBuiltin("run_shell") {
-		t.Fatal("precondition: IsBuiltin(run_shell) should be true")
-	}
-
-	// Unregister succeeds at the Registry level — no built-in guard here.
-	if err := r.Unregister("run_shell"); err != nil {
-		t.Fatalf("Unregister(run_shell) = %v, expected nil (Registry does not protect builtins)", err)
-	}
-
-	// After unregister, run_shell is gone from the registry.
-	if _, err := r.Execute("run_shell", nil); err == nil {
-		t.Fatal("expected run_shell to be removed after Unregister")
-	}
-
-	// IsBuiltin is a pure name check, independent of registration state — it
-	// still returns true even though the tool is no longer registered.
-	if !r.IsBuiltin("run_shell") {
-		t.Fatal("IsBuiltin(run_shell) should still be true (pure name check, decoupled from registration)")
+	for _, name := range []string{"run_shell", "write_file", "read_file"} {
+		t.Run(name, func(t *testing.T) {
+			if !r.IsBuiltin(name) {
+				t.Fatalf("precondition: IsBuiltin(%q) should be true", name)
+			}
+			err := r.Unregister(name)
+			if err == nil {
+				t.Fatalf("Unregister(%q) = nil, expected error", name)
+			}
+			if !strings.Contains(err.Error(), "built-in") {
+				t.Errorf("error should mention 'built-in', got %q", err.Error())
+			}
+			// Tool should still be registered.
+			if _, err := r.Execute(name, map[string]any{}); err != nil {
+				if strings.Contains(err.Error(), "tool not found") {
+					t.Errorf("built-in tool was removed despite error: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -520,14 +515,34 @@ func TestConcurrentReadSafe(t *testing.T) {
 	// Reaching here without panic means concurrent reads are safe.
 }
 
-// TestConcurrentWriteSkipped documents that the Registry has NO internal mutex
-// protecting its tools map. Concurrent writes (Register/Unregister from multiple
-// goroutines) would race on the map and may panic with "concurrent map writes".
-//
-// This test is intentionally skipped — it exists to record the finding that
-// Registry is NOT goroutine-safe for writes. Callers must serialize writes
-// externally (the HTTP API layer does this implicitly via Go's http.Server
-// serializing handlers, but direct Registry users do not).
-func TestConcurrentWriteSkipped(t *testing.T) {
-	t.Skip("Registry has no mutex; concurrent Register/Unregister would race on the internal map — see report")
+// TestDataRaceThroughMutex verifies that all Registry methods are safe under
+// the Go race detector when exercised concurrently. This guards against
+// accidental removal of the sync.RWMutex in future changes.
+func TestDataRaceThroughMutex(t *testing.T) {
+	r := NewRegistry()
+	RegisterBuiltins(r)
+
+	var wg sync.WaitGroup
+	ops := 200
+	for i := 0; i < ops; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			name := fmt.Sprintf("dynamic-%d", idx%10)
+			switch idx % 5 {
+			case 0:
+				r.Register(&mockTool{name: name})
+			case 1:
+				_ = r.Unregister(name)
+			case 2:
+				_ = r.List()
+			case 3:
+				_, _ = r.Execute("run_shell", map[string]any{})
+			case 4:
+				_ = r.IsBuiltin("run_shell")
+			}
+		}(i)
+	}
+	wg.Wait()
+	// Race detector will flag any missing RLock/Lock around the tools map.
 }

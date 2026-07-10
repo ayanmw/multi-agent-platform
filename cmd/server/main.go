@@ -550,6 +550,13 @@ func main() {
 		json.NewEncoder(w).Encode(cases.All())
 	})
 
+	// Run Case proxy: POST /api/run-case
+	// Thin proxy used by the CaseCard frontend. Delegates to the same chat-action
+	// logic as POST /api/tasks with the case_id extracted from the request body.
+	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
+		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry)
+	})
+
 	// Dynamic Tool Registration API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

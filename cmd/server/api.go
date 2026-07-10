@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
@@ -408,6 +410,15 @@ func handleListMemories(w http.ResponseWriter, r *http.Request) {
 // PUT /api/memories/{id}/scope
 // Body: {"scope": "project", "session_id": ""}
 func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) {
+	// Verify the memory exists before attempting to update.
+	if _, err := db.QueryMemoryByID(id); err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var req struct {
 		Scope     string `json:"scope"`
 		SessionID string `json:"session_id"`
@@ -441,6 +452,15 @@ func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) 
 // handleDeleteMemory removes a memory record by ID.
 // DELETE /api/memories/{id}
 func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
+	// Verify the memory exists before attempting to delete.
+	if _, err := db.QueryMemoryByID(id); err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := db.DeleteMemory(id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1000,4 +1020,112 @@ func truncateContent(content string, maxLen int) string {
 		return content
 	}
 	return content[:maxLen] + "..."
+}
+
+// handleRunCase is a thin proxy for the CaseCard frontend.
+// POST /api/run-case
+// Body: {"input": "...", "agent_id": "...", "max_steps": N, "case": "code-gen", "session_id": "..."}
+// It extracts the case identifier (from "case" or "case_id" field), then executes
+// the same chat action logic as POST /api/tasks?case=<caseID>, with the case's
+// default input and system prompt applied when the body does not override them.
+func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse the request body — accepts both "case" and "case_id" for the case identifier.
+	var body struct {
+		Input        string `json:"input"`
+		AgentID      string `json:"agent_id"`
+		SystemPrompt string `json:"system_prompt"`
+		MaxSteps     int    `json:"max_steps"`
+		Case         string `json:"case"`
+		CaseID       string `json:"case_id"`
+		SessionID    string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Resolve caseID: prefer "case", fall back to "case_id".
+	caseID := body.Case
+	if caseID == "" {
+		caseID = body.CaseID
+	}
+
+	req := body
+	if req.Input == "" {
+		req.Input = body.Input
+	}
+	if req.AgentID == "" {
+		req.AgentID = body.AgentID
+	}
+	if req.SystemPrompt == "" {
+		req.SystemPrompt = body.SystemPrompt
+	}
+	if req.MaxSteps == 0 {
+		req.MaxSteps = body.MaxSteps
+	}
+	if req.SessionID == "" {
+		req.SessionID = body.SessionID
+	}
+
+	// Mirror the chat-action logic from POST /api/tasks: apply case defaults,
+	// then run the agent loop.
+	var contract harness.TaskContract
+	if caseID != "" {
+		if c := cases.Get(caseID); c != nil {
+			contract = c.Contract
+			if req.Input == "" {
+				req.Input = c.DefaultInput
+			}
+			if req.SystemPrompt == "" {
+				req.SystemPrompt = c.SystemPrompt
+			}
+		}
+	}
+
+	if req.Input == "" {
+		http.Error(w, "input is required", http.StatusBadRequest)
+		return
+	}
+
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = "agent_default"
+	}
+
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = "You are a helpful AI assistant with access to tools. " +
+			"When you need to run commands, read files, or write files, use the available tools. " +
+			"Always explain your reasoning before using tools. " +
+			"After using tools, analyze the results and continue until the task is complete."
+	}
+
+	if contract.Goal == "" {
+		contract = harness.DefaultContract(req.Input)
+	}
+	if req.MaxSteps > 0 {
+		contract.MaxSteps = req.MaxSteps
+	}
+
+	workingMemory := ""
+	if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
+		workingMemory = memRecall.FormatForSystemPrompt(wm)
+	}
+
+	taskID := "task_" + time.Now().Format("20060102150405")
+	go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, tools, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, caseID, costRepo, modelRegistry)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"task_id":    taskID,
+		"agent_id":   agentID,
+		"case_id":    caseID,
+		"session_id": req.SessionID,
+		"status":     "started",
+	})
 }

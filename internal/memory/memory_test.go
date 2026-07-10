@@ -29,27 +29,22 @@ func TestCosineSimilarity(t *testing.T) {
 		name string
 		a, b []float32
 		want float64
-		skip bool // true = 当前源码有 bug，期望值是"正确"的 cosine
 	}{
-		{"identical unit vectors", []float32{1, 0, 0}, []float32{1, 0, 0}, 1.0, false},
-		{"orthogonal vectors", []float32{1, 0}, []float32{0, 1}, 0.0, false},
-		{"opposite vectors", []float32{1, 0}, []float32{-1, 0}, -1.0, false},
-		{"parallel scaled (BUG: 缺 sqrt)", []float32{1, 2, 3}, []float32{2, 4, 6}, 1.0, true},
-		{"45-degree-ish (BUG: 缺 sqrt)", []float32{1, 1}, []float32{1, 0}, 0.70710678, true},
-		{"identical non-unit (BUG: 缺 sqrt)", []float32{1, 2, 3}, []float32{1, 2, 3}, 1.0, true},
-		{"empty a returns 0", []float32{}, []float32{1, 0}, 0.0, false},
-		{"empty b returns 0", []float32{1, 0}, []float32{}, 0.0, false},
-		{"dimension mismatch returns 0", []float32{1, 0, 0}, []float32{1, 0}, 0.0, false},
-		{"zero magnitude a returns 0", []float32{0, 0, 0}, []float32{1, 0}, 0.0, false},
-		{"zero magnitude b returns 0", []float32{1, 0}, []float32{0, 0}, 0.0, false},
+		{"identical unit vectors", []float32{1, 0, 0}, []float32{1, 0, 0}, 1.0},
+		{"orthogonal vectors", []float32{1, 0}, []float32{0, 1}, 0.0},
+		{"opposite vectors", []float32{1, 0}, []float32{-1, 0}, -1.0},
+		{"parallel scaled", []float32{1, 2, 3}, []float32{2, 4, 6}, 1.0},
+		{"45-degree-ish", []float32{1, 1}, []float32{1, 0}, 0.70710678},
+		{"identical non-unit", []float32{1, 2, 3}, []float32{1, 2, 3}, 1.0},
+		{"empty a returns 0", []float32{}, []float32{1, 0}, 0.0},
+		{"empty b returns 0", []float32{1, 0}, []float32{}, 0.0},
+		{"dimension mismatch returns 0", []float32{1, 0, 0}, []float32{1, 0}, 0.0},
+		{"zero magnitude a returns 0", []float32{0, 0, 0}, []float32{1, 0}, 0.0},
+		{"zero magnitude b returns 0", []float32{1, 0}, []float32{0, 0}, 0.0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := CosineSimilarity(c.a, c.b)
-			if c.skip {
-				// 记录源码实际值 vs 正确期望，便于追踪 bug 修复进度
-				t.Skipf("源码 bug：CosineSimilarity 缺 sqrt，实际=%f，正确应为=%f", got, c.want)
-			}
 			if !approxEq(got, c.want) {
 				t.Errorf("CosineSimilarity = %f, want %f", got, c.want)
 			}
@@ -57,14 +52,13 @@ func TestCosineSimilarity(t *testing.T) {
 	}
 }
 
-// TestCosineSimilarityBugDemonstration 显式记录源码 bug：identical 非单位向量
-// 按定义应返回 1.0，但实际远小于 1.0。此测试永远 skip，仅作文档。
+// TestCosineSimilarityBugDemonstration 验证 identical 非单位向量按定义返回 1.0
 func TestCosineSimilarityBugDemonstration(t *testing.T) {
 	a := []float32{1, 2, 3}
 	got := CosineSimilarity(a, a)
-	t.Skipf("CosineSimilarity([1,2,3],[1,2,3]) = %f, 应为 1.0（identical vectors）。"+
-		"根因：vector_store.go 分母用 magA*magB（平方和乘积）而非 sqrt(magA)*sqrt(magB)（模的乘积）。"+
-		"影响：Search 对非单位向量的排序被系统性扭曲。", got)
+	if !approxEq(got, 1.0) {
+		t.Errorf("CosineSimilarity([1,2,3],[1,2,3]) = %f, want 1.0（identical vectors）", got)
+	}
 }
 
 // ============================================================================
