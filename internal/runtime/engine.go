@@ -158,6 +158,13 @@ type EngineConfig struct {
 	// Added in Phase 5.
 	Provider llm.Provider
 
+	// CaseID is an optional hint passed through to llm.ChatRequest. MockProvider
+	// uses it for deterministic script matching (exact case match first, then
+	// keyword fallback). Real providers ignore this field entirely.
+	// When empty, MockProvider falls back to keyword matching against user input.
+	// Added in Phase 6 mock integration.
+	CaseID string
+
 	// Temperature controls the randomness of LLM output (0.0–2.0).
 	// Lower values produce more deterministic responses; higher values produce
 	// more creative/varied output. Defaults to 0.7 if not set.
@@ -341,6 +348,7 @@ type Engine struct {
 	checkpoint       *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
 	sessionMsgWriter func(SessionMessageRecord) error // optional session message writer (nil = skip)
 	turnIndex        int                              // current turn index within the session (0-based)
+	caseID           string                           // optional case ID hint for MockProvider script matching
 	providers        map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
 }
 
@@ -399,6 +407,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		checkpoint:       cfg.CheckpointManager,    // nil = no checkpoint/recovery
 		sessionMsgWriter: cfg.SessionMessageWriter, // nil = skip session message persistence
 		turnIndex:        cfg.TurnIndex,            // turn index within the session
+		caseID:           cfg.CaseID,               // case ID hint for mock script matching
 		taskID:           taskID,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
@@ -1009,6 +1018,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		Temperature: e.cfg.Temperature,
 		MaxTokens:   e.cfg.MaxTokens,
 		Context:     ctx,
+		CaseID:      e.caseID,
 	}
 
 	// Call the LLM with streaming. The onChunk callback is invoked for each SSE

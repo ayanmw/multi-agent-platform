@@ -19,6 +19,7 @@
 //        (same /chat/completions endpoint, same request/response format)
 //   - "anthropic" → AnthropicProvider — Claude's Messages API (Phase 6)
 //        Different endpoint (/v1/messages), auth (x-api-key), and streaming format.
+//   - "mock"      → MockProvider — deterministic scripted responses for tests/demos.
 //   - default     → OpenAIProvider  — any unrecognized name falls back to
 //        OpenAI-compatible, since most providers (Groq, Together, Fireworks, etc.)
 //        share this protocol.
@@ -33,11 +34,13 @@
 //	})
 package llm
 
+import "github.com/anmingwei/multi-agent-platform/internal/config"
+
 // ProviderConfig holds the configuration parameters for creating a Provider instance.
 // It mirrors the fields needed by all provider constructors, providing a uniform
 // interface regardless of the underlying provider type.
 type ProviderConfig struct {
-	// Name is the provider identifier ("openai", "deepseek", "anthropic", etc.)
+	// Name is the provider identifier ("openai", "deepseek", "anthropic", "mock", etc.)
 	Name string
 
 	// Endpoint is the API base URL (e.g., "https://api.openai.com/v1")
@@ -48,6 +51,12 @@ type ProviderConfig struct {
 
 	// Model is the default model name for this provider (e.g., "deepseek-v4-flash")
 	Model string
+
+	// CaseID is an optional hint used by MockProvider to select a mock script.
+	CaseID string
+
+	// MockStore is the optional mock script store for creating MockProvider.
+	MockStore MockScriptStore
 }
 
 // NewProvider creates a Provider instance based on the provider name in cfg.
@@ -56,11 +65,20 @@ type ProviderConfig struct {
 //   - "openai"   → OpenAIProvider (OpenAI-compatible API)
 //   - "deepseek" → OpenAIProvider (DeepSeek's API is OpenAI-compatible)
 //   - "anthropic" → AnthropicProvider (Claude Messages API, Phase 6)
+//   - "mock"   → MockProvider (deterministic scripted responses)
 //   - anything else → OpenAIProvider (safe fallback for OpenAI-compatible providers)
 //
 // Returns an error only if the provider name is recognized but the underlying
 // constructor fails (e.g., missing API key).
 func NewProvider(cfg ProviderConfig) (Provider, error) {
+	if cfg.Name == "mock" {
+		model := cfg.Model
+		if model == "" {
+			model = "mock/" + cfg.CaseID
+		}
+		return NewMockProvider(model, cfg.MockStore, BuiltinMockScripts()), nil
+	}
+
 	switch cfg.Name {
 	case "openai":
 		// OpenAIProvider directly implements OpenAI's Chat Completions API.
@@ -85,4 +103,53 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 		// This allows the system to work with new providers without code changes.
 		return NewOpenAIProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 	}
+}
+
+// CreateProviderFromConfig creates a Provider from the global configuration,
+// selecting MockProvider or a real provider based on cfg.ShouldMock.
+//
+// If mock mode is selected, the provider name is "mock" with Model set to
+// "mock/<caseID>" so cost/metrics pipelines can identify mock calls.
+//
+// For real providers, it looks up modelName in cfg.Models. If no matching model
+// configuration is found, it falls back to cfg.LLMEndpoint and cfg.LLMModel as
+// an OpenAI-compatible provider.
+func CreateProviderFromConfig(cfg *config.Config, modelName string, caseID string) (Provider, error) {
+	if cfg.ShouldMock(caseID, "") {
+		return NewProvider(ProviderConfig{
+			Name:      "mock",
+			Model:     "mock/" + caseID,
+			CaseID:    caseID,
+			MockStore: DefaultMockStore,
+		})
+	}
+
+	// Find model configuration by name; fallback to default fields.
+	var mc config.ModelConfig
+	found := false
+	for _, m := range cfg.Models {
+		if m.Name == modelName {
+			mc = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		mc = config.ModelConfig{
+			Name:     cfg.LLMModel,
+			Provider: "openai",
+			Endpoint: cfg.LLMEndpoint,
+			APIKey:   cfg.LLMAPIKey,
+		}
+	}
+	if mc.Provider == "" {
+		mc.Provider = "openai"
+	}
+
+	return NewProvider(ProviderConfig{
+		Name:     mc.Provider,
+		Endpoint: mc.Endpoint,
+		APIKey:   mc.APIKey,
+		Model:    mc.Name,
+	})
 }

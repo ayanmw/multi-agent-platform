@@ -22,6 +22,14 @@ type Config struct {
 	ServerPort    string
 	ProviderDefault string           // default provider name for multi-model routing
 	Models        []ModelConfig     // multi-model configuration list
+
+	// LLM mock switch: global default, per-case real outliers, and endpoint/hint overrides.
+	// Used to route LLM calls to MockProvider instead of real providers during testing/demo.
+	// LLMUseMock defaults to true so new deployments run in deterministic mock mode unless
+	// explicitly configured otherwise (or the case is listed in LLMRealCases).
+	LLMUseMock      bool     // global default: true → mock, false → real
+	LLMRealCases    []string // case IDs that always use real providers (comma-separated from LLM_REAL_CASES)
+	LLMMockEndpoints []string // case IDs or endpoint hints that always use mock (comma-separated from LLM_MOCK_ENDPOINTS)
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -40,6 +48,7 @@ func Load() (*Config, error) {
 		LLMModel:    "deepseek-v4-flash",
 		DBPath:      "data/app.db",
 		ServerPort:  "8080",
+		LLMUseMock:  true,
 	}
 
 	// Load .env file (lowest priority)
@@ -63,6 +72,15 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("SERVER_PORT"); v != "" {
 		cfg.ServerPort = v
+	}
+	if v := os.Getenv("LLM_USE_MOCK"); v != "" {
+		cfg.LLMUseMock = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("LLM_REAL_CASES"); v != "" {
+		cfg.LLMRealCases = splitAndTrim(v)
+	}
+	if v := os.Getenv("LLM_MOCK_ENDPOINTS"); v != "" {
+		cfg.LLMMockEndpoints = splitAndTrim(v)
 	}
 
 	// Load multi-model configuration
@@ -100,6 +118,46 @@ func loadEnvFile(path string) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// splitAndTrim splits a comma-separated string and trims whitespace from each element.
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// ShouldMock decides whether a request for the given case/endpoint should be routed
+// to MockProvider based on the three-layer mock switch.
+//
+// Priority (highest first):
+//  1) LLMMockEndpoints contains caseID or endpointHint → force mock
+//  2) LLMRealCases contains caseID → force real
+//  3) LLMUseMock == true → mock
+//  4) otherwise → real
+func (cfg *Config) ShouldMock(caseID string, endpointHint string) bool {
+	contains := func(list []string, value string) bool {
+		for _, item := range list {
+			if strings.EqualFold(item, value) && value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if contains(cfg.LLMMockEndpoints, caseID) || contains(cfg.LLMMockEndpoints, endpointHint) {
+		return true
+	}
+	if contains(cfg.LLMRealCases, caseID) {
+		return false
+	}
+	return cfg.LLMUseMock
 }
 
 // GetAgentConfig loads an agent's configuration from the database

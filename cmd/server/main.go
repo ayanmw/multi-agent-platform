@@ -146,6 +146,35 @@ func main() {
 	// Initialize persistence adapter
 	persist := &DBPersistence{}
 
+	// Phase mock: Initialize mock script store and load built-in scripts.
+	// The in-memory store is always available; if DB is initialized, also create
+	// a SQLite-backed store and load dynamic scripts into the default store so
+	// both management API and MockProvider share the same scripts.
+	mockStore := llm.DefaultMockStore
+	if db.DB != nil {
+		sqliteMockStore := llm.NewSqliteMockScriptStore(db.DB)
+		if err := sqliteMockStore.LoadBuiltin(llm.BuiltinMockScripts()); err != nil {
+			observability.DefaultLogger.Warn("mock", "failed to seed builtin mock scripts into sqlite", map[string]any{"error": err.Error()})
+		}
+		dynamicScripts, err := sqliteMockStore.List()
+		if err != nil {
+			observability.DefaultLogger.Warn("mock", "failed to load dynamic mock scripts", map[string]any{"error": err.Error()})
+		} else {
+			if err := mockStore.LoadBuiltin(dynamicScripts); err != nil {
+				observability.DefaultLogger.Warn("mock", "failed to load dynamic scripts into default store", map[string]any{"error": err.Error()})
+			}
+		}
+	} else {
+		if err := mockStore.LoadBuiltin(llm.BuiltinMockScripts()); err != nil {
+			observability.DefaultLogger.Warn("mock", "failed to load builtin mock scripts", map[string]any{"error": err.Error()})
+		}
+	}
+	observability.DefaultLogger.Info("mock", "mock provider initialized", map[string]any{
+		"use_mock":       cfg.LLMUseMock,
+		"real_cases":     cfg.LLMRealCases,
+		"mock_endpoints": cfg.LLMMockEndpoints,
+	})
+
 	// Phase 6-D: Initialize model registry with default profiles for cost tracking
 	// and future multi-provider routing. The registry is used by the CostTracker
 	// to resolve tier/pricing information when building CostRecords.
@@ -357,7 +386,7 @@ func main() {
 			}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, costRepo, modelRegistry)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -463,6 +492,12 @@ func main() {
 	if authStore != nil {
 		authAPI.RegisterRoutes(http.DefaultServeMux)
 	}
+
+	// Mock script management API (Phase 6 mock provider).
+	// RegisterMockRoutes is called after the mock store is initialized above
+	// (see the "Phase mock" block). The store is shared between the management
+	// API and the MockProvider via llm.DefaultMockStore.
+	RegisterMockRoutes(http.DefaultServeMux, mockStore, llm.BuiltinMockScripts())
 
 	// Version API: returns the current version from version.txt
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
@@ -714,7 +749,7 @@ func main() {
 	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
 	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
 	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
-	log.Printf("LLM:         %s (%s)", cfg.LLMEndpoint, cfg.LLMModel)
+	log.Printf("LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
 	log.Printf("Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
 	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
 	log.Printf("========================================")
@@ -730,15 +765,19 @@ func main() {
 
 // runAgentLoop executes the full ReAct loop for a chat request.
 // It is a convenience wrapper around runAgentLoopWithTurn for the initial (root) turn.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", costRepo, modelRegistry)
+// caseID is used by MockProvider for deterministic script matching; it is ignored
+// when LLM_USE_MOCK is false or when the request does not target a preset case.
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
 // multi-turn session. It accepts turnIndex and parentTaskID to support subsequent
 // turns in a conversation (turnIndex >= 0). The root task binding is only done
 // when turnIndex == 0 (first turn).
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+// caseID is an optional hint for the MockProvider to select a mock script by
+// exact case match; when empty the provider falls back to keyword matching.
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
 	isRoot := turnIndex == 0
 
 	// Persist task creation
@@ -758,6 +797,17 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 				log.Printf("[runAgentLoopWithTurn] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
 			}
 		}
+	}
+
+	// Resolve the LLM Provider from mock/global configuration. The provider is
+	// created once per agent loop and passed to the Engine so that the mock
+	// switch (LLM_USE_MOCK / LLMRealCases / LLMMockEndpoints) is honored.
+	// Errors are logged and fall back to nil; the Engine will then create a
+	// default OpenAIProvider from Endpoint/APIKey/Model.
+	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	if err != nil {
+		log.Printf("[runAgentLoopWithTurn] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
+		provider = nil
 	}
 
 	// Build Harness policy gate with all safety rules:
@@ -831,6 +881,8 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		Model:             cfg.LLMModel,
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,
+		Provider:          provider, // mock or real provider resolved above
+		CaseID:            caseID,   // hint for MockProvider script matching
 		Temperature:       0.7,
 		MaxTokens:         4096,
 		MaxSteps:          contract.MaxSteps,
@@ -1024,6 +1076,20 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 	contract := harness.DefaultContract("resume")
 	contract.MaxSteps = cp.StepIdx + 10 // allow 10 more steps
 
+	// Recover case ID from checkpoint if available in the engine config (the
+	// engine's own caseID is not persisted separately, so keyword fallback is
+	// used when no case metadata is present).
+	caseID := ""
+
+	// Resolve the LLM Provider from mock/global configuration for recovery.
+	// Errors are logged and fall back to nil; the Engine will create a default
+	// OpenAIProvider from Endpoint/APIKey/Model.
+	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	if err != nil {
+		log.Printf("[handleRecoverCheckpoint] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
+		provider = nil
+	}
+
 	progressManager := harness.NewProgressManager()
 	tokenBudgetRule := &harness.TokenBudgetRule{}
 	policyChain := harness.NewPolicyChain(
@@ -1042,6 +1108,8 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 		Model:             cfg.LLMModel,
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,
+		Provider:          provider, // mock or real provider resolved above
+		CaseID:            caseID,   // hint for MockProvider script matching
 		Temperature:       0.7,
 		MaxTokens:         4096,
 		MaxSteps:          contract.MaxSteps,

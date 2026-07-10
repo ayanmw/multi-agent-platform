@@ -45,6 +45,7 @@ import (
 
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -210,12 +211,25 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 		model = o.cfg.LLMModel
 	}
 
+	// Resolve the LLM Provider from mock/global configuration. The provider is
+	// created once per agent and passed to the Engine so that the mock switch
+	// (LLM_USE_MOCK / LLMRealCases / LLMMockEndpoints) is honored.
+	// Errors are logged and fall back to nil; the Engine will create a default
+	// OpenAIProvider from Endpoint/APIKey/Model.
+	provider, err := llm.CreateProviderFromConfig(o.cfg, model, "")
+	if err != nil {
+		log.Printf("[Orchestrator] Failed to create provider for agent=%s (falling back to default): %v", spec.AgentID, err)
+		provider = nil
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:          spec.AgentID,
 		SystemPrompt:     spec.SystemPrompt,
 		Model:            model,
 		Endpoint:         o.cfg.LLMEndpoint,
 		APIKey:           o.cfg.LLMAPIKey,
+		Provider:         provider, // mock or real provider resolved above
+		CaseID:           "",       // orchestrator specs do not carry case IDs yet
 		Temperature:      0.7,
 		MaxTokens:        4096,
 		MaxSteps:         contract.MaxSteps,

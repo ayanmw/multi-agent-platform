@@ -99,6 +99,9 @@ type ChatRequest struct {
 	Temperature float32   `json:"temperature"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream"`
+	// CaseID is an optional hint used by MockProvider to select a mock script.
+	// It is ignored by real LLM providers.
+	CaseID string `json:"-"`
 	// Context carries the caller's cancellation and timeout signals.
 	// Providers use it to cancel in-flight HTTP requests. If nil,
 	// providers fall back to their default timeout.

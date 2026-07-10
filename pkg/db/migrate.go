@@ -187,6 +187,24 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
 		CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);`,
 	},
+
+	// v13: Create mock_scripts table for deterministic LLM mock responses.
+	// Mock scripts store case-specific response sequences and optional input
+	// keyword matching rules for LLM testing without calling real providers.
+	{
+		Version:     13,
+		Description: "Create mock_scripts table for LLM mock response sequences",
+		SQL: `CREATE TABLE IF NOT EXISTS mock_scripts (
+			id TEXT PRIMARY KEY,
+			case_id TEXT,
+			priority INTEGER DEFAULT 0,
+			match_input TEXT,
+			responses TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_mock_scripts_case_id ON mock_scripts(case_id);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
