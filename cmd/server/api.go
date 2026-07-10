@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,28 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	if childTasks == nil {
 		childTasks = []db.TaskRecord{}
 	}
+
+	// For multi-agent root tasks, merge steps from child sub-tasks so the
+	// root task detail view shows the complete execution history of all agents.
+	stepIDs := make(map[string]bool)
+	for _, s := range steps {
+		stepIDs[s.ID] = true
+	}
+	for _, ct := range childTasks {
+		childSteps, cErr := db.QueryStepsByTask(ct.ID)
+		if cErr != nil {
+			log.Printf("[API] GET /api/tasks?id=%s: child steps query error for %s: %v", taskID, ct.ID, cErr)
+			continue
+		}
+		for _, cs := range childSteps {
+			if !stepIDs[cs.ID] {
+				steps = append(steps, cs)
+				stepIDs[cs.ID] = true
+			}
+		}
+	}
+	// Sort merged steps by step_index for coherent ordering
+	sort.SliceStable(steps, func(i, j int) bool { return steps[i].StepIndex < steps[j].StepIndex })
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
