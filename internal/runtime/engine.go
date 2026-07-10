@@ -596,6 +596,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		// llm_delta event, creating a typewriter effect in the UI.
 		content, usage, toolCalls, err := e.think(ctx)
 		if err != nil {
+			// Distinguish cancellation from genuine LLM errors. If the context was
+			// cancelled (e.g. user clicked stop) the loop header has already emitted
+			// the cancelled reason; just return without overwriting it as llm_error.
+			select {
+			case <-ctx.Done():
+				return "", e.totalTokens, ctx.Err()
+			default:
+			}
 			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "llm_error",
 				"error":  err.Error(),

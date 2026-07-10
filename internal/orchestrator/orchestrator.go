@@ -143,7 +143,11 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 
 // RunBlocking launches all agents concurrently and blocks until they all complete.
 // Returns a slice of results, one per agent. The order matches the input specs.
-func (o *Orchestrator) RunBlocking(ctx context.Context, taskID string, specs []AgentSpec) []AgentResult {
+//
+// The rootTaskID is passed through to each agent so child tasks can set their
+// parent_task_id to the root task. This is the hook used by the persistence
+// layer to build the child_tasks tree.
+func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
 	var wg sync.WaitGroup
 
@@ -151,25 +155,64 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, taskID string, specs []A
 		wg.Add(1)
 		go func(idx int, s AgentSpec) {
 			defer wg.Done()
-			results[idx] = o.runAgent(ctx, taskID, s)
+			results[idx] = o.runAgent(ctx, rootTaskID, s)
 		}(i, spec)
 	}
 
 	wg.Wait()
+
+	// Once all child agents finish, derive and persist the root task terminal
+	// status. The root task itself has no engine loop; its status reflects the
+	// overall outcome of the orchestration so /api/tasks?id=root stops showing
+	// "running" and can be polled to completion.
+	rootStatus := "completed"
+	var rootResult string
+	var rootTokens int
+	for _, r := range results {
+		rootTokens += r.TotalTokens
+		if r.Status != "completed" {
+			rootStatus = "failed"
+		}
+	}
+	if rootStatus == "failed" {
+		rootResult = "one or more child agents failed"
+	} else {
+		rootResult = "all agents completed"
+	}
+	if o.persist != nil {
+		if err := o.persist.UpdateTask(rootTaskID, rootStatus, rootResult, rootTokens); err != nil {
+			log.Printf("[Orchestrator] Failed to update root task %s status: %v", rootTaskID, err)
+		}
+	}
+	if status := rootStatus; status == "completed" {
+		o.hub.SendEvent(event.NewEvent("task_completed", rootTaskID, "orchestrator", 0, map[string]any{
+			"result":       rootResult,
+			"total_tokens": rootTokens,
+		}))
+	} else {
+		o.hub.SendEvent(event.NewEvent("task_failed", rootTaskID, "orchestrator", 0, map[string]any{
+			"reason":       rootResult,
+			"total_tokens": rootTokens,
+		}))
+	}
+
 	return results
 }
 
 // RunWithCallback launches agents concurrently and calls onResult for each agent
 // as it completes. This allows the caller to process results as they arrive
 // without waiting for all agents to finish.
-func (o *Orchestrator) RunWithCallback(ctx context.Context, taskID string, specs []AgentSpec, onResult func(AgentResult)) {
+//
+// The rootTaskID is passed through to each agent so child tasks can set their
+// parent_task_id to the root task.
+func (o *Orchestrator) RunWithCallback(ctx context.Context, rootTaskID string, specs []AgentSpec, onResult func(AgentResult)) {
 	var wg sync.WaitGroup
 
 	for _, spec := range specs {
 		wg.Add(1)
 		go func(s AgentSpec) {
 			defer wg.Done()
-			result := o.runAgent(ctx, taskID, s)
+			result := o.runAgent(ctx, rootTaskID, s)
 			onResult(result)
 		}(spec)
 	}
@@ -179,7 +222,12 @@ func (o *Orchestrator) RunWithCallback(ctx context.Context, taskID string, specs
 
 // runAgent launches a single agent and returns its result.
 // This is the core method that creates and runs an Engine for a single agent spec.
-func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSpec) AgentResult {
+//
+// rootTaskID is the parent/root task under which this agent is running. The agent's
+// own sub-task ID is derived as rootTaskID + "_" + spec.AgentID. We persist both the
+// task row and its meta row so parent_task_id points back to the root task, making
+// it discoverable via QueryChildTasks(rootTaskID).
+func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec AgentSpec) AgentResult {
 	start := time.Now()
 
 	// Build the agent's contract
@@ -222,6 +270,15 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 		provider = nil
 	}
 
+	// Derive the sub-task ID for this agent and look up the session ID so we
+	// can persist the parent relationship. The session ID is required by
+	// SaveTaskMeta; we read it from the root task record via QueryTaskByID.
+	subTaskID := rootTaskID + "_" + spec.AgentID
+	var sessionID string
+	if o.persist != nil {
+		sessionID = o.persist.QueryTaskSessionID(rootTaskID)
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:          spec.AgentID,
 		SystemPrompt:     spec.SystemPrompt,
@@ -240,10 +297,10 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 		WorkingMemory:    spec.WorkingMemory, // Phase 6: 工作记忆注入
 		AgentBus:         o.agentBus,         // Phase 5: 多Agent通信
 		CheckpointManager: o.checkpointMgr,   // Phase 5: 崩溃恢复
-	}, o.tools, &hubAdapter{hub: o.hub}, taskID)
+	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Emit agent_started event for the orchestrator to track
-	o.hub.SendEvent(event.NewEvent("agent_ready", taskID, spec.AgentID, 0, map[string]any{
+	o.hub.SendEvent(event.NewEvent("agent_ready", subTaskID, spec.AgentID, 0, map[string]any{
 		"agent_name":    spec.Name,
 		"model":         model,
 		"max_steps":     contract.MaxSteps,
@@ -251,9 +308,15 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 		"allowed_tools": spec.AllowedTools,
 	}))
 
-	// Persist task creation for this agent
+	// Persist task creation for this agent: create the child task row first,
+	// then set its meta so parent_task_id points back to the root task. This is
+	// what makes QueryChildTasks(rootTaskID) return the child task.
 	if o.persist != nil {
-		o.persist.SaveTask(taskID+"_"+spec.AgentID, spec.Input, []string{spec.AgentID})
+		if err := o.persist.SaveTask(subTaskID, spec.Input, []string{spec.AgentID}); err != nil {
+			log.Printf("[Orchestrator] Failed to save child task %s: %v", subTaskID, err)
+		} else if err := o.persist.SaveTaskMeta(subTaskID, sessionID, rootTaskID, false); err != nil {
+			log.Printf("[Orchestrator] Failed to bind child task %s to root %s: %v", subTaskID, rootTaskID, err)
+		}
 	}
 
 	// Run the engine
@@ -263,12 +326,17 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 
 	if err != nil {
 		log.Printf("[Orchestrator] Agent %s (%s) failed: %v", spec.AgentID, spec.Name, err)
-		o.hub.SendEvent(event.NewEvent("task_failed", taskID, spec.AgentID, 0, map[string]any{
+		o.hub.SendEvent(event.NewEvent("task_failed", subTaskID, spec.AgentID, 0, map[string]any{
 			"reason":       err.Error(),
 			"agent_name":   spec.Name,
 			"total_tokens": totalTokens,
 			"duration_ms":  duration,
 		}))
+		if o.persist != nil {
+			if uerr := o.persist.UpdateTask(subTaskID, "failed", result, totalTokens); uerr != nil {
+				log.Printf("[Orchestrator] Failed to update child task %s status: %v", subTaskID, uerr)
+			}
+		}
 		return AgentResult{
 			AgentID:     spec.AgentID,
 			Name:        spec.Name,
@@ -283,7 +351,15 @@ func (o *Orchestrator) runAgent(ctx context.Context, taskID string, spec AgentSp
 	log.Printf("[Orchestrator] Agent %s (%s) completed: %d tokens, %dms",
 		spec.AgentID, spec.Name, totalTokens, duration)
 
-	o.hub.SendEvent(event.NewEvent("task_completed", taskID, spec.AgentID, 0, map[string]any{
+	// Persist the child task terminal status so QueryTaskByID on subTaskID
+	// reflects completed/failed for playback and debugging.
+	if o.persist != nil {
+		if err := o.persist.UpdateTask(subTaskID, "completed", result, totalTokens); err != nil {
+			log.Printf("[Orchestrator] Failed to update child task %s status: %v", subTaskID, err)
+		}
+	}
+
+	o.hub.SendEvent(event.NewEvent("task_completed", subTaskID, spec.AgentID, 0, map[string]any{
 		"result":       result,
 		"agent_name":   spec.Name,
 		"total_tokens": totalTokens,

@@ -91,6 +91,11 @@ func BuiltinMockScripts() []MockScript {
 			MatchInput: []string{"long", "many", "multiple", "steps"},
 			Responses: []MockResponse{
 				{
+					Type:    MockResponseText,
+					Content: "Starting long task setup. First, I will create the directory structure.",
+					DelayMs: 200,
+				},
+				{
 					Type: MockResponseToolCall,
 					ToolCalls: []ToolCall{
 						{
@@ -103,6 +108,7 @@ func BuiltinMockScripts() []MockScript {
 							},
 						},
 					},
+					DelayMs: 200,
 				},
 				{
 					Type: MockResponseToolCall,
@@ -117,10 +123,12 @@ func BuiltinMockScripts() []MockScript {
 							},
 						},
 					},
+					DelayMs: 200,
 				},
 				{
 					Type:    MockResponseText,
 					Content: "Long task finished. Steps executed: long_task_step1, long_task_step2. Final summary delivered.",
+					DelayMs: 200,
 				},
 			},
 		},

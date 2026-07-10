@@ -8,6 +8,11 @@ type Persistence interface {
 	UpdateTask(taskID string, status string, finalResult string, totalTokens int) error
 	SaveStep(step StepRecord) error
 	SaveConversation(conv ConversationRecord) error
+	// QueryTaskSessionID returns the session_id for a task, or empty string if
+	// the task is not known or persistence is unavailable. It is a read-only
+	// helper used by orchestration layers that only hold a root task ID and
+	// need to propagate the session ID to child tasks.
+	QueryTaskSessionID(taskID string) string
 }
 
 // StepRecord is a step to be persisted

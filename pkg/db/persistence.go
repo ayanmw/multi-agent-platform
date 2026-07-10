@@ -73,13 +73,31 @@ type AgentRecord struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
-// InsertTask creates a new task record
+// InsertTask persists a task record. If a task with the same ID already exists,
+// it updates the mutable fields (agent_ids, user_input, status, started_at) so
+// that callers can safely re-save a root task after its real agent list is known.
+// This is intentionally idempotent: it keeps the existing row and only mutates
+// the fields passed in the record.
 func InsertTask(t TaskRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	agentIDsJSON, _ := json.Marshal(t.AgentIDs)
-	_, err := DB.Exec(
+
+	// Try to update an existing row first. This avoids DELETE+INSERT side effects
+	// (rowid churn, foreign-key ON DELETE behavior) that INSERT OR REPLACE has.
+	res, err := DB.Exec(
+		`UPDATE tasks SET agent_ids=?, user_input=?, status=?, started_at=? WHERE id=?`,
+		string(agentIDsJSON), t.UserInput, t.Status, t.StartedAt, t.ID,
+	)
+	if err == nil {
+		if rows, _ := res.RowsAffected(); rows > 0 {
+			return nil
+		}
+	}
+
+	// No existing row: create a new one.
+	_, err = DB.Exec(
 		`INSERT INTO tasks (id, user_input, status, agent_ids, started_at, session_id, parent_task_id, is_root)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.UserInput, t.Status, string(agentIDsJSON), t.StartedAt, t.SessionID, t.ParentTaskID, t.IsRoot,

@@ -28,6 +28,24 @@ func Init(dataPath string) error {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// modernc.org/sqlite推荐使用单一连接模型，避免并发写导致的BUSY/LOCKED错误。
+	// 设置MaxOpenConns(1)让所有数据库操作串行化，配合WAL和busy_timeout进一步提升并发容忍度。
+	DB.SetMaxOpenConns(1)
+
+	// 配置SQLite并发写行为：5秒busy_timeout + WAL日志
+	// 注意：foreign_keys 不在此处全局开启，因为历史代码（包括 tests 和 orchestrator）
+	// 在插入 task 前并不总是保证 session 已存在，开启 FK 会导致这些路径失败。
+	// 外键一致性由应用层保证；如需强制 FK，应在已知 session 存在的特定事务内开启。
+	pragmas := []string{
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA journal_mode = WAL",
+	}
+	for _, pragma := range pragmas {
+		if _, err := DB.Exec(pragma); err != nil {
+			return fmt.Errorf("failed to execute %s: %w", pragma, err)
+		}
+	}
+
 	if err := createTables(); err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}

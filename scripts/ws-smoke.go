@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -294,12 +295,12 @@ func runScenario(caseID string, body map[string]any, timeout time.Duration, isCa
 // runCancelTest 测试 cancel 控制消息:
 // 1. 连接 WS
 // 2. POST long-task 任务
-// 3. 立即发送 cancel 控制消息
+// 3. 等待收到首个 step_started 后再发送 cancel，确保 cancelRegistry 已注册
 // 4. 读取事件，验证任务是否被取消
 func runCancelTest() scenarioResult {
 	result := scenarioResult{name: "cancel-test"}
 
-	// 连接 WS
+	// 连接 WebSocket
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		result.failReasons = append(result.failReasons, "WS 连接失败: "+err.Error())
@@ -331,20 +332,21 @@ func runCancelTest() scenarioResult {
 	result.taskID = taskResp.TaskID
 	fmt.Printf("  POST /api/tasks?case=long-task → task_id=%s\n", taskResp.TaskID)
 
-	// 立即发送 cancel 控制消息
-	// 格式参考 ws.ClientControlMsg: {action, task_id, agent_id}
+	// 等待收到首个 step_started 事件，确保 runAgentLoopWithTurn 已经把 cancel 函数
+	// 注册到 cancelRegistry 中，然后再发送 cancel，避免在 goroutine 启动前 cancel。
 	cancelMsg := map[string]any{
 		"action":   "cancel",
 		"task_id":  taskResp.TaskID,
 		"agent_id": taskResp.AgentID,
 	}
 	cancelJSON, _ := json.Marshal(cancelMsg)
-	fmt.Printf("  发送 cancel 控制消息: %s\n", string(cancelJSON))
-	if err := conn.WriteMessage(websocket.TextMessage, cancelJSON); err != nil {
-		result.failReasons = append(result.failReasons, "发送 cancel 失败: "+err.Error())
-		result.pass = false
-		return result
-	}
+
+	sendCancelOnce := sync.OnceFunc(func() {
+		fmt.Printf("  发送 cancel 控制消息: %s\n", string(cancelJSON))
+		if err := conn.WriteMessage(websocket.TextMessage, cancelJSON); err != nil {
+			result.failReasons = append(result.failReasons, "发送 cancel 失败: "+err.Error())
+		}
+	})
 
 	// 再发一条 pause (测试多个控制消息)
 	pauseMsg, _ := json.Marshal(map[string]any{
@@ -352,11 +354,15 @@ func runCancelTest() scenarioResult {
 		"task_id":  taskResp.TaskID,
 		"agent_id": taskResp.AgentID,
 	})
-	conn.WriteMessage(websocket.TextMessage, pauseMsg)
-	fmt.Printf("  发送 pause 控制消息: %s\n", string(pauseMsg))
 
 	// 读取事件
-	result.events = readEvents(conn, 15*time.Second)
+	result.events = readEventsWithCancel(conn, 20*time.Second, func(evt Event) {
+		if evt.Type == "step_started" {
+			sendCancelOnce()
+			fmt.Printf("  发送 pause 控制消息: %s\n", string(pauseMsg))
+			conn.WriteMessage(websocket.TextMessage, pauseMsg)
+		}
+	})
 	for _, evt := range result.events {
 		result.eventTypes = append(result.eventTypes, evt.Type)
 	}
@@ -376,6 +382,12 @@ func runCancelTest() scenarioResult {
 
 // readEvents 从 WS 读取事件，直到读到 task_completed/task_failed 或超时。
 func readEvents(conn *websocket.Conn, timeout time.Duration) []Event {
+	return readEventsWithCancel(conn, timeout, nil)
+}
+
+// readEventsWithCancel 从 WS 读取事件，每收到一个事件调用 onEvent，直到读到
+// task_completed/task_failed 或超时。
+func readEventsWithCancel(conn *websocket.Conn, timeout time.Duration, onEvent func(Event)) []Event {
 	events := []Event{}
 	evtCh := make(chan Event, 256)
 	errCh := make(chan error, 1)
@@ -401,6 +413,9 @@ func readEvents(conn *websocket.Conn, timeout time.Duration) []Event {
 		select {
 		case evt := <-evtCh:
 			events = append(events, evt)
+			if onEvent != nil {
+				onEvent(evt)
+			}
 			if evt.Type == "task_completed" || evt.Type == "task_failed" {
 				// 再读 500ms 捕获可能的 session_status 尾事件
 				grace := time.After(500 * time.Millisecond)

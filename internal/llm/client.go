@@ -254,6 +254,13 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 	}
 	defer resp.Body.Close()
 
+	// Derive context from request so cancellation checks can use it during
+	// SSE streaming. Fall back to a non-cancellable background context.
+	ctx := req.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", Usage{}, nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
@@ -271,6 +278,14 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
+		// Check for context cancellation between SSE chunks so a cancelled
+		// task stops quickly instead of continuing to read the full stream.
+		select {
+		case <-ctx.Done():
+			return "", usage, nil, ctx.Err()
+		default:
+		}
+
 		line := scanner.Text()
 
 		// SSE protocol: empty lines are heartbeat, ":" lines are comments

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/auth"
@@ -32,9 +33,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// cancelRegistry maps task_id to the context.CancelFunc for currently running
+// agent loops. WebSocket control messages can look up and invoke these
+// functions to cancel a task. Access is synchronized by sync.Map.
+var cancelRegistry sync.Map
+
 func main() {
 	port := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
+
+	// First, register the WebSocket control handler. It uses the package-level
+	// cancelRegistry so WebSocket control messages can cancel running tasks.
+	var _ = cancelRegistry
 
 	// Phase 6-D: Initialize structured logging level from configuration.
 	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(os.Getenv("LOG_LEVEL")))
@@ -53,7 +63,6 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// Initialize approval handler for Phase 5 Harness
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
 
 	observability.DefaultLogger.Info("server", "initializing subsystems", map[string]any{
@@ -70,7 +79,8 @@ func main() {
 			"agent_id":    msg.AgentID,
 			"approval_id": msg.ApprovalID,
 		})
-		// Phase 5: 路由审批决定到 ApprovalHandler
+
+		// Phase 5: route approval decisions to ApprovalHandler
 		switch msg.Action {
 		case "approve":
 			if msg.ApprovalID != "" {
@@ -80,8 +90,30 @@ func main() {
 			if msg.ApprovalID != "" {
 				approvalHandler.HandleDecision(msg.ApprovalID, false)
 			}
+		case "cancel":
+			if msg.TaskID == "" {
+				observability.DefaultLogger.Warn("control", "cancel received without task_id", nil)
+				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
+					"message": "cancel requires task_id",
+				}))
+				return
+			}
+			if cancelFn, ok := cancelRegistry.Load(msg.TaskID); ok {
+				observability.DefaultLogger.Info("control", "cancelling task", map[string]any{"task_id": msg.TaskID})
+				cancelFn.(context.CancelFunc)()
+			} else {
+				observability.DefaultLogger.Warn("control", "cancel received for unknown task", map[string]any{"task_id": msg.TaskID})
+			}
+		case "pause", "resume":
+			observability.DefaultLogger.Info("control", "not implemented control action", map[string]any{"action": msg.Action})
+			hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
+				"message":     msg.Action + " not implemented",
+				"action":      msg.Action,
+				"status_code": 501,
+			}))
+		default:
+			observability.DefaultLogger.Warn("control", "unknown control action", map[string]any{"action": msg.Action})
 		}
-		// TODO: Phase 4+ — implement actual engine control via context cancellation
 	})
 
 	// Initialize cost repository (SQLite if available, else in-memory fallback).
@@ -924,6 +956,12 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	// Register the task's cancel function so WebSocket control messages can
+	// cancel this task (root or child). Always remove it when the goroutine
+	// exits to avoid leaking entries in cancelRegistry.
+	cancelRegistry.Store(taskID, cancel)
+	defer cancelRegistry.Delete(taskID)
 
 	observability.DefaultMetrics.IncrTasksStarted()
 

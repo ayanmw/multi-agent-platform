@@ -33,7 +33,9 @@ func (p *DBPersistence) UpdateTask(taskID string, status string, finalResult str
 
 func (p *DBPersistence) SaveStep(s runtime.StepRecord) error {
 	return db.InsertStep(db.StepRecord{
-		ID:         fmt.Sprintf("step_%s_%d_%s", s.TaskID, s.StepIndex, s.Type),
+		ID:         fmt.Sprintf("step_%s_%s_%d_%s", s.TaskID, s.AgentID, s.StepIndex, s.Type),
+		// Step ID now includes agent_id so multiple agents sharing the same root
+		// task cannot collide. Each agent has its own step namespace.
 		TaskID:     s.TaskID,
 		AgentID:    s.AgentID,
 		StepIndex:  s.StepIndex,
@@ -53,6 +55,16 @@ func (p *DBPersistence) SaveConversation(c runtime.ConversationRecord) error {
 		fmt.Sprintf("conv_%s_%s_%d", c.TaskID, c.Role, time.Now().UnixNano()),
 		c.TaskID, c.Role, c.Content,
 	)
+}
+
+// QueryTaskSessionID returns the session_id for a task from SQLite.
+// Returns empty string if the task does not exist or the DB is unavailable.
+func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
+	t, err := db.QueryTaskByID(taskID)
+	if err != nil {
+		return ""
+	}
+	return t.SessionID
 }
 
 // resolveSession either uses an existing session ID or creates a new empty session.
