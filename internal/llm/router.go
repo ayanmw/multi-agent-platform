@@ -336,6 +336,20 @@ func (r *Router) meetsRequirements(m *ModelProfile, req *RouteRequest) bool {
 		}
 	}
 
+	// Check budget ceiling (USD per 1M tokens).
+	// BudgetUSD is compared against InputPrice as a conservative proxy for
+	// per-request cost — if the input price alone exceeds the budget, the model
+	// is rejected. Models with no price set (zero) are always accepted.
+	if req.BudgetUSD > 0 && m.InputPrice > 0 && m.InputPrice > req.BudgetUSD {
+		return false
+	}
+
+	// Check latency requirement.
+	// If the model's average latency exceeds the requested maximum, reject it.
+	if req.LatencyReq > 0 && m.AvgLatencyMs > int(req.LatencyReq.Milliseconds()) {
+		return false
+	}
+
 	return true
 }
 

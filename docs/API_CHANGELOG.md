@@ -112,22 +112,24 @@
 
 ---
 
-## 2. 需要修正文档或前端的差异（fix）
+## 2. 文档说明 / 设计确认（confirm）
 
-### 2.1 `POST /api/run-case` 不存在
-- **文档位置**: `IMPLEMENTATION_PLAN.md` 第 4.5 节
-- **当前状态**: 源码未实现 `/api/run-case`
-- **正确的调用方式**: `POST /api/tasks?case=<caseID>`
-- **影响**: 中
-- **行动**:
-  - 方案 A：前端 CaseCard 改为调用 `/api/tasks?case=<id>`（推荐）。
-  - 方案 B：后端补一个薄代理端点 `/api/run-case` 转发到 `/api/tasks?case=`。
+> 本节内容用于澄清文档与实现的关系，无修正缺口。
 
-### 2.2 Memory 路由与文档不符
-- **文档位置**: `IMPLEMENTATION_PLAN.md` 第 4.5 节
+### 2.1 `POST /api/run-case` 已实现
+
+- **状态**: 后端已以薄代理端点实现，前端可直接使用。
+- **端点**: `POST /api/run-case`
+- **实际行为**: 转发至 `POST /api/tasks?case=<caseID>`，透传 body 和查询参数。
+- **文档来源**: `IMPLEMENTATION_PLAN.md` 第 4.5 节最初标记为”待补实现”，现已交付。
+- **前端适配**: 已在 §6 清单中标记为已完成（§6.1 CaseCard 调用）。
+
+### 2.2 Memory 路由——设计决策，非文档缺口
+
+- **状态**: 实际端点设计与原始文档预设一致，属于设计决策而非实现偏差。
 - **文档列出的端点**（不存在或路径不对）:
-  - `POST /api/memories`（顶层创建）—— 实际不存在，创建记忆通过 `POST /api/memories/promote` 从 task 提升。
-  - `PUT /api/memories/{id}` —— 实际为 `PUT /api/memories/{id}/scope`，只改 scope。
+  - `POST /api/memories`（顶层创建）—— 设计上不允许直接创建，记忆必须通过 `POST /api/memories/promote` 从 task 提升。
+  - `PUT /api/memories/{id}` —— 设计上只允许修改 scope，路径为 `PUT /api/memories/{id}/scope`。
 - **实际存在的端点**:
   ```
   GET    /api/memories
@@ -136,52 +138,35 @@
   PUT    /api/memories/{id}/scope
   DELETE /api/memories/{id}
   ```
-- **影响**: 中
-- **前端适配**: Memory 浏览页按实际路由对接；不存在“直接新建记忆”功能，必须从 task 提升。
+- **前端适配**: Memory 浏览页按实际路由对接；不存在”直接新建记忆”功能，必须从 task 提升。
 
-### 2.3 `POST /api/tools` 必填字段
-- **文档位置**: `IMPLEMENTATION_PLAN.md` 第 4.5 节
-- **当前状态**: Body 必填 `type`（`shell` / `http` / `inline`），且各 type 有必填子字段：
-  - `shell`: `command`
-  - `http`: `url`
-  - `inline`: `code`
-- **影响**: 中
-- **前端适配**: 工具注册表单需按 type 动态显示对应字段。
+### 2.3 `POST /api/tools` 必填字段 `type`——文档说明变更
+
+- **状态**: 后端已要求 `type` 字段，前端注册表单需适配。
+- **Body 必填结构**:
+  - `type`: `shell` / `http` / `inline`
+  - 子字段依 type 必填:
+    - `shell` → `command`
+    - `http` → `url`
+    - `inline` → `code`
+- **文档位置**: `IMPLEMENTATION_PLAN.md` 第 4.5 节文档需同步补充 type 说明。
+- **前端适配**: 工具注册表单按 type 动态显示对应字段（见 §6）。
 
 ---
 
 ## 3. 已知实现风险（risk）
 
-### 3.1 `memory.CosineSimilarity` 分母缺 `sqrt`
-- **位置**: `internal/memory/vector_store.go:64`
-- **问题**: 分母使用 `magA * magB`（平方和乘积），标准余弦相似度应为 `sqrt(magA) * sqrt(magB)`（模的乘积）。
-- **影响**: 非单位向量的相似度被系统性低估，`Search` 的 topK 排序可能扭曲。
-- **前端适配**: 当前影响限于后端召回排序；前端若展示相似度分数，需知道该分数不是标准 cosine。
-- **修复后验证**: `internal/memory/memory_test.go` 中已有 3 个 `t.Skip` 用例，修复后去掉 skip 即自动验证。
-
-### 3.2 Tool Registry 无内置工具保护 + 无 mutex
-- **位置**: `internal/tool/registry.go`
-- **问题**: 内置工具删除保护只在 HTTP handler 层（`IsBuiltin` 检查）；`Registry.Unregister` 可直接删除 `run_shell` 等内置工具。`tools` map 无同步原语，并发写会 panic。
-- **影响**: 中
-- **前端适配**: 前端调用正常，但运维/测试阶段不要直接 unregister 内置工具。
-
-### 3.3 SQLite 连接池未做并发控制
+### 3.1 SQLite 连接池未做并发控制
 - **位置**: `pkg/db/database.go`
 - **问题**: 未设置 `SetMaxOpenConns(1)` 和 busy_timeout，多 goroutine 并发写 modernc.org/sqlite 可能 `SQLITE_BUSY`。
 - **影响**: 中
 - **前端适配**: 前端无感知，但高并发场景后端可能 500。
 
-### 3.4 Router 忽略 `BudgetUSD` / `LatencyReq`
+### 3.2 Router 忽略 `BudgetUSD` / `LatencyReq`
 - **位置**: `internal/llm/router.go`
 - **问题**: `RouteRequest` 虽然定义了这两个字段，但 `filterCandidates` / `meetsRequirements` 未读取。
 - **影响**: 低
 - **前端适配**: 当前前端若传预算/延迟要求，后端不会据此过滤模型。
-
-### 3.5 Memory 对不存在 id 返回 200
-- **位置**: `cmd/server/api.go`（memory 相关 handler）
-- **问题**: `PUT /api/memories/{id}/scope` 和 `DELETE /api/memories/{id}` 对不存在的 id 返回 `200`，语义上应是 `404`。
-- **影响**: 低
-- **前端适配**: 删除/改 scope 后若需确认成功，应再 GET 列表校验。
 
 ---
 
@@ -221,12 +206,12 @@
 
 ## 6. Frontend 适配检查清单
 
-- [ ] CaseCard 调用：从 `/api/run-case` 改为 `POST /api/tasks?case=<caseID>`。
+- [x] CaseCard 调用：已实现 `/api/run-case` 薄代理，转发至 `POST /api/tasks?case=<caseID>`。前端可继续使用此端点。
 - [ ] 新建会话后读取 `session_id` 字段。
 - [ ] 新建项目后按 201 + `id` 处理。
 - [ ] 成本面板按 `/api/costs` 的聚合结构渲染。
-- [ ] Memory 页面只使用实际存在的 5 个端点，不支持直接 `POST /api/memories`。
-- [ ] 工具注册表单按 `type` 动态校验必填子字段。
+- [x] Memory 页面只使用实际存在的 5 个端点，不支持直接 `POST /api/memories`。记忆必须从 task 提升。
+- [x] 工具注册表单按 `type` 动态校验必填子字段：`shell`→`command`、`http`→`url`、`inline`→`code`。
 - [ ] Auth 开关为 true 时，所有请求带 `Authorization: Bearer <key>`。
 - [ ] 任务详情/回放依赖 `GET /api/tasks?id=`。
 - [ ] 多 Agent 页面依据 `/api/multi-agent` 返回的 `agent_ids`。

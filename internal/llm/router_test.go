@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -743,16 +744,91 @@ func TestNewRouterNilArgs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Design note: BudgetUSD and LatencyReq are currently ignored by Select.
-// These fields exist on RouteRequest for future use but the current
-// filterCandidates / meetsRequirements do not consult them. The tests below
-// document this behavior so future changes are intentional.
+// BudgetUSD filtering
 // ---------------------------------------------------------------------------
 
-// TestSelectIgnoresBudgetUSD documents that BudgetUSD is not enforced in the
-// current Router. A model with non-zero prices is still selected when the
-// budget is set to zero.
-func TestSelectIgnoresBudgetUSD(t *testing.T) {
+// TestSelectFiltersByBudgetUSD verifies that a model whose InputPrice exceeds the
+// budget ceiling is excluded from candidate selection.
+func TestSelectFiltersByBudgetUSD(t *testing.T) {
+	// standard-m has InputPrice=1.0; budget=0.5 means it should be filtered out.
+	reg := newRegistryWith(
+		profileFor("expensive-m", TierStandard, nil, 8192, ""), // InputPrice=1.0
+	)
+	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+
+	_, err := r.Select(context.Background(), &RouteRequest{
+		UserInput: "x",
+		BudgetUSD: 0.5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no suitable model") {
+		t.Errorf("expected 'no suitable model' error when budget is too low, got: %v", err)
+	}
+}
+
+// TestSelectPassesByBudgetUSD verifies that a model within budget is still selected.
+func TestSelectPassesByBudgetUSD(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("cheap-m", TierEfficient, nil, 8192, ""), // InputPrice=1.0
+	)
+	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
+
+	dec, err := r.Select(context.Background(), &RouteRequest{
+		UserInput: "x",
+		BudgetUSD: 1.0, // exactly at the limit — InputPrice=1.0 is NOT > 1.0, so passes
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if dec.Primary == nil || dec.Primary.Name != "cheap-m" {
+		t.Errorf("Primary.Name = %v, want cheap-m (budget should allow it)", dec.Primary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LatencyReq filtering
+// ---------------------------------------------------------------------------
+
+// TestSelectFiltersByLatencyReq verifies that models whose AvgLatencyMs exceeds
+// the latency requirement are excluded from candidate selection.
+func TestSelectFiltersByLatencyReq(t *testing.T) {
+	// profileFor defaults to AvgLatencyMs=500. Set a 300ms ceiling to exclude it.
+	slowModel := profileFor("slow-m", TierStandard, nil, 8192, "")
+	slowModel.AvgLatencyMs = 500
+
+	reg := newRegistryWith(
+		slowModel,
+		profileFor("fast-m", TierEfficient, nil, 8192, ""), // AvgLatencyMs=500 default
+	)
+	// Make fast-m actually fast
+	for _, m := range reg.List() {
+		if m.Name == "fast-m" {
+			m.AvgLatencyMs = 200
+		}
+	}
+
+	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+
+	dec, err := r.Select(context.Background(), &RouteRequest{
+		UserInput:    "x",
+		LatencyReq:   250 * time.Millisecond,
+		PreferredTier: TierEfficient, // force tier so cheap-m is tried first
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if dec.Primary.Name != "fast-m" {
+		t.Errorf("Primary.Name = %q, want fast-m (slow-m filtered by latency)",
+			dec.Primary.Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Zero-value BudgetUSD / LatencyReq disables filtering (backward compat)
+// ---------------------------------------------------------------------------
+
+// TestSelectBudgetUSDZeroDisablesFiltering verifies that BudgetUSD=0 means no
+// budget filter is applied (existing behavior preserved).
+func TestSelectBudgetUSDZeroDisablesFiltering(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
@@ -760,12 +836,12 @@ func TestSelectIgnoresBudgetUSD(t *testing.T) {
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
-		BudgetUSD: 0.0001, // would be exceeded by the model's $1/$2 pricing
+		// BudgetUSD defaults to 0 — budget filter not applied
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if dec.Primary == nil {
-		t.Fatal("Primary is nil despite BudgetUSD — budget is not enforced (documented behavior)")
+	if dec.Primary == nil || dec.Primary.Name != "standard-m" {
+		t.Errorf("Primary.Name = %v, want standard-m (no budget filter)", dec.Primary)
 	}
 }
