@@ -339,6 +339,8 @@ func main() {
 
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				cancelRegistry.Store(taskID, cancel)
+				defer cancelRegistry.Delete(taskID)
 				defer cancel()
 				orch.RunBlocking(ctx, taskID, specs)
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
@@ -662,6 +664,8 @@ func main() {
 		// Launch agents concurrently
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			cancelRegistry.Store(taskID, cancel)
+			defer cancelRegistry.Delete(taskID)
 			defer cancel()
 			orch.RunBlocking(ctx, taskID, specs)
 			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))

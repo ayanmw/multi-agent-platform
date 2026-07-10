@@ -245,7 +245,8 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
-		tokenBudgetRule,
+		&harness.DangerousCommandRule{},
+			tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
