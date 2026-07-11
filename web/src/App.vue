@@ -99,6 +99,7 @@ const {
   createSession,
   setActiveSession,
   deleteSession,
+  refreshSession,
 } = useSessionStore()
 
 const { showAgentConfig, loadAgents, agents } = useAgentStore()
@@ -171,6 +172,17 @@ const showCaseModal = ref(false)
 const currentTask = computed(() => {
   if (!activeTaskId.value) return null
   return taskCache.value[activeTaskId.value] || null
+})
+
+/** Total tokens across all turns in the active session.
+ *  This is what the MetricsPanel header should show — the session-level cost,
+ *  not just the currently visible turn. */
+const sessionTotalTokens = computed(() => {
+  const sid = activeSession.value?.id
+  if (!sid) return 0
+  return Object.values(taskCache.value)
+    .filter(t => !t.sessionId || t.sessionId === sid)
+    .reduce((sum, t) => sum + (t.totalTokens || 0), 0)
 })
 
 /**
@@ -619,7 +631,7 @@ function handleProjectConfigBack() {
       </header>
 
       <!-- Metrics bar -->
-      <MetricsPanel :task="currentTask" :ws-status="wsStatus" :agents="agents" :selected-agent-id="selectedAgentId" :auto-approve="autoApprovePolicy" @update:selected-agent-id="(id: string) => selectedAgentId = id" @update:auto-approve="(v: boolean) => autoApprovePolicy = v" />
+      <MetricsPanel :task="currentTask" :session-total-tokens="sessionTotalTokens" :ws-status="wsStatus" :agents="agents" :selected-agent-id="selectedAgentId" :auto-approve="autoApprovePolicy" @update:selected-agent-id="(id: string) => selectedAgentId = id" @update:auto-approve="(v: boolean) => autoApprovePolicy = v" />
 
       <!-- Turn List (multi-turn conversation timeline) -->
       <TurnList

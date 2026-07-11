@@ -325,6 +325,10 @@ export function useTaskStore() {
         if (sid && newStatus) {
           updateSession(sid, { status: newStatus as SessionStatus })
         }
+        const totalTokens = (evt.data.total_tokens as number) ?? undefined
+        if (sid && totalTokens !== undefined) {
+          updateSession(sid, { totalTokens })
+        }
         break
       }
 

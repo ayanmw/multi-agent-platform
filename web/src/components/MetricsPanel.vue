@@ -1,6 +1,7 @@
 <!-- MetricsPanel — displays task-level metrics (token usage, step count, duration, token details)
      Props:
        task: the current TaskState from useTaskStore
+       sessionTotalTokens: total tokens for the whole session across all turns
        wsStatus: WebSocket connection status string
        agents: list of available agents (from useAgentStore)
        selectedAgentId: currently selected agent ID
@@ -20,6 +21,7 @@ import StatusIndicator from './StatusIndicator.vue'
 
 const props = defineProps<{
   task: TaskState | null
+  sessionTotalTokens: number
   wsStatus: string
   agents: AgentRecord[]
   selectedAgentId: string
@@ -240,30 +242,30 @@ const showTimeDetail = ref(false)
           @mouseleave="showTokenDetail = false"
         >
           <span class="metric-label">Tokens</span>
-          <span class="metric-value">{{ formatTokens(tokenUsage.totalTokens) }}</span>
+          <span class="metric-value">{{ formatTokens(sessionTotalTokens) }}</span>
 
           <!-- Token detail tooltip -->
           <Transition name="token-tooltip">
             <div v-if="showTokenDetail" class="token-tooltip">
               <div class="token-row">
-                <span class="token-key">Input</span>
-                <span class="token-val">{{ formatTokens(tokenUsage.promptTokens) }}</span>
+                <span class="token-key">Current Turn</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.totalTokens) }}</span>
               </div>
               <div class="token-row indent">
-                <span class="token-key sub">cache hit</span>
+                <span class="token-key sub">input</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.promptTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">output</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.completionTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">cache</span>
                 <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheHitTokens) }}</span>
               </div>
-              <div class="token-row indent">
-                <span class="token-key sub">cache miss</span>
-                <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheMissTokens) }}</span>
-              </div>
-              <div class="token-row">
-                <span class="token-key">Output</span>
-                <span class="token-val">{{ formatTokens(tokenUsage.completionTokens) }}</span>
-              </div>
               <div class="token-row total">
-                <span class="token-key">Total</span>
-                <span class="token-val">{{ formatTokens(tokenUsage.totalTokens) }}</span>
+                <span class="token-key">Session Total</span>
+                <span class="token-val">{{ formatTokens(sessionTotalTokens) }}</span>
               </div>
             </div>
           </Transition>

@@ -1010,11 +1010,16 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		observability.DefaultMetrics.IncrTasksFailed()
 		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
 		if sessionID != "" {
+			// 失败后同样聚合所有任务 token 并同步 session 状态，避免失败前
+			// 的 token 消耗在第二次刷新 UI 时消失。
+			aggregateTokens, _ := db.AggregateSessionTokens(sessionID)
+			db.UpdateSessionContextSize(sessionID, aggregateTokens, 0)
 			newStatus := deriveSessionStatus(sessionID)
 			db.UpdateSessionStatus(sessionID, newStatus)
 			hub.SendEvent(event.NewEvent("session_status", taskID, agentID, 0, map[string]any{
-				"session_id": sessionID,
-				"status":     newStatus,
+				"session_id":   sessionID,
+				"status":       newStatus,
+				"total_tokens": aggregateTokens,
 			}))
 		}
 		if result == "" {
@@ -1030,11 +1035,16 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	// 完成后递增 session.turn_count（多轮对话）
 	if sessionID != "" {
 		db.UpdateSessionTurnCount(sessionID)
+		// 聚合所有任务的累计 token，同步回 sessions.total_tokens，保证
+		// 侧边栏 token 显示和页面刷新后保持一致。
+		aggregateTokens, _ := db.AggregateSessionTokens(sessionID)
+		db.UpdateSessionContextSize(sessionID, aggregateTokens, 0)
 		newStatus := deriveSessionStatus(sessionID)
 		db.UpdateSessionStatus(sessionID, newStatus)
 		hub.SendEvent(event.NewEvent("session_status", taskID, agentID, 0, map[string]any{
-			"session_id": sessionID,
-			"status":     newStatus,
+			"session_id":   sessionID,
+			"status":       newStatus,
+			"total_tokens": aggregateTokens,
 		}))
 	}
 

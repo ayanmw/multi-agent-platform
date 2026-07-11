@@ -165,6 +165,40 @@ export function useSessionStore() {
     saveToStorage()
   }
 
+  /** Refresh a single session from the backend by id. */
+  async function refreshSession(sessionId: string) {
+    try {
+      const resp = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      if (!resp.ok) return
+      const data = (await resp.json()) as {
+        session: {
+          id: string
+          name: string
+          root_task_id: string
+          status: string
+          user_input: string
+          total_tokens: number
+          project_id: string
+          turn_count: number
+          created_at: string
+          updated_at: string
+        }
+      }
+      const s = data.session
+      updateSession(sessionId, {
+        name: s.name,
+        rootTaskId: s.root_task_id || null,
+        status: s.status as SessionStatus,
+        userInput: s.user_input || '',
+        totalTokens: s.total_tokens || 0,
+        projectId: s.project_id || 'default',
+        turnCount: s.turn_count || 0,
+      })
+    } catch (err) {
+      console.error('[useSessionStore] refreshSession failed:', err)
+    }
+  }
+
   return {
     sessions,
     activeSessionId,
@@ -174,6 +208,7 @@ export function useSessionStore() {
     setActiveSession,
     deleteSession,
     updateSession,
+    refreshSession,
   }
 }
 

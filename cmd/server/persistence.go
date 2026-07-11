@@ -114,29 +114,23 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 }
 
 // deriveSessionStatus computes the session status from all its tasks.
-// "running" if any task is running, otherwise derived from root task status,
-// falling back to "empty".
+// Returns the status of the latest task that has a meaningful (non-empty/idle) status,
+// falling back to "empty" if no task has one.
+// ORDER BY is_root DESC, started_at ASC puts root first, so the last element
+// with a non-empty/idle status is the latest meaningful task.
 func deriveSessionStatus(sessionID string) string {
 	tasks, err := db.QueryTasksBySession(sessionID)
 	if err != nil || len(tasks) == 0 {
 		return "empty"
 	}
-	hasRunning := false
+	var lastMeaningful string
 	for _, t := range tasks {
-		if t.Status == "running" {
-			hasRunning = true
+		if t.Status != "" && t.Status != "empty" {
+			lastMeaningful = t.Status
 		}
 	}
-	if hasRunning {
-		return "running"
-	}
-	for _, t := range tasks {
-		if t.IsRoot {
-			if t.Status == "" || t.Status == "empty" {
-				return "empty"
-			}
-			return t.Status
-		}
+	if lastMeaningful != "" {
+		return lastMeaningful
 	}
 	return "empty"
 }

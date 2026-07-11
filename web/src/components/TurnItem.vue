@@ -11,7 +11,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { TaskState } from '../types/events'
+import type { TaskState, TokenUsage } from '../types/events'
 import AgentTree from './AgentTree.vue'
 
 const props = defineProps<{
@@ -22,6 +22,7 @@ const props = defineProps<{
 }>()
 
 const expanded = ref(props.isDefaultExpanded)
+const showTokenDetail = ref(false)
 
 function toggle() {
   expanded.value = !expanded.value
@@ -60,6 +61,21 @@ function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
   return `${n}`
 }
+
+/** Prefer detailed tokenUsage breakdown; fall back to task.totalTokens. */
+const tokenUsage = computed<TokenUsage>(() => {
+  if (props.task.tokenUsage) {
+    return props.task.tokenUsage
+  }
+  const total = props.task.totalTokens || 0
+  return {
+    promptTokens: total,
+    promptCacheHitTokens: 0,
+    promptCacheMissTokens: total,
+    completionTokens: 0,
+    totalTokens: total,
+  }
+})
 </script>
 
 <template>
@@ -74,8 +90,37 @@ function formatTokens(n: number): string {
       </div>
       <div class="turn-meta">
         <span :class="['turn-status', statusLabel]">{{ statusLabel }}</span>
-        <span v-if="task.totalTokens > 0" class="turn-tokens">
-          {{ formatTokens(task.totalTokens) }} tokens
+        <span
+          v-if="tokenUsage.totalTokens > 0"
+          class="turn-tokens"
+          @mouseenter="showTokenDetail = true"
+          @mouseleave="showTokenDetail = false"
+        >
+          {{ formatTokens(tokenUsage.totalTokens) }} tokens
+          <Transition name="token-tooltip">
+            <div v-if="showTokenDetail" class="token-tooltip">
+              <div class="token-row">
+                <span class="token-key">Input</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.promptTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">cache hit</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheHitTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">cache miss</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheMissTokens) }}</span>
+              </div>
+              <div class="token-row">
+                <span class="token-key">Output</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.completionTokens) }}</span>
+              </div>
+              <div class="token-row total">
+                <span class="token-key">Total</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.totalTokens) }}</span>
+              </div>
+            </div>
+          </Transition>
         </span>
       </div>
     </div>
@@ -186,6 +231,70 @@ function formatTokens(n: number): string {
 .turn-tokens {
   font-size: 10px;
   color: #888;
+  cursor: help;
+  position: relative;
+}
+
+/* Token detail tooltip */
+.token-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 150px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.token-tooltip::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  right: 16px;
+  border: 6px solid transparent;
+  border-bottom-color: #444;
+}
+
+.token-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: #d4d4d4;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+
+.token-row.indent {
+  padding-left: 12px;
+}
+
+.token-row.total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #333;
+  font-weight: 600;
+}
+
+.token-key.sub,
+.token-val.sub {
+  color: #888;
+  font-size: 11px;
+}
+
+/* Token tooltip transition */
+.token-tooltip-enter-active,
+.token-tooltip-leave-active {
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.token-tooltip-enter-from,
+.token-tooltip-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .turn-body {

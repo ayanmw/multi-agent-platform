@@ -677,41 +677,47 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Persist the final step for audit trail.
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
-				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
+				Type: "think", Status: "completed", Content: content, TokenUsed: e.totalTokens,
 			})
 			e.saveConversation("assistant", content)
-			e.writeSessionMessage("assistant", content, "", "", usage.TotalTokens)
+			e.writeSessionMessage("assistant", content, "", "", e.totalTokens)
 
 			// Emit the final observation — the complete answer text along with
 			// token usage statistics. The frontend uses this to display the
 			// final answer and token cost summary.
 			e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"content":           content,
-				"total_tokens":      usage.TotalTokens,
-				"prompt_tokens":     usage.PromptTokens,
-				"completion_tokens": usage.CompletionTokens,
+				"content":                  content,
+				"total_tokens":             e.totalTokens,
+				"prompt_tokens":            e.tokenUsage.PromptTokens,
+				"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
+				"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
+				"completion_tokens":        e.tokenUsage.CompletionTokens,
 			}))
 
 			// Persist the final observation step for historical replay.
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 				Type: "observation", Status: "completed",
-				Content: content, TokenUsed: usage.TotalTokens,
+				Content: content, TokenUsed: e.totalTokens,
 			})
 
 			// Emit task_completed — this tells the frontend that the agent
-			// has finished successfully. The UI transitions from the "running"
-			// state to the "completed" state and shows the final result.
+			// has finished successfully. Include the cumulative token breakdown
+			// so the frontend can display accurate token metrics.
 			e.bus.SendEvent(event.NewEvent("task_completed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"result":       content,
-				"total_tokens": usage.TotalTokens,
-				"total_steps":  e.stepIdx,
+				"result":                    content,
+				"total_tokens":              e.totalTokens,
+				"total_steps":               e.stepIdx,
+				"prompt_tokens":             e.tokenUsage.PromptTokens,
+				"prompt_cache_hit_tokens":   e.tokenUsage.PromptCacheHitTokens,
+				"prompt_cache_miss_tokens":  e.tokenUsage.PromptCacheMissTokens,
+				"completion_tokens":         e.tokenUsage.CompletionTokens,
 			}))
 
-			// Persist the completed status. The task record now has the final
-			// result text and total token count for cost tracking.
-			e.updateTask("completed", content, usage.TotalTokens)
-			return content, usage.TotalTokens, nil
+			// Persist the completed status. Pass the cumulative total (e.totalTokens)
+			// so the DB record reflects the full cost across all ReAct turns.
+			e.updateTask("completed", content, e.totalTokens)
+			return content, e.totalTokens, nil
 		}
 
 		// =====================================================================
@@ -729,7 +735,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// what the LLM was thinking when it decided to call the tool.
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
-				Type: "think", Status: "completed", Content: content, TokenUsed: usage.TotalTokens,
+				Type: "think", Status: "completed", Content: content, TokenUsed: e.totalTokens,
 			})
 			e.saveConversation("assistant", content)
 			// Serialize tool calls to JSON for session_messages persistence.

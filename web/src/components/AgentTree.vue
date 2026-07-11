@@ -20,7 +20,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import type { AgentState, Step, ToolCallData } from '../types/events'
+import type { AgentState, Step, ToolCallData, TokenUsage } from '../types/events'
 import StatusIndicator from './StatusIndicator.vue'
 import TypeWriter from './TypeWriter.vue'
 
@@ -43,6 +43,7 @@ const props = defineProps<{
 
 /** Track which steps are expanded (by index) */
 const expandedSteps = ref<Set<number>>(new Set())
+const showTokenDetail = ref(false)
 
 /** Scroll container ref for auto-scroll logic */
 const scrollContainer = ref<HTMLElement | null>(null)
@@ -194,6 +195,21 @@ const totalTokens = computed(() => {
   return total
 })
 
+/** Detailed token usage breakdown for the agent; fall back to step totals as input. */
+const tokenUsage = computed<TokenUsage>(() => {
+  if (props.agent.tokenUsage) {
+    return props.agent.tokenUsage
+  }
+  const input = totalTokens.value
+  return {
+    promptTokens: input,
+    promptCacheHitTokens: 0,
+    promptCacheMissTokens: input,
+    completionTokens: 0,
+    totalTokens: input,
+  }
+})
+
 // === Smart scroll: auto-scroll to bottom on new steps, but pause if user scrolls up ===
 
 /** Check if the scroll container is at the bottom (within 40px tolerance) */
@@ -265,7 +281,38 @@ watch(
           :status="isRunning ? 'running' : 'completed'"
           :label="isRunning ? 'Running' : `${agent.steps.length} steps`"
         />
-        <span v-if="totalTokens > 0" class="agent-tokens">{{ formatTokens(totalTokens) }} tokens</span>
+        <span
+          v-if="totalTokens > 0"
+          class="agent-tokens"
+          @mouseenter="showTokenDetail = true"
+          @mouseleave="showTokenDetail = false"
+        >
+          {{ formatTokens(totalTokens) }} tokens
+          <Transition name="token-tooltip">
+            <div v-if="showTokenDetail" class="token-tooltip">
+              <div class="token-row">
+                <span class="token-key">Input</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.promptTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">cache hit</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheHitTokens) }}</span>
+              </div>
+              <div class="token-row indent">
+                <span class="token-key sub">cache miss</span>
+                <span class="token-val sub">{{ formatTokens(tokenUsage.promptCacheMissTokens) }}</span>
+              </div>
+              <div class="token-row">
+                <span class="token-key">Output</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.completionTokens) }}</span>
+              </div>
+              <div class="token-row total">
+                <span class="token-key">Total</span>
+                <span class="token-val">{{ formatTokens(tokenUsage.totalTokens) }}</span>
+              </div>
+            </div>
+          </Transition>
+        </span>
       </div>
     </div>
 
@@ -437,6 +484,70 @@ watch(
 .agent-tokens {
   font-size: 11px;
   color: #888;
+  cursor: help;
+  position: relative;
+}
+
+/* Token detail tooltip */
+.token-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 150px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.token-tooltip::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  right: 16px;
+  border: 6px solid transparent;
+  border-bottom-color: #444;
+}
+
+.token-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: #d4d4d4;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+
+.token-row.indent {
+  padding-left: 12px;
+}
+
+.token-row.total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #333;
+  font-weight: 600;
+}
+
+.token-key.sub,
+.token-val.sub {
+  color: #888;
+  font-size: 11px;
+}
+
+/* Token tooltip transition */
+.token-tooltip-enter-active,
+.token-tooltip-leave-active {
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.token-tooltip-enter-from,
+.token-tooltip-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .agent-steps {
