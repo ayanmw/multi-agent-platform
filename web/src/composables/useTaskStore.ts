@@ -601,9 +601,11 @@ export function useTaskStore() {
       },
     }
 
-    // Group steps by agent_id to rebuild agent states
+    // Group steps by agent_id to rebuild agent states.
+    // Note: persisted steps (DB path) don't carry a per-step model field —
+    // the WS real-time path already populates model correctly. For DB replay
+    // we fall back to 'unknown' rather than pretend we know it.
     const agentStepsMap = new Map<string, typeof steps>()
-    const agentModelMap = new Map<string, string>()
     for (const step of steps) {
       const aid = step.agent_id || 'agent_default'
       if (!agentStepsMap.has(aid)) {
@@ -621,7 +623,7 @@ export function useTaskStore() {
       const agentState: AgentState = {
         id: agentId,
         name: agentId,
-        model: agentModelMap.get(agentId) || 'unknown',
+        model: 'unknown',
         steps: agentSteps.map((s): Step => {
           const stepType: StepType =
             s.type === 'tool_call' ? 'tool_call' :
@@ -639,7 +641,9 @@ export function useTaskStore() {
             } : null,
             tokens: s.token_used || 0,
             durationMs: s.duration_ms || 0,
-            startedAt: 0, // historical steps don't have per-step timestamps
+            // Persisted steps lack per-step timestamps; use the task start time as
+            // a common baseline so the timeline shows a real start point instead of 0.
+            startedAt: taskState.startedAt,
           }
         }),
         color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],

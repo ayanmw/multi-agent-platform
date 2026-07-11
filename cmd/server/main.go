@@ -281,6 +281,12 @@ func main() {
 			MaxSteps     int                      `json:"max_steps"`
 			SessionID    string                   `json:"session_id"`
 			Agents       []orchestrator.AgentSpec `json:"agents"`
+			// TaskContract optional overrides — when >0 / non-empty, override the
+			// default (or case-provided) contract so frontend can drive PolicyChain.
+			Scope         string   `json:"scope"`
+			AllowedTools  []string `json:"allowed_tools"`
+			TokenBudget   int      `json:"token_budget"`
+			CostBudgetUSD float64  `json:"cost_budget_usd"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -411,6 +417,20 @@ func main() {
 			// Override MaxSteps from request if provided (>0)
 			if req.MaxSteps > 0 {
 				contract.MaxSteps = req.MaxSteps
+			}
+			// Override TaskContract fields from request body when provided —
+			// lets the frontend drive PolicyChain (scope, tools, budgets).
+			if req.Scope != "" {
+				contract.Scope = req.Scope
+			}
+			if len(req.AllowedTools) > 0 {
+				contract.AllowedTools = req.AllowedTools
+			}
+			if req.TokenBudget > 0 {
+				contract.TokenBudget = req.TokenBudget
+			}
+			if req.CostBudgetUSD > 0 {
+				contract.CostBudgetUSD = req.CostBudgetUSD
 			}
 
 			// Build Working Memory from past experiences for this task
