@@ -448,13 +448,16 @@ async function handleSessionSelect(session: Session) {
       // Load ALL turns (root + continuation turns) so sessionTurns shows
       // the full conversation timeline, not just the most recent task.
       await loadSessionTurns(session.id)
-      console.log('[App] loadSessionTurns done, taskCache keys:', Object.keys(taskCache.value))
-      // Set the most-recently-loaded task as the active one so TurnList
-      // defaults its expand state to the latest turn.
-      const keys = Object.keys(taskCache.value)
-      if (keys.length > 0) {
-        activeTaskId.value = keys[keys.length - 1]
+      // Set the active task to the latest turn according to sessionTurns'
+      // chronological order (not Object.keys order), so the timeline defaults
+      // to expanding the most recent turn instead of turn 1.
+      const ordered = Object.values(taskCache.value)
+        .filter(t => !t.sessionId || t.sessionId === sid)
+        .sort((a, b) => a.startedAt - b.startedAt)
+      if (ordered.length > 0) {
+        activeTaskId.value = ordered[ordered.length - 1].id
       }
+      console.log('[App] loadSessionTurns done, taskCache keys:', Object.keys(taskCache.value))
     } catch (err) {
       console.error('[App] loadSessionTurns failed:', err)
     }
