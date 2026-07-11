@@ -801,9 +801,9 @@ export function useTaskStore() {
       }
     }
 
-    // Store in cache and set as active
+    // Store in cache (do NOT mutate activeTaskId here — the caller decides
+    // which task should be active after batch-loading).
     taskCache.value[taskId] = taskState
-    activeTaskId.value = taskId
     console.log('[useTaskStore] loadTask done, taskState:', {
       id: taskState.id,
       status: taskState.status,
