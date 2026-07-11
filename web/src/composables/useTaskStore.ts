@@ -603,6 +603,41 @@ export function useTaskStore() {
     activeTaskId.value = taskId
   }
 
+  /** Load a session's full conversation history into the cache.
+   *  Fetches GET /api/sessions/{id} which returns { session, tasks [] },
+   *  then hydrates each historical task so sessionTurns can reconstruct every turn. */
+  async function loadSessionTurns(sessionId: string): Promise<void> {
+    console.log('[useTaskStore] loadSessionTurns:', sessionId)
+    const resp = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+    if (!resp.ok) {
+      throw new Error(`Failed to load session tasks: ${resp.status}`)
+    }
+    const data = (await resp.json()) as {
+      session: { root_task_id: string | null; turn_count: number }
+      tasks: Array<{
+        id: string
+        user_input: string
+        status: string
+        started_at: string
+      }>
+    }
+    const tasks = (data.tasks || [])
+    // Sort chronologically so turns appear in conversation order
+    tasks.sort((a, b) => a.started_at.localeCompare(b.started_at))
+    // Skip tasks already loaded (e.g. currently running ones that may arrive empty)
+    let loaded = 0
+    for (const t of tasks) {
+      if (taskCache.value[t.id]) continue
+      try {
+        await loadTask(t.id)
+        loaded++
+      } catch (err) {
+        console.warn('[useTaskStore] loadTask failed for', t.id, err)
+      }
+    }
+    console.log('[useTaskStore] loadSessionTurns done, hydrated', loaded, 'tasks, keys:', Object.keys(taskCache.value))
+  }
+
   /** Load a task from the backend into the cache, hydrating agents and steps */
   async function loadTask(taskId: string): Promise<void> {
     console.log('[useTaskStore] loadTask started, taskId:', taskId)
@@ -837,6 +872,7 @@ export function useTaskStore() {
     clearActiveTask,
     setActiveTaskId,
     loadTask,
+    loadSessionTurns,
     pauseTask,
     resumeTask,
     cancelTask,
