@@ -83,6 +83,7 @@ const {
   clearActiveTask,
   setActiveTaskId,
   loadTask,
+  loadSessionTurns,
   pauseTask,
   resumeTask,
   cancelTask,
@@ -173,18 +174,31 @@ const currentTask = computed(() => {
 })
 
 /**
- * Collect all turns in the current session for the timeline view.
- * Currently wraps the active task as a single turn. In a full multi-turn
- * implementation, this would load all tasks from the session and assemble
- * the full conversation history.
- * TODO: 后续可以加载所有 turn 的 task 到 taskCache
+ * Collect all loaded turns in the current session for the timeline view.
+ * After handleSessionSelect calls loadSessionTurns, every task for the
+ * active session will be present in taskCache; this computed slices them
+ * out in chronological order so TurnList can render the full timeline.
+ *
+ * Tasks that don't yet have a sessionId (e.g. real-time WS tasks that
+ * haven't been persisted) are always included — they are implicitly the
+ * current session's in-flight turn.
  */
 const sessionTurns = computed(() => {
+  const sid = activeSession.value?.id
   const turns: Array<{ task: TaskState; userInput: string }> = []
-  if (currentTask.value) {
+  // If no session is selected, show nothing
+  if (!sid) return turns
+
+  const allTasks = Object.values(taskCache.value)
+    .filter(t => !t.sessionId || t.sessionId === sid)
+  // Sort by startedAt ASC so timeline is in conversation order
+  allTasks.sort((a, b) => a.startedAt - b.startedAt)
+  for (const t of allTasks) {
     turns.push({
-      task: currentTask.value,
-      userInput: lastUserInput.value,
+      task: t,
+      // Prefer the hydrated userInput; fall back to the last-submitted input
+      // (handles the real-time case where DB hasn't been written yet).
+      userInput: t.userInput || lastUserInput.value,
     })
   }
   return turns
@@ -420,14 +434,21 @@ async function handleSessionSelect(session: Session) {
   }))
   setActiveSession(session.id)
   if (session.rootTaskId) {
-    console.log('[App] Loading task:', session.rootTaskId)
+    console.log('[App] Loading session turns:', session.id)
     clearActiveTask()
     try {
-      await loadTask(session.rootTaskId)
-      console.log('[App] loadTask completed, taskCache keys:', Object.keys(taskCache.value))
-      // TODO: 后续可以加载所有 turn 的 task 到 taskCache
+      // Load ALL turns (root + continuation turns) so sessionTurns shows
+      // the full conversation timeline, not just the most recent task.
+      await loadSessionTurns(session.id)
+      console.log('[App] loadSessionTurns done, taskCache keys:', Object.keys(taskCache.value))
+      // Set the most-recently-loaded task as the active one so TurnList
+      // defaults its expand state to the latest turn.
+      const keys = Object.keys(taskCache.value)
+      if (keys.length > 0) {
+        activeTaskId.value = keys[keys.length - 1]
+      }
     } catch (err) {
-      console.error('[App] loadTask failed:', err)
+      console.error('[App] loadSessionTurns failed:', err)
     }
   } else {
     console.log('[App] No rootTaskId, clearing active task')
@@ -456,7 +477,11 @@ async function handleDeleteSession(session: Session) {
       if (first) {
         setActiveSession(first.id)
         if (first.rootTaskId) {
-          await loadTask(first.rootTaskId)
+          await loadSessionTurns(first.id)
+          const keys = Object.keys(taskCache.value)
+          if (keys.length > 0) {
+            activeTaskId.value = keys[keys.length - 1]
+          }
         } else {
           clearActiveTask()
         }

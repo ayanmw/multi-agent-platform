@@ -119,6 +119,10 @@ export type TaskStatus = 'idle' | 'running' | 'completed' | 'failed'
 /** The top-level task state */
 export interface TaskState {
   id: string
+  /** Session ID — available after DB hydration, optional for real-time tasks */
+  sessionId?: string
+  /** User input that triggered this task — available after DB hydration */
+  userInput?: string
   status: TaskStatus
   /** Final result text (only when completed) */
   finalResult: string | null

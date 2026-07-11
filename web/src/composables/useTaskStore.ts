@@ -696,6 +696,8 @@ export function useTaskStore() {
     // Build TaskState from persisted data
     const taskState: TaskState = {
       id: task.id,
+      sessionId: task.session_id || '',
+      userInput: task.user_input || '',
       status: (task.status as TaskStatus) || 'completed',
       finalResult: task.final_result || null,
       totalTokens: task.total_tokens || 0,
