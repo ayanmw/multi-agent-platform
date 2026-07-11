@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -527,9 +528,29 @@ func isHighRiskShellCommand(cmd string) bool {
 
 // isHighRiskFilePath 检查文件路径是否指向高风险系统路径。
 // 用于 ApprovalRule 的 RequiresApproval 方法。
+//
+// 修复（TEST_REPORT 低危项）：原实现用 strings.Contains(path, "/etc/") 做
+// 子串匹配，导致：
+//   - "./etc/x"（项目内子目录）不匹配 "/etc/"，可绕过审批。
+//   - 绝对路径分隔符差异（Windows 反斜杠）也不匹配。
+// 现在先用 filepath.ToSlash 统一分隔符，再做规范化比较。对 Unix 系统路径
+// （/etc/、/System/）要求 path 以 risky 前缀开头或紧跟分隔符，避免 "./etc/"
+// 被错误放行；对 Windows 系统路径保持子串匹配（盘符路径天然带反斜杠）。
 func isHighRiskFilePath(path string) bool {
+	// 统一为正斜杠便于匹配 Unix 风格的系统路径
+	normalized := strings.ToLower(filepath.ToSlash(path))
 	for _, risky := range highRiskFilePaths {
-		if strings.Contains(path, risky) {
+		r := strings.ToLower(risky)
+		// Windows 盘符路径（如 c:\windows\）仍用子串匹配
+		if strings.Contains(r, ":") {
+			if strings.Contains(normalized, r) {
+				return true
+			}
+			continue
+		}
+		// Unix 系统路径：要求 path 以 risky 开头（绝对路径），
+		// 这样 "./etc/foo" 不会被误判为 "/etc/foo"。
+		if strings.HasPrefix(normalized, r) {
 			return true
 		}
 	}

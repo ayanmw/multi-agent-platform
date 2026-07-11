@@ -1216,17 +1216,38 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			return e.handleApprovalRequired(tc, approvalErr, args, duration)
 		}
 
-		// Other Policy blocks (PathTraversalRule, FileScopeRule, TokenBudgetRule,
-		// ToolWhitelistRule) also route through approval flow instead of failing directly.
+		// S7 修复：硬性安全拦截（ErrBlockedByPolicy）必须立即失败，
+		// 不再走 30s 审批超时流程。只有 ApprovalRule 主动返回的
+		// ErrApprovalRequired 才进入审批。这样 PathTraversal /
+		// FileScope / TokenBudget / ToolWhitelist / DangerousCommand
+		// 命中时 ReAct Loop 立即收到错误并可选择重试，同时持久化
+		// 拦截原因（M1）便于历史回放。
 		var policyErr *harness.ErrBlockedByPolicy
 		if errors.As(execErr, &policyErr) {
-			approval := &harness.ErrApprovalRequired{
-				ApprovalID: harness.GenerateApprovalID(),
-				Tool:       tc.Function.Name,
-				Reason:     policyErr.Reason,
-				Input:      args,
-			}
-			return e.handleApprovalRequired(tc, approval, args, duration)
+			reason := fmt.Sprintf("[POLICY BLOCK] %s blocked %s: %s", policyErr.Rule, policyErr.Tool, policyErr.Reason)
+			e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"tool":        tc.Function.Name,
+				"error":       reason,
+				"duration_ms": duration,
+				"policy_rule": policyErr.Rule,
+			}))
+			e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"type": "tool_call",
+			}))
+
+			// M1 修复：持久化被拦截的 tool_call step，使 GET /api/tasks?id=...
+			// 能在历史回放中还原拦截事件（之前 handleApprovalRequired 不调
+			// saveStep，导致拦截步骤丢失）。
+			e.saveStep(StepRecord{
+				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+				Type: "tool_call", Status: "failed",
+				ToolName: tc.Function.Name, ToolInput: args,
+				ToolOutput: reason, DurationMs: int(duration),
+			})
+
+			// 返回错误给 ReAct Loop。Engine.Run 会把错误作为 observation 反馈
+			// 给 LLM（让其换思路），而不是终止整个任务——除非达到 max_steps。
+			return reason, nil
 		}
 
 		// Tool execution failed — emit failure events and return the error.

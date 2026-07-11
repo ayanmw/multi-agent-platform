@@ -131,8 +131,17 @@ function handleDeny(approvalId: string) {
 }
 
 function handleApprovalClose() {
-  // Don't auto-deny on close — user must explicitly choose
-  // Just dismiss the dialog visually; the server will timeout
+  // F1 修复：关闭对话框必须等同于拒绝，否则后端会一直等到 30s 审批超时
+  // 才释放任务，期间该 task 仍显示 running，用户也无法重新提交。
+  // 之前只清空 pendingApproval 而不发送 deny，导致 WS 队列里没有控制消息，
+  // 后端 handleApprovalRequired.WaitForDecision 必然超时。
+  if (pendingApproval.value) {
+    denyTask(
+      pendingApproval.value.approvalId,
+      pendingApproval.value.taskId,
+      pendingApproval.value.agentId,
+    )
+  }
   pendingApproval.value = null
 }
 

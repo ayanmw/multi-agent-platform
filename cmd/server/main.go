@@ -860,9 +860,11 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	//   ApprovalRule           — requires frontend approval for high-risk ops (Phase 5)
 	//   TokenBudgetRule        — blocks tool calls when token budget exceeded
 	//   ToolWhitelistRule      — only allows tools listed in the contract
+	//   CostBudgetRule         — blocks tool calls when USD cost budget exceeded (M2)
 	//
 	// Rules are checked in order. The first rule that blocks stops the chain.
 	tokenBudgetRule := &harness.TokenBudgetRule{}
+	costBudgetRule := harness.NewCostBudgetRule()
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
@@ -870,6 +872,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		harness.NewApprovalRule(approvalHandler),
 		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
+		costBudgetRule,
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 
@@ -906,6 +909,12 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 			0, // step_index is populated from usage aggregation perspective
 			model, profile, usage,
 		)
+		// M2 修复：把本次调用成本累加进 CostBudgetRule，让 PolicyChain 在
+		// 后续 tool call 中能根据累计成本阻断。此前 CostBudgetRule 已实现
+		// 并有单测，但从未接入 main.go 的 PolicyChain，端到端不生效。
+		if record.CostCents > 0 {
+			costBudgetRule.SetCost(float64(record.CostCents) / 100.0)
+		}
 		// Best-effort persistence; failures are logged but don't break the task.
 		if costRepo != nil {
 			if err := costRepo.Insert(record); err != nil {
@@ -1141,6 +1150,7 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 
 	progressManager := harness.NewProgressManager()
 	tokenBudgetRule := &harness.TokenBudgetRule{}
+	costBudgetRule := harness.NewCostBudgetRule()
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
@@ -1148,6 +1158,7 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 		harness.NewApprovalRule(approvalHandler),
 		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
+		costBudgetRule,
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 

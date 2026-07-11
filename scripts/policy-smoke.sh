@@ -416,48 +416,31 @@ else
     "task=${SCOPE_STATUS}, tool_done=${SCOPE_TOOL_DONE}, file_exists=${SCOPE_FILE_EXISTS} → 状态异常"
 fi
 
-# --- 4. ApprovalRule: 路径含 /etc/ 触发审批 ---
-# 注: 用 ./etc/xxx 测试 ApprovalRule 的 isHighRiskFilePath。
-# isHighRiskFilePath 用 strings.Contains(path, "/etc/") 检查，
-# "./etc/xxx" 不含 "/etc/" 子串（是 "./etc/"）→ ApprovalRule 不触发。
-# 这暴露 ApprovalRule 的子串匹配缺陷: 无法检测 ./etc/ 这类相对路径。
+# --- 4. ApprovalRule: ./etc/ 相对路径不再被误判（isHighRiskFilePath 修复验证） ---
+# 修复后（TEST_REPORT 低危项）：isHighRiskFilePath 用 HasPrefix 而非 Contains
+# 比较，"./etc/xxx" 不再被误判为系统路径 "/etc/"。写入项目内 ./etc/ 子目录
+# 是合法操作，应正常执行（task=completed, 文件已创建）。
 echo ""
-echo "--- 4. ApprovalRule: ./etc/ 路径审批（子串匹配缺陷测试） ---"
+echo "--- 4. ApprovalRule: ./etc/ 相对路径不触发审批（修复验证） ---"
 APPR_DETAIL=$(get_task_detail "$TASK_APPROVAL")
 APPR_PARSED=$(parse_detail "$APPR_DETAIL")
 APPR_STATUS=$(pget "$APPR_PARSED" "task_status")
 APPR_TOOL_DONE=$(pget "$APPR_PARSED" "completed_tool_steps")
 APPR_FILE_EXISTS=$(test -f "$APPROVAL_TEST_FILE" && echo "yes" || echo "no")
 echo "  task_status=${APPR_STATUS}, completed_tool_steps=${APPR_TOOL_DONE}, target_file_exists=${APPR_FILE_EXISTS}"
-# 注: ApprovalRule 对路径含 /etc/ 的写入返回 ErrApprovalRequired，
-# 但 Engine 会将其转为审批流程。无 WebSocket 客户端审批 → 30s 超时 → 自动拒绝 → task failed。
-# 被拦截标志: task=failed 且 completed_tool_steps=0 且文件未创建
-# 如果 completed_tool_steps > 0 说明文件被写入，ApprovalRule 未拦截（./etc/ 子串匹配 /etc/ 但在 PolicyChain 中 ApprovalRule 在 DangerousCommandRule 之后，write_file 不触发 DangerousCommandRule，所以应被 ApprovalRule 拦）
-# 注2: ApprovalRule 用 isHighRiskFilePath 检查 strings.Contains(path, "/etc/")，
-# 但 "./etc/..." 不含 "/etc/"（是 "./etc/"）→ 实际不会触发 ApprovalRule。
-# 需要用绝对路径如 "/etc/test" 才能触发，但 "/etc/..." 在 Windows 上 filepath.IsAbs=false，
-# 会被 FileScopeRule 的 filepath.Join 并入 scope 而放行。
-# 所以 ApprovalRule 在 Windows 上对 /etc/ 路径实际无法端到端触发拦截。
-if [[ "$APPR_STATUS" == "failed" && "$APPR_TOOL_DONE" == "0" && "$APPR_FILE_EXISTS" == "no" ]]; then
+# 修复后期望: ./etc/ 是项目内合法子目录，不被误判为系统 /etc/。
+# 文件应被创建，task 应 completed（mock 脚本只一步 tool_call，无后续 text 终止
+# 可能导致 max_steps，但 tool_done > 0 且文件存在即说明未被审批拦截）。
+if [[ "$APPR_TOOL_DONE" != "0" && "$APPR_FILE_EXISTS" == "yes" ]]; then
   record_result "ApprovalRule" "PASS" \
-    "task=failed, 无 completed tool 步骤, 文件未创建 → 审批超时自动拒绝，高风险操作被拦截"
-elif [[ "$APPR_TOOL_DONE" != "0" && "$APPR_FILE_EXISTS" == "yes" ]]; then
-  # 文件被创建说明 ApprovalRule 未拦截。原因: ./etc/ 不含 "/etc/" 子串（是 "./etc/"）
+    "task=${APPR_STATUS}, 文件已创建 → ./etc/ 相对路径不被误判为系统路径，正常执行"
+elif [[ "$APPR_STATUS" == "failed" && "$APPR_TOOL_DONE" == "0" && "$APPR_FILE_EXISTS" == "no" ]]; then
   record_result "ApprovalRule" "FAIL" \
-    "task=${APPR_STATUS}, 文件已创建 → ApprovalRule 未拦截 ./etc/ 路径（./etc/ 不匹配 /etc/ 子串模式）"
-  FINDINGS+=("[设计问题] ApprovalRule.isHighRiskFilePath 用 strings.Contains(path, \"/etc/\") 检查，但相对路径 ./etc/xxx 不含 \"/etc/\" 子串（是 \"./etc/\"），导致项目内 etc/ 子目录写入不触发审批")
+    "task=failed, 文件未创建 → ./etc/ 被误判为高风险系统路径（isHighRiskFilePath 修复未生效）"
+  FINDINGS+=("[修复未生效] ApprovalRule.isHighRiskFilePath 仍用 Contains 匹配，./etc/ 被误判")
 else
-  if [[ "$APPR_FILE_EXISTS" == "yes" ]]; then
-    record_result "ApprovalRule" "FAIL" \
-      "task=${APPR_STATUS}, 文件已创建! 审批未生效!"
-    FINDINGS+=("[严重] ApprovalRule 未拦截 /etc/ 路径写入，文件被创建")
-  elif [[ "$APPR_TOOL_DONE" != "0" ]]; then
-    record_result "ApprovalRule" "FAIL" \
-      "task=${APPR_STATUS}, completed_tool_steps=${APPR_TOOL_DONE} → 审批未拦截"
-  else
-    record_result "ApprovalRule" "FAIL" \
-      "task=${APPR_STATUS}, tool_done=${APPR_TOOL_DONE}, file_exists=${APPR_FILE_EXISTS} → 状态异常"
-  fi
+  record_result "ApprovalRule" "FAIL" \
+    "task=${APPR_STATUS}, tool_done=${APPR_TOOL_DONE}, file_exists=${APPR_FILE_EXISTS} → 状态异常"
 fi
 
 # --- 5. 控制测试: 安全命令 ---
@@ -532,28 +515,23 @@ fi
 
 # 静态分析发现（不依赖运行时测试）
 echo ""
-echo "  [静态分析] 代码审查发现的 policy 设计缺口（未改源码，仅记录）："
-echo "  1. [设计问题] Engine (engine.go:1213-1222) 将所有 ErrBlockedByPolicy 转换为"
-echo "     ErrApprovalRequired 并走 30s 审批超时流程。PathTraversal / FileScope /"
-echo "     ToolWhitelist 等硬性安全拦截应立即失败，不应等待审批。当前每次被拦截"
-echo "     的 tool call 都要等 30s 才失败，严重影响 UX 和测试效率。"
-echo "  2. [可观测性缺口] Policy 拦截原因未持久化到 DB。task_failed 事件含 reason/"
-echo "     error 字段，但 updateTask 只存 status=failed + final_result=''，GET /api/tasks"
-echo "     ?id=xxx 无法获取拦截原因，调试困难。"
-echo "  3. [规则缺口] CostBudgetRule 已实现 (cost_budget_rule.go) 但未加入 main.go 的"
-echo "     PolicyChain，端到端不生效。"
-echo "  4. [API 缺口] /api/tasks POST 请求体无法设置 TaskContract 的 Scope、AllowedTools、"
-echo "     TokenBudget、CostBudgetUSD、Permissions 字段。这些只能来自 preset cases 或"
-echo "     DefaultContract，限制了 policy 的端到端可测试性和实际使用灵活性。"
-echo "  5. [误判风险] ApprovalRule.isHighRiskFilePath 使用 strings.Contains(path, \"/etc/\")"
-echo "     检查，不区分绝对路径和相对路径。写入 ./etc/test.txt (项目内子目录) 会被误判"
-echo "     为高风险系统路径操作。"
-echo "  6. [步骤持久化缺口] Policy 拦截后 handleApprovalRequired 不调用 saveStep，被拦截"
-echo "     的 tool_call 步骤不会出现在 GET /api/tasks?id=xxx 的 steps 数组中，历史回放"
-echo "     无法还原拦截事件。"
-echo "  7. [Windows 兼容性] FileScopeRule 在 Windows 上对 Unix 绝对路径 (如 /etc/passwd)"
-echo "     不识别为绝对路径 (filepath.IsAbs 返回 false)，会被 filepath.Join 并入 scope"
-echo "     而放行。policy_test.go 已记录此跨平台行为但未修复。"
+echo "  [静态分析] 本轮已修复的 policy 缺口（对照 TEST_REPORT S1/S7/M1/M2）："
+echo "  1. [已修复 S7] Engine 不再把 ErrBlockedByPolicy 转为 ErrApprovalRequired。"
+echo "     PathTraversal / FileScope / TokenBudget / ToolWhitelist / CostBudget 命中"
+echo "     时立即失败并把拦截原因作为 observation 反馈给 LLM，不再等 30s 审批。"
+echo "  2. [已修复 M1] Policy 拦截的 tool_call step 现在会调 saveStep 持久化，"
+echo "     GET /api/tasks?id=xxx 的 steps 数组能还原拦截事件（含 policy_rule 字段）。"
+echo "  3. [已修复 M2] CostBudgetRule 已加入 main.go 的 PolicyChain，onUsage 回调"
+echo "     把每轮 LLM 调用成本累加进 CostBudgetRule，端到端生效。"
+echo "  4. [已修复 S1] FileScopeRule 新增 isUnixAbsolutePath 判定，/etc/passwd 在"
+echo "     Windows 上不再被 filepath.Join 并入 scope 放行。"
+echo "  5. [已修复 低危] ApprovalRule.isHighRiskFilePath 用 HasPrefix 替代 Contains，"
+echo "     ./etc/x 相对路径不再被误判为系统 /etc/ 路径。"
+echo ""
+echo "  [未修复/已知缺口]"
+echo "  A. [API 缺口 M3] /api/tasks POST 请求体仍无法设置 TaskContract 的 Scope /"
+echo "     AllowedTools / TokenBudget / CostBudgetUSD / Permissions，端到端无法触发"
+echo "     TokenBudget / ToolWhitelist（默认 0/nil），需单测覆盖。"
 
 echo ""
 if [[ $FAIL -gt 0 ]]; then

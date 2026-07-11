@@ -511,8 +511,19 @@ type FileScopeRule struct{}
 // Name returns the rule name.
 func (r *FileScopeRule) Name() string { return "FileScopeRule" }
 
+// isUnixAbsolutePath reports whether p is a Unix-style absolute path (leading '/').
+// On Windows, filepath.IsAbs only recognizes drive-rooted paths (C:\, \server\share)
+// and returns false for "/etc/passwd", which then gets treated as relative and
+// joined into the scope directory — a cross-platform security hole. By detecting
+// Unix absolute paths explicitly we ensure they are treated as absolute on every
+// platform, so the scope-prefix check below rejects them when the scope is a
+// Windows path (and accepts them only when the scope is a matching Unix path).
+func isUnixAbsolutePath(p string) bool {
+	return strings.HasPrefix(p, "/")
+}
+
 // Check validates that the file path is within the contract's scope.
-// If the path is absolute, it checks whether it's under the scope.
+// If the path is absolute (Windows or Unix style), it checks whether it's under the scope.
 // If the path is relative, it resolves it against the scope.
 // The returned input contains the normalized absolute path.
 func (r *FileScopeRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
@@ -536,15 +547,20 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		}
 	}
 
-	// Resolve the requested path
+	// Resolve the requested path. We treat both Windows-absolute paths
+	// (filepath.IsAbs, e.g. "C:\...") and Unix-absolute paths (leading '/',
+	// e.g. "/etc/passwd") as absolute. On Windows, a Unix-absolute path can
+	// never be inside a Windows scope, so the prefix check below rejects it
+	// instead of silently joining it into the scope directory.
 	var targetAbs string
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || isUnixAbsolutePath(path) {
 		targetAbs = filepath.Clean(path)
 	} else {
 		targetAbs = filepath.Join(scopeAbs, filepath.Clean(path))
 	}
 
-	// Check if the target is within the scope
+	// Check if the target is within the scope. We compare against
+	// scopeAbs + separator so that a scope "/foo" does not match "/foobar".
 	if !strings.HasPrefix(targetAbs, scopeAbs+string(filepath.Separator)) && targetAbs != scopeAbs {
 		return input, &ErrBlockedByPolicy{
 			Rule:   r.Name(),

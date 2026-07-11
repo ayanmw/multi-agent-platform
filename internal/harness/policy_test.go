@@ -154,12 +154,14 @@ func TestFileScopeRule(t *testing.T) {
 		}
 	})
 
-	t.Run("unix absolute path behavior is platform-dependent", func(t *testing.T) {
-		// 记录源码跨平台行为：/etc/passwd 在 Windows 上不被 IsAbs 识别，
-		// 会被 filepath.Join 并入 scope 而放行（潜在的安全弱点）。
-		// 这里不断言，仅在不同 OS 上打印实际行为，便于后续评估。
+	t.Run("unix absolute path blocked on every platform", func(t *testing.T) {
+		// S1 修复：Unix 绝对路径（如 "/etc/passwd"）必须在所有平台上被识别为绝对路径，
+		// 不允许被 filepath.Join 并入 scope 而放行。Windows 上 scope 是 "C:\\..."，
+		// "/etc/passwd" 解析后不可能是其前缀，必须被拒绝。
 		_, err := rule.Check("write_file", map[string]any{"path": "/etc/passwd"}, contract)
-		t.Logf("unix-abs /etc/passwd on this OS: blocked=%v err=%v", isPolicyBlock(err), err)
+		if !isPolicyBlock(err) {
+			t.Errorf("expected block for unix-absolute /etc/passwd, got %v (err=%v)", err, err)
+		}
 	})
 
 	t.Run("relative traversal blocked by scope", func(t *testing.T) {
@@ -466,6 +468,23 @@ func TestApprovalRule(t *testing.T) {
 		_, err := rule.Check("write_file", map[string]any{"path": "./local.txt"}, TaskContract{})
 		if err != nil {
 			t.Errorf("safe path should pass, got %v", err)
+		}
+	})
+
+	t.Run("relative ./etc/ path does NOT trigger high-risk approval", func(t *testing.T) {
+		// 修复（TEST_REPORT 低危项）：原 isHighRiskFilePath 用 strings.Contains
+		// 匹配 "/etc/"，"./etc/x" 不含 "/etc/" 子串可绕过审批。修复后用
+		// HasPrefix 比较，"./etc/x" 不应被判定为高风险系统路径。
+		_, err := rule.Check("write_file", map[string]any{"path": "./etc/policy_approval_test.txt"}, TaskContract{})
+		if err != nil {
+			t.Errorf("relative ./etc/ path should NOT trigger approval, got %v", err)
+		}
+	})
+
+	t.Run("absolute /etc/ path DOES trigger high-risk approval", func(t *testing.T) {
+		_, err := rule.Check("write_file", map[string]any{"path": "/etc/passwd"}, TaskContract{})
+		if !isApprovalRequired(err) {
+			t.Errorf("absolute /etc/passwd should trigger approval, got %v", err)
 		}
 	})
 
