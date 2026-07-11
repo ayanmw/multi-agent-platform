@@ -7,6 +7,8 @@
        input: the tool call arguments/parameters
        autoApprove: if true, auto-approve without showing the dialog
        visible: whether the dialog is shown
+       error: optional error message — when set, renders error styling and disables buttons
+              (F6: used to surface approval timeout / lost connection scenarios)
      Emits:
        approve: user clicked Approve (auto-approve also emits this)
        deny: user clicked Deny or countdown expired
@@ -22,6 +24,7 @@ const props = defineProps<{
   input: Record<string, any>
   autoApprove: boolean
   visible: boolean
+  error?: string
 }>()
 
 const emit = defineEmits<{
@@ -66,6 +69,13 @@ watch(() => props.visible, (newVal) => {
   }
 })
 
+// F6: 当外部传入 error 时，停止倒计时（状态由父组件驱动，按钮已禁用）
+watch(() => props.error, (err) => {
+  if (err) {
+    stopTimer()
+  }
+})
+
 onMounted(() => {
   if (props.visible) {
     countdown.value = 30
@@ -100,7 +110,7 @@ function truncateInput(s: string, maxLen = 500): string {
 <template>
   <Transition name="approval-fade">
     <div v-if="visible && !autoApprove" class="approval-overlay" @click.self="emit('close')">
-      <div class="approval-dialog">
+      <div class="approval-dialog" :class="{ 'approval-dialog-error': error }">
         <!-- Header -->
         <div class="approval-header">
           <span class="approval-icon">&#9888;</span>
@@ -108,9 +118,20 @@ function truncateInput(s: string, maxLen = 500): string {
             <h3 class="approval-title">Approval Required</h3>
             <span class="approval-tool-name">{{ tool }}</span>
           </div>
-          <span class="approval-countdown" :class="{ 'countdown-warn': countdown <= 10 }">
+          <span
+            v-if="!error"
+            class="approval-countdown"
+            :class="{ 'countdown-warn': countdown <= 10 }"
+          >
             {{ countdown }}s
           </span>
+          <span v-else class="approval-countdown approval-countdown-error">&#10007;</span>
+        </div>
+
+        <!-- F6: Error banner — shown when error prop is set (e.g. approval timed out) -->
+        <div v-if="error" class="approval-error-banner">
+          <span class="approval-error-icon">&#9888;</span>
+          <span class="approval-error-text">{{ error }}</span>
         </div>
 
         <!-- Reason -->
@@ -125,12 +146,20 @@ function truncateInput(s: string, maxLen = 500): string {
           <pre class="approval-params"><code>{{ truncateInput(formatInput(input)) }}</code></pre>
         </div>
 
-        <!-- Actions -->
+        <!-- Actions — disabled when error is set -->
         <div class="approval-actions">
-          <button class="approval-btn deny-btn" @click="emit('deny', approvalId)">
+          <button
+            class="approval-btn deny-btn"
+            :disabled="!!error"
+            @click="emit('deny', approvalId)"
+          >
             &#10007; Deny
           </button>
-          <button class="approval-btn approve-btn" @click="emit('approve', approvalId)">
+          <button
+            class="approval-btn approve-btn"
+            :disabled="!!error"
+            @click="emit('approve', approvalId)"
+          >
             &#10003; Approve
           </button>
         </div>
@@ -215,6 +244,44 @@ function truncateInput(s: string, maxLen = 500): string {
   animation: countdown-pulse 0.5s ease-in-out infinite alternate;
 }
 
+/* F6: Error state — replaces countdown with a red ✗ marker */
+.approval-countdown-error {
+  color: #e74c3c;
+  font-size: 22px;
+}
+
+.approval-dialog-error {
+  border-color: #c62828;
+  box-shadow: 0 8px 32px rgba(198, 40, 40, 0.35);
+}
+
+.approval-dialog-error .approval-header {
+  background: #2e1a1a;
+  border-color: #4a2a2a;
+}
+
+/* F6: Error banner shown above the reason section */
+.approval-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(231, 76, 60, 0.12);
+  border-bottom: 1px solid rgba(231, 76, 60, 0.3);
+  color: #e74c3c;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.approval-error-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.approval-error-text {
+  line-height: 1.4;
+}
+
 @keyframes countdown-pulse {
   from { opacity: 1; }
   to { opacity: 0.5; }
@@ -282,6 +349,17 @@ function truncateInput(s: string, maxLen = 500): string {
 
 .approval-btn:active {
   transform: scale(0.97);
+}
+
+/* F6: disabled state when error is set */
+.approval-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.approval-btn:disabled:hover {
+  background: inherit;
 }
 
 .approve-btn {

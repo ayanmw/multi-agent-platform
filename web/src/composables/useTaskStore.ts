@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
 import { useSessionStore } from './useSessionStore'
+import { useToast } from './useToast'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
 
@@ -24,8 +25,67 @@ export interface PendingApproval {
   tool: string
   reason: string
   input: Record<string, any>
+  /** F6: error message shown in the dialog when approval times out */
+  error?: string
 }
 const pendingApproval = ref<PendingApproval | null>(null)
+
+/**
+ * F6: approval timeout timer.
+ * 后端审批窗口是 30s，前端给 28s 倒计时留 2s 余量，超时后主动 deny 并弹 toast。
+ * 如果用户在 28s 内点了 Approve/Deny，handleEvent 里的 system_info approval 分支
+ * 会通过 clearApprovalTimer() 清掉这个定时器。
+ */
+let approvalTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+const APPROVAL_TIMEOUT_MS = 28000
+
+/**
+ * F6: module-level sendControl reference.
+ * startApprovalTimer 在模块作用域执行，无法直接拿到 useWebSocket().sendControl，
+ * 因此 useTaskStore 初始化时把 sendControl 注入到这里。
+ */
+let sendControlFn: ((msg: { action: string; task_id: string; agent_id: string; [key: string]: unknown }) => void) | null = null
+let showErrorFn: ((message: string) => void) | null = null
+
+function clearApprovalTimer() {
+  if (approvalTimeoutTimer) {
+    clearTimeout(approvalTimeoutTimer)
+    approvalTimeoutTimer = null
+  }
+}
+
+function startApprovalTimer(approvalId: string, taskId: string, agentId: string) {
+  clearApprovalTimer()
+  approvalTimeoutTimer = setTimeout(() => {
+    approvalTimeoutTimer = null
+    // 超时：若 pendingApproval 还在且是同一个请求，标记错误 + 主动 deny + toast
+    if (pendingApproval.value && pendingApproval.value.approvalId === approvalId) {
+      pendingApproval.value = {
+        ...pendingApproval.value,
+        error: '审批请求已超时，操作已被拒绝',
+      }
+      // 通知后端拒绝（让等待中的 WaitForDecision 解除阻塞）
+      if (sendControlFn) {
+        sendControlFn({
+          action: 'deny',
+          task_id: taskId,
+          agent_id: agentId,
+          approval_id: approvalId,
+        })
+      }
+      // 通过 toast 通知用户
+      if (showErrorFn) {
+        showErrorFn('审批请求已超时，操作已被拒绝')
+      }
+      // 短暂展示错误状态后清空对话框
+      setTimeout(() => {
+        if (pendingApproval.value && pendingApproval.value.approvalId === approvalId) {
+          pendingApproval.value = null
+        }
+      }, 3000)
+    }
+  }, APPROVAL_TIMEOUT_MS)
+}
 
 /** Whether the store has been initialized (WebSocket listener registered) */
 let initialized = false
@@ -46,6 +106,14 @@ let colorIdx = 0
 export function useTaskStore() {
   const { status, connect, disconnect, sendControl, onEvent } = useWebSocket()
   const { updateSession } = useSessionStore()
+
+  // F6: 注入 sendControl / showError 给模块级 startApprovalTimer 使用。
+  // 一次性注入即可，多次赋值无副作用。
+  sendControlFn = sendControl
+  if (!showErrorFn) {
+    const { showError } = useToast()
+    showErrorFn = showError
+  }
 
   // Initialize event listener once
   if (!initialized) {
@@ -310,6 +378,12 @@ export function useTaskStore() {
             reason: (evt.data.reason as string) || 'Policy block',
             input: (evt.data.input as Record<string, any>) || {},
           }
+          // F6: 启动 28s 超时倒计时，到期自动 deny + toast
+          startApprovalTimer(
+            pendingApproval.value.approvalId,
+            pendingApproval.value.taskId,
+            pendingApproval.value.agentId,
+          )
         }
         break
       }
@@ -722,6 +796,7 @@ export function useTaskStore() {
 
   /** Approve a pending policy block — sent via WebSocket control message */
   function approveTask(approvalId: string, taskId: string, agentId: string) {
+    clearApprovalTimer()
     sendControl({
       action: 'approve',
       task_id: taskId,
@@ -733,6 +808,7 @@ export function useTaskStore() {
 
   /** Deny a pending policy block — sent via WebSocket control message */
   function denyTask(approvalId: string, taskId: string, agentId: string) {
+    clearApprovalTimer()
     sendControl({
       action: 'deny',
       task_id: taskId,

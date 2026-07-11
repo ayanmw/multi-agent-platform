@@ -21,7 +21,7 @@
        - Copy buttons on code blocks improve UX for generated code
 -->
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import { Marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js/lib/core'
@@ -87,6 +87,14 @@ const contentRef = ref<HTMLElement | null>(null)
 
 /** Track which code blocks have had copy buttons injected */
 let copyButtonsInjected = false
+
+/**
+ * F11 修复：injectCopyButtons 防抖定时器。
+ * 每次 llm_delta 都会触发 text watch，若每次都 querySelectorAll + insertBefore
+ * 在长输出下会高频操作 DOM 造成掉帧。这里用 100ms 防抖合并连续 delta。
+ * 组件 unmount 时 clearTimeout 防止泄漏。
+ */
+let injectTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Render Markdown to HTML. Returns empty string for empty input. */
 const renderedHTML = computed(() => {
@@ -188,7 +196,8 @@ function isJsonLike(text: string): boolean {
   return (trimmed.startsWith('{') || trimmed.startsWith('['))
 }
 
-/** Auto-scroll to the bottom when new content arrives */
+/** Auto-scroll to the bottom when new content arrives.
+ *  F11: injectCopyButtons 走 100ms 防抖，避免每个 delta 都重 DOM。 */
 watch(
   () => props.text,
   async () => {
@@ -196,10 +205,21 @@ watch(
     if (contentRef.value) {
       contentRef.value.scrollTop = contentRef.value.scrollHeight
     }
-    // Inject copy buttons after each render
-    injectCopyButtons()
+    // Inject copy buttons after each render — debounced to avoid per-delta DOM thrash
+    if (injectTimer) clearTimeout(injectTimer)
+    injectTimer = setTimeout(() => {
+      injectCopyButtons()
+    }, 100)
   }
 )
+
+/** F11: 组件卸载时清理防抖定时器，防止在已卸载的 DOM 上执行 insertBefore */
+onUnmounted(() => {
+  if (injectTimer) {
+    clearTimeout(injectTimer)
+    injectTimer = null
+  }
+})
 </script>
 
 <template>

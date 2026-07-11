@@ -195,6 +195,13 @@ const isAgentRunning = computed(() => {
   return currentTask.value.status === 'running'
 })
 
+/** Whether the current task is in idle state (exists but not yet executing).
+ *  DB-backed sessions may surface tasks with status='idle' when loaded from history
+ *  before any agent event has arrived. We treat this like an empty state for display. */
+const isTaskIdle = computed(() => {
+  return currentTask.value?.status === 'idle'
+})
+
 // Group sessions by project for sidebar display
 interface ProjectGroup {
   project: { id: string; name: string; description: string; working_directory: string }
@@ -580,9 +587,17 @@ function handleProjectConfigBack() {
 
       <!-- Turn List (multi-turn conversation timeline) -->
       <TurnList
-        v-if="currentTask"
+        v-if="currentTask && !isTaskIdle"
         :turns="sessionTurns"
       />
+
+      <!-- Idle state — task exists in DB but hasn't executed (status='idle').
+           Shown instead of the empty state when a session with an idle task is selected. -->
+      <div v-else-if="isTaskIdle" class="empty-state">
+        <div class="empty-icon">💤</div>
+        <h2>Task Idle</h2>
+        <p>This task hasn't started executing yet. Send a message above to resume.</p>
+      </div>
 
       <!-- Loading indicator -->
       <div v-else-if="isTaskPending" class="loading-area">
@@ -673,6 +688,7 @@ function handleProjectConfigBack() {
         :input="pendingApproval?.input ?? {}"
         :auto-approve="autoApprovePolicy"
         :visible="pendingApproval !== null"
+        :error="pendingApproval?.error"
         @approve="handleApprove"
         @deny="handleDeny"
         @close="handleApprovalClose"

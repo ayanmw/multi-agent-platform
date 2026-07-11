@@ -104,6 +104,10 @@ export function useWebSocket() {
   function scheduleReconnect() {
     if (reconnectTimer) return // already scheduled
 
+    // TODO: Phase 7 — WS 重连后 reload active task
+    // 当前重连后不补发断线期间的事件，前端可能丢失中间 step。
+    // 需要 (a) 后端补一个 since-event-id 的 replay 端点，或 (b) 前端
+    // 在 onopen 里调用 /api/tasks?id=<activeTaskId> 重新拉取完整状态。
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       console.log(`[WS] Reconnecting (delay: ${reconnectDelay}ms)...`)

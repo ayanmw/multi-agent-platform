@@ -1,11 +1,18 @@
 <!-- StatusIndicator — renders a colored dot + label for step/task status
      Props:
-       status: 'running' | 'completed' | 'failed' | 'pending'
+       status: 'idle' | 'running' | 'completed' | 'failed' | 'pending'
        label: optional text label (shown next to the dot)
+
+     Color scheme:
+       idle      — gray (task exists but not running, e.g. fresh session)
+       running   — blue pulsing
+       completed — green
+       failed    — red
+       pending   — gray (alias of idle, kept for backward compat)
 -->
 <script setup lang="ts">
 defineProps<{
-  status: 'running' | 'completed' | 'failed' | 'pending'
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'pending'
   label?: string
 }>()
 </script>
@@ -32,6 +39,11 @@ defineProps<{
   display: inline-block;
 }
 
+/* Idle — gray dot (task exists but not running) */
+.status-indicator.idle .status-dot {
+  background: #888;
+}
+
 /* Running — blue pulsing dot */
 .status-indicator.running .status-dot {
   background: #4a9eff;
@@ -48,7 +60,7 @@ defineProps<{
   background: #ff6b6b;
 }
 
-/* Pending — gray dot */
+/* Pending — gray dot (legacy alias of idle) */
 .status-indicator.pending .status-dot {
   background: #666;
 }

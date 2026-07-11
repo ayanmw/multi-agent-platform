@@ -108,8 +108,13 @@ export interface AgentState {
   tokenUsage?: TokenUsage
 }
 
-/** Task status */
-export type TaskStatus = 'running' | 'completed' | 'failed'
+/** Task status
+ *  - 'idle': task/session exists but hasn't started executing (DB may return this)
+ *  - 'running': agent is actively executing
+ *  - 'completed': finished successfully
+ *  - 'failed': finished with error
+ */
+export type TaskStatus = 'idle' | 'running' | 'completed' | 'failed'
 
 /** The top-level task state */
 export interface TaskState {

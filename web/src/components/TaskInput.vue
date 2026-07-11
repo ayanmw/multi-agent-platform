@@ -34,6 +34,10 @@ const inputText = ref('')
 const showOptions = ref(false)
 const maxSteps = ref(10)
 
+// TODO: Phase 7 — 从后端读取 max_steps 合理范围
+// 当前 quickSteps / 滑块上限 50 是前端硬编码，与后端实际允许的范围可能脱节。
+// 后续应通过 GET /api/agents/:id 或 case 配置回读合理上限，避免用户设置一个
+// 后端拒绝的值（或滑块范围远超实际可用区间）。
 const quickSteps = [2, 5, 10, 15, 20, 30]
 
 function handleSend() {

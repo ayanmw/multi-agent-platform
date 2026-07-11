@@ -294,7 +294,7 @@ watch(
 
       <div
         v-for="step in agent.steps"
-        :key="step.index"
+        :key="step.index + '-' + step.type"
         class="step-item"
         :class="{
           'step-running': step.status === 'running',
