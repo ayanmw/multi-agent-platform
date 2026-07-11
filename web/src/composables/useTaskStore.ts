@@ -542,6 +542,9 @@ export function useTaskStore() {
       }
 
       const data = (await resp.json()) as { session_id: string; task_id: string; turn_index: number }
+      // A new turn means the session is active again — reset the status
+      // that may have been set to 'failed' by a previous turn's task_failed event.
+      updateSession(data.session_id, { status: 'running' })
       activeTaskId.value = data.task_id
       ensureTask(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id, turnIndex: data.turn_index }
@@ -622,18 +625,31 @@ export function useTaskStore() {
       }>
     }
     const tasks = (data.tasks || [])
-    // Sort chronologically so turns appear in conversation order
+    // Sort by started_at ASC so turns appear in chronological order
     tasks.sort((a, b) => a.started_at.localeCompare(b.started_at))
+    let latestTask: { status: string; started_at: string } | undefined
     // Skip tasks already loaded (e.g. currently running ones that may arrive empty)
     let loaded = 0
     for (const t of tasks) {
-      if (taskCache.value[t.id]) continue
+      if (taskCache.value[t.id]) {
+        // Track latest even if already cached so we can sync session status
+        if (!latestTask || t.started_at > latestTask.started_at) latestTask = t
+        continue
+      }
       try {
         await loadTask(t.id)
+        latestTask = t
         loaded++
       } catch (err) {
         console.warn('[useTaskStore] loadTask failed for', t.id, err)
       }
+    }
+    // Mirror the latest task's status onto the session so the sidebar
+    // reflects the current reality (e.g. 'failed' → 'completed' after a
+    // successful subsequent turn) instead of stale status pinned by
+    // an earlier task_failed/task_completed event.
+    if (latestTask && latestTask.status) {
+      updateSession(sessionId, { status: latestTask.status as SessionStatus })
     }
     console.log('[useTaskStore] loadSessionTurns done, hydrated', loaded, 'tasks, keys:', Object.keys(taskCache.value))
   }
