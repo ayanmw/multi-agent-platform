@@ -436,6 +436,14 @@ async function handleSessionSelect(session: Session) {
   if (session.rootTaskId) {
     console.log('[App] Loading session turns:', session.id)
     clearActiveTask()
+    // 清理 taskCache 中不属于当前 session 的旧数据，避免长期切换导致内存累积
+    const sid = session.id
+    for (const tid of Object.keys(taskCache.value)) {
+      const t = taskCache.value[tid]
+      if (t.sessionId && t.sessionId !== sid) {
+        delete taskCache.value[tid]
+      }
+    }
     try {
       // Load ALL turns (root + continuation turns) so sessionTurns shows
       // the full conversation timeline, not just the most recent task.
