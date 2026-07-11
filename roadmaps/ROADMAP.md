@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-08
-> **Current version**: v0.6.1 Alpha (Phase 6-E 完成)
+> **Last updated**: 2026-07-11
+> **Current version**: v0.6.3 Alpha (Phase 2.5 UI 修复批次)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -346,8 +346,63 @@ const activeTaskId = ref<string | null>(null)
 - [x] `/api/memories/recall?query=` 端点: 纯向量检索返回按相似度排序的记忆列表
 - [x] 验证: `go build ./...`, `go vet ./...` 通过；启动后 auth 端点 CRUD 正常（auth on/off 双模式）；向量召回端点返回正确结构
 
-### 已知待优化/远期规划
-- [ ] **Phase 7**: 详见下方 Phase 7 章节规划
+## Phase 6 收尾：安全与质量修复批次 ✅ (2026-07-10 ~ 2026-07-11)
+
+> **版本**: v0.6.2 Alpha
+> **Commit**: `7f24a24` / `750e98f` / `94b9bba` / `692cad8` / `bd0cc4b`
+
+### 修复摘要（源自 docs/TEST_REPORT.md 5 维度端到端评测）
+
+| 编号 | 问题 | 修复文件 | 状态 |
+|------|------|---------|------|
+| S1 | FileScopeRule Windows 放行 Unix 绝对路径 | `internal/harness/harness.go` | ✅ |
+| S2 | child_tasks 永远空（未设 parent_task_id） | `internal/orchestrator/orchestrator.go` | ✅ (随 S2 父提交) |
+| S3 | SQLite 并发写丢失（缺 busy_timeout/WAL） | `pkg/db/database.go` | ✅ (随 S3 父提交) |
+| S4 | step ID 碰撞 | `cmd/server/persistence.go` | ✅ (随 S4 父提交) |
+| S5 | root task agent_ids 永远空 | `pkg/db/persistence.go` | ✅ (随 S5 父提交) |
+| S6 | cancel 控制消息未实现 | `cmd/server/main.go` | ✅ cancel 已实现 |
+| S7 | 硬性安全拦截转 30s 审批超时 | `internal/runtime/engine.go` | ✅ |
+| M1 | Policy 拦截原因不持久化 | `internal/runtime/engine.go` | ✅ (随 S7) |
+| M2 | CostBudgetRule 未接入 orchestrator | `internal/orchestrator/orchestrator.go` | ✅ |
+| M3 | /api/tasks body 不支持 TaskContract 透传 | `cmd/server/main.go` + `api.go` | ✅ |
+| F1 | ApprovalDialog 关闭静默丢消息 | `web/src/App.vue` | ✅ |
+| F2 | sendControl 断线丢消息 | `web/src/composables/useWebSocket.ts` | ✅ |
+| F3 | loadTask agentModelMap 死代码 | `web/src/composables/useTaskStore.ts` | ✅ |
+| F7 | loadTask startedAt 时间戳为 0 | `web/src/composables/useTaskStore.ts` | ✅ |
+
+### 验证
+- `go build ./...` / `go test ./...` / `vue-tsc` 全通过
+- 端到端评测：34 PASS / 8 FAIL / 3 SKIP（报告见 `docs/TEST_REPORT.md`）
+
+## Phase 2.5：UI 修复批次 ✅ (2026-07-11)
+
+> **版本**: v0.6.3 Alpha
+> **范围**: 前端体验修复，覆盖 F5 / F6 / F10 / F11 四项；F8 / F9 标记 TODO 推入 Phase 7。
+
+| 编号 | 问题 | 修复文件 | 状态 |
+|------|------|---------|------|
+| F5 | idle 状态样式缺失 | `web/src/types/events.ts` + `App.vue` + `StatusIndicator.vue` | ✅ |
+| F6 | ApprovalDialog 无错误状态 / 超时无通知 | `web/src/composables/useTaskStore.ts` + `ApprovalDialog.vue` + `App.vue` | ✅ |
+| F10 | Step key 多 agent 冲突 | `web/src/components/AgentTree.vue` | ✅ |
+| F11 | TypeWriter 频繁 DOM 操作防抖 | `web/src/components/TypeWriter.vue` | ✅ |
+| F8 | WS 重连不补事件 | `web/src/composables/useWebSocket.ts`（标记 TODO） | ⏳ Phase 7 |
+| F9 | maxSteps 滑块与后端脱节 | `web/src/components/TaskInput.vue`（标记 TODO） | ⏳ Phase 7 |
+
+### 验证
+- `npx vue-tsc -b --noEmit` 通过
+- `npx vite build` 通过（82 modules transformed）
+
+### 已知遗留（推入 Phase 7 安全加固）
+
+| 编号 | 问题 | 说明 |
+|------|------|------|
+| M4 | Auth GET 请求豁免敏感端点 | 需团队讨论安全策略 |
+| M5 | 无 RBAC enforcement | Role 结构已搭好，enforcement 需设计路由规则映射 |
+| M6 | GET /api/auth/api-keys 无 token 可枚举 | 依赖 M5 RBAC |
+| F8 | WS 重连不补事件 | 需要后端 replay 端点或前端 onopen reload task |
+| F9 | maxSteps 滑块与后端脱节 | 需要从后端读取 max_steps 合理范围 |
+
+---
 
 ### 参考文档
 - `doc/chapters/09-llm-api-comparison.html` — LLM 厂商 API 差异分析
