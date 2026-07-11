@@ -240,14 +240,16 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		contract.AllowedTools = spec.AllowedTools
 	}
 
-	// Build PolicyGate with the full rule chain
+	// Build PolicyGate with the full rule chain (mirrors main.go:886-896)
 	tokenBudgetRule := &harness.TokenBudgetRule{}
+	costBudgetRule := harness.NewCostBudgetRule()
 	policyChain := harness.NewPolicyChain(
 		&harness.PathTraversalRule{},
 		&harness.FileScopeRule{},
 		&harness.DangerousCommandRule{},
-			tokenBudgetRule,
+		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
+		costBudgetRule,
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 
@@ -280,6 +282,16 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		sessionID = o.persist.QueryTaskSessionID(rootTaskID)
 	}
 
+	// OnLLMUsage feeds accumulated cost into costBudgetRule so the PolicyChain
+	// can block further tool calls when the USD budget is exceeded. Mirrors
+	// main.go:888-895 (handleMultiAgent) and main.go:1173-1181 (handleRecoverCheckpoint).
+	// Pricing estimate: deepseek-v4-flash ~ $0.05 / 1M input tokens, ~$0.10 / 1M output.
+	onUsage := func(model string, _ *llm.ModelProfile, usage llm.Usage) {
+		// Simple cost estimate; for precise billing, pass a *ModelRegistry.
+		cost := (float64(usage.PromptTokens)*0.05 + float64(usage.CompletionTokens)*0.10) / 1_000_000
+		costBudgetRule.SetCost(cost)
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:          spec.AgentID,
 		SystemPrompt:     spec.SystemPrompt,
@@ -298,6 +310,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		WorkingMemory:    spec.WorkingMemory, // Phase 6: 工作记忆注入
 		AgentBus:         o.agentBus,         // Phase 5: 多Agent通信
 		CheckpointManager: o.checkpointMgr,   // Phase 5: 崩溃恢复
+		OnLLMUsage:       onUsage,
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Emit agent_started event for the orchestrator to track
