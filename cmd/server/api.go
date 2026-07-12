@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -107,9 +109,10 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 // === Session API ===
 
 type createSessionRequest struct {
-	Name      string `json:"name"`
-	UserInput string `json:"user_input"`
-	ProjectID string `json:"project_id"`
+    Name          string `json:"name"`
+    UserInput     string `json:"user_input"`
+    ProjectID     string `json:"project_id"`
+    WorkspaceDir  string `json:"workspace_dir"`  // optional: user-specified path; empty = auto
 }
 
 type renameSessionRequest struct {
@@ -172,15 +175,23 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 			name = extractSessionName(req.UserInput)
 		}
 
+		// Resolve workspace directory according to the fallback rules:
+		// 1. Explicit user path (validated/created) -> use it, isAuto=false
+		// 2. Project's working_directory/session-{id} -> use it, isAuto=false
+		// 3. ./workspace/session-{id}/ -> use it, isAuto=true
+		workspaceDir, workspaceAuto := resolveWorkspaceDir(req.WorkspaceDir, req.ProjectID, sessionID)
+
 		now := time.Now()
 		sess := db.SessionRecord{
-			ID:        sessionID,
-			Name:      name,
-			Status:    "empty",
-			UserInput: req.UserInput,
-			ProjectID: req.ProjectID,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:            sessionID,
+			Name:          name,
+			Status:        "empty",
+			UserInput:     req.UserInput,
+			ProjectID:     req.ProjectID,
+			WorkspaceDir:  workspaceDir,
+			WorkspaceAuto: workspaceAuto,
+			CreatedAt:     now,
+			UpdatedAt:     now,
 		}
 		if err := db.InsertSession(sess); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -260,9 +271,21 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(sess)
 
 	case http.MethodDelete:
+		// Fetch session first to get workspace_dir before deleting the DB record
+		sessToDelete, sessErr := db.QuerySessionByID(id)
+		if sessErr != nil {
+			http.Error(w, "session not found: "+sessErr.Error(), http.StatusNotFound)
+			return
+		}
 		if err := db.DeleteSession(id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// Clean up workspace directory after DB deletion
+		if sessToDelete.WorkspaceDir != "" {
+			if rmErr := os.RemoveAll(sessToDelete.WorkspaceDir); rmErr != nil {
+				log.Printf("[API] DELETE /api/sessions/%s: workspace cleanup failed: %v", id, rmErr)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -286,6 +309,42 @@ func extractSessionName(input string) string {
 		return clean[:30] + "..."
 	}
 	return clean
+}
+
+// resolveWorkspaceDir determines the workspace directory for a new session
+// following the fallback rules:
+//  1. Explicit user-specified path — validate or create it; isAuto=false
+//  2. Project working_directory/session-{id}/ — isAuto=false
+//  3. ./workspace/session-{id}/ — isAuto=true (default)
+func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceDir string, isAuto bool) {
+	// 1. Explicit user path: validate existence, or try to create it
+	if specifiedPath != "" {
+		if info, err := os.Stat(specifiedPath); err == nil && info.IsDir() {
+			return specifiedPath, false
+		}
+		if err := os.MkdirAll(specifiedPath, 0755); err == nil {
+			return specifiedPath, false
+		}
+		// Creation failed — fall through to default
+	}
+
+	// 2. Project working_directory: create session subdirectory
+	if projectID != "" {
+		proj, projErr := db.QueryProjectByID(projectID)
+		if projErr == nil && proj.WorkingDirectory != "" {
+			wsPath := filepath.Join(proj.WorkingDirectory, "workspace", "session-"+sessionID)
+			if err := os.MkdirAll(wsPath, 0755); err == nil {
+				return wsPath, false
+			}
+		}
+	}
+
+	// 3. Default: ./workspace/session-{id}/
+	wsPath := filepath.Join(".", "workspace", "session-"+sessionID)
+	if err := os.MkdirAll(wsPath, 0755); err == nil {
+		return wsPath, true
+	}
+	return "", true // best-effort; empty path tolerated
 }
 
 // === Agent CRUD API ===

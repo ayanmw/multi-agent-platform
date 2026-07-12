@@ -145,7 +145,9 @@ func createTables() error {
 			total_tokens INTEGER DEFAULT 0,
 			context_size INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			workspace_dir TEXT DEFAULT '',
+			workspace_auto BOOLEAN DEFAULT 1
 		)`,
 		// Phase 5-A: Project management and multi-turn conversation tables
 		//   projects — top-level organizational unit for grouping sessions

@@ -39,8 +39,10 @@ import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
 import ApprovalDialog from './components/ApprovalDialog.vue'
+import RecentModsDialog from './components/RecentModsDialog.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
+import { useRecentMods } from './composables/useRecentMods'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
@@ -109,6 +111,23 @@ const { projects, activeProjectId, activeProject, loadProjects, setActiveProject
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
 
+// === 最近修改 Dialog 状态 ===
+const recentModsVisible = ref(false)
+
+const {
+  items: recentMods,
+  show: openRecentMods,
+  toggle: toggleRecentMods,
+  clear: clearRecentMods,
+  addItem: addRecentMod,
+  hasTodayItems,
+} = useRecentMods()
+
+function showRecentMods() {
+  recentModsVisible.value = true
+  openRecentMods()
+}
+
 /** Whether a session is currently in inline rename mode. */
 const renamingSessionId = ref<string | null>(null)
 /** Buffer for the inline rename input field. */
@@ -154,6 +173,12 @@ function closeMemoryBrowser() {
 
 // Collapsed state for project groups in sidebar
 const collapsedProjects = ref<Set<string>>(new Set())
+
+/** 控制侧边栏顶部 "+" 新建 Session 菜单的展开/折叠 */
+const showNewSessionMenu = ref(false)
+
+/** 自定义工作目录路径输入框的绑定值 */
+const customWorkspacePath = ref('')
 
 // === Global expand/collapse state for all agent trees in the current view ===
 /** null = no explicit user command; true/false = expand/collapse all */
@@ -248,11 +273,22 @@ function handleKeydownGlobal(e: KeyboardEvent) {
   }
 }
 
+// 点击侧边栏外部区域时关闭新建 Session 菜单
+function handleGlobalClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  // 如果点击的不是菜单内部或其触发按钮，则关闭
+  if (!target.closest('.new-session-menu') && !target.closest('.new-session-btn[title="New Session"]')) {
+    showNewSessionMenu.value = false
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydownGlobal)
+  window.addEventListener('click', handleGlobalClick)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydownGlobal)
+  window.removeEventListener('click', handleGlobalClick)
 })
 
 // Handlers for approval dialog
@@ -459,6 +495,23 @@ onUnmounted(() => {
   disconnect()
 })
 
+// 最近修改 Dialog: 页面加载时如果有今天的记录则自动弹出一次
+if (hasTodayItems()) {
+  showRecentMods()
+}
+
+// 最近修改 Dialog 快捷键: Ctrl+M / Cmd+M
+onMounted(() => {
+  const handler = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
+      e.preventDefault()
+      toggleRecentMods()
+    }
+  }
+  window.addEventListener('keydown', handler)
+  onUnmounted(() => window.removeEventListener('keydown', handler))
+})
+
 /** Handle task submission from TaskInput */
 async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
   try {
@@ -653,6 +706,52 @@ async function handleNewSession(projectId?: string) {
   }
 }
 
+/** 展开/折叠新建 Session 菜单，同时清空上次输入 */
+function toggleNewSessionMenu() {
+  showNewSessionMenu.value = !showNewSessionMenu.value
+  if (!showNewSessionMenu.value) {
+    customWorkspacePath.value = ''
+  }
+}
+
+/** Auto 模式：不指定 workspace，后端自动生成 ./workspace/session-{id}/ */
+async function handleNewSessionAuto() {
+  showNewSessionMenu.value = false
+  customWorkspacePath.value = ''
+  try {
+    const session = await createSession(undefined, undefined, activeProjectId.value)
+    setActiveSession(session.id)
+    clearActiveTask()
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to create session')
+  }
+}
+
+/** Custom Path 模式：用户指定服务器路径作为 workspace */
+async function handleNewSessionCustom() {
+  customWorkspacePath.value = customWorkspacePath.value.trim()
+  if (!customWorkspacePath.value) {
+    showError('Please enter a valid server path')
+    return
+  }
+  showNewSessionMenu.value = false
+  try {
+    const session = await createSession(undefined, undefined, activeProjectId.value, customWorkspacePath.value)
+    setActiveSession(session.id)
+    clearActiveTask()
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to create session')
+  }
+  customWorkspacePath.value = ''
+}
+
+/** 在新标签页打开 session 的 workspace 目录 */
+function openWorkspace(session: Session) {
+  if (session.workspaceDir) {
+    window.open('/s/' + session.id + '/', '_blank')
+  }
+}
+
 /** Delete current session and select the next one */
 async function handleDeleteSession(session: Session) {
   try {
@@ -758,7 +857,27 @@ function formatShortTime(ts: number): string {
     <aside class="session-sidebar">
       <div class="sidebar-header">
         <h2 class="sidebar-title">Projects</h2>
-        <button class="new-session-btn" @click="showProjectConfig = true" title="New Project">+</button>
+        <div style="position: relative; display: inline-flex;">
+          <!-- 新建 Session 菜单 -->
+          <div v-if="showNewSessionMenu" class="new-session-menu">
+            <button class="menu-auto-btn" @click="handleNewSessionAuto">
+              📁 Auto — workspaces/session-xxx/
+            </button>
+            <div class="menu-separator"></div>
+            <input v-model="customWorkspacePath"
+                   class="menu-path-input"
+                   type="text"
+                   placeholder="Server path: /tmp/my-workspace"
+                   @keydown.enter="handleNewSessionCustom" />
+            <button class="menu-custom-btn" @click="handleNewSessionCustom">
+              📂 Use This Path
+            </button>
+          </div>
+          <!-- New Session 按钮 -->
+          <button class="new-session-btn" @click="toggleNewSessionMenu" title="New Session">+</button>
+          <!-- New Project 按钮（保持原有行为，长按或右键可设） -->
+          <button class="new-session-btn project-btn" @click="showProjectConfig = true" title="New Project" style="margin-left: 4px;">⚙</button>
+        </div>
       </div>
       <div class="project-list">
         <div
@@ -806,7 +925,12 @@ function formatShortTime(ts: number): string {
                   @blur="commitRenameSession(session)"
                   @vue:mounted="($refs['rename-input-' + session.id] as HTMLInputElement)?.focus()"
                 />
-                <div v-else class="session-name">💬 {{ session.name }}</div>
+                <span v-else class="session-name">💬 {{ session.name }}</span>
+                <span v-if="session.workspaceDir && renamingSessionId !== session.id"
+                      class="session-workspace-path"
+                      :title="session.workspaceDir">
+                  📁 {{ session.workspaceDir.split('/').pop() || session.workspaceDir.split('\\').pop() }}
+                </span>
                 <button
                   v-if="renamingSessionId !== session.id"
                   class="session-rename-btn"
@@ -816,7 +940,15 @@ function formatShortTime(ts: number): string {
                   ✎
                 </button>
               </div>
-              <div class="session-meta" :title="`Updated: ${formatSessionTime(session.updatedAt)}\nCreated: ${formatSessionTime(session.createdAt)}`">
+              <button
+                v-if="session.workspaceDir"
+                class="session-workspace-btn"
+                @click.stop="openWorkspace(session)"
+                title="Open workspace: {{ session.workspaceDir }}"
+              >
+                📂
+              </button>
+              <div class="session-meta" :title="`Updated: ${formatSessionTime(session.updatedAt)}\nCreated: ${formatSessionTime(session.createdAt)}${session.workspaceDir ? '\nWorkspace: ' + session.workspaceDir : ''}`">
                 <span :class="['session-status', session.status]">{{ session.status }}</span>
                 <span v-if="session.totalTokens > 0" class="session-tokens">
                   {{ session.totalTokens }} tokens
@@ -880,6 +1012,7 @@ function formatShortTime(ts: number): string {
           <div class="app-header-right">
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
+            <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
             <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
             <span class="app-version">{{ appVersion }}</span>
           </div>
@@ -1008,6 +1141,14 @@ function formatShortTime(ts: number): string {
         @approve="handleApprove"
         @deny="handleDeny"
         @close="handleApprovalClose"
+      />
+
+      <!-- 最近修改 Dialog: shows recent file write history -->
+      <RecentModsDialog
+        :visible="recentModsVisible"
+        :items="recentMods"
+        @update:visible="recentModsVisible = $event"
+        @clear="clearRecentMods"
       />
     </main>
   </div>
@@ -1663,5 +1804,118 @@ function formatShortTime(ts: number): string {
 .memory-overlay-enter-from,
 .memory-overlay-leave-to {
   opacity: 0;
+}
+
+/* New Session dropdown menu */
+.new-session-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #2a2a2e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 8px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 260px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.menu-auto-btn {
+  background: #333;
+  border: 1px solid #444;
+  color: #ccc;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.menu-auto-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.menu-separator {
+  height: 1px;
+  background: #444;
+  margin: 2px 0;
+}
+
+.menu-path-input {
+  background: #1a1a1e;
+  border: 1px solid #444;
+  color: #ddd;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, monospace);
+}
+.menu-path-input:focus {
+  border-color: #4a9eff;
+}
+
+.menu-custom-btn {
+  background: #4a9eff;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.menu-custom-btn:hover {
+  background: #3a8eef;
+}
+
+.session-workspace-btn {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  padding: 0 3px;
+  line-height: 1;
+}
+.session-item:hover .session-workspace-btn {
+  opacity: 1;
+}
+.session-workspace-btn:hover {
+  color: #4a9eff;
+}
+
+.session-workspace-path {
+  font-size: 9px;
+  color: #888;
+  font-family: var(--font-mono, monospace);
+  margin-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 确保 handleGlobalClick 在 App.vue 中可用 */
+.new-session-btn[title="New Session"] {
+  position: relative;
+}
+
+.new-session-btn.project-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  background: #444;
+}
+.new-session-btn.project-btn:hover {
+  background: #555;
 }
 </style>

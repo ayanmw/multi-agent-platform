@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -487,6 +488,34 @@ func main() {
 			handleSessionMessages(w, r, sessionID)
 			return
 		}
+		// GET /api/sessions/{id}/workspace/dir — returns workspace path and auto flag
+		if strings.HasSuffix(path, "/workspace/dir") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET only", http.StatusMethodNotAllowed)
+				return
+			}
+			sessionID := strings.TrimSuffix(path, "/workspace/dir")
+			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
+			sess, err := db.QuerySessionByID(sessionID)
+			if err != nil {
+				http.Error(w, "session not found: "+err.Error(), http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"session_id":      sessionID,
+				"workspace_dir":   sess.WorkspaceDir,
+				"workspace_auto":  sess.WorkspaceAuto,
+			})
+			return
+		}
+		// GET /api/sessions/{id}/workspace-browse — workspace browse info for frontend
+		if strings.HasSuffix(path, "/workspace-browse") {
+			sessionID := strings.TrimSuffix(path, "/workspace-browse")
+			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
+			handleSessionWorkspaceBrowse(w, r, sessionID)
+			return
+		}
 		handleSessionByID(w, r)
 	})
 
@@ -566,6 +595,37 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{
 			"version": version.Version,
 		})
+	})
+
+	// Session workspace static file serving — /s/{session_id}/...
+	// Allows frontend one-click access to generated HTML/image assets.
+	http.HandleFunc("/s/", func(w http.ResponseWriter, r *http.Request) {
+		// Extract session_id from /s/{session_id}/...
+		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
+		if len(pathParts) == 0 || pathParts[0] == "" {
+			http.Error(w, "session_id required", http.StatusBadRequest)
+			return
+		}
+		sessionID := pathParts[0]
+
+		// Look up session to verify it exists and get workspace_dir
+		sess, err := db.QuerySessionByID(sessionID)
+		if err != nil || sess.WorkspaceDir == "" {
+			http.Error(w, "session not found or no workspace", http.StatusNotFound)
+			return
+		}
+
+		// Security: ensure the resolved path is within the workspace dir
+		requestPath := filepath.Join(sess.WorkspaceDir, filepath.Join(pathParts[1:]...))
+		cleanPath := filepath.Clean(requestPath)
+		workspaceRoot := filepath.Clean(sess.WorkspaceDir)
+		if !strings.HasPrefix(cleanPath, workspaceRoot) {
+			http.Error(w, "path traversal detected", http.StatusForbidden)
+			return
+		}
+
+		// Serve the file
+		http.ServeFile(w, r, cleanPath)
 	})
 
 	// Cases API: list preset task cases
@@ -1338,6 +1398,23 @@ func seedDefaultAdminIfNeeded(store auth.APIKeyStore) {
 	log.Printf("DEFAULT ADMIN API KEY: %s", rawKey)
 	log.Printf("  (save this key — it will not be shown again)")
 	log.Printf("========================================")
+}
+
+// handleSessionWorkspaceBrowse returns JSON metadata for the session's workspace
+// directory, including the browse URL for frontend one-click navigation.
+// GET /api/sessions/{id}/workspace-browse
+func handleSessionWorkspaceBrowse(w http.ResponseWriter, r *http.Request, sessionID string) {
+	sess, err := db.QuerySessionByID(sessionID)
+	if err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"session_id":    sessionID,
+		"workspace_dir": sess.WorkspaceDir,
+		"browse_url":    "/s/" + sessionID + "/",
+	})
 }
 
 // fileExists checks if a path exists in the embedded filesystem.

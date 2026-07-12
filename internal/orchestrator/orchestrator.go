@@ -49,6 +49,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
+	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
@@ -282,6 +283,15 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		sessionID = o.persist.QueryTaskSessionID(rootTaskID)
 	}
 
+	// Resolve the session workspace_dir so that tools like run_shell execute
+	// with the correct CWD without the LLM having to pass it every time.
+	workspaceDir := ""
+	if sessionID != "" {
+		if sess, err := db.QuerySessionByID(sessionID); err == nil && sess.WorkspaceDir != "" {
+			workspaceDir = sess.WorkspaceDir
+		}
+	}
+
 	// OnLLMUsage feeds accumulated cost into costBudgetRule so the PolicyChain
 	// can block further tool calls when the USD budget is exceeded. Mirrors
 	// main.go:888-895 (handleMultiAgent) and main.go:1173-1181 (handleRecoverCheckpoint).
@@ -293,24 +303,25 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:          spec.AgentID,
-		SystemPrompt:     spec.SystemPrompt,
-		Model:            model,
-		Endpoint:         o.cfg.LLMEndpoint,
+		AgentID:           spec.AgentID,
+		SystemPrompt:      spec.SystemPrompt,
+		Model:             model,
+		Endpoint:          o.cfg.LLMEndpoint,
 		APIKey:           o.cfg.LLMAPIKey,
-		Provider:         provider, // mock or real provider resolved above
+		Provider:          provider, // mock or real provider resolved above
 		CaseID:           "",       // orchestrator specs do not carry case IDs yet
-		Temperature:      0.7,
-		MaxTokens:        4096,
-		MaxSteps:         contract.MaxSteps,
-		Persistence:      o.persist,
-		PolicyGate:       policyGate,
-		Progress:         progressManager,
-		Contract:         contract,
-		WorkingMemory:    spec.WorkingMemory, // Phase 6: 工作记忆注入
-		AgentBus:         o.agentBus,         // Phase 5: 多Agent通信
-		CheckpointManager: o.checkpointMgr,   // Phase 5: 崩溃恢复
-		OnLLMUsage:       onUsage,
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		MaxSteps:          contract.MaxSteps,
+		Persistence:       o.persist,
+		PolicyGate:        policyGate,
+		Progress:          progressManager,
+		Contract:          contract,
+		WorkingMemory:     spec.WorkingMemory, // Phase 6: 工作记忆注入
+		AgentBus:          o.agentBus,         // Phase 5: 多Agent通信
+		CheckpointManager: o.checkpointMgr,    // Phase 5: 崩溃恢复
+		WorkspaceDir:      workspaceDir,       // Session-level workspace directory
+		OnLLMUsage:        onUsage,
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Emit agent_started event for the orchestrator to track

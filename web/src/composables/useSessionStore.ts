@@ -15,6 +15,8 @@ export interface Session {
   turnCount: number
   createdAt: number
   updatedAt: number
+  workspaceDir: string
+  workspaceAuto: boolean
 }
 
 export interface CreateSessionResponse {
@@ -76,10 +78,9 @@ export function useSessionStore() {
       turn_count: number
       created_at: string
       updated_at: string
+      workspace_dir: string
+      workspace_auto: boolean
     }>
-    console.log('[useSessionStore] loadSessions raw:', raw.map(s => ({
-      id: s.id, name: s.name, root_task_id: s.root_task_id, status: s.status,
-    })))
     // Server is the source of truth — replace local cache entirely.
     // This prevents stale localStorage entries from surviving after
     // a session is deleted on the server.
@@ -97,20 +98,24 @@ export function useSessionStore() {
         turnCount: s.turn_count || 0,
         createdAt: new Date(s.created_at).getTime(),
         updatedAt: new Date(s.updated_at).getTime(),
+        workspaceDir: s.workspace_dir || '',
+        workspaceAuto: s.workspace_auto !== false,
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
-    console.log('[useSessionStore] loadSessions mapped:', sessions.value.map(s => ({
-      id: s.id, name: s.name, rootTaskId: s.rootTaskId, status: s.status,
-    })))
     saveToStorage()
   }
 
   /** Create a new empty session on the backend.
-   *  projectId is optional — defaults to the active project or 'default'. */
-  async function createSession(name?: string, userInput?: string, projectId?: string): Promise<Session> {
+   *  projectId is optional — defaults to the active project or 'default'.
+   *  workspaceDir is optional — if provided, use as the session's working directory;
+   *  if empty, the server auto-generates one. */
+  async function createSession(name?: string, userInput?: string, projectId?: string, workspaceDir?: string): Promise<Session> {
     const body: Record<string, string> = { name: name || '', user_input: userInput || '' }
     if (projectId) {
       body.project_id = projectId
+    }
+    if (workspaceDir) {
+      body.workspace_dir = workspaceDir
     }
     const resp = await fetch('/api/sessions', {
       method: 'POST',
@@ -135,6 +140,8 @@ export function useSessionStore() {
       turnCount: 0,
       createdAt: now,
       updatedAt: now,
+      workspaceDir: workspaceDir || '',
+      workspaceAuto: !workspaceDir,
     }
     sessions.value.unshift(session)
     saveToStorage()
@@ -187,6 +194,8 @@ export function useSessionStore() {
           turn_count: number
           created_at: string
           updated_at: string
+          workspace_dir: string
+          workspace_auto: boolean
         }
       }
       const s = data.session
@@ -199,6 +208,8 @@ export function useSessionStore() {
         durationMs: s.duration_ms || 0,
         projectId: s.project_id || 'default',
         turnCount: s.turn_count || 0,
+        workspaceDir: s.workspace_dir || '',
+        workspaceAuto: s.workspace_auto !== false,
       })
     } catch (err) {
       console.error('[useSessionStore] refreshSession failed:', err)
@@ -234,6 +245,8 @@ export function useSessionStore() {
       turn_count: number
       created_at: string
       updated_at: string
+      workspace_dir: string
+      workspace_auto: boolean
     }
     const existing = sessions.value.find(x => x.id === id)
     const updates: Partial<Session> = {
@@ -245,6 +258,8 @@ export function useSessionStore() {
       durationMs: s.duration_ms || 0,
       projectId: s.project_id || 'default',
       turnCount: s.turn_count || 0,
+      workspaceDir: s.workspace_dir || '',
+      workspaceAuto: s.workspace_auto !== false,
       createdAt: new Date(s.created_at).getTime(),
       updatedAt: new Date(s.updated_at).getTime(),
     }

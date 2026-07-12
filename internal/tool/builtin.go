@@ -207,18 +207,18 @@ func executeShell(input map[string]any) (any, error) {
 func NewWriteFileTool() *BuiltinTool {
 	return &BuiltinTool{
 		name:        "write_file",
-		description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically.",
+		description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. IMPORTANT: Always provide both 'path' and 'content' parameters in your response as a JSON object. Example: {\"path\": \"output.txt\", \"content\": \"hello world\"}",
 		parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "The file path to write to (relative to working directory)",
+						"description": "The file path to write to. This field is REQUIRED. Relative paths are resolved from the working directory. Example: \"src/main.go\" or \"output.txt\"",
 				},
-				"content": map[string]any{
-					"type":        "string",
-					"description": "The content to write to the file",
-				},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "The text content to write to the file. This field is REQUIRED. Always provide the complete file content as a string.",
+					},
 			},
 			"required": []string{"path", "content"},
 		},
@@ -251,6 +251,11 @@ func executeWriteFile(input map[string]any) (any, error) {
 	content, ok := input["content"].(string)
 	if !ok {
 		return nil, fmt.Errorf("content must be a string")
+	}
+
+	// Resolve relative path against workdir if provided.
+	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
+		path = filepath.Join(workdir, path)
 	}
 
 	// Reject paths that attempt directory traversal.
@@ -335,6 +340,16 @@ func executeReadFile(input map[string]any) (any, error) {
 	}
 
 	// Reject paths that attempt directory traversal.
+	if isPathTraversal(path) {
+		return nil, fmt.Errorf("path traversal detected: %s", path)
+	}
+
+	// Resolve relative path against workdir if provided.
+	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
+		path = filepath.Join(workdir, path)
+	}
+
+	// Reject paths that attempt directory traversal after resolving against workdir.
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}

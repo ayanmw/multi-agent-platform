@@ -20,6 +20,8 @@ type SessionRecord struct {
 	TurnCount    int       `json:"turn_count"`
 	TotalTokens  int       `json:"total_tokens"`
 	ContextSize  int       `json:"context_size"`
+	WorkspaceDir string    `json:"workspace_dir"`
+	WorkspaceAuto bool    `json:"workspace_auto"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -153,9 +155,9 @@ func InsertSession(s SessionRecord) error {
 		projectID = "default"
 	}
 	_, err := DB.Exec(
-		`INSERT INTO sessions (id, name, root_task_id, status, user_input, project_id, turn_count, total_tokens, context_size, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Name, s.RootTaskID, s.Status, s.UserInput, projectID, s.TurnCount, s.TotalTokens, s.ContextSize, s.CreatedAt, s.UpdatedAt,
+		`INSERT INTO sessions (id, name, root_task_id, status, user_input, project_id, turn_count, total_tokens, context_size, workspace_dir, workspace_auto, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Name, s.RootTaskID, s.Status, s.UserInput, projectID, s.TurnCount, s.TotalTokens, s.ContextSize, s.WorkspaceDir, s.WorkspaceAuto, s.CreatedAt, s.UpdatedAt,
 	)
 	return err
 }
@@ -242,12 +244,12 @@ func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	var err error
 	if projectID != "" {
 		rows, err = DB.Query(
-			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), created_at, updated_at
+			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
 			 FROM sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT ?`, projectID, limit,
 		)
 	} else {
 		rows, err = DB.Query(
-			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), created_at, updated_at
+			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
 			 FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit,
 		)
 	}
@@ -259,7 +261,7 @@ func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	var sessions []SessionRecord
 	for rows.Next() {
 		var s SessionRecord
-		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.WorkspaceDir, &s.WorkspaceAuto, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)
@@ -274,9 +276,9 @@ func QuerySessionByID(id string) (*SessionRecord, error) {
 	}
 	var s SessionRecord
 	err := DB.QueryRow(
-		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), created_at, updated_at
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
 		 FROM sessions WHERE id=?`, id,
-	).Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.WorkspaceDir, &s.WorkspaceAuto, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -882,7 +884,7 @@ func QuerySessionsByProject(projectID string, limit int) ([]SessionRecord, error
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), created_at, updated_at
+		`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
 		 FROM sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT ?`, projectID, limit,
 	)
 	if err != nil {
@@ -893,7 +895,7 @@ func QuerySessionsByProject(projectID string, limit int) ([]SessionRecord, error
 	var sessions []SessionRecord
 	for rows.Next() {
 		var s SessionRecord
-		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.RootTaskID, &s.Status, &s.UserInput, &s.ProjectID, &s.TurnCount, &s.TotalTokens, &s.ContextSize, &s.WorkspaceDir, &s.WorkspaceAuto, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)

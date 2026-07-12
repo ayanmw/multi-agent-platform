@@ -212,6 +212,13 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		Description: "Add duration_ms column to tasks table",
 		SQL:         `ALTER TABLE tasks ADD COLUMN duration_ms INTEGER DEFAULT 0`,
 	},
+
+	// v15: Add workspace_dir and workspace_auto columns to sessions table.
+	{
+		Version:     15,
+		Description: "Add workspace_dir and workspace_auto columns to sessions table",
+		SQL:         `ALTER TABLE sessions ADD COLUMN workspace_dir TEXT DEFAULT ''; ALTER TABLE sessions ADD COLUMN workspace_auto BOOLEAN DEFAULT 1`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
