@@ -100,6 +100,7 @@ const {
   setActiveSession,
   deleteSession,
   refreshSession,
+  renameSession,
 } = useSessionStore()
 
 const { showAgentConfig, loadAgents, agents } = useAgentStore()
@@ -107,6 +108,11 @@ const { showAgentConfig, loadAgents, agents } = useAgentStore()
 const { projects, activeProjectId, activeProject, loadProjects, setActiveProject } = useProjectStore()
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
+
+/** Whether a session is currently in inline rename mode. */
+const renamingSessionId = ref<string | null>(null)
+/** Buffer for the inline rename input field. */
+const renameBuffer = ref('')
 
 /** Default task timeout (0 = unlimited). Matches the default in TaskInput. */
 function getPreferredTimeoutSeconds(): number {
@@ -686,6 +692,64 @@ function handleProjectConfigBack() {
   // Reload projects in case something changed
   loadProjects().catch(err => console.error('Failed to reload projects:', err))
 }
+
+/** Start inline rename for a session. */
+function startRenameSession(session: Session) {
+  renamingSessionId.value = session.id
+  renameBuffer.value = session.name
+}
+
+/** Commit a session rename to the backend and exit rename mode. */
+async function commitRenameSession(session: Session) {
+  if (renamingSessionId.value !== session.id) return
+  const newName = renameBuffer.value.trim()
+  if (newName && newName !== session.name) {
+    try {
+      await renameSession(session.id, newName)
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to rename session')
+    }
+  }
+  renamingSessionId.value = null
+  renameBuffer.value = ''
+}
+
+/** Cancel an in-progress inline rename without saving. */
+function cancelRenameSession() {
+  renamingSessionId.value = null
+  renameBuffer.value = ''
+}
+
+/** Format a timestamp as a short relative or absolute label for the sidebar.
+ *  Returns only the most important fields: updated date/time, plus created
+ *  when it differs by more than a few seconds. */
+function formatSessionTime(ts: number): string {
+  if (!ts || Number.isNaN(ts)) return ''
+  const d = new Date(ts)
+  try {
+    return d.toLocaleString()
+  } catch {
+    return d.toISOString()
+  }
+}
+
+/** Short-form timestamp for the sidebar list (only updated_at by default). */
+function formatShortTime(ts: number): string {
+  if (!ts || Number.isNaN(ts)) return ''
+  const d = new Date(ts)
+  const now = new Date()
+  const isSameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate()
+  try {
+    if (isSameDay) {
+      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    }
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  } catch {
+    return d.toISOString()
+  }
+}
 </script>
 
 <template>
@@ -730,11 +794,35 @@ function handleProjectConfigBack() {
               :class="['session-item', { active: session.id === activeSessionId }]"
               @click="handleSessionSelect(session)"
             >
-              <div class="session-name">💬 {{ session.name }}</div>
-              <div class="session-meta">
+              <div class="session-name-wrap">
+                <input
+                  v-if="renamingSessionId === session.id"
+                  v-model="renameBuffer"
+                  class="session-rename-input"
+                  type="text"
+                  @click.stop
+                  @keydown.enter="commitRenameSession(session)"
+                  @keydown.escape="cancelRenameSession"
+                  @blur="commitRenameSession(session)"
+                  @vue:mounted="($refs['rename-input-' + session.id] as HTMLInputElement)?.focus()"
+                />
+                <div v-else class="session-name">💬 {{ session.name }}</div>
+                <button
+                  v-if="renamingSessionId !== session.id"
+                  class="session-rename-btn"
+                  @click.stop="startRenameSession(session)"
+                  title="Rename session"
+                >
+                  ✎
+                </button>
+              </div>
+              <div class="session-meta" :title="`Updated: ${formatSessionTime(session.updatedAt)}\nCreated: ${formatSessionTime(session.createdAt)}`">
                 <span :class="['session-status', session.status]">{{ session.status }}</span>
                 <span v-if="session.totalTokens > 0" class="session-tokens">
                   {{ session.totalTokens }} tokens
+                </span>
+                <span v-if="session.updatedAt" class="session-timestamp">
+                  {{ formatShortTime(session.updatedAt) }}
                 </span>
               </div>
               <button
@@ -1078,6 +1166,45 @@ function handleProjectConfigBack() {
   padding-right: 4px;
 }
 
+.session-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 20px;
+}
+
+.session-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-primary, #18181b);
+  border: 1px solid var(--accent-blue, #4a9eff);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  outline: none;
+}
+
+.session-rename-btn {
+  background: transparent;
+  border: none;
+  color: #666;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.session-item:hover .session-rename-btn {
+  opacity: 1;
+}
+
+.session-rename-btn:hover {
+  color: #4a9eff;
+}
+
 .session-meta {
   display: flex;
   gap: 6px;
@@ -1101,6 +1228,12 @@ function handleProjectConfigBack() {
 .session-tokens {
   font-size: 9px;
   color: var(--text-muted);
+}
+
+.session-timestamp {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: auto;
 }
 
 .session-delete {

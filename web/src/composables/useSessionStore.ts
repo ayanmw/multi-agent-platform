@@ -205,6 +205,57 @@ export function useSessionStore() {
     }
   }
 
+  /** Rename a session and persist the change to the backend.
+   *  On success the local cache is updated so the UI reflects the
+   *  new name immediately without a full reload. */
+  async function renameSession(id: string, name: string): Promise<Session> {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      throw new Error('Session name cannot be empty')
+    }
+    const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(`Failed to rename session: ${resp.status} ${text}`)
+    }
+    const s = (await resp.json()) as {
+      id: string
+      name: string
+      root_task_id: string
+      status: string
+      user_input: string
+      total_tokens: number
+      duration_ms: number
+      project_id: string
+      turn_count: number
+      created_at: string
+      updated_at: string
+    }
+    const existing = sessions.value.find(x => x.id === id)
+    const updates: Partial<Session> = {
+      name: s.name,
+      rootTaskId: s.root_task_id || null,
+      status: s.status as SessionStatus,
+      userInput: s.user_input || '',
+      totalTokens: s.total_tokens || 0,
+      durationMs: s.duration_ms || 0,
+      projectId: s.project_id || 'default',
+      turnCount: s.turn_count || 0,
+      createdAt: new Date(s.created_at).getTime(),
+      updatedAt: new Date(s.updated_at).getTime(),
+    }
+    if (!existing) {
+      throw new Error('Session not found in local cache')
+    }
+    Object.assign(existing, updates)
+    saveToStorage()
+    return existing
+  }
+
   return {
     sessions,
     activeSessionId,
@@ -215,6 +266,7 @@ export function useSessionStore() {
     deleteSession,
     updateSession,
     refreshSession,
+    renameSession,
   }
 }
 
