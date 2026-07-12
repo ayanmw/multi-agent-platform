@@ -273,8 +273,8 @@ run_case "multi-agent" \
 
 run_case "long-task" \
   "Execute a long task with multiple steps" \
-  "completed" "yes" "nonempty" \
-  "长任务多步循环"
+  "completed" "no" "nonempty" \
+  "长任务多步循环 (mock 单 text 响应，无 tool_call)"
 
 run_case "tool-error" \
   "This should trigger an error scenario" \

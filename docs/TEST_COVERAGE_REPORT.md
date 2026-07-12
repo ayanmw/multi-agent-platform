@@ -1,6 +1,6 @@
 # Multi-Agent Platform — 测试覆盖率审计报告
 
-> 生成日期：2026-07-11
+> 生成日期：2026-07-12
 > 审计范围：Go 后端全量包 + 前端 Vue 3 + 脚本端到端冒烟
 > 审计方式：`go test -cover ./...` + 逐函数 `go tool cover -func` + 源码 LOC 统计 + 已有评测报告交叉核对
 > 后端版本：commit `231e403`（feat: Phase 2.5 UI 修复批次 — F5/F6/F10/F11）
@@ -204,12 +204,13 @@
 
 | 脚本 | 语言 | 端口 | 大小 | 覆盖维度 | 场景数 | 最近结果 |
 |------|------|------|------|---------|--------|---------|
-| `scripts/smoke-test.sh` | bash | 18080 | 17.7 KB | HTTP REST 全端点冒烟 | 30+ 端点 | 46 PASS |
+| `scripts/smoke-test.sh` | bash | 18080 | 17.7 KB | HTTP REST 全端点冒烟 | 30+ 端点 | 46 PASS / 0 FAIL / 1 SKIP |
+| `scripts/smoke-test-auth.sh` | bash | 18092 | 19.1 KB | HTTP REST 全端点冒烟（REQUIRE_AUTH=true） | 30+ 端点 | 39 PASS / 0 FAIL / 0 SKIP |
 | `scripts/ws-smoke.go` | Go | 18101 | 28.5 KB | WebSocket 事件流 | 3 场景 | 2 PASS / 1 FAIL（cancel 未实现） |
 | `scripts/policy-smoke.sh` | bash | 18102 | 26.2 KB | Policy 安全门端到端 | 5 规则 + 2 SKIP | 3 PASS / 2 FAIL / 2 SKIP |
 | `scripts/multi-agent-smoke.sh` | bash | 18103 | 22.2 KB | 多 Agent 编排（orchestrator） | 3 拆分场景 | 7 PASS / 5 FAIL（持久化 bug） |
-| `scripts/auth-smoke.sh` | bash | 18104 | 21.5 KB | Auth 开启模式全链路 | 16 检查点 | 16 PASS / 0 FAIL / 1 SKIP |
-| `scripts/cases-regression.sh` | bash | 18105 | 10.6 KB | 6 预设 Case Mock 回归 | 6 Case | 6 PASS / 0 FAIL |
+| `scripts/auth-smoke.sh` | bash | 18104 | 21.5 KB | Auth 开启模式全链路（旧脚本，已弃用） | 16 检查点 | FATAL（log cleanup 时序 bug，被 smoke-test-auth.sh 替代） |
+| `scripts/cases-regression.sh` | bash | 18105 | 10.6 KB | 6 预设 Case Mock 回归 | 6 Case | 6 PASS / 0 FAIL（long-task 预期已修正） |
 
 ### 5.2 API 端点冒烟覆盖矩阵
 
@@ -223,9 +224,9 @@
 | 端点 | 覆盖脚本数 | 等级 | 覆盖要点 | 盲区 |
 |------|:---------:|:----:|---------|------|
 | `GET /healthz` | 5 | ✅ | auth on/off 均通过，启动就绪检查 | 无 |
-| `GET /metrics` | 1 | 🔴 | 仅 smoke-test 验证返回 200 | **auth on 下无覆盖**；字段完整性未断言 |
+| `GET /metrics` | 2 | 🟡 | smoke-test + smoke-test-auth 均验证返回 200 | 字段完整性未断言 |
 | `GET /api/version` | 2 | 🟢 | smoke-test + auth-smoke 均通过 | 无 |
-| `GET /api/health` | 1 | 🔴 | 仅 smoke-test 验证返回 200 | 与 /healthz 功能重合，无差异化验证 |
+| `GET /api/health` | 2 | 🟡 | smoke-test + smoke-test-auth 均验证返回 200 | 与 /healthz 功能重合，无差异化验证 |
 | `POST /api/auth/api-keys` | 2 | ✅ | smoke-test（REQUIRE_AUTH=false）+ auth-smoke（REQUIRE_AUTH=true）均验证 201 + key 返回 | 无 |
 | `GET /api/auth/api-keys` | 2 | 🟡 | 两个脚本都测了，但 auth-smoke 发现 **M6: 无 token 可枚举** | auth on 下应只返回当前用户的 keys |
 | `DELETE /api/auth/api-keys/:id` | 2 | ✅ | 创建→吊销→已吊销再访问 全链路 | 不存在的 id → 404（auth-smoke 测了） |
@@ -463,6 +464,6 @@ web/src/
 
 ---
 
-*报告生成：2026-07-11*
+*报告生成：2026-07-12*
 *审计工具：`go test -cover` + `go tool cover -func` + 源码 LOC 统计*
-*交叉参考：`docs/TEST_REPORT.md`（端到端评测，commit 76b9a95）*
+*交叉参考：`docs/TEST_REPORT.md`（端到端评测，commit 231e403）*
