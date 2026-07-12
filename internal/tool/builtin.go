@@ -253,9 +253,18 @@ func executeWriteFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("content must be a string")
 	}
 
-	// Resolve relative path against workdir if provided.
-	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
-		path = filepath.Join(workdir, path)
+	// Resolve relative path against workdir if provided. When workdir is empty
+	// (workspace_dir not bound to the session), fall back to the current
+	// working directory so relative paths still resolve predictably.
+	if !filepath.IsAbs(path) {
+		if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
+			path = filepath.Join(workdir, path)
+		} else {
+			wd, _ := os.Getwd()
+			if wd != "" {
+				path = filepath.Join(wd, path)
+			}
+		}
 	}
 
 	// Reject paths that attempt directory traversal.

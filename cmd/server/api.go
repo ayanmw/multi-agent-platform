@@ -339,8 +339,11 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 		}
 	}
 
-	// 3. Default: ./workspace/session-{id}/
-	wsPath := filepath.Join(".", "workspace", "session-"+sessionID)
+	// 3. Default: <cwd>/workspace/session-{id}/
+	// Use an absolute path based on the current working directory so it is
+	// independent of the directory the server binary was launched from.
+	cwd, _ := os.Getwd()
+	wsPath := filepath.Join(cwd, "workspace", "session-"+sessionID)
 	if err := os.MkdirAll(wsPath, 0755); err == nil {
 		return wsPath, true
 	}
