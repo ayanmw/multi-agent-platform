@@ -33,6 +33,7 @@
         <h1>7. 功能模块</h1>
 
         <h2>7.1 模块总览</h2>
+        <div class="note-obsolete">下表为早期 Phase 0–3 状态，大量模块现已在 Phase 2–6 完成。最新功能状态请见根 <code>README.md</code>、<code>roadmaps/ROADMAP.md</code> 与 <code>docs/History.md</code>。</div>
         <table>
             <tr><th>模块</th><th>Phase</th><th>状态</th><th>说明</th></tr>
             <tr><td>WebSocket Hub</td><td>0</td><td>✅</td><td>多客户端连接管理 + 广播</td></tr>
@@ -83,6 +84,7 @@
             <div class="callout-title">🔶 待完善</div>
             数据库初始化函数 <code>db.Init()</code> 已定义但 Server 启动时未调用，Phase 1 启动时需接入。
         </div>
+        <div class="note-obsolete">数据库现已在 Server 启动时初始化，Schema 已扩展至 16+ 表（sessions、projects、memories、cost_records、api_keys、users 等），迁移版本已达 v14+。详见 <code>pkg/db/</code> 与 <code>docs/History.md</code>。</div>
 
         <h3>7.2.4 Tool Registry 框架</h3>
         <p><strong>位置</strong>：<code>internal/tool/registry.go</code></p>
@@ -96,8 +98,10 @@
             <div class="callout-title">🔶 待实现</div>
             3 个内置工具（run_shell, write_file, read_file）Phase 1 实现。
         </div>
+        <div class="note-obsolete">内置工具与运行时工具注册均已实现，run_shell 已接入 Docker 沙箱。详见 <code>roadmaps/ROADMAP.md</code> Phase 1/5 与 <code>docs/History.md</code>。</div>
 
         <h2>7.3 预设 Task Cases（Phase 3）</h2>
+        <div class="note-obsolete">Cases 已实现，触发方式为 <code>/api/run-case</code> 代理到 <code>POST /api/tasks?case=</code>，详见 <code>docs/API_CHANGELOG.md</code> §2.1。</div>
         <table>
             <tr><th>Case</th><th>演示能力</th><th>预期流程</th></tr>
             <tr>

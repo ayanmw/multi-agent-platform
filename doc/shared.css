@@ -228,7 +228,23 @@ tr:hover td { background: #f8faff; }
     color: #999;
 }
 
-/* === Responsive === */
+/* === Obsolete Notice === */
+.note-obsolete {
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    border-left: 4px solid #ffc107;
+    color: #856404;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin: 14px 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+}
+.note-obsolete::before {
+    content: "[已过时] ";
+    font-weight: 600;
+}
+
 @media (max-width: 768px) {
     .sidebar { width: 100%; height: auto; position: relative; }
     .main { margin-left: 0; padding: 20px; }

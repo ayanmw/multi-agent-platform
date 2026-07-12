@@ -34,6 +34,7 @@
         <p style="color:#666;">SQLite Schema 定义、表关系、文件存储方案。</p>
 
         <h2>5.1 数据库概况</h2>
+        <div class="note-obsolete">数据库已扩展至 16+ 表，迁移版本 v14+，新增 sessions、projects、session_messages、memories、memory_links、cost_records、users、api_keys、checkpoints、metrics 等。详见 <code>pkg/db/</code> 与 <code>docs/History.md</code>。</div>
         <table>
             <tr><th>属性</th><th>值</th></tr>
             <tr><td>数据库引擎</td><td>SQLite (<code>modernc.org/sqlite</code>，纯 Go)</td></tr>
@@ -84,6 +85,7 @@
                    └──────────┘</pre>
 
         <h2>5.3 表详细定义</h2>
+        <div class="note-obsolete">以下仅为 Phase 0 定义的 6 张基础表；完整 Schema 与字段演进请见 <code>pkg/db/database.go</code>、<code>pkg/db/migrate.go</code> 与 <code>docs/History.md</code>。</div>
 
         <h3>5.3.1 agents — Agent 配置表</h3>
         <table>

@@ -33,6 +33,7 @@
         <h1>6. API 参考</h1>
 
         <h2>6.1 端点总览</h2>
+        <div class="note-obsolete">以下端点列表为早期规划，大量端点路径/状态已变更或新增。最新 REST 契约、请求/响应示例与前端适配建议请优先参考 <code>docs/API_CHANGELOG.md</code>，路线与历史见 <code>docs/History.md</code> 与 <code>roadmaps/ROADMAP.md</code>。</div>
         <table>
             <tr><th>方法</th><th>路径</th><th>说明</th><th>Phase</th></tr>
             <tr><td>GET</td><td><code>/health</code></td><td>健康检查</td><td>0 ✅</td></tr>
@@ -48,6 +49,7 @@
         </table>
 
         <h2>6.2 健康检查</h2>
+        <div class="note-obsolete">健康检查端点现为 <code>/healthz</code>（DB ping + WS hub 状态 JSON），并新增 <code>/metrics</code> Prometheus 指标端点。</div>
         <pre>GET /health
 → 200 ok</pre>
 
@@ -67,6 +69,7 @@ ws.send(JSON.stringify({ type: "pause", task_id: "xxx" }));
 ws.send(JSON.stringify({ type: "cancel", task_id: "xxx" }));</pre>
 
         <h2>6.4 POST /api/tasks — 创建任务</h2>
+        <div class="note-obsolete">当前请求体已支持 <code>max_steps</code>、<code>timeout_seconds</code>、<code>agent_id</code>、<code>session_id</code>、<code>project_id</code> 等字段；响应字段为 <code>session_id</code>、<code>task_id</code>、<code>agent_id</code>、<code>action</code>。详见 <code>docs/API_CHANGELOG.md</code> §1。</div>
         <pre>// 请求
 POST /api/tasks
 Content-Type: application/json
@@ -97,6 +100,7 @@ HTTP 200
 }</pre>
 
         <h2>6.5 Agent CRUD（Phase 1+）</h2>
+        <div class="note-obsolete">Agent CRUD 已实现，且支持模型绑定、运行时配置；新增端点包括 Session、Project、Memory、Cost、Auth、Checkpoints、Multi-Agent 等。完整契约见 <code>docs/API_CHANGELOG.md</code>。</div>
         <div class="callout info">
             <div class="callout-title">📋 待实现</div>
             Phase 1 将实现 Agent 配置的 CRUD 接口。
@@ -122,6 +126,7 @@ PUT /api/agents/{id}
 DELETE /api/agents/{id}</pre>
 
         <h2>6.6 Tool 注册（Phase 5+）</h2>
+        <div class="note-obsolete">运行时工具注册已实现，且请求体必须包含 <code>type</code> 字段（<code>shell</code>/<code>http</code>/<code>inline</code>）及对应子字段。详见 <code>docs/API_CHANGELOG.md</code> §2.3。</div>
         <pre>// 注册新工具
 POST /api/tools
 {

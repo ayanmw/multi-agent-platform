@@ -3,6 +3,7 @@
 > **状态**: 已完成（Phase 5-A + 5-B）
 > **日期**: 2026-07-06（设计）/ 2026-07-07（实现完成）
 > **关联**: Phase 5-A（多轮对话 + Project 管理）+ Phase 5-B（上下文压缩 + 记忆作用域）
+> **更新提示**: 本设计文档所述功能已落地。后续 UI/UX 修复（Memory overlay、Continue 保留上下文、step 索引、智能滚动等）记录在 `docs/History.md`；路线与远期规划请见 `roadmaps/ROADMAP.md`。
 
 ---
 
@@ -424,6 +425,8 @@ App.vue
 ---
 
 ## 七、完整 API 总览
+
+> 本节仅记录设计阶段约定的端点；最新实际契约、请求/响应字段与前端适配建议请优先参考 `docs/API_CHANGELOG.md`。
 
 ### Project API
 | 方法 | 路径 | 说明 |

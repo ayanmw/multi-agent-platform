@@ -80,6 +80,7 @@
         </pre>
 
         <h2>2.2 目录结构</h2>
+        <div class="note-obsolete">目录结构已大幅扩展，内部新增了 auth、cases、cost、harness、llm、memory、observability、orchestrator、pool、tool、version 等模块。最新完整结构请见根 <code>README.md</code> 或 <code>docs/History.md</code>。</div>
         <table>
             <tr><th>路径</th><th>说明</th><th>Phase</th></tr>
             <tr><td><code>cmd/server/</code></td><td>入口 main.go，HTTP + WebSocket Server</td><td>0</td></tr>
@@ -147,8 +148,10 @@ ReAct Loop 开始
             Phase 0-4 阶段，前端使用 <code>web/index.html</code> CDN 直接访问，无需 build step。<br>
             Phase 2+ 迁移到 Vite 工程化后，需 <code>npm run build</code> 生成 <code>web/dist/</code>。
         </div>
+        <div class="note-obsolete">最新部署与构建流程请参见 <code>roadmaps/ROADMAP.md</code> Phase 2 与 Phase 5 章节，以及 <code>docs/History.md</code>。</div>
 
         <h2>2.5 关键设计决策回顾</h2>
+        <div class="note-obsolete">前端状态管理现使用 useTaskStore / useSessionStore，Provider 接口已抽象多厂商模型，run_shell 已实现 Docker 沙箱。详见 <code>roadmaps/ROADMAP.md</code> Phase 2/5/6 与 <code>docs/History.md</code>。</div>
         <table>
             <tr><th>决策</th><th>选择</th><th>原因</th></tr>
             <tr><td>通信协议</td><td>WebSocket + JSON</td><td>前端原生支持、调试直观、单连接承载所有事件</td></tr>
