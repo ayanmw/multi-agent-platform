@@ -413,6 +413,21 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		systemPrompt = cfg.WorkingMemory + "\n\n" + cfg.SystemPrompt
 	}
 
+	// Inject working directory guidance into the system prompt when the
+	// session has a bound workspace. This tells the LLM to use relative
+	// paths for all file operations — files are naturally resolved against
+	// this directory, so the LLM can write `snake_game.html` instead of
+	// needing to know an absolute path. No tool mechanics change; this
+	// is purely a prompt-level hint. If WorkspaceDir is empty (legacy
+	// behavior), nothing is appended.
+	if cfg.WorkspaceDir != "" {
+		systemPrompt += "\n\n## Working Directory\n"
+		systemPrompt += "Your working directory for all file operations is: " + cfg.WorkspaceDir + "\n"
+		systemPrompt += "IMPORTANT: When using `write_file` or `read_file`, always use relative paths only "
+		systemPrompt += "(e.g. \"snake_game.html\", \"src/main.go\"). Do NOT prepend directory segments or use "
+		systemPrompt += "absolute paths — the system resolves all relative paths against this working directory.\n"
+	}
+
 	return &Engine{
 		cfg:              cfg,
 		llm:              provider,

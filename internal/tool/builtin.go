@@ -100,7 +100,7 @@ func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
 func NewRunShellTool() *BuiltinTool {
 	return &BuiltinTool{
 		name:        "run_shell",
-		description: "Execute a shell command and return its output. Use this to run system commands, scripts, or development tools.",
+		description: "Execute a shell command and return its output. The command runs in the session's working directory (see system prompt for current directory). Use relative paths for file references (e.g. 'python script.py' not 'cd workspace && python script.py').",
 		parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -110,7 +110,7 @@ func NewRunShellTool() *BuiltinTool {
 				},
 				"workdir": map[string]any{
 					"type":        "string",
-					"description": "Working directory for the command (optional)",
+					"description": "Working directory for the command (optional — defaults to the session's working directory set automatically by the system)",
 				},
 				"timeout_ms": map[string]any{
 					"type":        "integer",
@@ -206,19 +206,19 @@ func executeShell(input map[string]any) (any, error) {
 // traversal attacks.
 func NewWriteFileTool() *BuiltinTool {
 	return &BuiltinTool{
-		name:        "write_file",
-		description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. IMPORTANT: Always provide both 'path' and 'content' parameters in your response as a JSON object. Example: {\"path\": \"output.txt\", \"content\": \"hello world\"}",
+		name: "write_file",
+		description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use RELATIVE paths only — the working directory is set automatically by the system (see system prompt for the current working directory). Do NOT prepend directory segments like 'workspace/session-xxx/'. Example: {\"path\": \"snake_game.html\", \"content\": \"...\"}",
 		parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-						"description": "The file path to write to. This field is REQUIRED. Relative paths are resolved from the working directory. Example: \"src/main.go\" or \"output.txt\"",
+					"description": "The RELATIVE file path to write to (e.g. \"output.txt\", \"src/main.go\"). The system resolves this against the current working directory. Do NOT use absolute paths.",
 				},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "The text content to write to the file. This field is REQUIRED. Always provide the complete file content as a string.",
-					},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The text content to write to the file. This field is REQUIRED. Always provide the complete file content as a string.",
+				},
 			},
 			"required": []string{"path", "content"},
 		},
@@ -302,14 +302,14 @@ const DefaultMaxBytes = 1 << 20 // 1,048,576 bytes
 // content is truncated and a "truncated" flag is set in the result.
 func NewReadFileTool() *BuiltinTool {
 	return &BuiltinTool{
-		name:        "read_file",
-		description: "Read the contents of a file. Use this to inspect files, source code, or configuration.",
+		name: "read_file",
+		description: "Read the contents of a file. The working directory is set automatically by the system — use RELATIVE paths only (e.g. \"README.md\", \"src/main.go\"). Do NOT use absolute paths or prepend directory segments.",
 		parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "The file path to read (relative to working directory)",
+					"description": "The RELATIVE file path to read (e.g. \"README.md\", \"src/main.go\"). The system resolves this against the current working directory. Do NOT use absolute paths.",
 				},
 				"offset": map[string]any{
 					"type":        "integer",
