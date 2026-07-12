@@ -10,7 +10,7 @@
      Used by: TurnList.vue
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { TaskState, TokenUsage } from '../types/events'
 import AgentTree from './AgentTree.vue'
 
@@ -26,6 +26,26 @@ const props = defineProps<{
 const expanded = ref(props.isDefaultExpanded)
 const showTokenDetail = ref(false)
 const showTimeDetail = ref(false)
+
+// React to the global expand/collapse command from App.vue.
+// When expandAll is true/false we explicitly open/close this turn so the
+// global buttons affect every turn, not just the last (default-expanded) one.
+// When the command is reset (null/undefined, e.g. session/task switch),
+// revert to the default state so the latest turn is expanded and historical
+// turns are collapsed again.
+watch(
+  () => props.expandAll,
+  (expand) => {
+    if (expand === true) {
+      expanded.value = true
+    } else if (expand === false) {
+      expanded.value = false
+    } else {
+      expanded.value = props.isDefaultExpanded
+    }
+  },
+  { immediate: true },
+)
 
 function toggle() {
   expanded.value = !expanded.value

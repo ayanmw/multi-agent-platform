@@ -240,6 +240,9 @@ const tokenUsage = computed<TokenUsage>(() => {
 watch(
   () => props.agent.steps.length,
   () => {
+    // Respect explicit Collapse All: do not auto-expand new steps.
+    // When expandAll is null/undefined we keep the existing auto-expand-latest behavior.
+    if (props.expandAll === false) return
     const lastStep = props.agent.steps[props.agent.steps.length - 1]
     if (lastStep) {
       expandedSteps.value.add(lastStep.index)

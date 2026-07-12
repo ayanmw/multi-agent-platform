@@ -168,6 +168,9 @@ function collapseAllTrees() {
 watch(activeTaskId, () => {
   expandAll.value = null
 })
+watch(activeSessionId, () => {
+  expandAll.value = null
+})
 
 // === Smart auto-scroll for the main page ===
 const BOTTOM_THRESHOLD = 50 // px
