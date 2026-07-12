@@ -538,6 +538,19 @@ func isUnixAbsolutePath(p string) bool {
 // If the path is absolute (Windows or Unix style), it checks whether it's under the scope.
 // If the path is relative, it resolves it against the scope.
 // The returned input contains the normalized absolute path.
+//
+// Scope resolution priority (highest first):
+//  1. contract.Scope — explicit caller-provided scope (absolute path expected)
+//  2. input["workdir"] — the session workspace_dir injected by the Engine
+//     (engine.go:1330) when the LLM did not pass an explicit workdir
+//  3. os.Getwd() — legacy fallback so the rule still has a usable root when
+//     neither scope nor workdir is set
+//
+// Without the workdir fallback, the default contract (Scope=".") resolves to
+// the server's CWD, so a write_file with a relative path like "foo.txt" is
+// allowed to land in the server CWD rather than the session workspace — the
+// exact bug we are fixing. When the Engine injects the session workspace as
+// "workdir", we anchor the scope there instead.
 func (r *FileScopeRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	// Only apply to file-related tools
 	if toolName != "write_file" && toolName != "read_file" {
@@ -549,8 +562,19 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		return input, nil // no path to check; let the tool handle the error
 	}
 
+	// Determine the effective scope root. contract.Scope takes precedence;
+	// when it is the permissive default "." (no explicit scope set), fall back
+	// to the session workspace_dir passed in the tool input so that relative
+	// paths resolve inside the session workspace instead of the server CWD.
+	scope := contract.Scope
+	if scope == "" || scope == "." {
+		if wd, hasWd := input["workdir"].(string); hasWd && wd != "" {
+			scope = wd
+		}
+	}
+
 	// Resolve the scope to an absolute path
-	scopeAbs, err := filepath.Abs(contract.Scope)
+	scopeAbs, err := filepath.Abs(scope)
 	if err != nil {
 		return input, &ErrBlockedByPolicy{
 			Rule:   "FileScopeRule",

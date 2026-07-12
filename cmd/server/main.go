@@ -957,6 +957,24 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		}
 	}
 
+	// Resolve the session workspace directory so that tools (run_shell,
+	// write_file, read_file) execute with the correct CWD. This is read for
+	// EVERY turn — not just the root — so subsequent turns in a multi-turn
+	// conversation inherit the same workspace.
+	//
+	// Without this, EngineConfig.WorkspaceDir stays empty and the Engine
+	// (engine.go:1330) never injects "workdir" into tool args. write_file
+	// then resolves relative paths against the server's CWD and treats
+	// absolute paths verbatim (e.g. "/tmp/x" writes to /tmp/x instead of
+	// the session workspace), so files never land in
+	// <cwd>/workspace/session-<id>/ as intended.
+	workspaceDir := ""
+	if sessionID != "" {
+		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
+			workspaceDir = wsSess.WorkspaceDir
+		}
+	}
+
 	// Resolve the LLM Provider from mock/global configuration. The provider is
 	// created once per agent loop and passed to the Engine so that the mock
 	// switch (LLM_USE_MOCK / LLMRealCases / LLMMockEndpoints) is honored.
@@ -1065,6 +1083,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		AgentBus:          agentBus,        // Phase 5: 多Agent通信
 		CheckpointManager: checkpointMgr,   // Phase 5: 崩溃恢复
 		TurnIndex:         turnIndex,       // 当前轮次
+		WorkspaceDir:       workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
 		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
 		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
 			return db.InsertSessionMessage(db.SessionMessageRecord{
