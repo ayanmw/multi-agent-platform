@@ -23,7 +23,9 @@
 ### 1.1 `POST /api/tasks`
 - **端点**: `POST /api/tasks?case=<caseID>`
 - **参数**:
-  - Body: `{ "action": "chat", "input": "...", "agent_id": "...", "max_steps": 10 }`
+  - Body: `{ "action": "chat", "input": "...", "agent_id": "...", "max_steps": 30, "timeout_seconds": 0 }`
+  - `max_steps`: 覆盖本次任务的 ReAct 循环上限（默认 30）。
+  - `timeout_seconds`: 覆盖本次任务的运行超时，0 表示不限制。
   - Query `case`: 透传给 MockProvider 做 `case_id` 精确匹配。真实 LLM 场景下 `case` 仅用于 `LLM_REAL_CASES` 开关判定。
 - **返回**: `201`
   ```json
@@ -71,6 +73,9 @@
 
 ### 1.4 `/api/multi-agent`
 - **端点**: `POST /api/multi-agent`
+- **参数**:
+  - Body: `{ "input": "...", "max_steps": 30, "timeout_seconds": 0, "agents": [...] }`
+  - `max_steps` / `timeout_seconds` 为全局覆盖，会分别写入每个 agent spec 的 contract。
 - **返回**: `201`
   ```json
   {

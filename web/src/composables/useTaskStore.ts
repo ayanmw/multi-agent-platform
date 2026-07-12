@@ -286,6 +286,7 @@ export function useTaskStore() {
         task.status = 'completed'
         task.finalResult = (evt.data.result as string) || null
         task.totalTokens = (evt.data.total_tokens as number) || 0
+        task.durationMs = Date.now() - task.startedAt
         // Update session status to completed
         const sid = (evt.data.session_id as string) || ''
         if (sid) {
@@ -311,6 +312,7 @@ export function useTaskStore() {
           if (evt.data.error) {
             task.finalResult += `\n${evt.data.error}`
           }
+          task.durationMs = Date.now() - task.startedAt
           // Update session status to failed
           const sid = (evt.data.session_id as string) || ''
           if (sid) {
@@ -329,6 +331,10 @@ export function useTaskStore() {
         if (sid && totalTokens !== undefined) {
           updateSession(sid, { totalTokens })
         }
+        const durationMs = (evt.data.duration_ms as number) ?? undefined
+        if (sid && durationMs !== undefined) {
+          updateSession(sid, { durationMs })
+        }
         break
       }
 
@@ -342,10 +348,16 @@ export function useTaskStore() {
           completionTokens: (evt.data.completion_tokens as number) || 0,
           totalTokens: (evt.data.total_tokens as number) || 0,
         }
+        // Accumulate agent duration from its steps for live display parity.
+        agent.durationMs = agent.steps.reduce((sum, s) => sum + (s.durationMs || 0), 0)
 
         if (task) {
           task.totalTokens = Object.values(task.agents).reduce(
             (sum, a) => sum + (a.tokenUsage?.totalTokens || 0),
+            0
+          )
+          task.durationMs = Object.values(task.agents).reduce(
+            (sum, a) => sum + (a.durationMs || 0),
             0
           )
           task.tokenUsage = {
@@ -420,6 +432,7 @@ export function useTaskStore() {
       systemPrompt?: string
       maxSteps?: number
       sessionId?: string
+      timeoutSeconds?: number
     } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     lastUserInput.value = input
@@ -439,6 +452,9 @@ export function useTaskStore() {
       }
       if (options.systemPrompt) body.system_prompt = options.systemPrompt
       if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
+      if (options.timeoutSeconds !== undefined && options.timeoutSeconds >= 0) {
+        body.timeout_seconds = options.timeoutSeconds
+      }
 
       const resp = await fetch('/api/tasks', {
         method: 'POST',
@@ -517,6 +533,7 @@ export function useTaskStore() {
       sessionId: string
       agentId?: string
       maxSteps?: number
+      timeoutSeconds?: number
     }
   ): Promise<{ sessionId: string; taskId: string; turnIndex: number }> {
     lastUserInput.value = input
@@ -531,6 +548,9 @@ export function useTaskStore() {
         agent_id: options.agentId || 'agent_default',
       }
       if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
+      if (options.timeoutSeconds !== undefined && options.timeoutSeconds >= 0) {
+        body.timeout_seconds = options.timeoutSeconds
+      }
 
       const resp = await fetch(`/api/sessions/${encodeURIComponent(options.sessionId)}/chat`, {
         method: 'POST',
@@ -562,7 +582,7 @@ export function useTaskStore() {
   /** Start a multi-agent task via /api/multi-agent. */
   async function startMultiAgentTask(
     input: string,
-    options: { caseType?: string; sessionId?: string } = {}
+    options: { caseType?: string; sessionId?: string; timeoutSeconds?: number } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
@@ -579,6 +599,7 @@ export function useTaskStore() {
           input,
           case_type: options.caseType || '',
           session_id: options.sessionId || '',
+          timeout_seconds: options.timeoutSeconds ?? 0,
         }),
       })
 
@@ -721,6 +742,7 @@ export function useTaskStore() {
       status: (task.status as TaskStatus) || 'completed',
       finalResult: task.final_result || null,
       totalTokens: task.total_tokens || 0,
+      durationMs: (task as any).duration_ms ?? 0,
       agents: {},
       startedAt: task.started_at ? new Date(task.started_at).getTime() : Date.now(),
       tokenUsage: {
@@ -798,8 +820,8 @@ export function useTaskStore() {
           }
         }
       }
-      // Aggregate child task tokens
       taskState.totalTokens += childTask.total_tokens || 0
+      taskState.durationMs = (taskState.durationMs || 0) + (childTask as any).duration_ms || 0
       if (taskState.tokenUsage) {
         taskState.tokenUsage.totalTokens = taskState.totalTokens
       }

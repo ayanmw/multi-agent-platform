@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-11
-> **Current version**: v0.6.3 Alpha (Phase 2.5 UI 修复批次)
+> **Current version**: v0.6.4 Alpha (Phase 6 收尾/UI 体验修复批次)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -260,10 +260,10 @@ const activeTaskId = ref<string | null>(null)
 1. **新建会话**：侧边栏 `+ New Session` → 后端创建空 Session → 回到主界面（预设 Cases + 输入框）
 2. **发送消息**：在 Session 内启动根 Task → WebSocket 事件更新 `taskCache[taskId]`
 3. **子任务生成**：多 Agent 执行时，子 Agent 的子 Task 作为 child task 绑定同一 Session
-4. **会话列表**：左侧边栏展示所有 Session，显示名称、状态、总 token
+4. **会话列表**：左侧边栏展示所有 Session，显示名称、状态、总 token、总耗时
 5. **切换会话**：点击历史 Session → 显示根 Task 及子 Task 的 AgentTree
 6. **删除会话**：删除 Session 及其下所有 Task/Steps/Files（级联）→ 自动切换到其他 Session
-7. **继续执行**：在历史失败 Session 上 Continue → 用原始输入 + 新 max_steps 创建新的根 Task
+7. **继续执行**：在历史失败 Session 上 Continue → 在当前 Session 内开启新一轮，保留完整会话上下文
 8. **服务端恢复**：刷新后前端调用 `GET /api/sessions` 拉取历史 Session 列表
 
 #### 后端数据模型
@@ -377,7 +377,7 @@ const activeTaskId = ref<string | null>(null)
 ## Phase 2.5：UI 修复批次 ✅ (2026-07-11)
 
 > **版本**: v0.6.3 Alpha
-> **范围**: 前端体验修复，覆盖 F5 / F6 / F10 / F11 四项；F8 / F9 标记 TODO 推入 Phase 7。
+> **范围**: 前端体验修复，覆盖 F5 / F6 / F10 / F11 四项；F8 / F9 标记 TODO 推入 Phase 7。本次批次还包含任务超时配置、智能自动滚动、多轮继续上下文保持等 UI/UX 改进，详见 `docs/History.md`。
 
 | 编号 | 问题 | 修复文件 | 状态 |
 |------|------|---------|------|
@@ -385,6 +385,14 @@ const activeTaskId = ref<string | null>(null)
 | F6 | ApprovalDialog 无错误状态 / 超时无通知 | `web/src/composables/useTaskStore.ts` + `ApprovalDialog.vue` + `App.vue` | ✅ |
 | F10 | Step key 多 agent 冲突 | `web/src/components/AgentTree.vue` | ✅ |
 | F11 | TypeWriter 频繁 DOM 操作防抖 | `web/src/components/TypeWriter.vue` | ✅ |
+| — | 可配置任务超时（0 = 无限制） | `internal/harness/harness.go` + `cmd/server/main.go` + `cmd/server/api.go` + `web/src/components/TaskInput.vue` | ✅ |
+| — | 一键展开/折叠全部 + 最新 step 自动展开 | `web/src/App.vue` + `web/src/components/AgentTree.vue` + `TurnItem.vue` + `TurnList.vue` | ✅ |
+| — | 智能自动滚动（底部阈值 + 暂停提示 + Ctrl+End 恢复） | `web/src/App.vue` | ✅ |
+| — | max_steps 失败后 Continue 保留 session 上下文 | `web/src/App.vue` + `web/src/composables/useTaskStore.ts` | ✅ |
+| — | Step 索引 #{{ index }} 显示 | `web/src/components/AgentTree.vue` | ✅ |
+| — | 默认最大步数 MaxSteps 10 → 30 | `internal/harness/harness.go` + `internal/runtime/engine.go` + `web/src/components/TaskInput.vue` | ✅ |
+| — | 首次错误反馈给 AI / 连续两次相同错误才失败 | `internal/runtime/engine.go` | ✅ |
+| — | 任务/会话耗时统计 (`duration_ms`) | `pkg/db/*` + `internal/runtime/*` + `cmd/server/*` + `web/src/components/MetricsPanel.vue` + `TurnItem.vue` / `AgentTree.vue` | ✅ |
 | F8 | WS 重连不补事件 | `web/src/composables/useWebSocket.ts`（标记 TODO） | ⏳ Phase 7 |
 | F9 | maxSteps 滑块与后端脱节 | `web/src/components/TaskInput.vue`（标记 TODO） | ⏳ Phase 7 |
 
@@ -477,3 +485,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
 | v0.6 Alpha | 2026-07-08 | Phase 6 完成: 6-C 技术债务修复 + 6-D 可观测性/成本持久化真实落地 |
 | v0.6.1 Alpha | 2026-07-08 | Phase 6-E 完成: Auth 中间件实际生效 + RAG 本地向量召回接入 MemoryRecall |
+| v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |

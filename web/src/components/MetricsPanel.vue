@@ -22,6 +22,7 @@ import StatusIndicator from './StatusIndicator.vue'
 const props = defineProps<{
   task: TaskState | null
   sessionTotalTokens: number
+  sessionTotalDuration: number
   wsStatus: string
   agents: AgentRecord[]
   selectedAgentId: string
@@ -70,7 +71,7 @@ const runningStep = computed<Step | null>(() => {
 const completedDuration = computed(() => {
   return allSteps.value
     .filter(s => s.status === 'completed' || s.status === 'failed')
-    .reduce((sum, s) => sum + s.durationMs, 0)
+    .reduce((sum, s) => sum + (s.durationMs || 0), 0)
 })
 
 /** Live elapsed for the currently running step (updated every second) */
@@ -271,14 +272,14 @@ const showTimeDetail = ref(false)
           </Transition>
         </div>
         <div
-          v-if="totalElapsed > 0 || isTicking"
+          v-if="sessionTotalDuration > 0 || isTicking"
           class="metric metric-elapsed"
           @mouseenter="showTimeDetail = true"
           @mouseleave="showTimeDetail = false"
         >
           <span class="metric-label">Elapsed</span>
           <span class="metric-value" :class="{ 'elapsed-live': isTicking }">
-            {{ formatElapsed(totalElapsed) }}
+            {{ formatElapsed(sessionTotalDuration + totalElapsed) }}
           </span>
 
           <!-- Time distribution tooltip -->
@@ -304,8 +305,12 @@ const showTimeDetail = ref(false)
                 </span>
               </div>
               <div class="time-row time-total">
-                <span class="time-step-label">Total</span>
+                <span class="time-step-label">Current Turn</span>
                 <span class="time-step-val">{{ formatElapsed(totalElapsed) }}</span>
+              </div>
+              <div class="time-row time-total">
+                <span class="time-step-label">Session Total</span>
+                <span class="time-step-val">{{ formatElapsed(sessionTotalDuration + totalElapsed) }}</span>
               </div>
             </div>
           </Transition>

@@ -11,10 +11,27 @@
        cancel: user clicked cancel
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+
+const MAX_STEPS_STORAGE_KEY = 'map_default_max_steps'
+const DEFAULT_MAX_STEPS = 30
+
+const TIMEOUT_STORAGE_KEY = 'map_default_timeout_seconds'
+const DEFAULT_TIMEOUT_SECONDS = 0
+
+const QUICK_TIMEOUTS_SECONDS = [
+  { label: 'Unlimited', value: 0 },
+  { label: '5 min', value: 5 * 60 },
+  { label: '10 min', value: 10 * 60 },
+  { label: '30 min', value: 30 * 60 },
+  { label: '60 min', value: 60 * 60 },
+  { label: '120 min', value: 120 * 60 },
+]
+const MAX_TIMEOUT_MINUTES = 120
 
 export interface SendOptions {
   maxSteps: number
+  timeoutSeconds?: number
 }
 
 const props = defineProps<{
@@ -32,18 +49,45 @@ const emit = defineEmits<{
 
 const inputText = ref('')
 const showOptions = ref(false)
-const maxSteps = ref(10)
+const maxSteps = ref(DEFAULT_MAX_STEPS)
+const timeoutSeconds = ref(DEFAULT_TIMEOUT_SECONDS)
+
+// Load saved preference on mount so the user's choice survives refreshes.
+onMounted(() => {
+  try {
+    const savedSteps = localStorage.getItem(MAX_STEPS_STORAGE_KEY)
+    if (savedSteps) {
+      const n = parseInt(savedSteps, 10)
+      if (!Number.isNaN(n) && n > 0) {
+        maxSteps.value = n
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  try {
+    const savedTimeout = localStorage.getItem(TIMEOUT_STORAGE_KEY)
+    if (savedTimeout) {
+      const n = parseInt(savedTimeout, 10)
+      if (!Number.isNaN(n) && n >= 0 && n <= MAX_TIMEOUT_MINUTES * 60) {
+        timeoutSeconds.value = n
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+})
 
 // TODO: Phase 7 — 从后端读取 max_steps 合理范围
 // 当前 quickSteps / 滑块上限 50 是前端硬编码，与后端实际允许的范围可能脱节。
 // 后续应通过 GET /api/agents/:id 或 case 配置回读合理上限，避免用户设置一个
 // 后端拒绝的值（或滑块范围远超实际可用区间）。
-const quickSteps = [2, 5, 10, 15, 20, 30]
+const quickSteps = [2, 5, 10, 15, 20, 30, 50]
 
 function handleSend() {
   const text = inputText.value.trim()
   if (!text || props.disabled) return
-  emit('send', text, { maxSteps: maxSteps.value })
+  emit('send', text, { maxSteps: maxSteps.value, timeoutSeconds: timeoutSeconds.value })
   inputText.value = ''
 }
 
@@ -57,6 +101,19 @@ function handleKeydown(e: KeyboardEvent) {
 
 function setMaxSteps(n: number) {
   maxSteps.value = n
+  try {
+    localStorage.setItem(MAX_STEPS_STORAGE_KEY, String(n))
+  } catch {
+    // ignore storage errors
+  }
+}
+function setTimeoutSeconds(seconds: number) {
+  timeoutSeconds.value = Math.max(0, Math.min(seconds, MAX_TIMEOUT_MINUTES * 60))
+  try {
+    localStorage.setItem(TIMEOUT_STORAGE_KEY, String(timeoutSeconds.value))
+  } catch {
+    // ignore storage errors
+  }
 }
 </script>
 
@@ -91,7 +148,7 @@ function setMaxSteps(n: number) {
         ⚙️ Options
       </button>
       <span v-if="!showOptions" class="options-summary">
-        Max steps: {{ maxSteps }}
+        Max steps: {{ maxSteps }} · Timeout: {{ timeoutSeconds === 0 ? 'Unlimited' : (timeoutSeconds / 60) + ' min' }}
       </span>
     </div>
 
@@ -119,6 +176,35 @@ function setMaxSteps(n: number) {
         />
         <div class="option-hint">
           Maximum number of ReAct loop iterations. Increase for long tasks, decrease for quick tasks.
+        </div>
+      </div>
+
+      <div class="option-group">
+        <label class="option-label">
+          Timeout: {{ timeoutSeconds === 0 ? 'Unlimited' : (timeoutSeconds / 60) + ' min' }}
+        </label>
+        <div class="quick-steps">
+          <button
+            v-for="item in QUICK_TIMEOUTS_SECONDS"
+            :key="item.value"
+            class="quick-step-btn"
+            :class="{ active: timeoutSeconds === item.value }"
+            @click="setTimeoutSeconds(item.value)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+        <input
+          :value="timeoutSeconds / 60"
+          type="range"
+          min="0"
+          :max="MAX_TIMEOUT_MINUTES"
+          step="1"
+          class="steps-slider"
+          @input="setTimeoutSeconds(Number(($event.target as HTMLInputElement).value) * 60)"
+        />
+        <div class="option-hint">
+          Maximum execution time for this task. 0 means unlimited.
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ export interface Session {
   status: SessionStatus
   userInput: string
   totalTokens: number
+  durationMs: number
   projectId: string
   turnCount: number
   createdAt: number
@@ -70,6 +71,7 @@ export function useSessionStore() {
       status: string
       user_input: string
       total_tokens: number
+      duration_ms: number
       project_id: string
       turn_count: number
       created_at: string
@@ -90,6 +92,7 @@ export function useSessionStore() {
         status: s.status as SessionStatus,
         userInput: s.user_input || '',
         totalTokens: s.total_tokens || 0,
+        durationMs: s.duration_ms || 0,
         projectId: s.project_id || 'default',
         turnCount: s.turn_count || 0,
         createdAt: new Date(s.created_at).getTime(),
@@ -127,6 +130,7 @@ export function useSessionStore() {
       status: data.status,
       userInput: userInput || '',
       totalTokens: 0,
+      durationMs: 0,
       projectId: projectId || 'default',
       turnCount: 0,
       createdAt: now,
@@ -178,6 +182,7 @@ export function useSessionStore() {
           status: string
           user_input: string
           total_tokens: number
+          duration_ms: number
           project_id: string
           turn_count: number
           created_at: string
@@ -191,6 +196,7 @@ export function useSessionStore() {
         status: s.status as SessionStatus,
         userInput: s.user_input || '',
         totalTokens: s.total_tokens || 0,
+        durationMs: s.duration_ms || 0,
         projectId: s.project_id || 'default',
         turnCount: s.turn_count || 0,
       })

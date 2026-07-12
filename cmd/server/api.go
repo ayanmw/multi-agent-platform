@@ -224,10 +224,17 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			tasks = []db.TaskRecord{}
 		}
 
+		// Aggregate session duration alongside tokens so the frontend can
+		// show session-level elapsed time without summing every task client-side.
+		aggregateTokens, _ := db.AggregateSessionTokens(id)
+		totalDuration, _ := db.AggregateSessionDuration(id)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"session": sess,
-			"tasks":   tasks,
+			"session":      sess,
+			"tasks":        tasks,
+			"total_tokens": aggregateTokens,
+			"duration_ms":  totalDuration,
 		})
 
 	case http.MethodPut:
@@ -837,10 +844,11 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 
 	// 解析请求
 	var req struct {
-		Input        string   `json:"input"`
-		AgentID      string   `json:"agent_id"`
-		SystemPrompt string   `json:"system_prompt"`
-		MaxSteps     int      `json:"max_steps"`
+		Input          string   `json:"input"`
+		AgentID        string   `json:"agent_id"`
+		SystemPrompt   string   `json:"system_prompt"`
+		MaxSteps       int      `json:"max_steps"`
+		TimeoutSeconds int      `json:"timeout_seconds"`
 		// TaskContract optional overrides — when >0 / non-empty, override the
 		// default contract so frontend can drive PolicyChain.
 		Scope         string   `json:"scope"`
@@ -925,7 +933,10 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		contract.MaxSteps = req.MaxSteps
 	}
 	// Override TaskContract fields from request body when provided —
-	// lets the frontend drive PolicyChain (scope, tools, budgets).
+	// lets the frontend drive PolicyChain (scope, tools, budgets) and timeout.
+	if req.TimeoutSeconds > 0 {
+		contract.TimeoutSeconds = req.TimeoutSeconds
+	}
 	if req.Scope != "" {
 		contract.Scope = req.Scope
 	}
@@ -1079,13 +1090,14 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 
 	// Parse the request body — accepts both "case" and "case_id" for the case identifier.
 	var body struct {
-		Input        string `json:"input"`
-		AgentID      string `json:"agent_id"`
-		SystemPrompt string `json:"system_prompt"`
-		MaxSteps     int    `json:"max_steps"`
-		Case         string `json:"case"`
-		CaseID       string `json:"case_id"`
-		SessionID    string `json:"session_id"`
+		Input          string `json:"input"`
+		AgentID        string `json:"agent_id"`
+		SystemPrompt   string `json:"system_prompt"`
+		MaxSteps       int    `json:"max_steps"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
+		Case           string `json:"case"`
+		CaseID         string `json:"case_id"`
+		SessionID      string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1110,6 +1122,9 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 	if req.MaxSteps == 0 {
 		req.MaxSteps = body.MaxSteps
+	}
+	if req.TimeoutSeconds == 0 {
+		req.TimeoutSeconds = body.TimeoutSeconds
 	}
 	if req.SessionID == "" {
 		req.SessionID = body.SessionID
@@ -1153,6 +1168,9 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 	if req.MaxSteps > 0 {
 		contract.MaxSteps = req.MaxSteps
+	}
+	if req.TimeoutSeconds > 0 {
+		contract.TimeoutSeconds = req.TimeoutSeconds
 	}
 
 	workingMemory := ""

@@ -32,6 +32,7 @@ type TaskRecord struct {
 	AgentIDs     []string   `json:"agent_ids"`
 	FinalResult  string     `json:"final_result"`
 	TotalTokens  int        `json:"total_tokens"`
+	DurationMs   int        `json:"duration_ms"`
 	StartedAt    time.Time  `json:"started_at"`
 	CompletedAt  *time.Time `json:"completed_at"`
 	SessionID    string     `json:"session_id"`
@@ -114,6 +115,18 @@ func UpdateTask(id string, status string, finalResult string, totalTokens int) e
 	_, err := DB.Exec(
 		`UPDATE tasks SET status=?, final_result=?, total_tokens=?, completed_at=? WHERE id=?`,
 		status, finalResult, totalTokens, now, id,
+	)
+	return err
+}
+
+// UpdateTaskDuration updates a task's elapsed time.
+func UpdateTaskDuration(id string, durationMs int) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`UPDATE tasks SET duration_ms=? WHERE id=?`,
+		durationMs, id,
 	)
 	return err
 }
@@ -277,7 +290,7 @@ func QueryTasksBySession(sessionID string) ([]TaskRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), COALESCE(duration_ms,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks WHERE session_id=? ORDER BY is_root DESC, started_at ASC`, sessionID,
 	)
 	if err != nil {
@@ -290,7 +303,7 @@ func QueryTasksBySession(sessionID string) ([]TaskRecord, error) {
 		var t TaskRecord
 		var agentIDsJSON string
 		var completedAt *time.Time
-		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.DurationMs, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
@@ -306,7 +319,7 @@ func QueryChildTasks(parentTaskID string) ([]TaskRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), COALESCE(duration_ms,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks WHERE parent_task_id=? ORDER BY started_at ASC`, parentTaskID,
 	)
 	if err != nil {
@@ -319,7 +332,7 @@ func QueryChildTasks(parentTaskID string) ([]TaskRecord, error) {
 		var t TaskRecord
 		var agentIDsJSON string
 		var completedAt *time.Time
-		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.DurationMs, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
@@ -337,6 +350,18 @@ func AggregateSessionTokens(sessionID string) (int, error) {
 	var total int
 	err := DB.QueryRow(
 		`SELECT COALESCE(SUM(total_tokens),0) FROM tasks WHERE session_id=?`, sessionID,
+	).Scan(&total)
+	return total, err
+}
+
+// AggregateSessionDuration sums task durations across all tasks in a session.
+func AggregateSessionDuration(sessionID string) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	var total int
+	err := DB.QueryRow(
+		`SELECT COALESCE(SUM(duration_ms),0) FROM tasks WHERE session_id=?`, sessionID,
 	).Scan(&total)
 	return total, err
 }
@@ -374,7 +399,7 @@ func QueryTasks(limit int) ([]TaskRecord, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), COALESCE(duration_ms,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks ORDER BY started_at DESC LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -387,7 +412,7 @@ func QueryTasks(limit int) ([]TaskRecord, error) {
 		var t TaskRecord
 		var agentIDsJSON string
 		var completedAt *time.Time
-		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.DurationMs, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
@@ -406,9 +431,9 @@ func QueryTaskByID(id string) (*TaskRecord, error) {
 	var agentIDsJSON string
 	var completedAt *time.Time
 	err := DB.QueryRow(
-		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), started_at, completed_at, session_id, parent_task_id, is_root
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), COALESCE(duration_ms,0), started_at, completed_at, session_id, parent_task_id, is_root
 		 FROM tasks WHERE id=?`, id,
-	).Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot)
+	).Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.DurationMs, &t.StartedAt, &completedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot)
 	if err != nil {
 		return nil, err
 	}

@@ -205,6 +205,13 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_mock_scripts_case_id ON mock_scripts(case_id);`,
 	},
+
+	// v14: Add duration_ms column to tasks table for task-level elapsed time tracking.
+	{
+		Version:     14,
+		Description: "Add duration_ms column to tasks table",
+		SQL:         `ALTER TABLE tasks ADD COLUMN duration_ms INTEGER DEFAULT 0`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

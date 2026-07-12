@@ -98,6 +98,8 @@ VALUES ('default', 'Default Project', 'Auto-created default project', '');
 - 用户可在 Project 设置中修改 `working_directory`
 - 如果 `working_directory` 为空，则使用服务进程的工作目录
 
+> **更新说明（2026-07-11）**: `max_steps_exceeded` 失败后，前端 `Continue with max steps ×2` 不再创建新的 root task，而是调用 `POST /api/sessions/:id/chat` 在相同 Session 内开启新一轮对话，从而保留完整 `session_messages` 上下文。
+
 ---
 
 ## 一、多轮对话架构（方案 C）
@@ -283,6 +285,7 @@ ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project';
 ┌─────────────────────────────────────────────────────────────────┐
 │                        sessions                                  │
 │  id | project_id | root_task_id | turn_count | total_tokens | ...│
+│        duration_ms                                               │
 └──────┬──────────────────────┬────────────────────────────────────┘
        │ 1:N                  │ 1:N
        ↓                      ↓
@@ -291,12 +294,13 @@ ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project';
 │  turn_index  │    │  session_id | task_id | turn_index    │
 │  parent_task │    │  role | content | tool_calls | ...    │
 │  is_root     │    └──────────────────────────────────────┘
+│  duration_ms │
 └──────┬───────┘
        │ 1:N
        ↓
 ┌──────────────┐
 │    steps      │
-│  type | ...  │
+│  type | duration_ms | ...  │
 └──────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -306,6 +310,9 @@ ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project';
 │  tier IN (consolidated, semantic)                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> **更新说明（2026-07-11）**: `tasks` 表新增 `duration_ms` 字段（迁移 v14），Engine 在任务完成/失败/取消时写入耗时；`sessions` 通过 `AggregateSessionDuration` 聚合同一 Session 下所有 Task 的 `duration_ms`，并在 `GET /api/sessions/:id` 返回 `duration_ms`。前端 `TaskState` / `AgentState` 增加 `durationMs` 用于界面上展示 task/turn/agent 级耗时。`steps` 也保留了单步耗时能力。
+
 
 ---
 
@@ -432,13 +439,13 @@ App.vue
 |------|------|------|
 | GET | `/api/sessions?project_id=xxx` | 按项目筛选 Session 列表 |
 | POST | `/api/sessions` | 创建 Session（绑定 project_id） |
-| GET | `/api/sessions/:id` | Session 详情（含 turn 列表） |
+| GET | `/api/sessions/:id` | Session 详情（含 turn 列表、聚合 `total_tokens` 与 `duration_ms`） |
 | DELETE | `/api/sessions/:id` | 删除 Session（级联 session_messages） |
 
 ### 多轮对话 API（新增）
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/sessions/:id/chat` | 在 Session 内发起新轮对话 |
+| POST | `/api/sessions/:id/chat` | 在 Session 内发起新轮对话；请求体支持 `timeout_seconds` 覆盖当前 turn 的任务超时 |
 | GET | `/api/sessions/:id/messages` | 获取 Session 的完整消息历史 |
 | POST | `/api/sessions/:id/compress` | 手动触发上下文压缩 |
 

@@ -16,6 +16,8 @@ const props = defineProps<{
     task: TaskState
     userInput: string
   }>
+  /** Forwarded from App.vue: controls all AgentTree step expansion */
+  expandAll?: boolean
 }>()
 
 // Default expand the last turn (if there are multiple)
@@ -34,6 +36,7 @@ const defaultExpandedTurn = props.turns.length > 0 ? props.turns.length - 1 : 0
       :turn-index="idx"
       :user-input="turn.userInput"
       :is-default-expanded="idx === defaultExpandedTurn"
+      :expand-all="expandAll"
     />
   </div>
 </template>

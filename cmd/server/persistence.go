@@ -31,6 +31,10 @@ func (p *DBPersistence) UpdateTask(taskID string, status string, finalResult str
 	return db.UpdateTask(taskID, status, finalResult, totalTokens)
 }
 
+func (p *DBPersistence) UpdateTaskDuration(taskID string, durationMs int) error {
+	return db.UpdateTaskDuration(taskID, durationMs)
+}
+
 func (p *DBPersistence) SaveStep(s runtime.StepRecord) error {
 	return db.InsertStep(db.StepRecord{
 		ID:         fmt.Sprintf("step_%s_%s_%d_%s", s.TaskID, s.AgentID, s.StepIndex, s.Type),

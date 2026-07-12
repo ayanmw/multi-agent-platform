@@ -23,7 +23,7 @@
        session click → switch activeSessionId + load task from history
 -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed, nextTick } from 'vue'
 import { useTaskStore } from './composables/useTaskStore'
 import { useSessionStore } from './composables/useSessionStore'
 import { useAgentStore } from './composables/useAgentStore'
@@ -108,6 +108,20 @@ const { projects, activeProjectId, activeProject, loadProjects, setActiveProject
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
 
+/** Default task timeout (0 = unlimited). Matches the default in TaskInput. */
+function getPreferredTimeoutSeconds(): number {
+  try {
+    const saved = localStorage.getItem('map_default_timeout_seconds')
+    if (saved) {
+      const n = parseInt(saved, 10)
+      if (!Number.isNaN(n) && n >= 0) return n
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 0
+}
+
 // Selected agent ID for task execution
 const selectedAgentId = ref('agent_default')
 
@@ -116,10 +130,121 @@ const autoApprovePolicy = ref(false)
 
 // Project config view toggle
 const showProjectConfig = ref(false)
+
+/** Whether the Memory Browser overlay is open.
+ *  Unlike showProjectConfig, this renders as a modal layer on top of the
+ *  existing main content so the session/task view remains interactive underneath. */
 const showMemoryBrowser = ref(false)
+
+/** Toggle the Memory overlay open/closed without replacing main content. */
+function toggleMemoryBrowser() {
+  showMemoryBrowser.value = !showMemoryBrowser.value
+}
+
+/** Close the Memory overlay and return to the previous view. */
+function closeMemoryBrowser() {
+  showMemoryBrowser.value = false
+}
 
 // Collapsed state for project groups in sidebar
 const collapsedProjects = ref<Set<string>>(new Set())
+
+// === Global expand/collapse state for all agent trees in the current view ===
+/** null = no explicit user command; true/false = expand/collapse all */
+const expandAll = ref<boolean | null>(null)
+
+/** User explicitly expands every turn and step in the current tree. */
+function expandAllTrees() {
+  expandAll.value = true
+}
+
+/** User explicitly collapses every turn and step in the current tree. */
+function collapseAllTrees() {
+  expandAll.value = false
+}
+
+// Reset expand/collapse command when the active task or session changes so
+// a new task defaults to current behavior (latest turn/step expanded).
+watch(activeTaskId, () => {
+  expandAll.value = null
+})
+
+// === Smart auto-scroll for the main page ===
+const BOTTOM_THRESHOLD = 50 // px
+const mainRef = ref<HTMLElement | null>(null)
+const isNearBottom = ref(true)
+const autoScrollPaused = ref(false)
+
+/** Check if the main scroll container is within BOTTOM_THRESHOLD px of the bottom. */
+function checkNearBottom(): boolean {
+  const el = mainRef.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
+}
+
+/** Smoothly scroll the main container to its bottom. */
+function scrollToBottom() {
+  const el = mainRef.value
+  if (!el) return
+  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  isNearBottom.value = true
+  autoScrollPaused.value = false
+}
+
+/** Window-level fallback scroll to bottom (for Ctrl+End). */
+function scrollWindowToBottom() {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
+}
+
+/** Called on main scroll events to detect if the user has moved away from the bottom. */
+function handleMainScroll() {
+  const near = checkNearBottom()
+  isNearBottom.value = near
+  if (near) {
+    autoScrollPaused.value = false
+  } else if (!autoScrollPaused.value) {
+    // User explicitly scrolled up — pause auto-scroll until they return to bottom.
+    autoScrollPaused.value = true
+  }
+}
+
+// When new content arrives (steps/thinking grow, new turns), auto-scroll only
+// if the user is already near the bottom. Otherwise keep the paused indicator.
+watch(
+  () => sessionTurns.value.length,
+  () => {
+    if (isNearBottom.value) {
+      nextTick(scrollToBottom)
+    }
+  }
+)
+
+watch(
+  () => currentTask.value?.totalTokens,
+  () => {
+    if (isNearBottom.value) {
+      nextTick(scrollToBottom)
+    }
+  }
+)
+
+// Global Ctrl+End handler to resume auto-scroll.
+function handleKeydownGlobal(e: KeyboardEvent) {
+  if (e.key === 'End' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    e.preventDefault()
+    isNearBottom.value = true
+    autoScrollPaused.value = false
+    scrollToBottom()
+    scrollWindowToBottom()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydownGlobal)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydownGlobal)
+})
 
 // Handlers for approval dialog
 function handleApprove(approvalId: string) {
@@ -183,6 +308,17 @@ const sessionTotalTokens = computed(() => {
   return Object.values(taskCache.value)
     .filter(t => !t.sessionId || t.sessionId === sid)
     .reduce((sum, t) => sum + (t.totalTokens || 0), 0)
+})
+
+/** Total duration across all turns in the active session (ms).
+ *  Mirrors the token strategy so MetricsPanel can display a single session-level
+ *  elapsed time without re-summing client-side. */
+const sessionTotalDuration = computed(() => {
+  const sid = activeSession.value?.id
+  if (!sid) return 0
+  return Object.values(taskCache.value)
+    .filter(t => !t.sessionId || t.sessionId === sid)
+    .reduce((sum, t) => sum + (t.durationMs || 0), 0)
 })
 
 /**
@@ -315,7 +451,7 @@ onUnmounted(() => {
 })
 
 /** Handle task submission from TaskInput */
-async function handleSend(text: string, options: { maxSteps?: number }) {
+async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
   try {
     const session = activeSession.value
     if (!session) {
@@ -323,6 +459,7 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
       const newSession = await createSession(undefined, text, activeProjectId.value)
       setActiveSession(newSession.id)
       await startTask(text, {
+        timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
         sessionId: newSession.id,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
@@ -330,6 +467,7 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
     } else if (!session.rootTaskId) {
       // Session exists but no root task yet — this is the first turn
       await startTask(text, {
+        timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
         sessionId: session.id,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
@@ -338,6 +476,7 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
       // Session already has a root task — this is a subsequent turn
       // Use the multi-turn chat endpoint
       await startTurn(text, {
+        timeoutSeconds: options.timeoutSeconds,
         sessionId: session.id,
         maxSteps: options.maxSteps,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
@@ -350,7 +489,7 @@ async function handleSend(text: string, options: { maxSteps?: number }) {
 
 /** Compute the next max steps when continuing a failed task */
 function nextMaxSteps(): number {
-  const currentMax = Object.values(currentTask.value?.agents ?? {}).find(a => a.maxSteps)?.maxSteps ?? 10
+  const currentMax = Object.values(currentTask.value?.agents ?? {}).find(a => a.maxSteps)?.maxSteps ?? 30
   return currentMax * 2
 }
 
@@ -359,18 +498,32 @@ function isMaxStepsFailure(): boolean {
   return currentTask.value?.finalResult?.includes('max steps') ?? false
 }
 
-/** Continue a max-steps-exceeded task with doubled max_steps */
+/** Continue a max-steps-exceeded task with doubled max_steps in the same session.
+ *
+ *  Instead of starting a brand-new root task (which loses the conversation
+ *  context), this sends the original user input as a new turn in the current
+ *  session. The backend's session-chat endpoint loads session_messages and
+ *  prepends the full history to the system prompt, so the agent can continue
+ *  as if it were the next round of the same conversation.
+ */
 async function handleContinue() {
   if (!lastUserInput.value) {
     showError('No previous input to continue from')
     return
   }
+  const sessionId = activeSessionId.value
+  if (!sessionId) {
+    showError('No active session to continue in')
+    return
+  }
   try {
     const newMaxSteps = nextMaxSteps()
     showInfo(`Continuing with max steps ×2 = ${newMaxSteps}`)
-    await startTask(lastUserInput.value, {
+    await startTurn(lastUserInput.value, {
+      sessionId,
       maxSteps: newMaxSteps,
-      sessionId: activeSessionId.value || undefined,
+      timeoutSeconds: getPreferredTimeoutSeconds(),
+      agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
     })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to continue task')
@@ -607,107 +760,131 @@ function handleProjectConfigBack() {
     </aside>
 
     <!-- Main content -->
-    <main class="main-content">
+    <main ref="mainRef" class="main-content" @scroll="handleMainScroll">
       <!-- Agent Config view — replaces main content when active -->
       <AgentConfig v-if="showAgentConfig" @back="showAgentConfig = false" />
 
       <!-- Project Config view — replaces main content when active -->
       <ProjectConfig v-else-if="showProjectConfig" @back="handleProjectConfigBack" />
 
-      <!-- Memory Browser view — replaces main content when active -->
-      <MemoryBrowser v-else-if="showMemoryBrowser" />
+      <!-- Memory Browser overlay — rendered on top of the normal main content.
+           The main view stays mounted underneath, so sidebar navigation continues
+           to work while the overlay is open. -->
+      <div v-if="showMemoryBrowser" class="memory-overlay" @click.self="closeMemoryBrowser">
+        <div class="memory-overlay-panel">
+          <div class="memory-overlay-header">
+            <button class="memory-close-btn" @click="closeMemoryBrowser" title="Close Memory Browser">
+              × Close
+            </button>
+          </div>
+          <MemoryBrowser class="memory-overlay-browser" />
+        </div>
+      </div>
 
       <!-- Normal main content -->
       <template v-else>
-      <!-- Header -->
-      <header class="app-header">
-        <h1 class="app-title">🤖 Multi-Agent Platform</h1>
-        <div class="app-header-right">
-          <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
-          <button class="agents-btn" @click="showMemoryBrowser = true" title="Memory Browser">🧠 Memory</button>
-          <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
-          <span class="app-version">{{ appVersion }}</span>
+        <!-- Header -->
+        <header class="app-header">
+          <h1 class="app-title">🤖 Multi-Agent Platform</h1>
+          <div class="app-header-right">
+            <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
+            <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
+            <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
+            <span class="app-version">{{ appVersion }}</span>
+          </div>
+        </header>
+
+        <!-- Metrics bar -->
+        <MetricsPanel :task="currentTask" :session-total-tokens="sessionTotalTokens" :session-total-duration="sessionTotalDuration" :ws-status="wsStatus" :agents="agents" :selected-agent-id="selectedAgentId" :auto-approve="autoApprovePolicy" @update:selected-agent-id="(id: string) => selectedAgentId = id" @update:auto-approve="(v: boolean) => autoApprovePolicy = v" />
+
+        <!-- View controls: expand/collapse all turns/steps -->
+        <div v-if="currentTask && !isTaskIdle" class="view-controls">
+          <button class="view-control-btn" @click="expandAllTrees" title="Expand all turns and steps">Expand All</button>
+          <button class="view-control-btn" @click="collapseAllTrees" title="Collapse all turns and steps">Collapse All</button>
         </div>
-      </header>
 
-      <!-- Metrics bar -->
-      <MetricsPanel :task="currentTask" :session-total-tokens="sessionTotalTokens" :ws-status="wsStatus" :agents="agents" :selected-agent-id="selectedAgentId" :auto-approve="autoApprovePolicy" @update:selected-agent-id="(id: string) => selectedAgentId = id" @update:auto-approve="(v: boolean) => autoApprovePolicy = v" />
-
-      <!-- Turn List (multi-turn conversation timeline) -->
-      <TurnList
-        v-if="currentTask && !isTaskIdle"
-        :turns="sessionTurns"
-      />
-
-      <!-- Idle state — task exists in DB but hasn't executed (status='idle').
-           Shown instead of the empty state when a session with an idle task is selected. -->
-      <div v-else-if="isTaskIdle" class="empty-state">
-        <div class="empty-icon">💤</div>
-        <h2>Task Idle</h2>
-        <p>This task hasn't started executing yet. Send a message above to resume.</p>
-      </div>
-
-      <!-- Loading indicator -->
-      <div v-else-if="isTaskPending" class="loading-area">
-        <div class="loading-spinner"></div>
-        <div class="loading-text">Agent is starting...</div>
-        <div class="loading-subtext">Waiting for LLM response</div>
-      </div>
-
-      <!-- Task input -->
-      <TaskInput
-        :disabled="isAgentRunning"
-        :is-running="isAgentRunning"
-        :is-pending="isTaskPending"
-        @send="handleSend"
-        @pause="pauseTask"
-        @resume="resumeTask"
-        @cancel="cancelTask"
-      />
-
-      <!-- Preset case cards — shown when active session has no task / task is empty -->
-      <div v-if="!currentTask && !isTaskPending && presetCases.length > 0" class="cases-section">
-        <h2 class="section-title">📋 预设任务</h2>
-        <div v-if="casesLoading" class="cases-loading">Loading...</div>
-        <div v-else class="cases-grid">
-          <CaseCard
-            v-for="c in presetCases"
-            :key="c.id"
-            :case-data="c"
-            :disabled="isAgentRunning"
-            @run="handleCaseRun"
-            @view="handleCaseView"
-          />
+        <!-- Auto-scroll paused indicator -->
+        <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
+          Auto-scroll paused — press Ctrl+End or click to resume
         </div>
-      </div>
 
-      <!-- Empty state -->
-      <div v-else-if="!isTaskPending && presetCases.length === 0" class="empty-state">
-        <div class="empty-icon">🚀</div>
-        <h2>Ready to start</h2>
-        <p>Enter a task description above to see the agent in action.</p>
-      </div>
+        <!-- Turn List (multi-turn conversation timeline) -->
+        <TurnList
+          v-if="currentTask && !isTaskIdle"
+          :turns="sessionTurns"
+          :expand-all="expandAll ?? undefined"
+        />
 
-      <!-- Final result (shown when task completed) -->
-      <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
-        <div class="final-result-header">✅ Task Complete</div>
-        <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
-      </div>
-
-      <!-- Task failed (shown when task failed) -->
-      <div v-if="currentTask?.status === 'failed'" class="final-result final-result-failed">
-        <div class="final-result-header">❌ Task Failed</div>
-        <div v-if="currentTask.finalResult" class="final-result-text">{{ currentTask.finalResult }}</div>
-        <div v-else class="final-result-text final-result-subtle">
-          The task failed. Check the agent tree above for details.
+        <!-- Idle state — task exists in DB but hasn't executed (status='idle').
+             Shown instead of the empty state when a session with an idle task is selected. -->
+        <div v-else-if="isTaskIdle" class="empty-state">
+          <div class="empty-icon">💤</div>
+          <h2>Task Idle</h2>
+          <p>This task hasn't started executing yet. Send a message above to resume.</p>
         </div>
-        <div v-if="isMaxStepsFailure()" class="failed-actions">
-          <button class="btn-continue" @click="handleContinue">
-            🚀 Continue with max steps ×2 ({{ nextMaxSteps() }})
-          </button>
-          <span class="continue-hint">Resume from the last input with doubled step budget</span>
+
+        <!-- Loading indicator -->
+        <div v-else-if="isTaskPending" class="loading-area">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Agent is starting...</div>
+          <div class="loading-subtext">Waiting for LLM response</div>
         </div>
-      </div>
+
+        <!-- Task input -->
+        <TaskInput
+          :disabled="isAgentRunning"
+          :is-running="isAgentRunning"
+          :is-pending="isTaskPending"
+          @send="handleSend"
+          @pause="pauseTask"
+          @resume="resumeTask"
+          @cancel="cancelTask"
+        />
+
+        <!-- Preset case cards — shown when active session has no task / task is empty -->
+        <div v-if="!currentTask && !isTaskPending && presetCases.length > 0" class="cases-section">
+          <h2 class="section-title">📋 预设任务</h2>
+          <div v-if="casesLoading" class="cases-loading">Loading...</div>
+          <div v-else class="cases-grid">
+            <CaseCard
+              v-for="c in presetCases"
+              :key="c.id"
+              :case-data="c"
+              :disabled="isAgentRunning"
+              @run="handleCaseRun"
+              @view="handleCaseView"
+            />
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <div v-else-if="!isTaskPending && presetCases.length === 0" class="empty-state">
+          <div class="empty-icon">🚀</div>
+          <h2>Ready to start</h2>
+          <p>Enter a task description above to see the agent in action.</p>
+        </div>
+
+        <!-- Final result (shown when task completed) -->
+        <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
+          <div class="final-result-header">✅ Task Complete</div>
+          <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
+        </div>
+
+        <!-- Task failed (shown when task failed) -->
+        <div v-if="currentTask?.status === 'failed'" class="final-result final-result-failed">
+          <div class="final-result-header">❌ Task Failed</div>
+          <div v-if="currentTask.finalResult" class="final-result-text">{{ currentTask.finalResult }}</div>
+          <div v-else class="final-result-text final-result-subtle">
+            The task failed. Check the agent tree above for details.
+          </div>
+          <div v-if="isMaxStepsFailure()" class="failed-actions">
+            <button class="btn-continue" @click="handleContinue">
+              🚀 Continue with max steps ×2 ({{ nextMaxSteps() }})
+            </button>
+            <span class="continue-hint">Resume from the last input with doubled step budget</span>
+          </div>
+        </div>
+      </template>
 
       <!-- Global toast notifications -->
       <Toast :toasts="toasts" @dismiss="dismissToast" />
@@ -741,7 +918,6 @@ function handleProjectConfigBack() {
         @deny="handleDeny"
         @close="handleApprovalClose"
       />
-      </template>
     </main>
   </div>
 </template>
@@ -998,6 +1174,54 @@ function handleProjectConfigBack() {
   flex: 1;
   min-width: 0;
   padding: 16px 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 40px);
+}
+
+/* View controls */
+.view-controls {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.view-control-btn {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #bbb;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.view-control-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+  border-color: #555;
+}
+
+/* Auto-scroll paused hint */
+.scroll-paused-hint {
+  position: sticky;
+  top: 12px;
+  z-index: 50;
+  margin: 0 0 12px;
+  padding: 8px 14px;
+  background: #2a2a2a;
+  border: 1px dashed #666;
+  border-radius: 8px;
+  color: #aaa;
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.scroll-paused-hint:hover {
+  background: #333;
+  color: #fff;
 }
 
 /* Header */
@@ -1232,5 +1456,76 @@ function handleProjectConfigBack() {
 .continue-hint {
   font-size: 11px;
   color: #888;
+}
+
+/* Memory Browser overlay — rendered on top of main content with a dark
+   backdrop. The panel takes most of the viewport and hosts the existing
+   MemoryBrowser component. */
+.memory-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+  backdrop-filter: blur(2px);
+}
+
+.memory-overlay-panel {
+  width: 100%;
+  max-width: 1200px;
+  height: calc(100vh - 40px);
+  background: var(--bg-primary, #18181b);
+  border: 1px solid var(--border-primary, #333);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.memory-overlay-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-primary, #333);
+  flex-shrink: 0;
+  background: var(--bg-secondary, #1e1e22);
+}
+
+.memory-close-btn {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  color: #ccc;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  font-weight: 500;
+}
+
+.memory-close-btn:hover {
+  background: #444;
+  color: #fff;
+}
+
+.memory-overlay-browser {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* Vue transition classes for the overlay fade/slide effect. */
+.memory-overlay-enter-active,
+.memory-overlay-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.memory-overlay-enter-from,
+.memory-overlay-leave-to {
+  opacity: 0;
 }
 </style>

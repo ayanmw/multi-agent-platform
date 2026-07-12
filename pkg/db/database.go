@@ -84,6 +84,7 @@ func createTables() error {
 			agent_ids JSON DEFAULT '[]',
 			final_result TEXT,
 			total_tokens INTEGER DEFAULT 0,
+			duration_ms INTEGER DEFAULT 0,
 			started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			completed_at DATETIME,
 			session_id TEXT,

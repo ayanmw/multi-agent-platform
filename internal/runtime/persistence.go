@@ -6,6 +6,7 @@ type Persistence interface {
 	SaveTask(taskID string, userInput string, agentIDs []string) error
 	SaveTaskMeta(taskID string, sessionID string, parentTaskID string, isRoot bool) error
 	UpdateTask(taskID string, status string, finalResult string, totalTokens int) error
+	UpdateTaskDuration(taskID string, durationMs int) error
 	SaveStep(step StepRecord) error
 	SaveConversation(conv ConversationRecord) error
 	// QueryTaskSessionID returns the session_id for a task, or empty string if

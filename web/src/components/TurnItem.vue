@@ -19,10 +19,13 @@ const props = defineProps<{
   turnIndex: number
   userInput: string
   isDefaultExpanded: boolean
+  /** Forwarded from App.vue: controls all AgentTree step expansion */
+  expandAll?: boolean
 }>()
 
 const expanded = ref(props.isDefaultExpanded)
 const showTokenDetail = ref(false)
+const showTimeDetail = ref(false)
 
 function toggle() {
   expanded.value = !expanded.value
@@ -62,6 +65,16 @@ function formatTokens(n: number): string {
   return `${n}`
 }
 
+function formatDuration(ms: number): string {
+  if (ms <= 0) return '0s'
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  if (h > 0) return `${h}h ${m % 60}m ${s % 60}s`
+  if (m > 0) return `${m}m ${s % 60}s`
+  return `${s}s`
+}
+
 /** Prefer detailed tokenUsage breakdown; fall back to task.totalTokens. */
 const tokenUsage = computed<TokenUsage>(() => {
   if (props.task.tokenUsage) {
@@ -75,6 +88,17 @@ const tokenUsage = computed<TokenUsage>(() => {
     completionTokens: 0,
     totalTokens: total,
   }
+})
+
+/** Turn-level duration: prefer backend value, otherwise compute from agents' steps. */
+const turnDuration = computed(() => {
+  if (props.task.durationMs && props.task.durationMs > 0) {
+    return props.task.durationMs
+  }
+  return Object.values(props.task.agents).reduce(
+    (sum, agent) => sum + agent.steps.reduce((a, s) => a + (s.durationMs || 0), 0),
+    0
+  )
 })
 </script>
 
@@ -122,6 +146,25 @@ const tokenUsage = computed<TokenUsage>(() => {
             </div>
           </Transition>
         </span>
+        <span
+          v-if="turnDuration > 0"
+          class="turn-duration"
+          @mouseenter="showTimeDetail = true"
+          @mouseleave="showTimeDetail = false"
+        >
+          {{ formatDuration(turnDuration) }}
+          <Transition name="token-tooltip">
+            <div v-if="showTimeDetail" class="token-tooltip">
+              <div class="token-row">
+                <span class="token-key">Turn Time</span>
+              </div>
+              <div class="token-row total">
+                <span class="token-key">Total</span>
+                <span class="token-val">{{ formatDuration(turnDuration) }}</span>
+              </div>
+            </div>
+          </Transition>
+        </span>
       </div>
     </div>
 
@@ -134,7 +177,7 @@ const tokenUsage = computed<TokenUsage>(() => {
 
       <!-- Agent Trees -->
       <div v-for="agent in Object.values(task.agents)" :key="agent.id" class="turn-agent-tree">
-        <AgentTree :agent="agent" :is-running="task.status === 'running'" />
+        <AgentTree :agent="agent" :is-running="task.status === 'running'" :expand-all="expandAll" />
       </div>
     </div>
   </div>
@@ -229,6 +272,13 @@ const tokenUsage = computed<TokenUsage>(() => {
 }
 
 .turn-tokens {
+  font-size: 10px;
+  color: #888;
+  cursor: help;
+  position: relative;
+}
+
+.turn-duration {
   font-size: 10px;
   color: #888;
   cursor: help;

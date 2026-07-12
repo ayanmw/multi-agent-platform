@@ -125,6 +125,12 @@ type TaskContract struct {
 	// cumulative cost exceeds this budget, CostBudgetRule blocks further tool calls.
 	// 0 means unlimited (no cost constraint).
 	CostBudgetUSD float64 `json:"cost_budget_usd,omitempty"`
+
+	// TimeoutSeconds is the maximum runtime for this task. When the timeout is
+	// reached, the Engine aborts with reason "task_timeout". 0 means unlimited
+	// (no timeout). This value is converted to a time.Duration by the caller
+	// before creating the execution context.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
 // TaskPermissions defines the agent's operational permissions.
@@ -149,12 +155,18 @@ type TaskPermissions struct {
 }
 
 // DefaultContract returns a permissive TaskContract suitable for simple tasks.
-// Production tasks should use explicit contracts with minimal permissions.
+// The default MaxSteps is 30 because complex multi-tool tasks often need more
+// than the previous 10 iterations to converge. Frontend preferences override
+// this value on a per-task basis; this default only applies when the caller
+// does not provide an explicit step budget.
+// The default TimeoutSeconds is 0 (unlimited), preserving backward compatibility
+// with tasks that do not set an explicit timeout.
 func DefaultContract(goal string) TaskContract {
 	return TaskContract{
-		Goal:     goal,
-		Scope:    ".",
-		MaxSteps: 10,
+		Goal:        goal,
+		Scope:       ".",
+		MaxSteps:    30,
+		TimeoutSeconds: 0,
 		Permissions: TaskPermissions{
 			AllowFileWrite: true,
 			AllowShell:     true,

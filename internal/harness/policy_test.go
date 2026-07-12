@@ -702,14 +702,17 @@ func TestDefaultContract(t *testing.T) {
 	if c.Scope != "." {
 		t.Errorf("Scope = %q, want '.'", c.Scope)
 	}
-	if c.MaxSteps != 10 {
-		t.Errorf("MaxSteps = %d, want 10", c.MaxSteps)
+	if c.MaxSteps != 30 {
+		t.Errorf("MaxSteps = %d, want 30", c.MaxSteps)
 	}
 	if !c.Permissions.AllowFileWrite || !c.Permissions.AllowShell {
 		t.Errorf("default permissions should allow file write + shell, got %+v", c.Permissions)
 	}
 	if c.Permissions.AllowShellDangerous {
 		t.Error("default should NOT allow dangerous shell")
+	}
+	if c.TimeoutSeconds != 0 {
+		t.Errorf("TimeoutSeconds = %d, want 0 (unlimited)", c.TimeoutSeconds)
 	}
 }
 

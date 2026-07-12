@@ -59,6 +59,12 @@ export interface TokenUsage {
   totalTokens: number
 }
 
+/** Elapsed time tracking per task / per agent */
+export interface DurationSummary {
+  /** Total elapsed time in milliseconds */
+  totalMs: number
+}
+
 /** Tool call data stored in a step */
 export interface ToolCallData {
   name: string
@@ -106,6 +112,8 @@ export interface AgentState {
   currentStep?: number
   /** Detailed token usage for this agent */
   tokenUsage?: TokenUsage
+  /** Cumulative duration for this agent (derived from steps or backend) */
+  durationMs?: number
 }
 
 /** Task status
@@ -128,6 +136,8 @@ export interface TaskState {
   finalResult: string | null
   /** Total tokens consumed across all agents */
   totalTokens: number
+  /** Total task duration in milliseconds (DB-backed or live computed) */
+  durationMs?: number
   /** Map of agent_id → AgentState */
   agents: Record<string, AgentState>
   /** Timestamp when the task was started (ms since epoch) */
@@ -151,6 +161,7 @@ export interface ChatRequest {
   input: string
   system_prompt?: string
   max_steps?: number
+  timeout_seconds?: number
   session_id?: string
 }
 
@@ -186,6 +197,7 @@ export interface TaskSummary {
   user_input: string
   status: TaskStatus
   total_tokens: number
+  duration_ms: number
   started_at: number
   is_root: boolean
   session_id: string

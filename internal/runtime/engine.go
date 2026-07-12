@@ -286,6 +286,14 @@ type EngineConfig struct {
 	// Added in Phase 6.
 	Providers map[string]llm.Provider
 
+	// Timeout is the optional per-task execution deadline. When non-zero, the
+	// caller (cmd/server) creates a context.WithTimeout from this value; when
+	// zero, no deadline is applied. The Engine consumes the timeout indirectly
+	// through the provided context and does not enforce its own deadline.
+	// If the context expires, the Engine returns context.DeadlineExceeded and
+	// the caller emits a task_timeout failure event.
+	Timeout time.Duration
+
 	// OnLLMUsage is an optional callback invoked after every successful LLM call
 	// in the ReAct loop. It receives the actual model selected (which may differ
 	// from cfg.Model when Router is active), the resolved ModelProfile, and the
@@ -343,6 +351,8 @@ type Engine struct {
 	stepIdx          int                              // current ReAct loop iteration (0-based)
 	totalTokens      int                              // cumulative total tokens across all LLM calls
 	tokenUsage       llm.Usage                        // cumulative detailed token usage (input/cache/output)
+	startTime        time.Time                        // task start time for duration tracking
+	durationMs       int64                            // total task duration in milliseconds
 	approvalHandler  harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
 	agentBus         AgentBus                         // optional inter-agent communication channel (nil = disabled)
 	checkpoint       *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
@@ -350,6 +360,8 @@ type Engine struct {
 	turnIndex        int                              // current turn index within the session (0-based)
 	caseID           string                           // optional case ID hint for MockProvider script matching
 	providers        map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
+	lastError        string                           // fingerprint of the most recent recoverable error fed back to the LLM
+	consecutiveErrors int                             // how many times the same recoverable error has occurred in a row
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -371,7 +383,7 @@ type Engine struct {
 // Otherwise, an OpenAIProvider is created from cfg.Endpoint, cfg.APIKey, cfg.Model.
 func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID string) *Engine {
 	if cfg.MaxSteps == 0 {
-		cfg.MaxSteps = 10
+		cfg.MaxSteps = 30
 	}
 	if cfg.Temperature == 0 {
 		cfg.Temperature = 0.7
@@ -412,11 +424,15 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
-		stepIdx:         0,
-		totalTokens:     0,
-		tokenUsage:      llm.Usage{},
-		approvalHandler: cfg.ApprovalHandler, // nil = approval not supported
-		providers:       cfg.Providers,       // provider lookup map for Router decisions
+		stepIdx:           0,
+		totalTokens:       0,
+		tokenUsage:        llm.Usage{},
+		startTime:         time.Now(),
+		durationMs:        0,
+		approvalHandler:   cfg.ApprovalHandler, // nil = approval not supported
+		providers:         cfg.Providers,       // provider lookup map for Router decisions
+		lastError:         "",
+		consecutiveErrors: 0,
 	}
 }
 
@@ -578,7 +594,9 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "cancelled",
 			}))
+			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("failed", "", 0)
+			e.updateTaskDuration()
 			return "", e.totalTokens, ctx.Err()
 		default:
 			// Context is still valid — continue to the think phase.
@@ -604,12 +622,41 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				return "", e.totalTokens, ctx.Err()
 			default:
 			}
-			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"reason": "llm_error",
-				"error":  err.Error(),
+
+			// -----------------------------------------------------------------
+			// ERROR-HANDLING POLICY: feedback first, fail on repeat.
+			//
+			// Any system-level error (LLM call failure, network issue, etc.) is
+			// first fed back to the LLM as an observation. This gives the agent a
+			// chance to self-correct and continue working. Only when the exact
+			// same error fingerprint occurs twice in a row do we treat it as
+			// non-recoverable and escalate to human intervention.
+			// -----------------------------------------------------------------
+			obsContent := fmt.Sprintf("[LLM ERROR] %s", err.Error())
+			if e.isRepeatingError(obsContent) {
+				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"reason": "llm_error",
+					"error":  err.Error(),
+				}))
+				e.durationMs = time.Since(e.startTime).Milliseconds()
+				e.updateTask("failed", "", e.totalTokens)
+				e.updateTaskDuration()
+				return "", e.totalTokens, fmt.Errorf("think step %d: repeated LLM error: %w", e.stepIdx, err)
+			}
+			e.recordFeedbackError(obsContent)
+
+			// Feed the error back into the conversation so the next think step
+			// can react to it. Persist it as a user message for auditability.
+			e.messages = append(e.messages, llm.Message{Role: "user", Content: obsContent})
+			e.saveConversation("user", obsContent)
+			e.writeSessionMessage("user", obsContent, "", "", 0)
+
+			// Emit a system_info event so the frontend can surface the retry.
+			e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"type":    "llm_error_feedback",
+				"content": obsContent,
 			}))
-			e.updateTask("failed", "", e.totalTokens)
-			return "", e.totalTokens, fmt.Errorf("think step %d: %w", e.stepIdx, err)
+			continue
 		}
 
 		// Accumulate token usage for budget tracking (TokenBudgetRule — Phase 4)
@@ -715,8 +762,10 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}))
 
 			// Persist the completed status. Pass the cumulative total (e.totalTokens)
-			// so the DB record reflects the full cost across all ReAct turns.
+			// and elapsed duration so the DB record reflects the full cost and time.
+			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("completed", content, e.totalTokens)
+			e.updateTaskDuration()
 			return content, e.totalTokens, nil
 		}
 
@@ -750,17 +799,53 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// executeTool manages the step lifecycle events (started/completed).
 			result, toolErr := e.executeTool(tc)
 			if toolErr != nil {
-				// Tool execution failed — this could be a tool-not-found error,
-				// a parameter validation error, or a runtime error inside the tool.
-				// Emit failure and return. The frontend will show which tool
-				// failed and the error message.
-				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-					"reason":    "tool_error",
-					"tool_name": tc.Function.Name,
-					"error":     toolErr.Error(),
+				// Tool execution failed. Instead of terminating immediately, we
+				// feed the error back to the LLM as an observation so the agent
+				// can self-correct on the next think iteration. This follows the
+				// platform's error-handling principle: first error → guide the AI,
+				// consecutive identical error → escalate to human.
+				obsContent := e.formatToolErrorObservation(tc.Function.Name, toolErr)
+				if e.isRepeatingError(obsContent) {
+					e.durationMs = time.Since(e.startTime).Milliseconds()
+					e.updateTask("failed", "", e.totalTokens)
+					e.updateTaskDuration()
+					return "", e.totalTokens, fmt.Errorf("tool %s: repeated error: %w", tc.Function.Name, toolErr)
+				}
+				e.recordFeedbackError(obsContent)
+
+				// Persist the error observation so the chat history and audit trail
+				// contain the failure the LLM sees on the next loop.
+				e.saveConversation("tool", obsContent)
+				e.writeSessionMessage("tool", obsContent, tc.ID, "", 0)
+
+				// Emit the observation event so the frontend shows the error as
+				// feedback to the LLM, not as a terminal task failure.
+				e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"content": obsContent,
 				}))
-				e.updateTask("failed", "", e.totalTokens)
-				return "", e.totalTokens, fmt.Errorf("tool %s: %w", tc.Function.Name, toolErr)
+				e.saveStep(StepRecord{
+					TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+					Type: "observation", Status: "completed",
+					Content: obsContent,
+				})
+
+				// Append the assistant message (with the failed tool_call) and the
+				// error observation to the conversation history. The next think
+				// iteration will see both and can decide to retry or try a different
+				// tool.
+				e.messages = append(e.messages, llm.Message{
+					Role:      "assistant",
+					Content:   content,
+					ToolCalls: []llm.ToolCall{tc},
+				})
+				e.messages = append(e.messages, llm.Message{
+					Role:       "tool",
+					ToolCallID: tc.ID,
+					Content:    obsContent,
+				})
+
+				// Continue the ReAct loop — let the LLM decide how to recover.
+				continue
 			}
 
 			// Persist the tool result for audit trail.
@@ -809,7 +894,9 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		"current_step": e.stepIdx,
 		"total_tokens": e.totalTokens,
 	}))
+	e.durationMs = time.Since(e.startTime).Milliseconds()
 	e.updateTask("failed", "", e.totalTokens)
+	e.updateTaskDuration()
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
 }
 
@@ -891,14 +978,47 @@ func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
 	}
 }
 
+func (e *Engine) updateTaskDuration() {
+	if e.persist == nil {
+		return
+	}
+	if err := e.persist.UpdateTaskDuration(e.taskID, int(e.durationMs)); err != nil {
+		log.Printf("[Engine] Failed to update task duration: %v", err)
+	}
+}
+
+// formatToolErrorObservation produces a concise, stable fingerprint of a tool
+// execution failure. The content is fed back to the LLM as a tool result so it
+// can self-correct. Keeping the format stable lets isRepeatingError detect
+// consecutive identical failures.
+func (e *Engine) formatToolErrorObservation(toolName string, err error) string {
+	return fmt.Sprintf("[TOOL ERROR] %s failed: %s", toolName, err.Error())
+}
+
+// isRepeatingError returns true if the same recoverable error just occurred
+// consecutively. Per the platform's error-handling principle, a single error
+// is fed back to the LLM for self-correction; two identical errors in a row
+// are considered a loop and escalate to human intervention.
+func (e *Engine) isRepeatingError(errFingerprint string) bool {
+	if e.consecutiveErrors == 0 {
+		return false
+	}
+	return e.lastError != "" && e.lastError == errFingerprint
+}
+
+// recordFeedbackError updates the engine's error-tracking state after a
+// recoverable error has been fed back to the LLM. It increments the counter
+// when the same error repeats, otherwise resets it for a new error pattern.
+func (e *Engine) recordFeedbackError(errFingerprint string) {
+	if e.lastError != "" && e.lastError == errFingerprint {
+		e.consecutiveErrors++
+	} else {
+		e.consecutiveErrors = 1
+		e.lastError = errFingerprint
+	}
+}
+
 // think sends the current conversation history to the LLM and returns the
-// accumulated text content, token usage, any tool calls, and an error.
-//
-// # How it works
-//
-//  1. Emits step_started and llm_thinking events so the UI shows the agent is
-//     actively processing (before any tokens arrive — this prevents the UI
-//     from looking stuck during network latency).
 //  2. Builds the tool definitions from the Tool Registry — these tell the LLM
 //     what tools are available, their descriptions, and their parameter schemas.
 //     The LLM uses this to decide whether and how to call tools.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -279,6 +280,7 @@ func main() {
 			SystemPrompt string                   `json:"system_prompt"`
 			CaseType     string                   `json:"case_type"`
 			MaxSteps     int                      `json:"max_steps"`
+			TimeoutSeconds int                  `json:"timeout_seconds"`
 			SessionID    string                   `json:"session_id"`
 			Agents       []orchestrator.AgentSpec `json:"agents"`
 			// TaskContract optional overrides — when >0 / non-empty, override the
@@ -418,8 +420,12 @@ func main() {
 			if req.MaxSteps > 0 {
 				contract.MaxSteps = req.MaxSteps
 			}
+			// Override timeout from request if provided (>0).
+			if req.TimeoutSeconds > 0 {
+				contract.TimeoutSeconds = req.TimeoutSeconds
+			}
 			// Override TaskContract fields from request body when provided —
-			// lets the frontend drive PolicyChain (scope, tools, budgets).
+			// lets the frontend drive PolicyChain (scope, tools, budgets, timeout).
 			if req.Scope != "" {
 				contract.Scope = req.Scope
 			}
@@ -602,11 +608,12 @@ func main() {
 		}
 
 		var req struct {
-			Input     string                   `json:"input"`
-			CaseType  string                   `json:"case_type"` // "multi_agent", "code_gen", or empty
-			MaxSteps  int                      `json:"max_steps"` // override max steps for all agents
-			SessionID string                   `json:"session_id"`
-			Agents    []orchestrator.AgentSpec `json:"agents"` // direct agent specs (optional)
+			Input          string                   `json:"input"`
+			CaseType       string                   `json:"case_type"` // "multi_agent", "code_gen", or empty
+			MaxSteps       int                      `json:"max_steps"` // override max steps for all agents
+			TimeoutSeconds int                      `json:"timeout_seconds"` // override timeout for all agents
+			SessionID      string                   `json:"session_id"`
+			Agents         []orchestrator.AgentSpec `json:"agents"` // direct agent specs (optional)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -636,6 +643,17 @@ func main() {
 					specs[i].Contract = &contract
 				}
 				specs[i].Contract.MaxSteps = req.MaxSteps
+			}
+		}
+
+		// Apply global TimeoutSeconds override if provided.
+		if req.TimeoutSeconds > 0 {
+			for i := range specs {
+				if specs[i].Contract == nil {
+					contract := harness.DefaultContract(specs[i].Input)
+					specs[i].Contract = &contract
+				}
+				specs[i].Contract.TimeoutSeconds = req.TimeoutSeconds
 			}
 		}
 
@@ -683,7 +701,24 @@ func main() {
 
 		// Launch agents concurrently
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			// Multi-agent orchestration timeouts default to 10 minutes. If every
+			// spec has the same TimeoutSeconds override, derive a single deadline
+			// from the smallest positive value so tasks fail predictably; otherwise
+			// fall back to the hardcoded 10 minute default.
+			var timeout time.Duration = 10 * time.Minute
+			minTimeout := 0
+			for _, s := range specs {
+				if s.Contract != nil && s.Contract.TimeoutSeconds > 0 {
+					if minTimeout == 0 || s.Contract.TimeoutSeconds < minTimeout {
+						minTimeout = s.Contract.TimeoutSeconds
+					}
+				}
+			}
+			if minTimeout > 0 {
+				timeout = time.Duration(minTimeout) * time.Second
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			cancelRegistry.Store(taskID, cancel)
 			defer cancelRegistry.Delete(taskID)
 			defer cancel()
@@ -994,7 +1029,15 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		"turn_index": turnIndex,
 	}))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx := context.Background()
+	cancel := context.CancelFunc(func() {})
+	// Apply the per-task timeout from the contract. TimeoutSeconds > 0 creates
+	// a context with deadline; 0 (or negative) means unlimited — no deadline.
+	if contract.TimeoutSeconds > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(contract.TimeoutSeconds)*time.Second)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
 	// Register the task's cancel function so WebSocket control messages can
@@ -1010,9 +1053,10 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		observability.DefaultMetrics.IncrTasksFailed()
 		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
 		if sessionID != "" {
-			// 失败后同样聚合所有任务 token 并同步 session 状态，避免失败前
+			// 失败后同样聚合所有任务 token 与 duration 并同步 session 状态，避免失败前
 			// 的 token 消耗在第二次刷新 UI 时消失。
 			aggregateTokens, _ := db.AggregateSessionTokens(sessionID)
+			aggregateDuration, _ := db.AggregateSessionDuration(sessionID)
 			db.UpdateSessionContextSize(sessionID, aggregateTokens, 0)
 			newStatus := deriveSessionStatus(sessionID)
 			db.UpdateSessionStatus(sessionID, newStatus)
@@ -1020,11 +1064,16 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 				"session_id":   sessionID,
 				"status":       newStatus,
 				"total_tokens": aggregateTokens,
+				"duration_ms":  aggregateDuration,
 			}))
 		}
 		if result == "" {
+			failureReason := err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				failureReason = "task_timeout"
+			}
 			hub.SendEvent(event.NewEvent("task_failed", taskID, agentID, 0, map[string]any{
-				"reason": err.Error(),
+				"reason": failureReason,
 			}))
 		}
 		return
@@ -1035,9 +1084,10 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	// 完成后递增 session.turn_count（多轮对话）
 	if sessionID != "" {
 		db.UpdateSessionTurnCount(sessionID)
-		// 聚合所有任务的累计 token，同步回 sessions.total_tokens，保证
+		// 聚合所有任务的累计 token 与 duration，同步回 sessions.total_tokens，保证
 		// 侧边栏 token 显示和页面刷新后保持一致。
 		aggregateTokens, _ := db.AggregateSessionTokens(sessionID)
+		aggregateDuration, _ := db.AggregateSessionDuration(sessionID)
 		db.UpdateSessionContextSize(sessionID, aggregateTokens, 0)
 		newStatus := deriveSessionStatus(sessionID)
 		db.UpdateSessionStatus(sessionID, newStatus)
@@ -1045,6 +1095,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 			"session_id":   sessionID,
 			"status":       newStatus,
 			"total_tokens": aggregateTokens,
+			"duration_ms":  aggregateDuration,
 		}))
 	}
 
@@ -1226,14 +1277,24 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 	// Run the engine in a goroutine. The input is empty because the conversation
 	// history already has the last user message.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx := context.Background()
+		cancel := context.CancelFunc(func() {})
+		if contract.TimeoutSeconds > 0 {
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(contract.TimeoutSeconds)*time.Second)
+		} else {
+			ctx, cancel = context.WithCancel(ctx)
+		}
 		defer cancel()
 
 		result, totalTokens, err := engine.Run(ctx, "")
 		if err != nil {
 			log.Printf("[Recovery %s] Agent loop failed: %v", req.TaskID, err)
+			failureReason := err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				failureReason = "task_timeout"
+			}
 			hub.SendEvent(event.NewEvent("task_failed", req.TaskID, cp.AgentID, 0, map[string]any{
-				"reason": err.Error(),
+				"reason": failureReason,
 			}))
 			return
 		}

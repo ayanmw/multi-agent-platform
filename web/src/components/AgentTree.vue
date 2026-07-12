@@ -19,7 +19,7 @@
        "white-box" Agent philosophy.
 -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { AgentState, Step, ToolCallData, TokenUsage } from '../types/events'
 import StatusIndicator from './StatusIndicator.vue'
 import TypeWriter from './TypeWriter.vue'
@@ -34,23 +34,35 @@ interface ReadonlyAgentState {
   readonly maxSteps?: number
   readonly currentStep?: number
   readonly tokenUsage?: import('../types/events').TokenUsage
+  readonly durationMs?: number
 }
 
 const props = defineProps<{
   agent: AgentState | ReadonlyAgentState
   isRunning: boolean
+  /** External control: when true, all steps should be expanded; when false, collapse all.
+   *  The component may still auto-expand the latest running step independently. */
+  expandAll?: boolean
 }>()
 
 /** Track which steps are expanded (by index) */
 const expandedSteps = ref<Set<number>>(new Set())
-const showTokenDetail = ref(false)
 
-/** Scroll container ref for auto-scroll logic */
-const scrollContainer = ref<HTMLElement | null>(null)
-/** Whether the user has manually scrolled up (disables auto-scroll) */
-const userScrolledUp = ref(false)
-/** Whether to show the "scroll to bottom" button */
-const showScrollBtn = ref(false)
+// Sync global expand/collapse commands with local expandedSteps
+watch(
+  () => props.expandAll,
+  (expand) => {
+    if (expand === true) {
+      // Expand every step in this agent
+      expandedSteps.value = new Set(props.agent.steps.map(s => s.index))
+    } else if (expand === false) {
+      // Collapse every step
+      expandedSteps.value = new Set()
+    }
+  },
+  { immediate: true },
+)
+const showTokenDetail = ref(false)
 
 /** Toggle step expand/collapse */
 function toggleStep(index: number) {
@@ -195,6 +207,19 @@ const totalTokens = computed(() => {
   return total
 })
 
+/** Total duration across all agent steps. */
+const agentDuration = computed(() => {
+  if (props.agent.durationMs && props.agent.durationMs > 0) {
+    return props.agent.durationMs
+  }
+  if (props.agent.steps.length === 0) return 0
+  let total = 0
+  for (const s of props.agent.steps) {
+    total += s.durationMs || 0
+  }
+  return total
+})
+
 /** Detailed token usage breakdown for the agent; fall back to step totals as input. */
 const tokenUsage = computed<TokenUsage>(() => {
   if (props.agent.tokenUsage) {
@@ -210,55 +235,15 @@ const tokenUsage = computed<TokenUsage>(() => {
   }
 })
 
-// === Smart scroll: auto-scroll to bottom on new steps, but pause if user scrolls up ===
-
-/** Check if the scroll container is at the bottom (within 40px tolerance) */
-function isAtBottom(): boolean {
-  const el = scrollContainer.value
-  if (!el) return true
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 40
-}
-
-/** Scroll to the bottom of the container */
-function scrollToBottom() {
-  const el = scrollContainer.value
-  if (!el) return
-  el.scrollTop = el.scrollHeight
-  userScrolledUp.value = false
-  showScrollBtn.value = false
-}
-
-/** Handle user scroll events — detect if user scrolled up */
-function handleScroll() {
-  const atBottom = isAtBottom()
-  if (atBottom) {
-    userScrolledUp.value = false
-    showScrollBtn.value = false
-  } else {
-    userScrolledUp.value = true
-    showScrollBtn.value = true
-  }
-}
-
-// Auto-scroll when steps change (new step added or thinking text updated)
+// Auto-expand the latest step when new events arrive and agent is running.
+// This is independent of expandAll so users retain control when reading history.
 watch(
   () => props.agent.steps.length,
   () => {
-    if (!userScrolledUp.value) {
-      nextTick(() => scrollToBottom())
-    }
-  }
-)
-
-// Also auto-scroll when the last step's thinking text grows (streaming)
-watch(
-  () => {
-    const last = props.agent.steps[props.agent.steps.length - 1]
-    return last?.thinking?.length ?? 0
-  },
-  () => {
-    if (!userScrolledUp.value) {
-      nextTick(() => scrollToBottom())
+    const lastStep = props.agent.steps[props.agent.steps.length - 1]
+    if (lastStep) {
+      expandedSteps.value.add(lastStep.index)
+      expandedSteps.value = new Set(expandedSteps.value)
     }
   }
 )
@@ -313,15 +298,17 @@ watch(
             </div>
           </Transition>
         </span>
+        <span
+          v-if="agentDuration > 0"
+          class="agent-duration"
+        >
+          {{ formatDuration(agentDuration) }}
+        </span>
       </div>
     </div>
 
     <!-- Step list -->
-    <div
-      ref="scrollContainer"
-      class="step-list"
-      @scroll="handleScroll"
-    >
+    <div class="step-list">
       <!-- Skeleton screen — shown when agent is running but no steps yet -->
       <div v-if="agent.steps.length === 0 && isRunning" class="skeleton-list">
         <div class="skeleton-item">
@@ -354,6 +341,7 @@ watch(
         <div class="step-header" @click="toggleStep(step.index)">
           <span class="step-toggle">{{ expandedSteps.has(step.index) ? '▼' : '▶' }}</span>
           <span class="step-icon">{{ stepIcon(step.type) }}</span>
+          <span class="step-index">#{{ step.index }}</span>
           <span class="step-type">{{ step.type }}</span>
           <StatusIndicator :status="step.status" />
           <span class="step-summary">{{ stepSummary(step) }}</span>
@@ -411,18 +399,6 @@ watch(
         </div>
       </div>
     </div>
-
-    <!-- Scroll-to-bottom button — shown when user has scrolled up -->
-    <Transition name="scroll-btn">
-      <button
-        v-if="showScrollBtn"
-        class="scroll-bottom-btn"
-        @click="scrollToBottom"
-        title="Scroll to bottom"
-      >
-        ↓ Bottom
-      </button>
-    </Transition>
   </div>
 </template>
 
@@ -486,6 +462,11 @@ watch(
   color: #888;
   cursor: help;
   position: relative;
+}
+
+.agent-duration {
+  font-size: 11px;
+  color: #888;
 }
 
 /* Token detail tooltip */
@@ -612,6 +593,16 @@ watch(
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.step-index {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10px;
+  color: #888;
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 
@@ -766,41 +757,5 @@ watch(
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.8; }
-}
-
-/* Scroll-to-bottom button */
-.scroll-bottom-btn {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #4a9eff;
-  color: #fff;
-  border: none;
-  border-radius: 16px;
-  padding: 6px 16px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  z-index: 10;
-  transition: opacity 0.2s, transform 0.2s;
-}
-
-.scroll-bottom-btn:hover {
-  background: #3a8eef;
-  transform: translateX(-50%) translateY(-2px);
-}
-
-/* Scroll button transition */
-.scroll-btn-enter-active,
-.scroll-btn-leave-active {
-  transition: all 0.2s ease;
-}
-
-.scroll-btn-enter-from,
-.scroll-btn-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(10px);
 }
 </style>
