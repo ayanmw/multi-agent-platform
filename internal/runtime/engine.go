@@ -206,6 +206,12 @@ type EngineConfig struct {
 	// Empty for tasks not yet associated with a session.
 	SessionID string
 
+	// WorkspaceDir is the session-level workspace directory.
+	// It is injected into tool call inputs (as "workdir") when the user
+	// has not explicitly provided one, so that tools like run_shell
+	// execute with the correct CWD without requiring the LLM to pass it.
+	WorkspaceDir string `json:"-"`
+
 	// ParentTaskID identifies the parent task for sub-tasks spawned by agents.
 	// Empty for root tasks.
 	ParentTaskID string
@@ -1303,6 +1309,15 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		args = make(map[string]any) // fallback to empty args
 	}
 
+	// Inject the session workspace_dir into the tool input if the user (LLM)
+	// has not explicitly provided a workdir. This allows tools like run_shell
+	// to execute with the correct CWD without the LLM having to pass it every time.
+	if e.cfg.WorkspaceDir != "" {
+		if _, hasWorkdir := args["workdir"]; !hasWorkdir {
+			args["workdir"] = e.cfg.WorkspaceDir
+		}
+	}
+
 	// Emit step and tool call lifecycle events. The UI uses these to show:
 	//   - step_started: this step is now "running" in the step list
 	//   - tool_call_started: the tool name and arguments in a card
@@ -1355,6 +1370,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 				"tool":        tc.Function.Name,
 				"error":       reason,
 				"duration_ms": duration,
+				"args":        args,
 				"policy_rule": policyErr.Rule,
 			}))
 			e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -1384,6 +1400,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			"tool":        tc.Function.Name,
 			"error":       execErr.Error(),
 			"duration_ms": duration,
+			"args":        args,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
@@ -1509,6 +1526,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批请求发送失败: %v", err),
 			"duration_ms": duration,
+			"args":        args,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
@@ -1531,6 +1549,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批超时: %v", waitErr),
 			"duration_ms": duration,
+			"args":        args,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
@@ -1551,6 +1570,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			"tool":        tc.Function.Name,
 			"error":       "用户拒绝了高风险操作",
 			"duration_ms": duration,
+			"args":        args,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
@@ -1577,6 +1597,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			"tool":        tc.Function.Name,
 			"error":       execErr.Error(),
 			"duration_ms": execDuration,
+			"args":        args,
 		}))
 		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",

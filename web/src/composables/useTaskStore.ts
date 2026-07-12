@@ -2,8 +2,13 @@ import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
 import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
+import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
+
+// 模块级引用，用于最近修改记录
+const { addItem: addRecentMod } = useRecentMods()
+const currentSessionId = ref<string>('')
 
 /** Per-task reactive cache */
 const taskCache = ref<Record<string, TaskState>>({})
@@ -153,6 +158,10 @@ export function useTaskStore() {
     if (evt.type === 'task_started') {
       activeTaskId.value = taskId
       ensureTask(taskId)
+      // Capture session ID for recent-mods recording
+      if (evt.data.session_id) {
+        currentSessionId.value = evt.data.session_id as string
+      }
       updateSession((evt.data.session_id as string) || '', {
         rootTaskId: taskId,
         status: 'running',
@@ -240,6 +249,21 @@ export function useTaskStore() {
           const result = evt.data.result
           lastStep.toolCall.output =
             typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+
+          // 记录最近修改：write_file 成功时追加到最近修改列表
+          if (lastStep.toolCall.name === 'write_file' && lastStep.toolCall.input) {
+            const input = lastStep.toolCall.input as Record<string, unknown>
+            const path = typeof input['path'] === 'string' ? input['path'] as string : null
+            const output = typeof result === 'object' ? result as Record<string, unknown> : null
+            if (path) {
+              addRecentMod({
+                path,
+                success: lastStep.status !== 'failed',
+                bytes: typeof output?.['bytes'] === 'number' ? output['bytes'] as number : undefined,
+                sessionId: currentSessionId.value || undefined,
+              })
+            }
+          }
         }
         break
       }
@@ -250,15 +274,39 @@ export function useTaskStore() {
           lastStep.toolCall.duration = (evt.data.duration_ms as number) || 0
           lastStep.status = 'completed'
           lastStep.durationMs = Date.now() - lastStep.startedAt
+
+          // 兜底：如果 tool_call_output 没发（或失败了），在 complete 时仍记录
+          if (lastStep.toolCall.name === 'write_file' && lastStep.toolCall.input) {
+            const input = lastStep.toolCall.input as Record<string, unknown>
+            const path = typeof input['path'] === 'string' ? input['path'] as string : null
+            if (path) {
+              const alreadyRecorded = (lastStep.toolCall.output?.includes('[') ?? false)
+              if (!alreadyRecorded) {
+                addRecentMod({
+                  path,
+                  success: true,
+                  sessionId: currentSessionId.value || undefined,
+                })
+              }
+            }
+          }
         }
         break
       }
 
       case 'tool_call_failed': {
         const lastStep = getLastStep(agent)
-        if (lastStep && lastStep.type === 'tool_call') {
+        if (lastStep && lastStep.type === 'tool_call' && lastStep.toolCall) {
           lastStep.status = 'failed'
           lastStep.durationMs = Date.now() - lastStep.startedAt
+          // 将错误信息写入 output，让前端 Output 面板也能显示错误详情
+          if (evt.data.error && !lastStep.toolCall.output) {
+            lastStep.toolCall.output = `[ERROR] ${evt.data.error}`
+          }
+          // 如果携带了 args，更新 input 显示（让前端能看到 LLM 实际传了什么参数）
+          if (evt.data.args && lastStep.toolCall) {
+            lastStep.toolCall.input = evt.data.args as Record<string, unknown>
+          }
         }
         break
       }
