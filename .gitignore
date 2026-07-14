@@ -47,3 +47,5 @@ web/tsconfig.tsbuildinfo
 .env
 .env.local
 *.key
+/workspace
+/task_progress.json
