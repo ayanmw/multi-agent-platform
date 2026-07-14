@@ -34,6 +34,15 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // LLM-requested function calls
 	ToolCallID string     `json:"tool_call_id,omitempty"` // correlates tool result to call
 	Name       string     `json:"name,omitempty"`         // optional agent name
+
+	// Reasoning is the chain-of-thought text some providers (DeepSeek R1/V4,
+	// Step-3.x) return in a separate "reasoning" field instead of "content".
+	// The Router's intent classifier reads Content first and falls back to
+	// Reasoning when Content is empty — this keeps classifyIntent working on
+	// reasoning-mode models that only populate reasoning at low max_tokens.
+	// Not serialized outbound (we never send reasoning to the LLM); parsed
+	// inbound only.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // ToolCall represents a function call request from the LLM.
@@ -115,11 +124,18 @@ type Choice struct {
 // ReasoningContent 字段已在 Phase 5-6 实现，DeepSeek R1/V4 推理模型
 // 的思维链内容与 content 并列返回。空字符串时不影响旧逻辑。
 // 参见 doc/chapters/09-llm-api-comparison.html §4.2。
+//
+// Reasoning (无 _content 后缀) 是 Step-3.x / vLLM 风格的等价字段 —— 同一个
+// 思维链在某些部署里叫 "reasoning"，在 DeepSeek 官方协议里叫 "reasoning_content"。
+// 两个字段都解析，ReasoningContent 优先；任一非空都并入 content 累积，保证
+// 推理型模型在 ChatStream 里也能拿到完整文本（否则 content 一直为空，think
+// 阶段会把空 content 当作 final answer 提前结束 ReAct loop）。
 type Delta struct {
 	Role             string     `json:"role"`
 	Content          string     `json:"content"`
 	ToolCalls        []ToolCall `json:"tool_calls"`
 	ReasoningContent string     `json:"reasoning_content"` // DeepSeek R1/V4 思维链字段
+	Reasoning        string     `json:"reasoning"`         // Step-3.x / vLLM 思维链字段（等价）
 }
 
 // Usage tracks token consumption as reported by the API.

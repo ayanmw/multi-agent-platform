@@ -40,6 +40,7 @@ import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
 import ApprovalDialog from './components/ApprovalDialog.vue'
 import RecentModsDialog from './components/RecentModsDialog.vue'
+import ModelPricesDialog from './components/ModelPricesDialog.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
@@ -113,6 +114,10 @@ const { toasts, showError, showInfo, dismissToast } = useToast()
 
 // === 最近修改 Dialog 状态 ===
 const recentModsVisible = ref(false)
+
+// === 模型价格管理 Dialog 状态 ===
+// 由顶部 header 的 💲 按钮触发，与"最近修改"共用 overlay/Teleport 模式。
+const modelPricesVisible = ref(false)
 
 const {
   items: recentMods,
@@ -1013,6 +1018,7 @@ function formatShortTime(ts: number): string {
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
             <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
+            <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>
             <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
             <span class="app-version">{{ appVersion }}</span>
           </div>
@@ -1149,6 +1155,13 @@ function formatShortTime(ts: number): string {
         :items="recentMods"
         @update:visible="recentModsVisible = $event"
         @clear="clearRecentMods"
+      />
+
+      <!-- 模型价格管理 Dialog: 查看/编辑 ModelRegistry 的 InputPrice/OutputPrice。
+           costs 仅供参考但必须非 0；此入口让运营在不重建二进制的前提下修正价格。 -->
+      <ModelPricesDialog
+        :visible="modelPricesVisible"
+        @update:visible="modelPricesVisible = $event"
       />
     </main>
   </div>

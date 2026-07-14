@@ -92,6 +92,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
@@ -99,6 +100,21 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
+
+// regexpRequestID matches OpenAI-style request id tokens embedded in error
+// messages, e.g. "request id: 20260714033318937918881aclHY4az" or
+// "request_id: req_abc123". The leading "request" / "request_id" / "request-id"
+// prefix is captured so the replacement preserves the key while redacting the
+// volatile value. Used by normalizeErrorFingerprint to make repeating errors
+// compare equal across calls (see isRepeatingError).
+//
+// This is the fix for the Router-activation 403 death loop: the provider
+// returned "This token has no access to model deepseek-v4-flash (request id:
+// <opaque>)" with a fresh opaque id on every call, so isRepeatingError's exact
+// comparison never matched and the engine spun ~1347 iterations before the 90s
+// poll timeout. Redacting the id makes consecutive 403s compare equal so the
+// "feedback first, fail on repeat" policy terminates the loop on the 2nd try.
+var regexpRequestID = regexp.MustCompile(`(?i)(request[-_ ]?id)[:=]\s*[A-Za-z0-9_-]+`)
 
 // EventBus is the real-time event transport layer that connects the Engine to the
 // frontend WebSocket clients. Every state change in the ReAct loop is published
@@ -366,7 +382,8 @@ type Engine struct {
 	turnIndex        int                              // current turn index within the session (0-based)
 	caseID           string                           // optional case ID hint for MockProvider script matching
 	providers        map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
-	lastError        string                           // fingerprint of the most recent recoverable error fed back to the LLM
+	selectedModel    string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
+	lastError        string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
 	consecutiveErrors int                             // how many times the same recoverable error has occurred in a row
 }
 
@@ -652,8 +669,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// chance to self-correct and continue working. Only when the exact
 			// same error fingerprint occurs twice in a row do we treat it as
 			// non-recoverable and escalate to human intervention.
+			//
+			// The fingerprint is normalized (normalizeErrorFingerprint) so volatile
+			// per-request ids in provider error messages (e.g. 403 "request id:
+			// <opaque>") don't mask genuine repetition — otherwise a persistent 403
+			// would spin until the poll timeout instead of failing fast.
 			// -----------------------------------------------------------------
-			obsContent := fmt.Sprintf("[LLM ERROR] %s", err.Error())
+			obsContent := fmt.Sprintf("[LLM ERROR] %s", normalizeErrorFingerprint(err.Error()))
 			if e.isRepeatingError(obsContent) {
 				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"reason": "llm_error",
@@ -710,14 +732,24 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		// The Engine remains cost-agnostic; the callback is supplied by cmd/server
 		// and wired to the CostTracker + MetricsCollector. Panics in the callback
 		// are recovered so observability bugs cannot crash the agent loop.
+		//
+		// R4 修复：reporting 用的 model 名取 think() 顶部 Router 选中的
+		// selectedModel（若 Router 未启用则为 e.cfg.Model）。此前固定传
+		// e.cfg.Model，当 Router 把本次调用路由到别的模型时 cost 记录的 model
+		// 名与实际调用不一致。fallback 到 e.cfg.Model 保证未启用 Router 的旧
+		// 链路行为不变。
+		reportModel := e.selectedModel
+		if reportModel == "" {
+			reportModel = e.cfg.Model
+		}
 		if e.cfg.OnLLMUsage != nil {
 			var profile *llm.ModelProfile
 			if e.cfg.Registry != nil {
-				profile = e.cfg.Registry.Get(e.cfg.Model)
+				profile = e.cfg.Registry.Get(reportModel)
 			}
 			if profile == nil {
 				profile = &llm.ModelProfile{
-					Name:        e.cfg.Model,
+					Name:        reportModel,
 					Provider:    "unknown",
 					InputPrice:  0,
 					OutputPrice: 0,
@@ -729,7 +761,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
 					}
 				}()
-				e.cfg.OnLLMUsage(e.cfg.Model, profile, usage)
+				e.cfg.OnLLMUsage(reportModel, profile, usage)
 			}()
 		}
 
@@ -1013,29 +1045,53 @@ func (e *Engine) updateTaskDuration() {
 // can self-correct. Keeping the format stable lets isRepeatingError detect
 // consecutive identical failures.
 func (e *Engine) formatToolErrorObservation(toolName string, err error) string {
-	return fmt.Sprintf("[TOOL ERROR] %s failed: %s", toolName, err.Error())
+	return fmt.Sprintf("[TOOL ERROR] %s failed: %s", toolName, normalizeErrorFingerprint(err.Error()))
+}
+
+// normalizeErrorFingerprint strips volatile substrings from an error message so
+// two failures of the same kind compare equal. The Router-activation post-mortem
+// showed that 403 "no access to model" errors embed a per-request id
+// ("request id: 20260714033318937918881aclHY4az") that changes on every call;
+// without normalization isRepeatingError never matched and the engine spun in a
+// 1347-iteration/90s death loop until the poll timeout. We collapse:
+//   - "request id: <opaque>"   → "request id: <redacted>"
+//   - "request_id: <opaque>"   → "request_id: <redacted>"
+//
+// The normalized string is used BOTH for the fingerprint comparison and for the
+// observation fed back to the LLM, so the LLM also sees a cleaner error signal.
+func normalizeErrorFingerprint(msg string) string {
+	// Strip OpenAI-style "request id: <opaque>" / "request_id: <opaque>".
+	// Keep the captured "request id" / "request_id" key, redact the volatile id.
+	return regexpRequestID.ReplaceAllString(msg, "$1: <redacted>")
 }
 
 // isRepeatingError returns true if the same recoverable error just occurred
 // consecutively. Per the platform's error-handling principle, a single error
-// is fed back to the LLM for self-correction; two identical errors in a row
-// are considered a loop and escalate to human intervention.
+// is fed back to the LLM for self-correction; two identical (normalized) errors
+// in a row are considered a loop and escalate to human intervention.
+//
+// Comparison uses normalizeErrorFingerprint so volatile tokens (per-request ids)
+// don't mask genuine repetition. See normalizeErrorFingerprint for the rationale.
 func (e *Engine) isRepeatingError(errFingerprint string) bool {
 	if e.consecutiveErrors == 0 {
 		return false
 	}
-	return e.lastError != "" && e.lastError == errFingerprint
+	norm := normalizeErrorFingerprint(errFingerprint)
+	return e.lastError != "" && e.lastError == norm
 }
 
 // recordFeedbackError updates the engine's error-tracking state after a
 // recoverable error has been fed back to the LLM. It increments the counter
-// when the same error repeats, otherwise resets it for a new error pattern.
+// when the same (normalized) error repeats, otherwise resets it for a new
+// error pattern. The stored lastError is the normalized form so subsequent
+// isRepeatingError comparisons are against the same normalized baseline.
 func (e *Engine) recordFeedbackError(errFingerprint string) {
-	if e.lastError != "" && e.lastError == errFingerprint {
+	norm := normalizeErrorFingerprint(errFingerprint)
+	if e.lastError != "" && e.lastError == norm {
 		e.consecutiveErrors++
 	} else {
 		e.consecutiveErrors = 1
-		e.lastError = errFingerprint
+		e.lastError = norm
 	}
 }
 
@@ -1111,6 +1167,10 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// Default to cfg.Model / e.llm
 	selectedModel = e.cfg.Model
 	selectedProvider = e.llm
+	// Cache the Router's pick on the engine so the OnLLMUsage callback (Run loop)
+	// reports cost against the model actually called, not e.cfg.Model. Reset each
+	// think() so a failed-then-retried step doesn't leak a stale selection.
+	e.selectedModel = selectedModel
 
 	if e.cfg.Router != nil && e.cfg.Registry != nil {
 		// Estimate context length from conversation history.
@@ -1135,6 +1195,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			log.Printf("[Engine] Router selection failed: %v, falling back to default model", errRoute)
 		} else if routeDecision != nil && routeDecision.Primary != nil {
 			selectedModel = routeDecision.Primary.Name
+			e.selectedModel = selectedModel //供 OnLLMUsage 上报真实调用模型
 
 			// Resolve the provider for the selected model from the providers map.
 			// Keys can be provider name (e.g., "deepseek") or model name.
@@ -1147,9 +1208,19 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			}
 
 			if selectedProvider == nil {
+				// Last-resort fallback: build a fresh OpenAI-compatible provider
+				// from the engine's default endpoint/key, anchored to the
+				// router-selected model name. This keeps the routed model in
+				// effect even when the caller didn't pre-register a provider
+				// for it in the Providers map.
 				selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
 					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
 			}
+			// Note: when a pre-registered provider is found above, we do NOT
+			// re-anchor its model — the ChatRequest.Model field (set to
+			// selectedModel below) takes precedence in OpenAIProvider.ChatStream,
+			// so the routed model is honored regardless of the provider's
+			// default model.
 
 			// model_routed event includes fallback info so the frontend can
 			// pre-display the fallback target model (white-box transparency).
@@ -1192,6 +1263,15 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				"reasoning_content": chunk.Delta.ReasoningContent,
 			}))
 		}
+		// Step-3.x / vLLM 风格的 reasoning 字段（与 reasoning_content 等价，仅
+		// 字段名不同）。同样转发到前端，保证推理型模型在 think 阶段的思维链
+		// 对用户可见（白盒哲学）。
+		if chunk.Delta.Reasoning != "" {
+			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"content":           chunk.Delta.Content,
+				"reasoning_content": chunk.Delta.Reasoning,
+			}))
+		}
 		return nil
 	})
 
@@ -1224,6 +1304,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		}
 
 		req.Model = routeDecision.Fallback.Name
+		e.selectedModel = routeDecision.Fallback.Name // fallback 成功后 cost 按实际模型上报
 		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":     "model_fallback",
 			"primary":  selectedModel,
@@ -1259,6 +1340,9 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	}
 
 	if err != nil {
+		// 失败返回前清空 selectedModel，避免 Run loop 里 OnLLMUsage 误用上一次
+		// think 残留的选择（虽然失败分支不会进 OnLLMUsage，但保持状态干净）。
+		e.selectedModel = ""
 		return "", usage, nil, err
 	}
 

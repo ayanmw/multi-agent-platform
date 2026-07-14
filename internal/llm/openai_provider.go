@@ -72,6 +72,13 @@ func (p *OpenAIProvider) Name() string {
 
 // Chat sends a non-streaming chat request and returns the full response.
 func (p *OpenAIProvider) Chat(req ChatRequest) (*ChatResponse, error) {
+	// Fall back to the provider's default model when the caller leaves Model
+	// empty. The Router's intent classifier intentionally sets Model="" so the
+	// classifier provider's configured default is used; without this fallback
+	// the API would receive "model":"" and reject the request.
+	if req.Model == "" {
+		req.Model = p.model
+	}
 	req.Stream = false
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -118,6 +125,13 @@ func (p *OpenAIProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 // The onChunk callback is called for each parsed chunk, enabling the Engine
 // to forward text deltas to the frontend in real time.
 func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
+	// Fall back to the provider's default model when the caller leaves Model
+	// empty (mirrors Chat). The Engine normally sets ChatRequest.Model to the
+	// routed model, but legacy callers that rely on the provider's default
+	// still work through this fallback.
+	if req.Model == "" {
+		req.Model = p.model
+	}
 	req.Stream = true
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -197,11 +211,17 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 			contentBuilder.WriteString(choice.Delta.Content)
 		}
 
-		// Accumulate reasoning content (chain-of-thought) from DeepSeek R1/V4 models.
-		// reasoning_content is emitted alongside content in the same delta by DeepSeek's
-		// reasoning models; we merge it into the full text accumulation.
+		// Accumulate reasoning content (chain-of-thought) from DeepSeek R1/V4
+		// models and Step-3.x / vLLM deployments. DeepSeek's protocol uses
+		// "reasoning_content"; Step-3.x exposes the same stream as "reasoning".
+		// Both are merged into the full text accumulation so the Engine's think
+		// phase sees the model's actual output instead of an empty content
+		// (which would prematurely end the ReAct loop as a "final answer").
 		if choice.Delta.ReasoningContent != "" {
 			contentBuilder.WriteString(choice.Delta.ReasoningContent)
+		}
+		if choice.Delta.Reasoning != "" {
+			contentBuilder.WriteString(choice.Delta.Reasoning)
 		}
 
 		for _, tc := range choice.Delta.ToolCalls {

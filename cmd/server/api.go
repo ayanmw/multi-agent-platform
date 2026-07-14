@@ -890,7 +890,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionChat handles POST /api/sessions/{id}/chat
 // 在已有 Session 中发起新轮对话，自动注入历史消息上下文
-func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1022,7 +1022,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
 		}
 
-		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID, "", costRepo, modelRegistry)
+		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID, "", costRepo, modelRegistry, modelRouter, routerProviders)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1104,27 +1104,29 @@ func costReportFromRecords(records []cost.CostRecord) map[string]any {
 	if records == nil {
 		records = []cost.CostRecord{}
 	}
+	var totalCostUSD float64
 	var totalCents int64
 	var totalTokens, totalInput, totalOutput int
-	byModel := make(map[string]int64)
-	byAgent := make(map[string]int64)
+	byModel := make(map[string]float64)
+	byAgent := make(map[string]float64)
 	for _, rec := range records {
+		totalCostUSD += rec.CostUSD
 		totalCents += rec.CostCents
 		totalTokens += rec.TotalTokens
 		totalInput += rec.InputTokens
 		totalOutput += rec.OutputTokens
-		byModel[rec.Model] += rec.CostCents
-		byAgent[rec.AgentID] += rec.CostCents
+		byModel[rec.Model] += rec.CostUSD
+		byAgent[rec.AgentID] += rec.CostUSD
 	}
 	return map[string]any{
 		"record_count":     len(records),
-		"total_cost_cents": totalCents,
-		"total_cost_usd":   float64(totalCents) / 100.0,
+		"total_cost_usd":   totalCostUSD, // primary, full float64 precision (no /100 truncation)
+		"total_cost_cents": totalCents,   // derived, backward-compatible integer sum
 		"total_tokens":     totalTokens,
 		"input_tokens":     totalInput,
 		"output_tokens":    totalOutput,
-		"by_model":         byModel,
-		"by_agent":         byAgent,
+		"by_model":         byModel, // float64 USD
+		"by_agent":         byAgent, // float64 USD
 		"records":          records,
 	}
 }
@@ -1144,7 +1146,7 @@ func truncateContent(content string, maxLen int) string {
 // It extracts the case identifier (from "case" or "case_id" field), then executes
 // the same chat action logic as POST /api/tasks?case=<caseID>, with the case's
 // default input and system prompt applied when the body does not override them.
-func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1241,7 +1243,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 
 	taskID := "task_" + time.Now().Format("20060102150405")
-	go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, tools, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, caseID, costRepo, modelRegistry)
+	go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, tools, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

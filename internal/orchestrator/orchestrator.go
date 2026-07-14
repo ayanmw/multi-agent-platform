@@ -126,19 +126,32 @@ type Orchestrator struct {
 	persist      runtime.Persistence
 	agentBus     *AgentBusAdapter         // Phase 5: inter-agent communication
 	checkpointMgr *runtime.CheckpointManager // Phase 5: crash recovery
+
+	// Phase 6 Router: optional model router + provider lookup shared by all
+	// child agents. When non-nil, each agent's Engine classifies intent and
+	// selects a model tier before every LLM call (engine.go:1115). When nil,
+	// agents fall back to cfg.LLMModel directly (legacy behavior).
+	modelRouter    *llm.Router
+	routerRegistry *llm.ModelRegistry
+	routerProviders map[string]llm.Provider
 }
 
 // New creates a new Orchestrator.
 // agentBus and checkpointMgr may be nil — multi-agent communication and
 // checkpointing are disabled when nil.
-func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, agentBus *AgentBusAdapter, checkpointMgr *runtime.CheckpointManager) *Orchestrator {
+// modelRouter/routerRegistry/routerProviders are optional Phase 6 Router deps;
+// pass nil for all three to keep the legacy single-model behavior in child agents.
+func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, agentBus *AgentBusAdapter, checkpointMgr *runtime.CheckpointManager, modelRouter *llm.Router, routerRegistry *llm.ModelRegistry, routerProviders map[string]llm.Provider) *Orchestrator {
 	return &Orchestrator{
-		hub:          hub,
-		cfg:          cfg,
-		tools:        tools,
-		persist:      persist,
-		agentBus:     agentBus,
-		checkpointMgr: checkpointMgr,
+		hub:             hub,
+		cfg:             cfg,
+		tools:           tools,
+		persist:         persist,
+		agentBus:        agentBus,
+		checkpointMgr:   checkpointMgr,
+		modelRouter:     modelRouter,
+		routerRegistry:  routerRegistry,
+		routerProviders: routerProviders,
 	}
 }
 
@@ -322,6 +335,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		CheckpointManager: o.checkpointMgr,    // Phase 5: 崩溃恢复
 		WorkspaceDir:      workspaceDir,       // Session-level workspace directory
 		OnLLMUsage:        onUsage,
+		// Phase 6 Router: forward the shared Router/Registry/Providers so child
+		// agents participate in dynamic model selection. When modelRouter is nil
+		// the Engine falls back to the single-model path (legacy behavior).
+		Router:    o.modelRouter,
+		Registry:  o.routerRegistry,
+		Providers: o.routerProviders,
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Emit agent_started event for the orchestrator to track

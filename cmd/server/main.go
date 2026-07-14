@@ -213,10 +213,108 @@ func main() {
 	// and future multi-provider routing. The registry is used by the CostTracker
 	// to resolve tier/pricing information when building CostRecords.
 	modelRegistry := llm.NewModelRegistry()
+	// R1 修复：先注册 cfg.LLMModel 对应的 profile，再注册 DefaultProfiles。
+	//
+	// 为什么顺序重要：Router.filterCandidates 在目标 tier 内按 registry 注册
+	// 顺序取第一个候选（GetByTier 返回 byTier[tier] 的注册顺序）。DefaultProfiles
+	// 注册的是 "deepseek-v4-flash"（TierEfficient），若先注册它，simple_chat 意图
+	// 会选中 "deepseek-v4-flash"，而实际部署 token 通常只能访问 cfg.LLMModel
+	// （如 "deepseek-v4-flash-local"）→ 403 → 死循环。
+	//
+	// 把 cfg.LLMModel 的克隆 profile 注册在最前，让它成为 TierEfficient 的首选
+	// 候选，Router 就会选中 token 实际可访问的模型名。仅在 cfg.LLMModel 未被
+	// DefaultProfiles 覆盖时补注（避免重复注册同名 profile）。DefaultProfiles 仍
+	// 照常注册，作为其它 tier（如 TierStandard 的 -pro）的成本/能力参考。
+	if cfg.LLMModel != "" {
+		defaults := llm.DefaultProfiles()
+		if modelRegistry.Get(cfg.LLMModel) == nil {
+			// 克隆第 0 个 DefaultProfile（TierEfficient、低价）改 Name。
+			base := defaults[0]
+			localProfile := *base
+			localProfile.Name = cfg.LLMModel
+			localProfile.FallbackModel = "" // -local 是兜底模型，不再指向自身
+			modelRegistry.Register(&localProfile)
+			log.Printf("ModelRegistry: registered cfg.LLMModel profile %q (tier=%s, cloned from %s)",
+				cfg.LLMModel, localProfile.Tier, base.Name)
+		}
+	}
 	for _, profile := range llm.DefaultProfiles() {
+		// D1 修复：把所有非 cfg.LLMModel 的 tier profile 的 FallbackModel 重定向
+		// 到 cfg.LLMModel（token 确定可访问的本地兜底模型），而非 DefaultProfiles
+		// 里的标准名。否则 multi-agent 路径 Router 选 deepseek-v4-pro（token 无权）
+		// → fallback 到标准名 deepseek-v4-flash（也无权）→ 403 死循环。指向
+		// cfg.LLMModel 保证任何 tier 失败都能回退到 token 可访问的模型。
+		//
+		// 必须克隆：DefaultProfiles 返回的是包级共享 *ModelProfile 指针，直接改
+		// 其 FallbackModel 会污染 llm.DefaultProfiles() 的全局返回值（其它调用方
+		// 如 cost tracker、单测会受影响）。克隆后只改副本。
+		if cfg.LLMModel != "" && profile.Name != cfg.LLMModel && profile.FallbackModel != "" {
+			cloned := *profile
+			cloned.FallbackModel = cfg.LLMModel
+			modelRegistry.Register(&cloned)
+			continue
+		}
 		modelRegistry.Register(profile)
 	}
 	log.Printf("ModelRegistry: loaded %d default profiles", len(llm.DefaultProfiles()))
+
+	// Phase 6 Router: build the model router + provider lookup map.
+	//
+	// Why: engine.go:1115 activates the Router code path only when EngineConfig
+	// carries non-nil Router/Registry/Providers. Previously main.go built the
+	// modelRegistry and costTracker but never wired them into EngineConfig, so
+	// the Phase 6 dynamic model selection / classifyIntent / model_routed event
+	// were dead code in the chat path. We construct the Router once at startup
+	// and share it across all chat turns and orchestrator runs.
+	//
+	// Mock safety: the classifier needs a Provider to classify intent. In mock
+	// mode (LLMUseMock=true) we MUST NOT call a real API — that would both cost
+	// money and break the deterministic smoke tests. We therefore build the
+	// classifier via the same CreateProviderFromConfig path used by the engine
+	// (which returns a MockProvider in mock mode), and additionally register a
+	// "builtin:router-classifier" mock script so the classifier gets a clean
+	// single-token "simple_chat" reply instead of accidentally matching a
+	// user-input-shaped dialogue script. In real mode the classifier is a real
+	// OpenAI-compatible provider pointed at cfg.LLMModel; classifyIntent calls
+	// its non-streaming Chat with a tiny (~10 token) budget.
+	routerClassifier, errClassifier := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, "router-classifier")
+	if errClassifier != nil {
+		log.Printf("[Router] failed to create classifier provider (Router will be disabled): %v", errClassifier)
+		routerClassifier = nil
+	}
+	var modelRouter *llm.Router
+	routerProviders := map[string]llm.Provider{}
+	if routerClassifier != nil {
+		// Seed the provider lookup map with the configured default model under
+		// both its provider name and model name — the engine resolves the
+		// selected profile via providers[profile.Provider] then falls back to
+		// providers[profile.Name] (engine.go:1141-1147).
+		if p, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, ""); err == nil {
+			routerProviders[cfg.LLMModel] = p
+			// DefaultProfiles models are all "deepseek"; register the same
+			// provider under that key so profile.Provider lookup succeeds.
+			routerProviders["deepseek"] = p
+		}
+		// Register a classifier mock script in mock mode so classifyIntent
+		// returns a valid intent token deterministically. In real mode this
+		// script is unused (the real provider ignores the store).
+		if cfg.LLMUseMock {
+			clsScript := llm.MockScript{
+				ID:         "builtin:router-classifier",
+				CaseID:     "router-classifier",
+				Priority:   1000,
+				MatchInput: []string{"classify", "category", "intent"},
+				Responses: []llm.MockResponse{
+					{Type: llm.MockResponseText, Content: "simple_chat"},
+				},
+			}
+			_ , _ = llm.DefaultMockStore.Save(clsScript)
+		}
+		modelRouter = llm.NewRouter(modelRegistry, routerClassifier)
+		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
+	} else {
+		log.Printf("[Router] disabled (no classifier provider)")
+	}
 
 	// Initialize tool registry with built-in tools
 	toolRegistry := tool.NewRegistry()
@@ -252,7 +350,7 @@ func main() {
 	log.Println("CheckpointManager: initialized (data/checkpoints)")
 
 	// Initialize multi-agent orchestrator
-	orch := orchestrator.New(hub, cfg, toolRegistry, persist, agentBusAdapter, checkpointMgr)
+	orch := orchestrator.New(hub, cfg, toolRegistry, persist, agentBusAdapter, checkpointMgr, modelRouter, modelRegistry, routerProviders)
 
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
@@ -447,7 +545,7 @@ func main() {
 			}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -478,7 +576,7 @@ func main() {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat — multi-turn chat within a session
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders)
 			return
 		}
 		// GET /api/sessions/{id}/messages — session message history
@@ -588,6 +686,13 @@ func main() {
 	// API and the MockProvider via llm.DefaultMockStore.
 	RegisterMockRoutes(http.DefaultServeMux, mockStore, llm.BuiltinMockScripts())
 
+	// Model price management API — view/update ModelRegistry prices.
+	// GET  /api/models/prices         — list all profiles with InputPrice/OutputPrice
+	// PUT  /api/models/prices/{model} — update a model's prices (runtime-only, resets on restart)
+	// The registry is the same shared instance wired into EngineConfig and CostTracker,
+	// so price edits here take effect immediately for all subsequent cost records.
+	RegisterModelPriceRoutes(http.DefaultServeMux, modelRegistry)
+
 	// Version API: returns the current version from version.txt
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -642,7 +747,7 @@ func main() {
 	// Thin proxy used by the CaseCard frontend. Delegates to the same chat-action
 	// logic as POST /api/tasks with the case_id extracted from the request body.
 	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
-		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry)
+		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders)
 	})
 
 	// Dynamic Tool Registration API (Phase 2+)
@@ -925,8 +1030,10 @@ func main() {
 // It is a convenience wrapper around runAgentLoopWithTurn for the initial (root) turn.
 // caseID is used by MockProvider for deterministic script matching; it is ignored
 // when LLM_USE_MOCK is false or when the request does not target a preset case.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry)
+// modelRouter/routerProviders activate the Phase 6 Router in the Engine; pass nil
+// to fall back to the legacy single-model path.
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
@@ -935,7 +1042,9 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // when turnIndex == 0 (first turn).
 // caseID is an optional hint for the MockProvider to select a mock script by
 // exact case match; when empty the provider falls back to keyword matching.
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry) {
+// modelRouter is the optional Phase 6 Router; when non-nil (with routerProviders)
+// the Engine classifies intent and selects a model tier before each LLM call.
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
 	isRoot := turnIndex == 0
 
 	// Persist task creation
@@ -1045,8 +1154,10 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		// M2 修复：把本次调用成本累加进 CostBudgetRule，让 PolicyChain 在
 		// 后续 tool call 中能根据累计成本阻断。此前 CostBudgetRule 已实现
 		// 并有单测，但从未接入 main.go 的 PolicyChain，端到端不生效。
-		if record.CostCents > 0 {
-			costBudgetRule.SetCost(float64(record.CostCents) / 100.0)
+		// CostBudgetRule.currentCostUSD 本就是 float64 USD，直接传 CostUSD
+		// 即可，无需经 CostCents 绕路（后者是 derived round 值，sub-cent 会丢精度）。
+		if record.CostUSD > 0 {
+			costBudgetRule.SetCost(record.CostUSD)
 		}
 		// Best-effort persistence; failures are logged but don't break the task.
 		if costRepo != nil {
@@ -1085,6 +1196,13 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		TurnIndex:         turnIndex,       // 当前轮次
 		WorkspaceDir:       workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
 		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
+		// Phase 6 Router: wire the model router into the Engine so the chat
+		// path actually classifies intent and selects a model tier. When
+		// modelRouter is nil (classifier unavailable) the Engine transparently
+		// falls back to cfg.Model — legacy behavior preserved.
+		Router:    modelRouter,
+		Registry:  modelRegistry,
+		Providers: routerProviders,
 		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
 			return db.InsertSessionMessage(db.SessionMessageRecord{
 				ID:         "msg_" + uuid.New().String(),

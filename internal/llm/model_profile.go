@@ -268,6 +268,18 @@ func (r *ModelRegistry) List() []*ModelProfile {
 // DefaultProfiles returns a set of sensible default model profiles.
 // These are used when no configuration is provided, ensuring the system
 // works out of the box with commonly available models.
+//
+// 价格来源（核实过的官方价，USD per 1M tokens）：
+//   - deepseek-v4-flash: Input $0.14, Output $0.28
+//     (DeepSeek 官方 api-docs.deepseek.com/quick_start/pricing，cache-miss 输入价)
+//   - deepseek-v4-pro:   Input $0.435, Output $0.87
+//     (DeepSeek 官方价)
+//
+// 历史踩坑：早期版本 deepseek-v4-flash 的 OutputPrice 写成 0.29（笔误），
+// deepseek-v4-pro 的 InputPrice/OutputPrice 写成 1.71/3.43（错误），
+// 导致 /api/costs 的 CostCents 偏高或与官方价不符。已于 2026-07 修正为官方价。
+// "deepseek-v4-flash-local" 等本地等效模型由 main.go 克隆本表第 0 项（flash）
+// 改名注册，沿用 0.14/0.28 作为本地 API 的上界成本参考。
 func DefaultProfiles() []*ModelProfile {
 	return []*ModelProfile{
 		{
@@ -276,7 +288,7 @@ func DefaultProfiles() []*ModelProfile {
 			Tier:             TierEfficient,
 			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
 			InputPrice:       0.14,
-			OutputPrice:      0.29,
+			OutputPrice:      0.28,
 			MaxContextWindow: 128000,
 			MaxOutputTokens:  4096,
 			RateLimitRPM:     500,
@@ -288,8 +300,8 @@ func DefaultProfiles() []*ModelProfile {
 			Provider:         "deepseek",
 			Tier:             TierStandard,
 			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
-			InputPrice:       1.71,
-			OutputPrice:      3.43,
+			InputPrice:       0.435,
+			OutputPrice:      0.87,
 			MaxContextWindow: 128000,
 			MaxOutputTokens:  8192,
 			RateLimitRPM:     200,

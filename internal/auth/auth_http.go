@@ -66,6 +66,9 @@ func DefaultProtectedRoutes() []string {
 		"DELETE /api/tools",
 		"POST /api/auth/api-keys",
 		"DELETE /api/auth/api-keys/",
+		// Model price edits are runtime-only writes (overwrite ModelRegistry entry),
+		// so they require a Bearer token when REQUIRE_AUTH is enabled. GET is public-read.
+		"PUT /api/models/prices/",
 	}
 }
 

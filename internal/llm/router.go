@@ -196,8 +196,15 @@ func (r *Router) classifyIntent(_ context.Context, userInput string) (string, er
 		Model:       "", // use the classifier's default model
 		Messages:    []Message{{Role: "user", Content: prompt}},
 		Temperature: 0, // deterministic classification
-		MaxTokens:   10, // only need one word
-		Stream:      false,
+		// NOTE: reasoning-mode models (DeepSeek R1/V4, Step-3.x) burn the whole
+		// token budget on chain-of-thought before emitting a final answer. With
+		// a tiny budget (e.g. 10) Content stays empty and the classifier would
+		// always fall back. 512 is enough for the reasoning to converge and the
+		// model to emit the single category token in Content; it's still < $0.001
+		// per call on Flash-tier models so the "negligible routing cost" design
+		// goal is preserved.
+		MaxTokens: 512,
+		Stream:    false,
 	}
 
 	resp, err := r.classifier.Chat(req)
@@ -209,18 +216,32 @@ func (r *Router) classifyIntent(_ context.Context, userInput string) (string, er
 		return "", fmt.Errorf("classifier returned empty response")
 	}
 
-	// Normalize the response
+	// Normalize the response. Some reasoning-mode models (DeepSeek R1/V4,
+	// Step-3.x) put their output in Message.Reasoning and leave Content empty
+	// when max_tokens is small (the reasoning eats the whole budget before a
+	// final answer is produced). Fall back to Reasoning so classifyIntent
+	// still extracts a category token in that case; if neither field carries a
+	// known category the default branch below maps it to simple_chat.
 	intent := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if intent == "" {
+		intent = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
+	}
 	intent = strings.ToLower(intent)
 
-	// Validate against known categories
-	switch intent {
-	case "simple_chat", "code_generation", "complex_reasoning", "multi_step":
-		return intent, nil
-	default:
-		// Unknown category — default to simple_chat
-		return "simple_chat", nil
+	// Validate against known categories. The classifier may wrap the category
+	// in punctuation or trailing prose ("simple_chat.", "category: code_generation"),
+	// so scan for the first known category substring rather than requiring an
+	// exact match. This keeps routing robust without weakening the contract
+	// (an unrecognized blob still defaults to simple_chat below).
+	for _, cat := range []string{"simple_chat", "code_generation", "complex_reasoning", "multi_step"} {
+		if strings.Contains(intent, cat) {
+			return cat, nil
+		}
 	}
+
+	// Unknown category — default to simple_chat so routing degrades gracefully
+	// (cheapest tier) rather than failing the whole task.
+	return "simple_chat", nil
 }
 
 // keywordClassify is a fallback classification method that uses keyword matching.

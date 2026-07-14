@@ -13,6 +13,7 @@ package db
 import (
 	"fmt"
 	"log"
+	"strings"
 )
 
 // Migration represents a single schema change.
@@ -153,7 +154,8 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	// Existing rows are backfilled from cost_usd*100 so the CostRepository can
 	// read all rows with a non-null cost_cents value. SQLite does not have ALTER
 	// ADD COLUMN IF NOT EXISTS, so failures because the column already exists
-	// are logged and ignored by RunMigrations.
+	// are silently ignored by RunMigrations (only non-"duplicate column name"
+	// errors are logged, to avoid noise on every startup).
 	{
 		Version:     11,
 		Description: "Add cost_cents column to cost_records for integer precision",
@@ -287,9 +289,19 @@ func RunMigrations() error {
 				continue
 			}
 			if _, err := DB.Exec(stmt); err != nil {
-				// SQLite ALTER TABLE ADD COLUMN errors if column already exists.
-				// This can happen if the DB was partially migrated or manually fixed.
-				// Log and continue — this is a best-effort migration.
+				// SQLite 没有 ALTER TABLE ADD COLUMN IF NOT EXISTS，因此对已有列
+				// 重复执行 ALTER 会返回 "duplicate column name" 错误。
+				//
+				// 这类错误是预期行为：当 createTables() 已在新库里建好该列、或
+				// 迁移曾部分应用过、或 DB 被手工修过时，列已存在就会触发。它不是
+				// 真实故障，迁移仍应继续并把该版本标记为已应用。
+				//
+				// 为避免这些预期内的"已存在"日志在每次启动时刷屏、淹没真实错误，
+				// 这里对 "duplicate column name" 错误静默跳过（不打印）；其它真正
+				// 意料之外的执行错误才按原逻辑打印，便于排查。
+				if strings.Contains(err.Error(), "duplicate column name") {
+					continue
+				}
 				log.Printf("[Migration] v%d: statement failed (may already exist): %v", m.Version, err)
 				continue
 			}

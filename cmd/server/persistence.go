@@ -36,10 +36,24 @@ func (p *DBPersistence) UpdateTaskDuration(taskID string, durationMs int) error 
 }
 
 func (p *DBPersistence) SaveStep(s runtime.StepRecord) error {
+	// Step ID = 可读前缀 + uuid 后缀。
+	//
+	// 为什么不用纯四元组 step_{taskID}_{agentID}_{stepIdx}_{type} 作主键：
+	// 真实 LLM 多步 ReAct 下，同一 (taskID, agentID, stepIdx, type) 四元组会被
+	// 多次保存——典型场景是 engine.go 在 `for _, tc := range toolCalls` 循环里，
+	// 每个 tool call 执行前都先 saveStep 一次 think（stepIdx 未自增），若一次 LLM
+	// 响应带 N 个 tool_calls，think step 就会被重复保存 N 次，主键完全相同 →
+	// `UNIQUE constraint failed: steps.id (1555)`，导致部分 step 记录被丢弃、
+	// 历史回放不完整。
+	//
+	// 加 uuid 后缀后，无论同一四元组保存多少次都不再碰撞。保留 taskID/stepIdx/type
+	// 前缀是为了日志和 DB 直查时可读（一眼看出属于哪个 task 的第几步）。前端按
+	// step_index 排序、api.go 按 ID 做子任务去重，都不依赖 ID 的精确格式，所以
+	// 加随机后缀是安全的。
+	id := fmt.Sprintf("step_%s_%s_%d_%s_%s",
+		s.TaskID, s.AgentID, s.StepIndex, s.Type, uuid.New().String())
 	return db.InsertStep(db.StepRecord{
-		ID:         fmt.Sprintf("step_%s_%s_%d_%s", s.TaskID, s.AgentID, s.StepIndex, s.Type),
-		// Step ID now includes agent_id so multiple agents sharing the same root
-		// task cannot collide. Each agent has its own step namespace.
+		ID:         id,
 		TaskID:     s.TaskID,
 		AgentID:    s.AgentID,
 		StepIndex:  s.StepIndex,

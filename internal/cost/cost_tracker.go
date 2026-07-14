@@ -9,8 +9,16 @@
 //
 // The cost calculation strictly uses the API-returned Usage fields — no local
 // estimation. Prices are expressed per 1M input/output tokens as defined in
-// llm.ModelProfile, and the tracker normalizes all arithmetic to avoid
-// floating-point drift across many records.
+// llm.ModelProfile. Cost is stored as float64 USD at full precision; the
+// display layer is responsible for truncation (frontend toFixed(3)). The
+// CostCents int64 field is retained only as a derived value (= round(CostUSD*100))
+// for backward compatibility with legacy consumers such as the cost_cents_total
+// Prometheus counter.
+//
+// Rationale: a single LLM call's cost lives at the $0.0001 scale, so integer-cent
+// arithmetic truncates small conversations to $0, defeating the "costs must be
+// non-zero" requirement; float64 accumulation drift stays at the 1e-15 level,
+// invisible at 3-decimal display precision.
 //
 // # Integration Pattern
 //
@@ -27,6 +35,7 @@ package cost
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -73,12 +82,18 @@ type CostRecord struct {
 	// TotalTokens is the total token count (input + output).
 	TotalTokens int
 
-	// CostCents is the calculated cost stored as integer cents for precision.
-	CostCents int64
-
-	// CostUSD is the calculated cost in US dollars (derived from CostCents).
-	// Retained for backward-compatible display purposes.
+	// CostUSD is the calculated cost in US dollars, stored at full float64
+	// precision. This is the primary field for cost tracking, aggregation,
+	// and persistence. The display layer is responsible for truncation
+	// (e.g., frontend toFixed(3)).
 	CostUSD float64
+
+	// CostCents is a derived field equal to round(CostUSD * 100), retained
+	// for backward compatibility with legacy consumers (the cost_cents_total
+	// Prometheus counter and the integer cost_cents DB column). It is NOT
+	// the source of truth — small per-call costs live below 1 cent and would
+	// truncate to 0 if computed via integer arithmetic.
+	CostCents int64
 
 	// CreatedAt is the timestamp when this record was created.
 	CreatedAt time.Time
@@ -87,11 +102,15 @@ type CostRecord struct {
 // CostReport is an aggregated cost report across a set of CostRecords.
 // It provides top-level totals plus breakdowns by model, tier, and agent.
 type CostReport struct {
-	// TotalCostCents is the sum of all CostCents values in the report (precise integer aggregation).
-	TotalCostCents int64
-
-	// TotalCostUSD is the derived display value equal to TotalCostCents / 100.0.
+	// TotalCostUSD is the sum of all CostUSD values in the report, aggregated
+	// at full float64 precision. This is the primary total cost field.
 	TotalCostUSD float64
+
+	// TotalCostCents is a derived value equal to the sum of each record's
+	// CostCents (= round(CostUSD*100)). Retained for backward compatibility
+	// with legacy integer-cents consumers. Note that summing rounded values
+	// can diverge slightly from round(TotalCostUSD*100) at the edges.
+	TotalCostCents int64
 
 	// TotalTokens is the sum of all TotalTokens values.
 	TotalTokens int
@@ -102,14 +121,14 @@ type CostReport struct {
 	// TotalOutputTokens is the sum of all output tokens.
 	TotalOutputTokens int
 
-	// ByModel maps model name → total cost (in cents).
-	ByModel map[string]int64
+	// ByModel maps model name → total cost in USD (full float64 precision).
+	ByModel map[string]float64
 
-	// ByTier maps tier name → total cost (in cents).
-	ByTier map[string]int64
+	// ByTier maps tier name → total cost in USD (full float64 precision).
+	ByTier map[string]float64
 
-	// ByAgent maps agent ID → total cost (in cents).
-	ByAgent map[string]int64
+	// ByAgent maps agent ID → total cost in USD (full float64 precision).
+	ByAgent map[string]float64
 
 	// RecordCount is the number of records included in this report.
 	RecordCount int
@@ -118,9 +137,9 @@ type CostReport struct {
 // newCostReport creates a zero-valued CostReport with initialized maps.
 func newCostReport() *CostReport {
 	return &CostReport{
-		ByModel: make(map[string]int64),
-		ByTier:  make(map[string]int64),
-		ByAgent: make(map[string]int64),
+		ByModel: make(map[string]float64),
+		ByTier:  make(map[string]float64),
+		ByAgent: make(map[string]float64),
 	}
 }
 
@@ -280,19 +299,21 @@ func (ct *CostTracker) DailyReport(days int) (*CostReport, error) {
 	return report, nil
 }
 
-// CalculateCost computes the USD cost in cents (integer) for a single LLM call
-// based on the model's pricing profile and the API-reported token usage.
+// CalculateCost computes the USD cost (float64) for a single LLM call based on
+// the model's pricing profile and the API-reported token usage.
 //
-// The prices in ModelProfile are per 1M tokens in USD cents. The function uses
-// pure integer arithmetic to avoid floating-point drift:
+// The prices in ModelProfile are USD per 1M tokens. The cost is computed in
+// straight float64 USD and stored at full precision — the display layer is
+// responsible for truncation (e.g., frontend toFixed(3)):
 //
-//	cost_cents = (input_tokens * input_price_cents + output_tokens * output_price_cents) / 1_000_000
+//	cost_usd = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
 //
 // This strictly uses the API-returned Usage — no local token estimation.
 //
-// Returns the cost in cents (1 cent = $0.01 USD). Returns 0 if profile is nil or
-// usage has zero tokens.
-func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage) int64 {
+// Returns 0 if profile is nil or usage has zero tokens. Callers that need the
+// backward-compatible integer-cents value should derive it via
+// int64(math.Round(cost * 100)) (as BuildRecordFromProfile does).
+func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage) float64 {
 	if profile == nil {
 		return 0
 	}
@@ -300,15 +321,12 @@ func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage)
 		return 0
 	}
 
-	// Prices in ModelProfile are USD per 1M tokens. To keep precision while using
-	// integer arithmetic, multiply by 100 to convert dollars to cents first, then
-	// divide by 1_000_000 to scale from "per 1M" to per-token:
-	//   cost_cents = (input_tokens * input_price_cents_per_1M + output_tokens * output_price_cents_per_1M) / 1_000_000
-	inputPriceCents := int64(profile.InputPrice * 100)
-	outputPriceCents := int64(profile.OutputPrice * 100)
-	inputCost := int64(usage.PromptTokens) * inputPriceCents
-	outputCost := int64(usage.CompletionTokens) * outputPriceCents
-	return (inputCost + outputCost) / 1_000_000
+	// Prices are USD per 1M tokens; divide by 1_000_000 to scale per-token.
+	// float64 keeps sub-cent precision (e.g., 1000 tokens at $1/1M = $0.001),
+	// which integer-cents arithmetic would truncate to $0.
+	inputCost := float64(usage.PromptTokens) * profile.InputPrice / 1_000_000
+	outputCost := float64(usage.CompletionTokens) * profile.OutputPrice / 1_000_000
+	return inputCost + outputCost
 }
 
 // BuildRecordFromProfile constructs a CostRecord from a model profile, usage
@@ -331,7 +349,7 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		}
 	}
 
-	costCents := ct.CalculateCost(profile, usage)
+	costUSD := ct.CalculateCost(profile, usage)
 
 	return CostRecord{
 		ID:           fmt.Sprintf("cr_%d_%d", time.Now().UnixNano(), stepIndex),
@@ -346,8 +364,8 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
-		CostCents:    costCents,
-		CostUSD:      float64(costCents) / 100.0, // derived display value
+		CostUSD:      costUSD,                        // primary, full precision
+		CostCents:    int64(math.Round(costUSD * 100)), // derived, legacy-compatible
 		CreatedAt:    time.Now(),
 	}
 }
@@ -363,7 +381,7 @@ func (r *CostReport) add(record CostRecord) {
 	r.TotalOutputTokens += record.OutputTokens
 	r.RecordCount++
 
-	r.ByModel[record.Model] += record.CostCents
-	r.ByTier[record.Tier] += record.CostCents
-	r.ByAgent[record.AgentID] += record.CostCents
+	r.ByModel[record.Model] += record.CostUSD
+	r.ByTier[record.Tier] += record.CostUSD
+	r.ByAgent[record.AgentID] += record.CostUSD
 }

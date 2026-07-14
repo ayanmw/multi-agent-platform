@@ -31,7 +31,7 @@ func sampleProfile(inputPrice, outputPrice float64, tier llm.ModelTier) *llm.Mod
 }
 
 // ============================================================================
-// CalculateCost — 整数精度计算
+// CalculateCost — float64 USD 精度计算
 // ============================================================================
 
 func TestCalculateCost(t *testing.T) {
@@ -39,7 +39,7 @@ func TestCalculateCost(t *testing.T) {
 
 	t.Run("nil profile returns 0", func(t *testing.T) {
 		if got := ct.CalculateCost(nil, llm.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}); got != 0 {
-			t.Errorf("nil profile should return 0, got %d", got)
+			t.Errorf("nil profile should return 0, got %f", got)
 		}
 	})
 
@@ -47,52 +47,50 @@ func TestCalculateCost(t *testing.T) {
 		p := sampleProfile(1.0, 2.0, llm.TierStandard)
 		// TotalTokens=0 triggers the early return even if prompt/completion are non-zero
 		if got := ct.CalculateCost(p, llm.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 0}); got != 0 {
-			t.Errorf("TotalTokens=0 should return 0, got %d", got)
+			t.Errorf("TotalTokens=0 should return 0, got %f", got)
 		}
 	})
 
 	t.Run("basic cost computation per 1M tokens", func(t *testing.T) {
 		// InputPrice=$1/1M, OutputPrice=$2/1M
-		// 1M input tokens  → 100 cents * 1M / 1M = 100 cents = $1.00
-		// 1M output tokens → 200 cents * 1M / 1M = 200 cents = $2.00
+		// 1M input tokens  → $1.00
+		// 1M output tokens → $2.00
+		// total = $3.00 USD
 		p := sampleProfile(1.0, 2.0, llm.TierStandard)
 		usage := llm.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000, TotalTokens: 2_000_000}
 		got := ct.CalculateCost(p, usage)
-		// 1M input * (1.0*100 cents) + 1M output * (2.0*100 cents) = 100M + 200M = 300M cents / 1M = 300 cents
-		if got != 300 {
-			t.Errorf("expected 300 cents, got %d", got)
+		if !approxEq(got, 3.0) {
+			t.Errorf("expected $3.0 USD, got %f", got)
 		}
 	})
 
-	t.Run("small token count truncates toward zero", func(t *testing.T) {
-		// $1/1M input → 0.1 cents for 1000 tokens → integer division truncates to 0
+	t.Run("small token count preserves sub-cent precision", func(t *testing.T) {
+		// $1/1M input → 1000 tokens = $0.001 (sub-cent; integer-cents would truncate to 0)
 		p := sampleProfile(1.0, 0.0, llm.TierStandard)
 		usage := llm.Usage{PromptTokens: 1000, CompletionTokens: 0, TotalTokens: 1000}
 		got := ct.CalculateCost(p, usage)
-		// 1000 * 100 cents / 1_000_000 = 0.1 → truncated to 0
-		if got != 0 {
-			t.Errorf("1000 tokens at $1/1M should truncate to 0 cents, got %d", got)
+		if !approxEq(got, 0.001) {
+			t.Errorf("1000 tokens at $1/1M should be $0.001, got %f", got)
 		}
 	})
 
 	t.Run("large amount no overflow", func(t *testing.T) {
-		// $1000/1M input, 1B tokens → 1000*100 * 1e9 / 1e6 = 1e8 cents = $1,000,000
+		// $1000/1M input, 1B tokens → 1000 * 1e9 / 1e6 = $1,000,000.0 USD
 		p := sampleProfile(1000.0, 0.0, llm.TierPremium)
 		usage := llm.Usage{PromptTokens: 1_000_000_000, CompletionTokens: 0, TotalTokens: 1_000_000_000}
 		got := ct.CalculateCost(p, usage)
-		// 1e9 * 100000 cents / 1e6 = 1e9 * 0.1 = 1e8 cents
-		if got != 100_000_000 {
-			t.Errorf("expected 100,000,000 cents, got %d", got)
+		if !approxEq(got, 1_000_000.0) {
+			t.Errorf("expected $1,000,000.0 USD, got %f", got)
 		}
 	})
 
 	t.Run("only output tokens", func(t *testing.T) {
+		// $4/1M output, 500k tokens → 500_000 * 4 / 1_000_000 = $2.0 USD
 		p := sampleProfile(0.0, 4.0, llm.TierStandard)
 		usage := llm.Usage{PromptTokens: 0, CompletionTokens: 500_000, TotalTokens: 500_000}
 		got := ct.CalculateCost(p, usage)
-		// 500k * (4.0*100=400 cents) / 1e6 = 200 cents
-		if got != 200 {
-			t.Errorf("expected 200 cents, got %d", got)
+		if !approxEq(got, 2.0) {
+			t.Errorf("expected $2.0 USD, got %f", got)
 		}
 	})
 }
@@ -124,14 +122,17 @@ func TestCostTrackerRecordAndAggregate(t *testing.T) {
 		if rep.TotalCostCents != 200 {
 			t.Errorf("TotalCostCents = %d, want 200", rep.TotalCostCents)
 		}
+		if !approxEq(rep.TotalCostUSD, 2.0) {
+			t.Errorf("TotalCostUSD = %f, want 2.0", rep.TotalCostUSD)
+		}
 		if rep.TotalTokens != 300 {
 			t.Errorf("TotalTokens = %d, want 300", rep.TotalTokens)
 		}
-		if rep.ByModel["m1"] != 50 || rep.ByModel["m2"] != 150 {
-			t.Errorf("ByModel = %v, want m1=50 m2=150", rep.ByModel)
+		if !approxEq(rep.ByModel["m1"], 0.50) || !approxEq(rep.ByModel["m2"], 1.50) {
+			t.Errorf("ByModel = %v, want m1=0.50 m2=1.50", rep.ByModel)
 		}
-		if rep.ByAgent["a1"] != 50 || rep.ByAgent["a2"] != 150 {
-			t.Errorf("ByAgent = %v, want a1=50 a2=150", rep.ByAgent)
+		if !approxEq(rep.ByAgent["a1"], 0.50) || !approxEq(rep.ByAgent["a2"], 1.50) {
+			t.Errorf("ByAgent = %v, want a1=0.50 a2=1.50", rep.ByAgent)
 		}
 	})
 
@@ -140,6 +141,9 @@ func TestCostTrackerRecordAndAggregate(t *testing.T) {
 		if rep.RecordCount != 1 || rep.TotalCostCents != 20 {
 			t.Errorf("SessionCost(s2) = count=%d cents=%d, want 1/20", rep.RecordCount, rep.TotalCostCents)
 		}
+		if !approxEq(rep.TotalCostUSD, 0.20) {
+			t.Errorf("SessionCost(s2) TotalCostUSD = %f, want 0.20", rep.TotalCostUSD)
+		}
 	})
 
 	t.Run("ProjectCost aggregates across sessions/tasks", func(t *testing.T) {
@@ -147,12 +151,18 @@ func TestCostTrackerRecordAndAggregate(t *testing.T) {
 		if rep.RecordCount != 3 || rep.TotalCostCents != 220 {
 			t.Errorf("ProjectCost(p1) = count=%d cents=%d, want 3/220", rep.RecordCount, rep.TotalCostCents)
 		}
+		if !approxEq(rep.TotalCostUSD, 2.20) {
+			t.Errorf("ProjectCost(p1) TotalCostUSD = %f, want 2.20", rep.TotalCostUSD)
+		}
 	})
 
 	t.Run("nonexistent task returns empty report", func(t *testing.T) {
 		rep, _ := ct.TaskCost("nope")
 		if rep.RecordCount != 0 || rep.TotalCostCents != 0 {
 			t.Errorf("expected empty report, got count=%d cents=%d", rep.RecordCount, rep.TotalCostCents)
+		}
+		if !approxEq(rep.TotalCostUSD, 0.0) {
+			t.Errorf("expected empty TotalCostUSD 0.0, got %f", rep.TotalCostUSD)
 		}
 		// maps should be initialized (not nil) to avoid下游 nil panic
 		if rep.ByModel == nil {
@@ -162,8 +172,8 @@ func TestCostTrackerRecordAndAggregate(t *testing.T) {
 
 	t.Run("ByTier breakdown", func(t *testing.T) {
 		rep, _ := ct.TaskCost("t1")
-		if rep.ByTier["standard"] != 50 || rep.ByTier["premium"] != 150 {
-			t.Errorf("ByTier = %v, want standard=50 premium=150", rep.ByTier)
+		if !approxEq(rep.ByTier["standard"], 0.50) || !approxEq(rep.ByTier["premium"], 1.50) {
+			t.Errorf("ByTier = %v, want standard=0.50 premium=1.50", rep.ByTier)
 		}
 	})
 }
@@ -221,7 +231,9 @@ func TestCostTrackerConcurrentRecord(t *testing.T) {
 		go func(gid int) {
 			defer wg.Done()
 			for i := 0; i < perG; i++ {
-				ct.Record(CostRecord{ID: "r", TaskID: "shared", AgentID: "a", CostCents: 1})
+				// CostCents=1 → CostUSD=0.01. Keeps the legacy TotalCostCents
+				// assertion meaningful alongside the new float64 TotalCostUSD check.
+				ct.Record(CostRecord{ID: "r", TaskID: "shared", AgentID: "a", CostCents: 1, CostUSD: 0.01})
 			}
 		}(g)
 	}
@@ -230,6 +242,10 @@ func TestCostTrackerConcurrentRecord(t *testing.T) {
 	want := int64(goroutines * perG)
 	if rep.RecordCount != goroutines*perG || rep.TotalCostCents != want {
 		t.Errorf("after concurrent records: count=%d cents=%d, want %d/%d", rep.RecordCount, rep.TotalCostCents, goroutines*perG, want)
+	}
+	// 1000 records * $0.01 = $10.00 USD
+	if !approxEq(rep.TotalCostUSD, 10.0) {
+		t.Errorf("after concurrent records: TotalCostUSD = %f, want 10.0", rep.TotalCostUSD)
 	}
 }
 
