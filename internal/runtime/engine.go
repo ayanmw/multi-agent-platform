@@ -118,6 +118,22 @@ import (
 // "feedback first, fail on repeat" policy terminates the loop on the 2nd try.
 var regexpRequestID = regexp.MustCompile(`(?i)(request[-_ ]?id)[:=]\s*[A-Za-z0-9_-]+`)
 
+// resolveProvider looks up a provider by provider name, then by model name.
+// It mirrors the lookup order used by the Router path so the fallback path and
+// any other caller can share the same resolution logic without duplication.
+func resolveProvider(providers map[string]llm.Provider, providerName, modelName string) llm.Provider {
+	if providers == nil {
+		return nil
+	}
+	if p, ok := providers[providerName]; ok {
+		return p
+	}
+	if p, ok := providers[modelName]; ok {
+		return p
+	}
+	return nil
+}
+
 // EventBus is the real-time event transport layer that connects the Engine to the
 // frontend WebSocket clients. Every state change in the ReAct loop is published
 // through this interface so the UI can render agent thinking, tool execution, and
@@ -1347,13 +1363,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 			// Resolve the provider for the selected model from the providers map.
 			// Keys can be provider name (e.g., "deepseek") or model name.
-			if p, ok := e.providers[routeDecision.Primary.Provider]; ok {
-				selectedProvider = p
-			} else if e.providers != nil {
-				if p, ok := e.providers[routeDecision.Primary.Name]; ok {
-					selectedProvider = p
-				}
-			}
+			selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
 
 			if selectedProvider == nil {
 				// Last-resort fallback: build a fresh OpenAI-compatible provider
@@ -1459,26 +1469,9 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			selectedModel, err, routeDecision.Fallback.Name)
 
 		var fallbackProvider llm.Provider
-		if p, ok := e.providers[routeDecision.Fallback.Provider]; ok {
-			fallbackProvider = p
-		} else if e.providers != nil {
-			if p, ok := e.providers[routeDecision.Fallback.Name]; ok {
-				fallbackProvider = p
-			}
-		}
-		//复用 primary provider 的同款查找逻辑，去掉硬编码 NewOpenAIProvider。
-		//if fallbackProvider == nil {
-		//	fallbackProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
-		//		e.cfg.Endpoint, e.cfg.APIKey, routeDecision.Fallback.Name)
-		//}
+		fallbackProvider = resolveProvider(e.providers, routeDecision.Fallback.Provider, routeDecision.Fallback.Name)
 		if fallbackProvider == nil {
-			if p, ok := e.providers[routeDecision.Fallback.Provider]; ok {
-				fallbackProvider = p
-			} else if e.providers != nil {
-				if p, ok := e.providers[routeDecision.Fallback.Name]; ok {
-					fallbackProvider = p
-				}
-			}
+			return "", usage, nil, fmt.Errorf("fallback provider %q not found: %w", routeDecision.Fallback.Provider, err)
 		}
 
 		req.Model = routeDecision.Fallback.Name
@@ -1995,7 +1988,6 @@ func repairToolArgumentsJSON(raw string) (map[string]any, error) {
 	candidates := []string{
 		raw + "\"",     // unterminated string value
 		raw + "\" }",   // unterminated string value + close object
-		raw + "\" }",   // typo variant: space before brace
 		raw + "}",      // unterminated object
 		raw + "\" } }", // nested unterminated string/object
 	}

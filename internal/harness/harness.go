@@ -697,6 +697,8 @@ func NewAcceptanceEvaluator(scope string) *AcceptanceEvaluator {
 
 // SetLLMJudge attaches an optional LLM judge for evaluating AcceptLLMJudge criteria.
 // Passing nil clears any previously attached judge.
+// 当未配置 LLM judge 时，AcceptLLMJudge 标准的检查会 soft pass，避免阻塞未配置评估器的
+// 旧任务或配置错误的引擎，同时仍会记录该标准因 judge 不可用而被跳过。
 func (ae *AcceptanceEvaluator) SetLLMJudge(judge *LLMJudge) {
 	ae.judge = judge
 }

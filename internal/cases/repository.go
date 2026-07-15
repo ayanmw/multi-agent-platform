@@ -13,7 +13,8 @@ import (
 )
 
 // Repository provides SQLite CRUD operations for the cases table.
-// 负责自定义用例的持久化；内置用例不进入此 Repository，仅作为种子由 Service 管理。
+// Repository 负责 cases 表与 case_evaluations 表的持久化，仅管理自定义用例；
+// 内置用例作为种子由 Service 合并，不写入此仓库。
 type Repository struct {
 	db *sql.DB
 }
@@ -24,6 +25,7 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 // CountAll returns the total number of case rows (built-in + custom).
+// CountAll 返回 cases 表总行数，包括内置与自定义用例。
 func (r *Repository) CountAll() (int, error) {
 	var count int
 	err := r.db.QueryRow(`SELECT COUNT(*) FROM cases`).Scan(&count)
@@ -122,6 +124,7 @@ func scanCase(row *sql.Row) (*Case, error) {
 }
 
 // Create inserts a new custom case into the cases table.
+// Create 插入一条新的自定义用例；若 ID 为空则自动生成，并为时间戳填充默认值。
 func (r *Repository) Create(c Case) (*Case, error) {
 	if c.ID == "" {
 		id, err := generateCaseID()
@@ -160,6 +163,7 @@ func (r *Repository) Create(c Case) (*Case, error) {
 }
 
 // GetByID returns a custom case by id, or sql.ErrNoRows if not found.
+// GetByID 按 ID 查询自定义用例；未找到时返回 sql.ErrNoRows。
 func (r *Repository) GetByID(id string) (*Case, error) {
 	row := r.db.QueryRow(`
 		SELECT id, name, description, icon, category, system_prompt, default_input, contract_json, tags_json, is_builtin, created_at, updated_at
@@ -187,6 +191,7 @@ func (r *Repository) List(category string) ([]Case, error) {
 }
 
 // Update updates all mutable fields of a custom case.
+// Update 更新自定义用例的所有可变字段；若未更新到任何行则返回 sql.ErrNoRows。
 func (r *Repository) Update(c Case) (*Case, error) {
 	c.UpdatedAt = time.Now()
 	contractJSON, err := toJSONString(c.Contract)
@@ -218,6 +223,7 @@ func (r *Repository) Update(c Case) (*Case, error) {
 }
 
 // Delete removes a custom case by id.
+// Delete 删除指定 ID 的自定义用例；若不存在则返回 sql.ErrNoRows。
 func (r *Repository) Delete(id string) error {
 	res, err := r.db.Exec(`DELETE FROM cases WHERE id = ?`, id)
 	if err != nil {
@@ -253,6 +259,7 @@ type CaseEvaluation struct {
 }
 
 // SaveEvaluation inserts a case evaluation into the case_evaluations table.
+// SaveEvaluation 保存任务针对用例的评估结果；若 EvaluatedAt 为空则设为当前时间。
 func (r *Repository) SaveEvaluation(eval CaseEvaluation) error {
 	if eval.EvaluatedAt.IsZero() {
 		eval.EvaluatedAt = time.Now()
@@ -269,6 +276,7 @@ func (r *Repository) SaveEvaluation(eval CaseEvaluation) error {
 }
 
 // GetEvaluation returns the most recent evaluation for a given task and case.
+// GetEvaluation 返回指定任务与用例的最新评估记录；SQLite 的 DATETIME 直接扫描为 time.Time。
 func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, error) {
 	row := r.db.QueryRow(`
 		SELECT id, task_id, case_id, passed, score, reason, evaluated_at
@@ -279,7 +287,7 @@ func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, erro
 
 	var e CaseEvaluation
 	var passed int
-	var evaluatedAt string
+	var evaluatedAt time.Time
 	if err := row.Scan(&e.ID, &e.TaskID, &e.CaseID, &passed, &e.Score, &e.Reason, &evaluatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
@@ -287,7 +295,7 @@ func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, erro
 		return nil, fmt.Errorf("select case_evaluation: %w", err)
 	}
 	e.Passed = passed != 0
-	e.EvaluatedAt, _ = time.Parse("2006-01-02 15:04:05", evaluatedAt)
+	e.EvaluatedAt = evaluatedAt
 	return &e, nil
 }
 
