@@ -52,6 +52,16 @@ func main() {
 	// Phase 6-D: Initialize structured logging level from configuration.
 	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(os.Getenv("LOG_LEVEL")))
 
+	// Configure dual logging: a persistent structured log file for detailed
+	// tracing, and the console for concise human-readable startup/runtime info.
+	// The file log uses JSON (StructuredLogger); the console uses the default
+	// Go log package for plain text. LOG_LEVEL still filters the JSON file log.
+	if logPath := os.Getenv("LOG_FILE"); logPath != "" {
+		if err := initDualLogging(logPath); err != nil {
+			log.Printf("Warning: failed to open log file %s: %v (continuing with console only)", logPath, err)
+		}
+	}
+
 	// Load configuration from .env and environment
 	cfg, err := config.Load()
 	if err != nil {
@@ -128,6 +138,7 @@ func main() {
 	var authAPI *auth.AuthAPI
 
 	// Initialize database
+	var caseService *cases.Service
 	if err := db.Init(cfg.DBPath); err != nil {
 		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
 	} else {
@@ -156,6 +167,13 @@ func main() {
 		// Seed default project if not exists
 		if err := db.SeedDefaultProject(); err != nil {
 			observability.DefaultLogger.Warn("database", "failed to seed default project", map[string]any{"error": err.Error()})
+		}
+
+		// Initialize case service now that the database is ready.
+		var svcErr error
+		caseService, svcErr = cases.Init(db.DB)
+		if svcErr != nil {
+			observability.DefaultLogger.Warn("cases", "failed to initialize case service", map[string]any{"error": svcErr.Error()})
 		}
 	}
 
@@ -337,7 +355,7 @@ func main() {
 					{Type: llm.MockResponseText, Content: "simple_chat"},
 				},
 			}
-			_ , _ = llm.DefaultMockStore.Save(clsScript)
+			_, _ = llm.DefaultMockStore.Save(clsScript)
 		}
 		modelRouter = llm.NewRouter(modelRegistry, routerClassifier)
 		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
@@ -402,15 +420,15 @@ func main() {
 		}
 
 		var req struct {
-			Action       string                   `json:"action"`
-			AgentID      string                   `json:"agent_id"`
-			Input        string                   `json:"input"`
-			SystemPrompt string                   `json:"system_prompt"`
-			CaseType     string                   `json:"case_type"`
-			MaxSteps     int                      `json:"max_steps"`
-			TimeoutSeconds int                  `json:"timeout_seconds"`
-			SessionID    string                   `json:"session_id"`
-			Agents       []orchestrator.AgentSpec `json:"agents"`
+			Action         string                   `json:"action"`
+			AgentID        string                   `json:"agent_id"`
+			Input          string                   `json:"input"`
+			SystemPrompt   string                   `json:"system_prompt"`
+			CaseType       string                   `json:"case_type"`
+			MaxSteps       int                      `json:"max_steps"`
+			TimeoutSeconds int                      `json:"timeout_seconds"`
+			SessionID      string                   `json:"session_id"`
+			Agents         []orchestrator.AgentSpec `json:"agents"`
 			// TaskContract optional overrides — when >0 / non-empty, override the
 			// default (or case-provided) contract so frontend can drive PolicyChain.
 			Scope         string   `json:"scope"`
@@ -630,9 +648,9 @@ func main() {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"session_id":      sessionID,
-				"workspace_dir":   sess.WorkspaceDir,
-				"workspace_auto":  sess.WorkspaceAuto,
+				"session_id":     sessionID,
+				"workspace_dir":  sess.WorkspaceDir,
+				"workspace_auto": sess.WorkspaceAuto,
 			})
 			return
 		}
@@ -762,14 +780,53 @@ func main() {
 		http.ServeFile(w, r, cleanPath)
 	})
 
-	// Cases API: list preset task cases
+	// Cases API: full CRUD for preset and custom cases.
+	// GET /api/cases — list all cases with optional tag/category filters
+	// POST /api/cases — create a custom case
 	http.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		switch r.Method {
+		case http.MethodGet:
+			if caseService == nil {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(cases.All())
+				return
+			}
+			handleListCases(w, r, caseService)
+		case http.MethodPost:
+			handleCreateCase(w, r, caseService)
+		default:
+			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+		}
+	})
+	// GET /api/cases/{id} — single case
+	// PUT /api/cases/{id} — update a custom case
+	// DELETE /api/cases/{id} — delete a custom case
+	http.HandleFunc("/api/cases/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/cases/")
+		if id == "" || id == "/" {
+			http.Error(w, "case ID required", http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cases.All())
+		switch r.Method {
+		case http.MethodGet:
+			if caseService == nil {
+				c := cases.Get(id)
+				if c == nil {
+					http.Error(w, "case not found", http.StatusNotFound)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(c)
+				return
+			}
+			handleGetCase(w, r, id, caseService)
+		case http.MethodPut:
+			handleUpdateCase(w, r, id, caseService)
+		case http.MethodDelete:
+			handleDeleteCase(w, r, id, caseService)
+		default:
+			http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
+		}
 	})
 
 	// Run Case proxy: POST /api/run-case
@@ -803,8 +860,8 @@ func main() {
 
 		var req struct {
 			Input          string                   `json:"input"`
-			CaseType       string                   `json:"case_type"` // "multi_agent", "code_gen", or empty
-			MaxSteps       int                      `json:"max_steps"` // override max steps for all agents
+			CaseType       string                   `json:"case_type"`       // "multi_agent", "code_gen", or empty
+			MaxSteps       int                      `json:"max_steps"`       // override max steps for all agents
 			TimeoutSeconds int                      `json:"timeout_seconds"` // override timeout for all agents
 			SessionID      string                   `json:"session_id"`
 			Agents         []orchestrator.AgentSpec `json:"agents"` // direct agent specs (optional)
@@ -1242,7 +1299,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		AgentBus:          agentBus,        // Phase 5: 多Agent通信
 		CheckpointManager: checkpointMgr,   // Phase 5: 崩溃恢复
 		TurnIndex:         turnIndex,       // 当前轮次
-		WorkspaceDir:       workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
+		WorkspaceDir:      workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
 		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
 		// Phase 6 Router: wire the model router into the Engine so the chat
 		// path actually classifies intent and selects a model tier. When
@@ -1583,6 +1640,24 @@ func seedDefaultAdminIfNeeded(store auth.APIKeyStore) {
 	log.Printf("DEFAULT ADMIN API KEY: %s", rawKey)
 	log.Printf("  (save this key — it will not be shown again)")
 	log.Printf("========================================")
+}
+
+// initDualLogging opens logPath for append and wires the structured logger
+// to write both to the file and to os.Stdout. The plain-text console logger
+// is intentionally left untouched so startup banners remain readable.
+func initDualLogging(logPath string) error {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	// StructuredLogger writes JSON lines to both stdout and the file.
+	observability.DefaultLogger.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	// Keep the unstructured console logger as-is; console will still show
+	// startup banners and package-level log.Printf calls.
+	return nil
 }
 
 // handleSessionWorkspaceBrowse returns JSON metadata for the session's workspace

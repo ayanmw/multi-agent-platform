@@ -110,13 +110,193 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// === Case API ===
+
+// handleListCases handles GET /api/cases with optional tag and category filters.
+// Multiple tags use OR semantics: a case matches if it contains ANY listed tag.
+func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
+	tags := parseTagFilter(r.URL.Query().Get("tag"))
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+
+	all, err := svc.List(nil, category)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if all == nil {
+		all = []cases.Case{}
+	}
+
+	if len(tags) > 0 {
+		all = filterCasesByAnyTag(all, tags)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(all)
+}
+
+// parseTagFilter splits a comma-separated tag query parameter into normalized tags.
+func parseTagFilter(s string) []string {
+	parts := strings.Split(s, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, strings.ToLower(p))
+		}
+	}
+	return result
+}
+
+// filterCasesByAnyTag returns cases that contain at least one of the requested tags.
+func filterCasesByAnyTag(all []cases.Case, tags []string) []cases.Case {
+	var result []cases.Case
+	for _, c := range all {
+		if caseMatchesAnyTag(c, tags) {
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
+// caseMatchesAnyTag reports whether the case has at least one tag in common with tags.
+func caseMatchesAnyTag(c cases.Case, tags []string) bool {
+	for _, t := range tags {
+		for _, ct := range c.Tags {
+			if strings.EqualFold(strings.TrimSpace(ct), t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// handleGetCase handles GET /api/cases/{id}.
+func handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+	c, err := svc.Get(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "case not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if c == nil {
+		http.Error(w, "case not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(c)
+}
+
+// handleCreateCase handles POST /api/cases.
+func handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
+	if svc == nil {
+		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req cases.CreateCaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	created, err := svc.Create(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(created)
+}
+
+// handleUpdateCase handles PUT /api/cases/{id}. Built-in cases are rejected.
+func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+	if svc == nil {
+		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	// Reject built-in cases explicitly so the 403 reason is clear.
+	existing, err := svc.Get(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "case not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.IsBuiltin {
+		http.Error(w, "cannot modify built-in case", http.StatusForbidden)
+		return
+	}
+
+	var req cases.UpdateCaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	updated, err := svc.Update(id, req)
+	if err != nil {
+		if isBuiltinError(err) {
+			http.Error(w, "cannot modify built-in case", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
+}
+
+// handleDeleteCase handles DELETE /api/cases/{id}. Built-in cases are rejected.
+func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+	if svc == nil {
+		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	existing, err := svc.Get(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "case not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.IsBuiltin {
+		http.Error(w, "cannot delete built-in case", http.StatusForbidden)
+		return
+	}
+
+	if err := svc.Delete(id); err != nil {
+		if isBuiltinError(err) {
+			http.Error(w, "cannot delete built-in case", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isBuiltinError reports whether an error is the built-in immutability rejection.
+func isBuiltinError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "built-in") || strings.Contains(msg, "builtin")
+}
+
 // === Session API ===
 
 type createSessionRequest struct {
-    Name          string `json:"name"`
-    UserInput     string `json:"user_input"`
-    ProjectID     string `json:"project_id"`
-    WorkspaceDir  string `json:"workspace_dir"`  // optional: user-specified path; empty = auto
+	Name         string `json:"name"`
+	UserInput    string `json:"user_input"`
+	ProjectID    string `json:"project_id"`
+	WorkspaceDir string `json:"workspace_dir"` // optional: user-specified path; empty = auto
 }
 
 type renameSessionRequest struct {
@@ -515,10 +695,10 @@ func handleListMemories(w http.ResponseWriter, r *http.Request) {
 // memoryCreateRequest is the JSON body for POST /api/memories.
 type memoryCreateRequest struct {
 	ProjectID  string   `json:"project_id"`
-	Scope      string   `json:"scope"`      // session | project | global
+	Scope      string   `json:"scope"` // session | project | global
 	SessionID  string   `json:"session_id"`
-	Type       string   `json:"type"`       // preference | rule | fact | lesson | reflection
-	Tier       string   `json:"tier"`       // consolidated | semantic
+	Type       string   `json:"type"` // preference | rule | fact | lesson | reflection
+	Tier       string   `json:"tier"` // consolidated | semantic
 	Content    string   `json:"content"`
 	Confidence float64  `json:"confidence"`
 	Status     string   `json:"status"`
@@ -874,7 +1054,7 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 	}
 	if hub != nil {
 		hub.SendEvent(event.NewEvent(event.EventMemoryCreated, "", "server", 0, map[string]any{
-			"memory_id": record.ID,
+			"memory_id":  record.ID,
 			"project_id": record.ProjectID,
 			"scope":      record.Scope,
 			"type":       record.Type,
@@ -955,8 +1135,8 @@ func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"project_id": projectID,
-		"counts":     grouped,
+		"project_id":   projectID,
+		"counts":       grouped,
 		"top_accessed": top,
 	})
 }
@@ -1278,11 +1458,11 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 
 	// 解析请求
 	var req struct {
-		Input          string   `json:"input"`
-		AgentID        string   `json:"agent_id"`
-		SystemPrompt   string   `json:"system_prompt"`
-		MaxSteps       int      `json:"max_steps"`
-		TimeoutSeconds int      `json:"timeout_seconds"`
+		Input          string `json:"input"`
+		AgentID        string `json:"agent_id"`
+		SystemPrompt   string `json:"system_prompt"`
+		MaxSteps       int    `json:"max_steps"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
 		// TaskContract optional overrides — when >0 / non-empty, override the
 		// default contract so frontend can drive PolicyChain.
 		Scope         string   `json:"scope"`

@@ -9,6 +9,7 @@ package observability
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -49,6 +50,15 @@ func (l *StructuredLogger) SetLevel(level LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
+}
+
+// SetOutput replaces the underlying writer of the structured logger.
+// This is typically called at startup after opening a log file so that
+// logs go to both the console and a persistent file via io.MultiWriter.
+func (l *StructuredLogger) SetOutput(w io.Writer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.output = log.New(w, "", 0)
 }
 
 // Log emits a structured log entry if the level passes the filter.

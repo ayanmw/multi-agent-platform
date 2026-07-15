@@ -69,10 +69,13 @@ func DefaultProtectedRoutes() []string {
 		// Model price edits are runtime-only writes (overwrite ModelRegistry entry),
 		// so they require a Bearer token when REQUIRE_AUTH is enabled. GET is public-read.
 		"PUT /api/models/prices/",
+		// Case mutations are writes; GET remains public-read.
+		"POST /api/cases",
+		"PUT /api/cases/",
+		"DELETE /api/cases/",
 	}
 }
 
-// NewAuthMiddleware creates an HTTP middleware that enforces API key authentication
 // on protected routes. When requireAuth is false, all requests pass through with
 // the fallback user ID injected, so auth management endpoints still work.
 //
