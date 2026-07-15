@@ -1,3 +1,5 @@
+import type { EvaluationResult } from './case'
+
 // Event system type definitions — mirrors the Go backend's pkg/event/event.go
 
 /** Event type enum — aligned with Go backend's event types */
@@ -37,6 +39,8 @@ export type EventType =
   | 'memory_summarize_failed'
   | 'memory_recall_performed'
   | 'heartbeat_beat'
+  // Case evaluation result
+  | 'task_evaluated'
   // Context window observability
   | 'context_window_snapshot'
 
@@ -178,6 +182,8 @@ export interface TaskState {
   startedAt: number
   /** Detailed token usage across all agents */
   tokenUsage?: TokenUsage
+  /** Evaluation result for case-driven tasks */
+  evaluation?: EvaluationResult
 }
 
 /** Control message sent from client to server via WebSocket */

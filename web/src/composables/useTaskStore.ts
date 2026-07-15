@@ -5,6 +5,7 @@ import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
+import type { EvaluationResult } from '../types/case'
 
 // 模块级引用，用于最近修改记录
 const { addItem: addRecentMod } = useRecentMods()
@@ -340,6 +341,16 @@ export function useTaskStore() {
         if (sid) {
           updateSession(sid, { status: 'completed' })
         }
+        break
+      }
+
+      case 'task_evaluated': {
+        task.evaluation = {
+          case_id: evt.data.case_id as string,
+          passed: evt.data.passed as boolean,
+          score: evt.data.score as number,
+          reason: evt.data.reason as string,
+        } as EvaluationResult
         break
       }
 
