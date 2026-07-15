@@ -38,6 +38,8 @@ import RAGPreviewPanel from './components/RAGPreviewPanel.vue'
 import MemoryEventsTimeline from './components/MemoryEventsTimeline.vue'
 import ContextWindowPanel from './components/ContextWindowPanel.vue'
 import CaseCard from './components/CaseCard.vue'
+import CaseFilter from './components/CaseFilter.vue'
+import CaseForm from './components/CaseForm.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
@@ -49,32 +51,10 @@ import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
 import { useMemoryEvents } from './composables/useMemoryEvents'
 import { useContextWindow } from './composables/useContextWindow'
+import { useCaseStore } from './composables/useCaseStore'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 import type { Case } from './types/case'
-
-// Preset case type
-interface PresetCase {
-  id: string
-  name: string
-  description: string
-  icon: string
-  category: string
-  tags: string[]
-  default_input: string
-  system_prompt?: string
-  contract?: {
-    goal?: string
-    scope?: string
-    allowed_tools?: string[]
-    token_budget?: number
-    max_steps?: number
-    acceptance_criteria?: Array<{
-      type: string
-      description: string
-    }>
-  }
-}
 
 const {
   taskCache,
@@ -117,6 +97,9 @@ const { showAgentConfig, loadAgents, agents } = useAgentStore()
 const { projects, activeProjectId, activeProject, loadProjects, setActiveProject } = useProjectStore()
 
 const { toasts, showError, showInfo, dismissToast } = useToast()
+
+const caseStore = useCaseStore()
+const { filteredCases, allTags, allCategories, selectedTags, selectedCategory, loading: casesLoading } = caseStore
 
 // === 最近修改 Dialog 状态 ===
 const recentModsVisible = ref(false)
@@ -379,14 +362,14 @@ const { isRunning: kbIsRunning, showTips } = useKeyboard({
   onResume: resumeTask,
 })
 
-// Preset cases loaded from /api/cases
-const presetCases = ref<Case[]>([])
-const casesLoading = ref(false)
-// App version loaded from /api/version
+// Preset cases loaded via useCaseStore
 const appVersion = ref('v0.4 Alpha')
 // Case detail modal state
 const selectedCase = ref<Case | null>(null)
 const showCaseModal = ref(false)
+// Case form state (create/edit)
+const editingCase = ref<Case | null>(null)
+const showCaseForm = ref(false)
 
 const currentTask = computed(() => {
   if (!activeTaskId.value) return null
@@ -518,18 +501,8 @@ onMounted(async () => {
     id: s.id, name: s.name, rootTaskId: s.rootTaskId, status: s.status,
   })))
   await loadAgents().catch(err => console.error('Failed to load agents:', err))
-  // Load preset cases
-  casesLoading.value = true
-  try {
-    const resp = await fetch('/api/cases')
-    if (resp.ok) {
-      presetCases.value = await resp.json()
-    }
-  } catch (err) {
-    console.error('Failed to load cases:', err)
-  } finally {
-    casesLoading.value = false
-  }
+  // Load cases via the case store
+  await caseStore.loadCases().catch(err => console.error('Failed to load cases:', err))
   // Load version from server
   try {
     const resp = await fetch('/api/version')
@@ -668,10 +641,52 @@ async function handleCaseRun(caseId: string) {
 
 /** Handle viewing case details */
 function handleCaseView(caseId: string) {
-  const c = presetCases.value.find(p => p.id === caseId)
+  const c = caseStore.cases.value.find((p: Case) => p.id === caseId)
   if (c) {
     selectedCase.value = c
     showCaseModal.value = true
+  }
+}
+
+/** Handle editing a case — open form in edit mode */
+function handleCaseEdit(caseId: string) {
+  const c = caseStore.cases.value.find((p: Case) => p.id === caseId)
+  if (c) {
+    editingCase.value = c
+    showCaseForm.value = true
+  }
+  // Also close the detail modal if it is open so the form is visible
+  showCaseModal.value = false
+}
+
+/** Handle deleting a case with confirmation */
+async function handleCaseDelete(caseId: string) {
+  if (!confirm('Are you sure you want to delete this case?')) return
+  try {
+    await caseStore.deleteCase(caseId)
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to delete case')
+  }
+}
+
+/** Open the case form for creating a new case */
+function openCreateCaseForm() {
+  editingCase.value = null
+  showCaseForm.value = true
+}
+
+/** Persist a create or update request from CaseForm */
+async function handleCaseSave(req: Parameters<ReturnType<typeof useCaseStore>['createCase']>[0] | Parameters<ReturnType<typeof useCaseStore>['updateCase']>[1]) {
+  try {
+    if (editingCase.value) {
+      await caseStore.updateCase(editingCase.value.id, req as Parameters<typeof caseStore.updateCase>[1])
+    } else {
+      await caseStore.createCase(req as Parameters<typeof caseStore.createCase>[0])
+    }
+    showCaseForm.value = false
+    editingCase.value = null
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to save case')
   }
 }
 
@@ -1182,23 +1197,41 @@ function formatShortTime(ts: number): string {
         />
 
         <!-- Preset case cards — shown when active session has no task / task is empty -->
-        <div v-if="!currentTask && !isTaskPending && presetCases.length > 0" class="cases-section">
-          <h2 class="section-title">📋 预设任务</h2>
+        <div v-if="!currentTask && !isTaskPending" class="cases-section">
+          <div class="cases-section-header">
+            <h2 class="section-title">📋 任务库 ({{ filteredCases.length }})</h2>
+            <button class="new-case-btn" @click="openCreateCaseForm">+ 新建 Case</button>
+          </div>
+          <CaseFilter
+            :selected-tags="selectedTags"
+            :selected-category="selectedCategory"
+            :all-tags="allTags"
+            :all-categories="allCategories"
+            @toggle-tag="(tag: string) => caseStore.toggleTag(tag)"
+            @set-category="caseStore.setCategory"
+            @clear-filters="caseStore.clearFilters"
+          />
           <div v-if="casesLoading" class="cases-loading">Loading...</div>
+          <div v-else-if="filteredCases.length === 0" class="cases-empty">
+            No cases match the current filters.
+          </div>
           <div v-else class="cases-grid">
             <CaseCard
-              v-for="c in presetCases"
+              v-for="c in filteredCases"
               :key="c.id"
               :case-data="c"
               :disabled="isAgentRunning"
               @run="handleCaseRun"
               @view="handleCaseView"
+              @toggle-tag="(tag: string) => caseStore.toggleTag(tag)"
+              @edit="handleCaseEdit"
+              @delete="handleCaseDelete"
             />
           </div>
         </div>
 
         <!-- Empty state -->
-        <div v-else-if="!isTaskPending && presetCases.length === 0" class="empty-state">
+        <div v-else-if="!isTaskPending" class="empty-state">
           <div class="empty-icon">🚀</div>
           <h2>Ready to start</h2>
           <p>Enter a task description above to see the agent in action.</p>
@@ -1208,6 +1241,25 @@ function formatShortTime(ts: number): string {
         <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
           <div class="final-result-header">✅ Task Complete</div>
           <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
+          <div v-if="currentTask.evaluation" class="evaluation-badge">
+            <span
+              v-if="currentTask.evaluation.passed"
+              class="evaluation-passed"
+              :title="currentTask.evaluation.reason"
+            >
+              ✅ Case 评估通过 (score: {{ currentTask.evaluation.score.toFixed(2) }})
+            </span>
+            <span
+              v-else
+              class="evaluation-failed"
+              :title="currentTask.evaluation.reason"
+            >
+              ❌ Case 评估未通过 (score: {{ currentTask.evaluation.score.toFixed(2) }})
+            </span>
+            <div v-if="currentTask.evaluation.reason" class="evaluation-reason">
+              {{ currentTask.evaluation.reason }}
+            </div>
+          </div>
         </div>
 
         <!-- Task failed (shown when task failed) -->
@@ -1235,6 +1287,15 @@ function formatShortTime(ts: number): string {
         :visible="showCaseModal"
         @close="showCaseModal = false"
         @run="handleCaseRun"
+        @edit="handleCaseEdit"
+      />
+
+      <!-- Case create/edit form -->
+      <CaseForm
+        :case-data="editingCase"
+        :visible="showCaseForm"
+        @close="showCaseForm = false"
+        @save="handleCaseSave"
       />
 
       <!-- Keyboard shortcuts panel -->
@@ -1727,14 +1788,44 @@ function formatShortTime(ts: number): string {
   margin-top: 20px;
 }
 
+.cases-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.new-case-btn {
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.new-case-btn:hover {
+  background: #3a8eef;
+}
+
 .section-title {
   font-size: 15px;
   font-weight: 600;
   color: #e0e0e0;
-  margin-bottom: 12px;
+  margin: 0;
 }
 
 .cases-loading {
+  text-align: center;
+  color: #888;
+  padding: 20px;
+  font-size: 13px;
+}
+
+.cases-empty {
   text-align: center;
   color: #888;
   padding: 20px;
@@ -1834,6 +1925,32 @@ function formatShortTime(ts: number): string {
   border-top: 1px solid #4a2a2a;
   background: #3a1e1e;
   flex-wrap: wrap;
+}
+
+.evaluation-badge {
+  padding: 10px 14px;
+  border-top: 1px solid #2a4a2a;
+  background: #1e3a1e;
+}
+
+.evaluation-passed,
+.evaluation-failed {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.evaluation-passed {
+  color: #51cf66;
+}
+
+.evaluation-failed {
+  color: #e74c3c;
+}
+
+.evaluation-reason {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #888;
 }
 
 .btn-continue {
