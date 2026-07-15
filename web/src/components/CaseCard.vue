@@ -6,46 +6,36 @@
      Emits:
        run: user clicked the Run button, emits the case ID
        view: user clicked the card body (not the Run button), emits the case ID
+       toggle-tag: user clicked a tag pill, emits the tag value
+       edit: user clicked the edit button, emits the case ID
+       delete: user clicked the delete button, emits the case ID
 
      Behavior:
        - Clicking the card body (excluding the Run button) emits 'view' for detail modal
        - Clicking the Run button emits 'run' directly
-       - Hover effect on the card, distinct hover on the button
+       - Clicking a tag emits 'toggle-tag' instead of 'view'
+       - Built-in cases hide edit/delete actions and show a builtin badge
 -->
 <script setup lang="ts">
+import type { Case } from '../types/case'
+
 defineProps<{
-  caseData: {
-    id: string
-    name: string
-    description: string
-    icon: string
-    category: string
-    tags: string[]
-    default_input?: string
-    system_prompt?: string
-    contract?: {
-      goal?: string
-      scope?: string
-      allowed_tools?: string[]
-      token_budget?: number
-      max_steps?: number
-      acceptance_criteria?: Array<{
-        type: string
-        description: string
-      }>
-    }
-  }
+  caseData: Case
   disabled: boolean
 }>()
 
 const emit = defineEmits<{
   run: [caseId: string]
   view: [caseId: string]
+  'toggle-tag': [tag: string]
+  edit: [caseId: string]
+  delete: [caseId: string]
 }>()
 
-/** Handle click on card body — emit view event (not run) */
-function handleCardClick() {
-  // The Run button click stops propagation, so this only fires on card body clicks
+/** Handle tag click without triggering the card view event */
+function handleTagClick(tag: string, event: MouseEvent) {
+  event.stopPropagation()
+  emit('toggle-tag', tag)
 }
 </script>
 
@@ -54,22 +44,50 @@ function handleCardClick() {
     <div class="case-card-header">
       <span class="case-icon">{{ caseData.icon }}</span>
       <div class="case-card-title">
-        <h3>{{ caseData.name }}</h3>
+        <div class="case-title-row">
+          <h3>{{ caseData.name }}</h3>
+          <span v-if="caseData.is_builtin" class="builtin-badge">builtin</span>
+        </div>
         <span class="case-category">{{ caseData.category }}</span>
       </div>
     </div>
     <p class="case-description">{{ caseData.description }}</p>
     <div class="case-card-footer">
       <div class="case-tags">
-        <span v-for="tag in caseData.tags" :key="tag" class="case-tag">{{ tag }}</span>
+        <span
+          v-for="tag in caseData.tags"
+          :key="tag"
+          class="case-tag"
+          @click.stop="handleTagClick(tag, $event)"
+        >
+          {{ tag }}
+        </span>
       </div>
-      <button
-        class="case-run-btn"
-        :disabled="disabled"
-        @click.stop="$emit('run', caseData.id)"
-      >
-        ▶ Run
-      </button>
+      <div class="case-actions">
+        <button
+          v-if="!caseData.is_builtin"
+          class="case-action-btn edit"
+          title="Edit"
+          @click.stop="emit('edit', caseData.id)"
+        >
+          ✎
+        </button>
+        <button
+          v-if="!caseData.is_builtin"
+          class="case-action-btn delete"
+          title="Delete"
+          @click.stop="emit('delete', caseData.id)"
+        >
+          🗑
+        </button>
+        <button
+          class="case-run-btn"
+          :disabled="disabled"
+          @click.stop="emit('run', caseData.id)"
+        >
+          ▶ Run
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -106,6 +124,14 @@ function handleCardClick() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.case-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .case-card-title h3 {
@@ -113,6 +139,9 @@ function handleCardClick() {
   font-weight: 600;
   color: #e0e0e0;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .case-category {
@@ -120,6 +149,17 @@ function handleCardClick() {
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.builtin-badge {
+  font-size: 9px;
+  color: #aaa;
+  background: #333;
+  border: 1px solid #444;
+  padding: 1px 5px;
+  border-radius: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
 .case-description {
@@ -135,6 +175,7 @@ function handleCardClick() {
   justify-content: space-between;
   align-items: center;
   margin-top: 4px;
+  gap: 8px;
 }
 
 .case-tags {
@@ -149,6 +190,44 @@ function handleCardClick() {
   background: #333;
   padding: 1px 6px;
   border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.case-tag:hover {
+  background: #3a3a3a;
+  color: #4a9eff;
+}
+
+.case-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.case-action-btn {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.case-action-btn:hover {
+  opacity: 1;
+  background: #333;
+}
+
+.case-action-btn.edit:hover {
+  color: #4a9eff;
+}
+
+.case-action-btn.delete:hover {
+  color: #e74c3c;
 }
 
 .case-run-btn {

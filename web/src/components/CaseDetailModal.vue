@@ -6,43 +6,27 @@
      Emits:
        close: user clicked close or backdrop
        run: user clicked the Run button inside the modal
+       edit: user clicked the Edit button (custom cases only)
 
      Shows:
        - Full description, category, tags
        - Default input text (if available)
        - System prompt preview
-       - Contract details: goal, scope, allowed tools, token budget, max steps
-       - Acceptance criteria
+       - Contract details: goal, scope, permissions, timeout, cost budget, allowed tools, token budget, max steps
+       - Acceptance criteria with type, target, and description
 -->
 <script setup lang="ts">
+import type { Case } from '../types/case'
+
 defineProps<{
-  caseData: {
-    id: string
-    name: string
-    description: string
-    icon: string
-    category: string
-    tags: string[]
-    default_input?: string
-    system_prompt?: string
-    contract?: {
-      goal?: string
-      scope?: string
-      allowed_tools?: string[]
-      token_budget?: number
-      max_steps?: number
-      acceptance_criteria?: Array<{
-        type: string
-        description: string
-      }>
-    }
-  } | null
+  caseData: Case | null
   visible: boolean
 }>()
 
 defineEmits<{
   close: []
   run: [caseId: string]
+  edit: [caseId: string]
 }>()
 </script>
 
@@ -116,6 +100,26 @@ defineEmits<{
                   <span class="contract-label">Max Steps</span>
                   <span class="contract-value">{{ caseData.contract.max_steps }}</span>
                 </div>
+                <div v-if="caseData.contract.timeout_seconds" class="contract-item">
+                  <span class="contract-label">Timeout</span>
+                  <span class="contract-value">{{ caseData.contract.timeout_seconds }}s</span>
+                </div>
+                <div v-if="caseData.contract.cost_budget_usd" class="contract-item">
+                  <span class="contract-label">Cost Budget</span>
+                  <span class="contract-value">${{ caseData.contract.cost_budget_usd.toFixed(4) }}</span>
+                </div>
+                <div v-if="caseData.contract.permissions" class="contract-item permissions">
+                  <span class="contract-label">Permissions</span>
+                  <div class="contract-permissions">
+                    <span
+                      v-for="(allowed, key) in caseData.contract.permissions"
+                      :key="key"
+                      :class="['permission-pill', allowed ? 'allowed' : 'denied']"
+                    >
+                      {{ allowed ? '✓' : '✕' }} {{ key.replace(/^allow_/, '').replace(/_/g, ' ') }}
+                    </span>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -129,7 +133,9 @@ defineEmits<{
                   class="ac-item"
                 >
                   <span class="ac-type">{{ ac.type }}</span>
+                  <span v-if="ac.target" class="ac-target">{{ ac.target }}</span>
                   <span class="ac-desc">{{ ac.description }}</span>
+                  <span v-if="ac.expected" class="ac-expected">expected: {{ ac.expected }}</span>
                 </div>
               </div>
             </section>
@@ -138,6 +144,13 @@ defineEmits<{
           <!-- Footer -->
           <div class="modal-footer">
             <button class="modal-cancel-btn" @click="$emit('close')">Cancel</button>
+            <button
+              v-if="!caseData.is_builtin"
+              class="modal-edit-btn"
+              @click="$emit('edit', caseData.id)"
+            >
+              ✎ Edit
+            </button>
             <button class="modal-run-btn" @click="$emit('run', caseData.id)">▶ Run</button>
           </div>
         </div>
@@ -289,6 +302,11 @@ defineEmits<{
   gap: 10px;
 }
 
+.contract-item.permissions {
+  flex-direction: column;
+  gap: 6px;
+}
+
 .contract-label {
   font-size: 11px;
   color: #888;
@@ -317,6 +335,29 @@ defineEmits<{
   color: #ce9178;
 }
 
+.contract-permissions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.permission-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.permission-pill.allowed {
+  background: rgba(81, 207, 102, 0.15);
+  color: #51cf66;
+}
+
+.permission-pill.denied {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
 /* Acceptance criteria */
 .ac-list {
   display: flex;
@@ -332,6 +373,7 @@ defineEmits<{
   background: #1e1e1e;
   border-radius: 6px;
   border: 1px solid #333;
+  flex-wrap: wrap;
 }
 
 .ac-type {
@@ -345,10 +387,24 @@ defineEmits<{
   font-family: 'Consolas', monospace;
 }
 
+.ac-target {
+  font-size: 11px;
+  color: #ce9178;
+  font-family: 'Consolas', monospace;
+  white-space: nowrap;
+}
+
 .ac-desc {
   font-size: 12px;
   color: #ccc;
   line-height: 1.4;
+  flex: 1;
+}
+
+.ac-expected {
+  font-size: 10px;
+  color: #888;
+  font-style: italic;
 }
 
 /* Footer */
@@ -373,6 +429,23 @@ defineEmits<{
 
 .modal-cancel-btn:hover {
   background: #444;
+}
+
+.modal-edit-btn {
+  padding: 8px 20px;
+  background: #2a2a2a;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.modal-edit-btn:hover {
+  background: #3a3a3a;
+  color: #4a9eff;
+  border-color: #4a9eff;
 }
 
 .modal-run-btn {

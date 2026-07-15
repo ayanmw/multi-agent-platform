@@ -51,6 +51,7 @@ import { useMemoryEvents } from './composables/useMemoryEvents'
 import { useContextWindow } from './composables/useContextWindow'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
+import type { Case } from './types/case'
 
 // Preset case type
 interface PresetCase {
@@ -379,12 +380,12 @@ const { isRunning: kbIsRunning, showTips } = useKeyboard({
 })
 
 // Preset cases loaded from /api/cases
-const presetCases = ref<PresetCase[]>([])
+const presetCases = ref<Case[]>([])
 const casesLoading = ref(false)
 // App version loaded from /api/version
 const appVersion = ref('v0.4 Alpha')
 // Case detail modal state
-const selectedCase = ref<PresetCase | null>(null)
+const selectedCase = ref<Case | null>(null)
 const showCaseModal = ref(false)
 
 const currentTask = computed(() => {
