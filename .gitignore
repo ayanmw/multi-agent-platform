@@ -49,3 +49,4 @@ web/tsconfig.tsbuildinfo
 *.key
 /workspace
 /task_progress.json
+/*.lnk
