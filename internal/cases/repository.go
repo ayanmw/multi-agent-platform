@@ -23,6 +23,16 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// CountAll returns the total number of case rows (built-in + custom).
+func (r *Repository) CountAll() (int, error) {
+	var count int
+	err := r.db.QueryRow(`SELECT COUNT(*) FROM cases`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count cases: %w", err)
+	}
+	return count, nil
+}
+
 // generateCaseID generates a short random id prefixed with "case-".
 // 使用 crypto/rand 产生 16 字节 hex，避免引入额外依赖。
 func generateCaseID() (string, error) {
@@ -221,16 +231,6 @@ func (r *Repository) Delete(id string) error {
 		return sql.ErrNoRows
 	}
 	return nil
-}
-
-// CountAll returns the total number of cases in the database (builtins + custom).
-func (r *Repository) CountAll() (int, error) {
-	var count int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM cases`).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count cases: %w", err)
-	}
-	return count, nil
 }
 
 // boolToInt converts a bool to an int for SQLite storage.
