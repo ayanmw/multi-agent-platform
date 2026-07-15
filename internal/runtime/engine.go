@@ -1106,7 +1106,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		}
 	}
 
-	if e.cfg.EvaluationRepository != nil {
+	if e.llm != nil {
 		judge := harness.NewLLMJudge(e.llm, e.cfg.Model)
 		evaluator.SetLLMJudge(judge)
 	}
@@ -1136,25 +1136,31 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 			}
 		}
 
-		// Compute an aggregate score from LLMJudge criteria. Deterministic
-		// criteria (file_exists, content_contains, etc.) do not contribute
-		// numeric scores; judge criteria average their returned scores.
+		// Compute an aggregate score. LLMJudge criteria contribute their returned
+		// scores; when no judge criteria are present but other criteria exist, the
+		// score is 1.0 only if all criteria passed, otherwise 0.0. This keeps the
+		// score meaningful for deterministic-only contracts while preserving the
+		// original judge-average behavior for semantic contracts.
 		if len(report.Results) > 0 {
 			var judgeScoreSum float64
 			var judgeCount int
+			var otherExists bool
 			for _, r := range report.Results {
 				if r.Criterion.Type == harness.AcceptLLMJudge {
-					// The judge result message contains "score=%.2f"; parse it
-					// as a fallback if the EvalResult did not expose Score directly.
-					// EvalResult currently stores only Message, so we scan the message.
-					if s, ok := parseScoreFromJudgeMessage(r.Message); ok {
-						judgeScoreSum += s
-						judgeCount++
-					}
+					judgeScoreSum += r.Score
+					judgeCount++
+				} else {
+					otherExists = true
 				}
 			}
 			if judgeCount > 0 {
 				score = judgeScoreSum / float64(judgeCount)
+			} else if otherExists {
+				if report.AllPassed {
+					score = 1.0
+				} else {
+					score = 0.0
+				}
 			}
 		}
 	}
@@ -1180,26 +1186,6 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		"reason":  reason,
 		"report":  report,
 	}))
-}
-
-// parseScoreFromJudgeMessage extracts the numeric score from the formatted
-// message produced by checkLLMJudge: "LLM judge passed=true score=0.85 reason=...".
-// It returns the score and true if found and parsed.
-func parseScoreFromJudgeMessage(msg string) (float64, bool) {
-	idx := strings.Index(msg, "score=")
-	if idx == -1 {
-		return 0, false
-	}
-	rest := msg[idx+len("score="):]
-	// Stop at first space.
-	if space := strings.Index(rest, " "); space != -1 {
-		rest = rest[:space]
-	}
-	var s float64
-	if _, err := fmt.Sscanf(rest, "%f", &s); err == nil {
-		return s, true
-	}
-	return 0, false
 }
 
 // formatToolErrorObservation produces a concise, stable fingerprint of a tool

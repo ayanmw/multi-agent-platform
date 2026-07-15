@@ -717,6 +717,7 @@ type EvalResult struct {
 	Criterion AcceptanceCriterion `json:"criterion"`
 	Passed    bool                `json:"passed"`
 	Message   string              `json:"message"`
+	Score     float64             `json:"score,omitempty"`
 	Duration  int64               `json:"duration_ms"`
 }
 
@@ -903,6 +904,7 @@ func (ae *AcceptanceEvaluator) checkLLMJudge(criterion AcceptanceCriterion, star
 		Criterion: criterion,
 		Passed:    result.Passed,
 		Message:   msg,
+		Score:     result.Score,
 		Duration:  time.Since(start).Milliseconds(),
 	}
 }
