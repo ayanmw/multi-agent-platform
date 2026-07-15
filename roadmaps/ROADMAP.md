@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-11
-> **Current version**: v0.6.4 Alpha (Phase 6 收尾/UI 体验修复批次)
+> **Last updated**: 2026-07-15
+> **Current version**: v0.7.0 Alpha (Case Management 增强批次)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -113,25 +113,40 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 **目标**: 提供一键式任务和 Agent 配置管理，引入 Harness 基础组件
 
-**完成日期**: 2026-07-03
-**Git commit**: `455b047`
+**完成日期**: 2026-07-15
+**Git commit**: `e516dcb` (Case Management 增强批次)
 
 ### 交付物
 - [x] 5 个预设 Task Cases（代码生成、研究、多Agent、对话、长任务）
-- [x] CaseCard UI 组件 + Run 按钮
+- [x] 自定义 Case CRUD：后端 `internal/cases` Repository + Service，前端 `useCaseStore` + API 对接
+- [x] Case 持久化：`cases` 表 + `case_evaluations` 表（migration v17）
+- [x] Case 库为空时自动插入 5 个内置默认 Case（`is_builtin = 1`）
+- [x] 按 Tag（OR 语义）和 Category 筛选 Case 列表
+- [x] 内置 Case 保护（不可修改/删除），自定义 Case 可编辑/删除
+- [x] CaseCard UI 组件 + Run 按钮 + 编辑/删除入口 + built-in badge
+- [x] CaseFilter 组件（Category 下拉 + Tag 胶囊 + 清除筛选）
+- [x] CaseForm 组件（新建/编辑 Case，含 Goal、Max Steps、Acceptance Criteria）
+- [x] CaseDetailModal 组件（展示 Contract、Acceptance Criteria，支持编辑入口）
 - [x] **Harness: TaskContract 定义**（目标、范围、验收标准、预算、权限）
 - [x] **Harness: Progress 文件管理**（TaskProgress 类型 + 关键节点自动写入）
 - [x] **Harness: FileScopeRule + PathTraversalRule**（路径安全，在 write_file 之前拦截）
-- [x] **Harness: AcceptanceCriteria 基础实现**（test_pass / file_exists / shell_exit_zero）
+- [x] **Harness: AcceptanceCriteria 基础实现**（test_pass / file_exists / content_contains / shell_exit_zero）
+- [x] **Harness: LLM Judge 判定器**（`llm_judge` 标准，任务完成后用 LLM 判定结果是否符合 Goal）
 - [x] **Harness: PolicyGate 集成到 Engine**（executeTool 经过 PolicyGate 拦截）
-- [x] `/api/cases` 端点（列出所有预设 Cases）
+- [x] `/api/cases` CRUD 端点（`GET/POST/PUT/DELETE`，支持 `?tag=` / `?category=` 筛选）
+- [x] `/api/cases/:id/evaluations/:task_id` 评估结果查询端点
+- [x] `task_evaluated` 事件：Engine 在 `task_completed` 后自动触发评估并广播
+- [x] 前端展示 Case 评估结果（passed / score / reason）
 - [ ] Agent 配置 CRUD 前端页面 → Phase 4（与多模型配置页面合并）
-- [ ] 任务历史侧边栏 → Phase 4（与多 Agent 并发时一起实现回放）
-- [ ] Memory: Task 完成时自动生成摘要 → Phase 4（与记忆系统合并）
 
 ### 验证标准
-- 点击 Case 卡片 → 任务自动执行 → 历史可回放
-- TaskContract 的预算/权限在运行时被强制执行
+- [x] 后端 `go test ./...` 通过（含 cases / harness / runtime / server）
+- [x] 前端 `npm run build` 通过（`vue-tsc -b && vite build`）
+- [x] 启动时若 Case 库为空，自动出现 5 个内置 Case
+- [x] 可新建自定义 Case，刷新后仍存在
+- [x] 内置 Case 不能删改，自定义 Case 可以编辑/删除
+- [x] 按 Tag / Category 筛选 Case 列表
+- [x] 运行带 `llm_judge` 标准的 Case，任务完成后收到 `task_evaluated` 事件并显示评估结果
 
 ---
 
@@ -496,3 +511,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.6.1 Alpha | 2026-07-08 | Phase 6-E 完成: Auth 中间件实际生效 + RAG 本地向量召回接入 MemoryRecall |
 | v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
 | v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
+| v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
