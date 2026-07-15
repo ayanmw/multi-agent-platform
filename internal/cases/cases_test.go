@@ -103,6 +103,9 @@ func TestServiceSeedsBuiltins(t *testing.T) {
 	if c.ID != "code-gen" {
 		t.Errorf("expected code-gen, got %s", c.ID)
 	}
+	if !c.IsBuiltin {
+		t.Errorf("service.Get should return builtin case with IsBuiltin=true")
+	}
 
 	// 同时校验数据库中的种子行 is_builtin 位正确写入。
 	seeded, err := svc.repo.GetByID("code-gen")
@@ -378,6 +381,49 @@ func TestListWithNoMatchTag(t *testing.T) {
 	}
 	if len(res) != 0 {
 		t.Errorf("expected no matches, got %d", len(res))
+	}
+}
+
+// TestRepositoryListExcludesBuiltins verifies repo.List filters out builtin rows.
+func TestRepositoryListExcludesBuiltins(t *testing.T) {
+	d := setupTestDB(t)
+	defer d.Close()
+
+	repo := NewRepository(d)
+	builtinLike := Case{
+		ID:           "builtin-like",
+		Name:         "Builtin Like",
+		Category:     "test",
+		SystemPrompt: "prompt",
+		DefaultInput: "input",
+		Contract:     harness.TaskContract{MaxSteps: 5},
+		IsBuiltin:    true,
+	}
+	if _, err := repo.Create(builtinLike); err != nil {
+		t.Fatalf("create builtin-like: %v", err)
+	}
+
+	custom := Case{
+		Name:         "Custom Case",
+		Category:     "test",
+		SystemPrompt: "prompt",
+		DefaultInput: "input",
+		Contract:     harness.TaskContract{MaxSteps: 5},
+		IsBuiltin:    false,
+	}
+	if _, err := repo.Create(custom); err != nil {
+		t.Fatalf("create custom: %v", err)
+	}
+
+	all, err := repo.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 custom case, got %d", len(all))
+	}
+	if all[0].IsBuiltin {
+		t.Errorf("repo.List should not return builtin rows")
 	}
 }
 
