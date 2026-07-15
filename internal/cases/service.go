@@ -40,7 +40,7 @@ type UpdateCaseRequest struct {
 type Service struct {
 	repo      *Repository
 	builtins  []Case
-	builtinBy map[string]Case
+	builtinBy map[string]*Case
 }
 
 // Init creates a new Service, seeds builtin cases if the database is empty, and indexes builtins.
@@ -49,13 +49,14 @@ func Init(db *sql.DB) (*Service, error) {
 	svc := &Service{
 		repo:      repo,
 		builtins:  All(),
-		builtinBy: make(map[string]Case, len(All())),
+		builtinBy: make(map[string]*Case, len(All())),
 	}
-	for _, c := range svc.builtins {
+	for i := range svc.builtins {
+		c := &svc.builtins[i]
 		svc.builtinBy[c.ID] = c
 	}
 
-	count, err := repo.Count()
+	count, err := repo.CountAll()
 	if err != nil {
 		return nil, fmt.Errorf("count cases: %w", err)
 	}
@@ -70,7 +71,6 @@ func Init(db *sql.DB) (*Service, error) {
 // seedBuiltins inserts all built-in cases into the database with IsBuiltin=1.
 func (s *Service) seedBuiltins() error {
 	for _, c := range s.builtins {
-		c.IsBuiltin = true
 		if _, err := s.repo.Create(c); err != nil {
 			return fmt.Errorf("seed case %s: %w", c.ID, err)
 		}
@@ -134,7 +134,7 @@ func (s *Service) isBuiltin(id string) bool {
 // Get returns a case by id, preferring builtin cases, then database cases.
 func (s *Service) Get(id string) (*Case, error) {
 	if c, ok := s.builtinBy[id]; ok {
-		return &c, nil
+		return c, nil
 	}
 	return s.repo.GetByID(id)
 }

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
 
 	_ "modernc.org/sqlite"
 )
@@ -88,7 +87,7 @@ func TestServiceSeedsBuiltins(t *testing.T) {
 		t.Fatalf("init service: %v", err)
 	}
 
-	count, err := svc.repo.Count()
+	count, err := svc.repo.CountAll()
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -135,7 +134,7 @@ func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-init service: %v", err)
 	}
-	count, err := svc2.repo.Count()
+	count, err := svc2.repo.CountAll()
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -479,7 +478,7 @@ func TestRepositoryCRUD(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	count, err := repo.Count()
+	count, err := repo.CountAll()
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -505,5 +504,3 @@ func newValidCreate() CreateCaseRequest {
 	}
 }
 
-// Make sure db.DB is referenced to ensure pkg/db import is not flagged as unused.
-var _ = db.DB

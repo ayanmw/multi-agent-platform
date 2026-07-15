@@ -33,7 +33,8 @@ func generateCaseID() (string, error) {
 	return "case-" + hex.EncodeToString(b), nil
 }
 
-// toJSONString marshals a value to a JSON string, returning "{}" on empty maps.
+// toJSONString marshals the value to JSON. Callers that want `null`/`[]`/`{}`
+// must initialize nil slices/maps before calling this helper.
 func toJSONString(v any) (string, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -55,12 +56,29 @@ func parseTags(s string) ([]string, error) {
 	return tags, nil
 }
 
-// scanCase scans a cases table row into a Case value.
-func scanCase(row *sql.Row) (*Case, error) {
+// scanCases scans a rows result set into a slice of Case values.
+func scanCases(rows *sql.Rows) ([]Case, error) {
+	defer rows.Close()
+	var cases []Case
+	for rows.Next() {
+		c, err := scanCaseFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, *c)
+	}
+	return cases, rows.Err()
+}
+
+// scanCaseFromRows scans the current row into a *Case. It is used by both
+// scanCase (single-row) and scanCases (multi-row) to avoid duplication.
+func scanCaseFromRows(scanner interface {
+	Scan(dest ...any) error
+}) (*Case, error) {
 	var c Case
 	var contractJSON, tagsJSON string
 	var isBuiltin int
-	if err := row.Scan(
+	if err := scanner.Scan(
 		&c.ID,
 		&c.Name,
 		&c.Description,
@@ -88,42 +106,9 @@ func scanCase(row *sql.Row) (*Case, error) {
 	return &c, nil
 }
 
-// scanCases scans a rows result set into a slice of Case values.
-func scanCases(rows *sql.Rows) ([]Case, error) {
-	defer rows.Close()
-	var cases []Case
-	for rows.Next() {
-		var c Case
-		var contractJSON, tagsJSON string
-		var isBuiltin int
-		if err := rows.Scan(
-			&c.ID,
-			&c.Name,
-			&c.Description,
-			&c.Icon,
-			&c.Category,
-			&c.SystemPrompt,
-			&c.DefaultInput,
-			&contractJSON,
-			&tagsJSON,
-			&isBuiltin,
-			&c.CreatedAt,
-			&c.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(contractJSON), &c.Contract); err != nil {
-			return nil, fmt.Errorf("unmarshal contract: %w", err)
-		}
-		tags, err := parseTags(tagsJSON)
-		if err != nil {
-			return nil, err
-		}
-		c.Tags = tags
-		c.IsBuiltin = isBuiltin != 0
-		cases = append(cases, c)
-	}
-	return cases, rows.Err()
+// scanCase scans a cases table row into a Case value.
+func scanCase(row *sql.Row) (*Case, error) {
+	return scanCaseFromRows(row)
 }
 
 // Create inserts a new custom case into the cases table.
@@ -231,8 +216,8 @@ func (r *Repository) Delete(id string) error {
 	return nil
 }
 
-// Count returns the total number of cases in the database.
-func (r *Repository) Count() (int, error) {
+// CountAll returns the total number of cases in the database (builtins + custom).
+func (r *Repository) CountAll() (int, error) {
 	var count int
 	err := r.db.QueryRow(`SELECT COUNT(*) FROM cases`).Scan(&count)
 	if err != nil {
