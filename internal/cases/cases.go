@@ -17,12 +17,17 @@
 package cases
 
 import (
+	"time"
+
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 )
 
 // Case represents a preset task configuration that users can launch with one click.
 // Each case has a name, description, system prompt, default input, and contract
 // that defines the task's scope, permissions, and acceptance criteria.
+//
+// 内置用例（IsBuiltin=true）不可被修改或删除，仅作为种子数据存在；
+// 用户自定义用例通过 Repository 持久化到 SQLite，可通过 Service 进行 CRUD。
 type Case struct {
 	// ID is a unique slug for the case (e.g., "code-gen", "research")
 	ID string `json:"id"`
@@ -33,7 +38,7 @@ type Case struct {
 	// Description explains what the case does and what it demonstrates
 	Description string `json:"description"`
 
-	// Icon is a single emoji for the case card
+	// Icon is a single emoji or icon identifier for the case card
 	Icon string `json:"icon"`
 
 	// Category groups related cases (e.g., "generation", "research", "interaction")
@@ -50,9 +55,20 @@ type Case struct {
 
 	// Tags for filtering in the UI
 	Tags []string `json:"tags"`
+
+	// IsBuiltin marks whether this case is a built-in preset.
+	// Builtin cases are seeded on an empty database and are immutable.
+	IsBuiltin bool `json:"is_builtin"`
+
+	// CreatedAt is the creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// UpdatedAt is the last update timestamp
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // All returns all preset task cases. Add new cases here as they are designed.
+// 返回内置用例列表，供 Service 在空库时种子初始化，也供前端展示内置卡片。
 func All() []Case {
 	return []Case{
 		CodeGenCase(),
@@ -82,6 +98,7 @@ func CodeGenCase() Case {
 		Description: "LLM 生成代码 → write_file 保存 → run_shell 测试 → 回 Loop 修复。演示完整的 ReAct Loop 能力。",
 		Icon:        "💻",
 		Category:    "generation",
+		IsBuiltin:   true,
 		SystemPrompt: `You are a senior software engineer. When given a coding task:
 1. Write clean, well-documented code
 2. Save it to a file using write_file
@@ -119,6 +136,7 @@ func ResearchCase() Case {
 		Description: "拆分子问题 → 分析 → 汇总 → 写入研究报告。演示多步推理和文件生成能力。",
 		Icon:        "🔬",
 		Category:    "research",
+		IsBuiltin:   true,
 		SystemPrompt: `You are a research analyst. When given a research topic:
 1. Break the topic down into 3-5 sub-questions
 2. Think through each sub-question systematically
@@ -155,6 +173,7 @@ func MultiAgentCase() Case {
 		Description: "模拟多 Agent 分工：分析 → 设计 → 实现。当前 Phase 3 单 Agent 模拟，Phase 4+ 多 Agent 并行。",
 		Icon:        "🤝",
 		Category:    "collaboration",
+		IsBuiltin:   true,
 		SystemPrompt: `You are simulating a multi-agent workflow. You will act as three different roles:
 1. ANALYST: Understand the requirements and produce a specification
 2. DESIGNER: Create an architecture plan based on the specification
@@ -191,6 +210,7 @@ func DialogueCase() Case {
 		Description: "纯 LLM 对话，无工具调用。验证流式渲染 (TypeWriter) 和 Markdown 显示效果。",
 		Icon:        "💬",
 		Category:    "interaction",
+		IsBuiltin:   true,
 		SystemPrompt: `You are a knowledgeable and engaging AI assistant. Respond to the user's question with:
 1. A clear, structured answer with headings
 2. Code examples where relevant (in fenced code blocks)
@@ -221,6 +241,7 @@ func LongTaskCase() Case {
 		Description: "多步复杂任务，演示 Progress 文件写入和关键节点里程碑。适合测试长时间运行的 Agent 稳定性。",
 		Icon:        "⏳",
 		Category:    "interaction",
+		IsBuiltin:   true,
 		SystemPrompt: `You are a DevOps engineer setting up a project. Complete the following steps in order:
 1. Create the project directory structure (use run_shell mkdir)
 2. Write a README.md with project overview (use write_file)
