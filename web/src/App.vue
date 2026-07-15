@@ -54,7 +54,7 @@ import { useContextWindow } from './composables/useContextWindow'
 import { useCaseStore } from './composables/useCaseStore'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
-import type { Case } from './types/case'
+import type { Case, CreateCaseRequest, UpdateCaseRequest } from './types/case'
 
 const {
   taskCache,
@@ -362,7 +362,7 @@ const { isRunning: kbIsRunning, showTips } = useKeyboard({
   onResume: resumeTask,
 })
 
-// Preset cases loaded via useCaseStore
+// Case library / 任务库 loaded via useCaseStore
 const appVersion = ref('v0.4 Alpha')
 // Case detail modal state
 const selectedCase = ref<Case | null>(null)
@@ -624,7 +624,7 @@ watch(
   }
 )
 
-/** Handle running a preset case */
+/** Handle running a case from the case library */
 async function handleCaseRun(caseId: string) {
   try {
     showCaseModal.value = false
@@ -676,12 +676,12 @@ function openCreateCaseForm() {
 }
 
 /** Persist a create or update request from CaseForm */
-async function handleCaseSave(req: Parameters<ReturnType<typeof useCaseStore>['createCase']>[0] | Parameters<ReturnType<typeof useCaseStore>['updateCase']>[1]) {
+async function handleCaseSave(req: CreateCaseRequest | UpdateCaseRequest) {
   try {
     if (editingCase.value) {
-      await caseStore.updateCase(editingCase.value.id, req as Parameters<typeof caseStore.updateCase>[1])
+      await caseStore.updateCase(editingCase.value.id, req)
     } else {
-      await caseStore.createCase(req as Parameters<typeof caseStore.createCase>[0])
+      await caseStore.createCase(req as CreateCaseRequest)
     }
     showCaseForm.value = false
     editingCase.value = null
@@ -690,7 +690,10 @@ async function handleCaseSave(req: Parameters<ReturnType<typeof useCaseStore>['c
   }
 }
 
-/** Toggle project collapse state in sidebar */
+/** Toggle a tag filter — shared by CaseFilter and CaseCard */
+function handleToggleTag(tag: string) {
+  caseStore.toggleTag(tag)
+}
 function toggleProjectCollapse(projectId: string) {
   if (collapsedProjects.value.has(projectId)) {
     collapsedProjects.value.delete(projectId)
@@ -1196,10 +1199,10 @@ function formatShortTime(ts: number): string {
           @cancel="cancelTask"
         />
 
-        <!-- Preset case cards — shown when active session has no task / task is empty -->
+        <!-- Case library cards — shown when active session has no task / task is empty -->
         <div v-if="!currentTask && !isTaskPending" class="cases-section">
           <div class="cases-section-header">
-            <h2 class="section-title">📋 任务库 ({{ filteredCases.length }})</h2>
+            <h2 class="section-title">📋 Case Library / 任务库 ({{ filteredCases.length }})</h2>
             <button class="new-case-btn" @click="openCreateCaseForm">+ 新建 Case</button>
           </div>
           <CaseFilter
@@ -1207,7 +1210,7 @@ function formatShortTime(ts: number): string {
             :selected-category="selectedCategory"
             :all-tags="allTags"
             :all-categories="allCategories"
-            @toggle-tag="(tag: string) => caseStore.toggleTag(tag)"
+            @toggle-tag="handleToggleTag"
             @set-category="caseStore.setCategory"
             @clear-filters="caseStore.clearFilters"
           />
@@ -1223,7 +1226,7 @@ function formatShortTime(ts: number): string {
               :disabled="isAgentRunning"
               @run="handleCaseRun"
               @view="handleCaseView"
-              @toggle-tag="(tag: string) => caseStore.toggleTag(tag)"
+              @toggle-tag="handleToggleTag"
               @edit="handleCaseEdit"
               @delete="handleCaseDelete"
             />
@@ -1247,14 +1250,14 @@ function formatShortTime(ts: number): string {
               class="evaluation-passed"
               :title="currentTask.evaluation.reason"
             >
-              ✅ Case 评估通过 (score: {{ currentTask.evaluation.score.toFixed(2) }})
+              ✅ Case 评估通过 (score: {{ typeof currentTask.evaluation.score === 'number' ? currentTask.evaluation.score.toFixed(2) : '' }})
             </span>
             <span
               v-else
               class="evaluation-failed"
               :title="currentTask.evaluation.reason"
             >
-              ❌ Case 评估未通过 (score: {{ currentTask.evaluation.score.toFixed(2) }})
+              ❌ Case 评估未通过 (score: {{ typeof currentTask.evaluation.score === 'number' ? currentTask.evaluation.score.toFixed(2) : '' }})
             </span>
             <div v-if="currentTask.evaluation.reason" class="evaluation-reason">
               {{ currentTask.evaluation.reason }}
@@ -1294,7 +1297,7 @@ function formatShortTime(ts: number): string {
       <CaseForm
         :case-data="editingCase"
         :visible="showCaseForm"
-        @close="showCaseForm = false"
+        @close="showCaseForm = false; editingCase = null"
         @save="handleCaseSave"
       />
 
@@ -1950,7 +1953,7 @@ function formatShortTime(ts: number): string {
 .evaluation-reason {
   margin-top: 6px;
   font-size: 12px;
-  color: #888;
+  color: #aaa;
 }
 
 .btn-continue {
