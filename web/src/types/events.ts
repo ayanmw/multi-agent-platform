@@ -37,6 +37,8 @@ export type EventType =
   | 'memory_summarize_failed'
   | 'memory_recall_performed'
   | 'heartbeat_beat'
+  // Context window observability
+  | 'context_window_snapshot'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {
@@ -124,6 +126,28 @@ export interface AgentState {
   tokenUsage?: TokenUsage
   /** Cumulative duration for this agent (derived from steps or backend) */
   durationMs?: number
+}
+
+/** Per-message payload included in a context_window_snapshot event */
+export interface ContextSnapshotMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+  reasoning?: string
+  /** Local token estimate; the LLM API usually does not expose per-message tokens */
+  estimated_tokens: number
+  /** Share of total estimated tokens (0.0–1.0) */
+  usage_ratio: number
+  tool_call_id?: string
+  tool_calls?: Array<Record<string, unknown>>
+}
+
+/** Snapshot of the LLM context window emitted before each think() call */
+export interface ContextWindowSnapshotData {
+  model: string
+  max_context_tokens: number
+  estimated_total_tokens: number
+  estimated_usage_ratio: number
+  messages: ContextSnapshotMessage[]
 }
 
 /** Task status

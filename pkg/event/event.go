@@ -9,22 +9,28 @@ import (
 // Memory lifecycle events broadcast over WebSocket. These are produced by the
 // Memory CRUD API handlers so the frontend can keep its cache in sync.
 const (
-	EventMemoryCreated    = "memory_created"
-	EventMemoryUpdated    = "memory_updated"
-	EventMemoryDeleted    = "memory_deleted"
-	EventMemoryPromoted   = "memory_promoted"
-	EventMemoryRecallDone = "memory_recall_performed"
-	EventHeartbeatBeat    = "heartbeat_beat"
+	EventMemoryCreated         = "memory_created"
+	EventMemoryUpdated         = "memory_updated"
+	EventMemoryDeleted         = "memory_deleted"
+	EventMemoryPromoted        = "memory_promoted"
+	EventMemoryRecallDone      = "memory_recall_performed"
+	EventHeartbeatBeat         = "heartbeat_beat"
+	EventContextWindowSnapshot = "context_window_snapshot"
+
+	// EventTaskEvaluated is emitted after a task completes when the engine has
+	// run the AcceptanceEvaluator against the case contract. It carries passed,
+	// score, reason, and the full evaluation report.
+	EventTaskEvaluated = "task_evaluated"
 )
 
 // Event represents a structured event sent over WebSocket
 type Event struct {
-	EventID   string                 `json:"event_id"`
-	TaskID    string                 `json:"task_id"`
-	AgentID   string                 `json:"agent_id"`
-	StepIndex int                    `json:"step_index"`
-	Type      string                 `json:"type"`
-	Timestamp int64                  `json:"timestamp"`
+	EventID   string         `json:"event_id"`
+	TaskID    string         `json:"task_id"`
+	AgentID   string         `json:"agent_id"`
+	StepIndex int            `json:"step_index"`
+	Type      string         `json:"type"`
+	Timestamp int64          `json:"timestamp"`
 	Data      map[string]any `json:"data"`
 }
 

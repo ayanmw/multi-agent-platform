@@ -241,5 +241,55 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// CaseEvaluation records the result of evaluating a completed task against its case.
+type CaseEvaluation struct {
+	ID          int64     `json:"id,omitempty"`
+	TaskID      string    `json:"task_id"`
+	CaseID      string    `json:"case_id"`
+	Passed      bool      `json:"passed"`
+	Score       float64   `json:"score"`
+	Reason      string    `json:"reason"`
+	EvaluatedAt time.Time `json:"evaluated_at"`
+}
+
+// SaveEvaluation inserts a case evaluation into the case_evaluations table.
+func (r *Repository) SaveEvaluation(eval CaseEvaluation) error {
+	if eval.EvaluatedAt.IsZero() {
+		eval.EvaluatedAt = time.Now()
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO case_evaluations (task_id, case_id, passed, score, reason, evaluated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		eval.TaskID, eval.CaseID, boolToInt(eval.Passed), eval.Score, eval.Reason, eval.EvaluatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert case_evaluation: %w", err)
+	}
+	return nil
+}
+
+// GetEvaluation returns the most recent evaluation for a given task and case.
+func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, error) {
+	row := r.db.QueryRow(`
+		SELECT id, task_id, case_id, passed, score, reason, evaluated_at
+		FROM case_evaluations
+		WHERE task_id = ? AND case_id = ?
+		ORDER BY evaluated_at DESC, id DESC
+		LIMIT 1`, taskID, caseID)
+
+	var e CaseEvaluation
+	var passed int
+	var evaluatedAt string
+	if err := row.Scan(&e.ID, &e.TaskID, &e.CaseID, &passed, &e.Score, &e.Reason, &evaluatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, sql.ErrNoRows
+		}
+		return nil, fmt.Errorf("select case_evaluation: %w", err)
+	}
+	e.Passed = passed != 0
+	e.EvaluatedAt, _ = time.Parse("2006-01-02 15:04:05", evaluatedAt)
+	return &e, nil
+}
+
 // Ensure interface compatibility: a new case should carry a valid contract when passed to services.
 var _ = harness.TaskContract{}

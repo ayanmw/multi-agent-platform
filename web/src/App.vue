@@ -36,6 +36,7 @@ import ProjectConfig from './components/ProjectConfig.vue'
 import MemoryBrowser from './components/MemoryBrowser.vue'
 import RAGPreviewPanel from './components/RAGPreviewPanel.vue'
 import MemoryEventsTimeline from './components/MemoryEventsTimeline.vue'
+import ContextWindowPanel from './components/ContextWindowPanel.vue'
 import CaseCard from './components/CaseCard.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
@@ -47,6 +48,7 @@ import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
 import { useMemoryEvents } from './composables/useMemoryEvents'
+import { useContextWindow } from './composables/useContextWindow'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
@@ -164,11 +166,27 @@ const autoApprovePolicy = ref(false)
 // Project config view toggle
 const showProjectConfig = ref(false)
 
+/** Singleton context window snapshot listener */
+const { latest: latestContextSnapshot } = useContextWindow()
+
 /** Singleton memory event listener + timeline state for Phase 6-F */
 const { events: memoryEvents, clear: clearMemoryEvents } = useMemoryEvents()
 
 /** Whether the Memory overlay is open */
 const showMemoryBrowser = ref(false)
+
+/** Whether the Context Window overlay is open */
+const showContextWindow = ref(false)
+
+/** Toggle the context window overlay */
+function toggleContextWindow() {
+  showContextWindow.value = !showContextWindow.value
+}
+
+/** Close the context window overlay */
+function closeContextWindow() {
+  showContextWindow.value = false
+}
 
 /** Active tab inside the memory overlay: 'browser' | 'rag' | 'events' */
 const memoryTab = ref<'browser' | 'rag' | 'events'>('browser')
@@ -1022,8 +1040,26 @@ function formatShortTime(ts: number): string {
       <!-- Project Config view — replaces main content when active -->
       <ProjectConfig v-else-if="showProjectConfig" @back="handleProjectConfigBack" />
 
+      <div v-if="showContextWindow" class="memory-overlay" @click.self="closeContextWindow">
+        <div class="memory-overlay-panel">
+          <div class="memory-overlay-header">
+            <div class="memory-tabs">
+              <button class="memory-tab active" disabled>🪟 Context Window</button>
+            </div>
+            <div class="memory-header-actions">
+              <button class="memory-close-btn" @click="closeContextWindow" title="Close Context Window">
+                × Close
+              </button>
+            </div>
+          </div>
+          <div class="memory-overlay-body">
+            <ContextWindowPanel class="memory-overlay-browser" />
+          </div>
+        </div>
+      </div>
+
       <!-- Memory overlay with tabbed Browser / RAG / Events panels -->
-      <div v-if="showMemoryBrowser" class="memory-overlay" @click.self="closeMemoryBrowser">
+      <div v-else-if="showMemoryBrowser" class="memory-overlay" @click.self="closeMemoryBrowser">
         <div class="memory-overlay-panel">
           <div class="memory-overlay-header">
             <div class="memory-tabs">
@@ -1082,12 +1118,13 @@ function formatShortTime(ts: number): string {
       </div>
 
       <!-- Normal main content -->
-      <template v-else>
+      <template v-else-if="!showContextWindow">
         <!-- Header -->
         <header class="app-header">
           <h1 class="app-title">🤖 Multi-Agent Platform</h1>
           <div class="app-header-right">
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
+            <button class="agents-btn" @click="toggleContextWindow" title="Context Window">🪟 Context</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
             <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
             <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>

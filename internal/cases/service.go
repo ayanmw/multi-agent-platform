@@ -43,6 +43,12 @@ type Service struct {
 	builtinBy map[string]*Case
 }
 
+// Repository returns the underlying cases.Repository so callers can persist
+// evaluation results directly (e.g., from the runtime Engine).
+func (s *Service) Repository() *Repository {
+	return s.repo
+}
+
 // Init creates a new Service, seeds builtin cases if the database is empty, and indexes builtins.
 func Init(db *sql.DB) (*Service, error) {
 	repo := NewRepository(db)

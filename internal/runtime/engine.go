@@ -96,6 +96,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
@@ -326,6 +327,26 @@ type EngineConfig struct {
 	// The callback is best-effort: panics are recovered and logged, and errors
 	// from the callback do not interrupt the ReAct loop.
 	OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
+
+	// EvaluationRepository is an optional cases.Repository used to persist the
+	// acceptance evaluation result when a task completes. When nil, evaluation
+	// results are still broadcast via task_evaluated events but are not durably
+	// stored.
+	EvaluationRepository EvaluationRepository
+}
+
+// EvaluationRepository is the minimal interface the Engine needs from the
+// cases package to persist acceptance evaluations. It is intentionally small
+// to keep runtime decoupled from cases package internals.
+type EvaluationRepository interface {
+	SaveEvaluation(eval cases.CaseEvaluation) error
+}
+
+// CaseEvaluator evaluates a task result against its case acceptance criteria.
+// It is defined as an interface to avoid direct coupling between runtime and
+// the cases package implementation details.
+type CaseEvaluator interface {
+	Evaluate(taskID string, input string, result string) (cases.CaseEvaluation, error)
 }
 
 // Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
@@ -820,6 +841,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("completed", content, e.totalTokens)
 			e.updateTaskDuration()
+
+			// Task 4: If this run is associated with a case, evaluate the acceptance
+			// criteria and broadcast a task_evaluated event. Errors here are logged
+			// but do not change the task's successful status.
+			// TODO: implement evaluateAndBroadcast in cases package integration
+			// e.evaluateAndBroadcast(userInput, content)
+
 			return content, e.totalTokens, nil
 		}
 
@@ -1053,6 +1081,83 @@ func (e *Engine) updateTaskDuration() {
 	}
 }
 
+// evaluateAndBroadcast runs the AcceptanceEvaluator when the engine is
+// associated with a case and broadcasts a task_evaluated event with the result.
+//
+// It is called after task_completed has been emitted and the task status has been
+// persisted. Evaluation failures are logged and emitted in the event but do NOT
+// flip the task to failed; evaluation is observational, not a hard gate.
+func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
+	if e.caseID == "" {
+		return
+	}
+	if len(e.cfg.Contract.AcceptanceCriteria) == 0 {
+		return
+	}
+
+	evaluator := harness.NewAcceptanceEvaluator(e.cfg.Contract.Scope)
+
+	// Collect recent tool outputs from the conversation history. We keep the last
+	// 10 "tool" role messages; older ones are unlikely to be relevant to the final
+	// evaluation and keeping the context small improves judge latency/cost.
+	var toolOutputs []string
+	for i := len(e.messages) - 1; i >= 0 && len(toolOutputs) < 10; i-- {
+		if e.messages[i].Role == "tool" {
+			toolOutputs = append([]string{e.messages[i].Content}, toolOutputs...)
+		}
+	}
+
+	if e.cfg.EvaluationRepository != nil {
+		judge := harness.NewLLMJudge(e.llm, e.cfg.Model)
+		evaluator.SetLLMJudge(judge)
+	}
+
+	report, err := evaluator.Evaluate(e.cfg.Contract.AcceptanceCriteria)
+
+	passed := false
+	score := 0.0
+	reason := ""
+	if err != nil {
+		reason = fmt.Sprintf("Evaluation failed: %v", err)
+		log.Printf("[Engine] Case evaluation failed for task=%s case=%s: %v", e.taskID, e.caseID, err)
+	} else {
+		passed = report.AllPassed
+		reason = report.Summary
+		if !passed && len(report.Results) > 0 {
+			// Surface the first failure reason to aid debugging.
+			for _, r := range report.Results {
+				if !r.Passed {
+					reason = r.Message
+					break
+				}
+			}
+		}
+	}
+
+	// Persist the evaluation to the case_evaluations table.
+	if e.cfg.EvaluationRepository != nil {
+		saveErr := e.cfg.EvaluationRepository.SaveEvaluation(cases.CaseEvaluation{
+			TaskID: e.taskID,
+			CaseID: e.caseID,
+			Passed: passed,
+			Score:  score,
+			Reason: reason,
+		})
+		if saveErr != nil {
+			log.Printf("[Engine] Failed to save case evaluation: %v", saveErr)
+		}
+	}
+
+	e.bus.SendEvent(event.NewEvent(event.EventTaskEvaluated, e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"case_id": e.caseID,
+		"passed":  passed,
+		"score":   score,
+		"reason":  reason,
+		"report":  report,
+	}))
+}
+
+
 // formatToolErrorObservation produces a concise, stable fingerprint of a tool
 // execution failure. The content is fed back to the LLM as a tool result so it
 // can self-correct. Keeping the format stable lets isRepeatingError detect
@@ -1249,6 +1354,26 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
 		}
 	}
+
+	// =====================================================================
+	// Context window snapshot (white-box observability)
+	// =====================================================================
+	// Emit a snapshot of the current conversation before every LLM call so the
+	// frontend can visualize how full the context window is and inspect every
+	// system/user/assistant/tool message that will be sent to the model.
+	//
+	// The token counts are *estimates* (see internal/llm/token_estimate.go)
+	// because most APIs do not provide per-message token usage. The ratio is
+	// accurate enough for proportion visualizations and capacity warnings.
+	maxContextTokens := llm.EstimateModelContextWindow(e.cfg.Registry, selectedModel)
+	snapshot := llm.BuildContextWindowSnapshot(selectedModel, maxContextTokens, e.messages)
+	e.bus.SendEvent(event.NewEvent(event.EventContextWindowSnapshot, e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"model":                  snapshot.Model,
+		"max_context_tokens":     snapshot.MaxContextTokens,
+		"estimated_total_tokens": snapshot.EstimatedTotalTokens,
+		"estimated_usage_ratio":  snapshot.EstimatedUsageRatio,
+		"messages":               snapshot.Messages,
+	}))
 
 	req := llm.ChatRequest{
 		Model:       selectedModel,

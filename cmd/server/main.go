@@ -592,7 +592,7 @@ func main() {
 			}
 
 			taskID := "task_" + time.Now().Format("20060102150405")
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -623,7 +623,7 @@ func main() {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat — multi-turn chat within a session
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 			return
 		}
 		// GET /api/sessions/{id}/messages — session message history
@@ -833,7 +833,7 @@ func main() {
 	// Thin proxy used by the CaseCard frontend. Delegates to the same chat-action
 	// logic as POST /api/tasks with the case_id extracted from the request body.
 	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
-		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders)
+		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 	})
 
 	// Dynamic Tool Registration API (Phase 2+)
@@ -1137,8 +1137,8 @@ func main() {
 // when LLM_USE_MOCK is false or when the request does not target a preset case.
 // modelRouter/routerProviders activate the Phase 6 Router in the Engine; pass nil
 // to fall back to the legacy single-model path.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders)
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
@@ -1149,7 +1149,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // exact case match; when empty the provider falls back to keyword matching.
 // modelRouter is the optional Phase 6 Router; when non-nil (with routerProviders)
 // the Engine classifies intent and selects a model tier before each LLM call.
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
 	isRoot := turnIndex == 0
 
 	// Persist task creation
@@ -1308,6 +1308,12 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		Router:    modelRouter,
 		Registry:  modelRegistry,
 		Providers: routerProviders,
+		EvaluationRepository: func() runtime.EvaluationRepository {
+			if caseService == nil {
+				return nil
+			}
+			return caseService.Repository()
+		}(),
 		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
 			return db.InsertSessionMessage(db.SessionMessageRecord{
 				ID:         "msg_" + uuid.New().String(),

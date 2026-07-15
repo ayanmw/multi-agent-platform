@@ -56,6 +56,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -344,6 +345,10 @@ const (
 	// AcceptContentContains checks that a file contains a specific string.
 	// E.g., the generated report includes "Summary" section.
 	AcceptContentContains AcceptanceCriterionType = "content_contains"
+
+	// AcceptLLMJudge asks an LLM to evaluate the agent's final answer against a
+	// rubric. The Target field of the criterion contains the rubric / question.
+	AcceptLLMJudge AcceptanceCriterionType = "llm_judge"
 )
 
 // AcceptanceCriterion defines a single check for task completion.
@@ -672,12 +677,19 @@ func (r *PathTraversalRule) Check(toolName string, input map[string]any, contrac
 // AcceptanceEvaluator checks whether a task's acceptance criteria have been met.
 // It runs each criterion's check and returns a report of which passed and which failed.
 type AcceptanceEvaluator struct {
-	scope string // working directory for resolving relative paths
+	scope  string     // working directory for resolving relative paths
+	judge  *LLMJudge  // optional LLM judge for semantic criteria (nil = soft pass)
 }
 
 // NewAcceptanceEvaluator creates a new AcceptanceEvaluator with the given scope.
 func NewAcceptanceEvaluator(scope string) *AcceptanceEvaluator {
 	return &AcceptanceEvaluator{scope: scope}
+}
+
+// SetLLMJudge attaches an optional LLM judge for evaluating AcceptLLMJudge criteria.
+// Passing nil clears any previously attached judge.
+func (ae *AcceptanceEvaluator) SetLLMJudge(judge *LLMJudge) {
+	ae.judge = judge
 }
 
 // EvalResult is the result of evaluating a single acceptance criterion.
@@ -747,6 +759,9 @@ func (ae *AcceptanceEvaluator) evaluateOne(criterion AcceptanceCriterion) EvalRe
 
 	case AcceptTestPass, AcceptShellExitZero:
 		return ae.checkShell(criterion, start)
+
+	case AcceptLLMJudge:
+		return ae.checkLLMJudge(criterion, start)
 
 	default:
 		return EvalResult{
@@ -829,6 +844,44 @@ func (ae *AcceptanceEvaluator) checkShell(criterion AcceptanceCriterion, start t
 		Criterion: criterion,
 		Passed:    true, // soft pass — don't block on unimplemented checks
 		Message:   fmt.Sprintf("Shell check skipped (not yet implemented): %s. Full implementation in Phase 5 with Docker sandbox.", criterion.Target),
+		Duration:  time.Since(start).Milliseconds(),
+	}
+}
+
+// checkLLMJudge evaluates a semantic rubric using the optional LLM judge.
+// If no judge is configured, the criterion receives a soft pass so that tasks
+// without a configured evaluator are not blocked (while still recording that
+// the judge was unavailable).
+func (ae *AcceptanceEvaluator) checkLLMJudge(criterion AcceptanceCriterion, start time.Time) EvalResult {
+	if ae.judge == nil {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    true,
+			Message:   "LLM judge criterion skipped: no LLM judge configured",
+			Duration:  time.Since(start).Milliseconds(),
+		}
+	}
+
+	result, err := ae.judge.Evaluate(context.Background(), JudgeRequest{
+		Goal:        "",
+		Rubric:      criterion.Target,
+		UserInput:   "",
+		FinalAnswer: "",
+	})
+	if err != nil {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   fmt.Sprintf("LLM judge evaluation failed: %v", err),
+			Duration:  time.Since(start).Milliseconds(),
+		}
+	}
+
+	msg := fmt.Sprintf("LLM judge passed=%v score=%.2f reason=%s", result.Passed, result.Score, result.Reason)
+	return EvalResult{
+		Criterion: criterion,
+		Passed:    result.Passed,
+		Message:   msg,
 		Duration:  time.Since(start).Milliseconds(),
 	}
 }
