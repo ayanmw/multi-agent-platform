@@ -121,7 +121,7 @@ func TestInitTwiceSameFile(t *testing.T) {
 // --- Table existence -------------------------------------------------------
 
 // TestExpectedTablesExist asserts every table declared by createTables and
-// the v5/v6/v10/v12/v13 migrations is present after Init.
+// the v5/v6/v10/v12/v13/v17 migrations is present after Init.
 func TestExpectedTablesExist(t *testing.T) {
 	freshDB(t)
 	wantTables := []string{
@@ -142,6 +142,9 @@ func TestExpectedTablesExist(t *testing.T) {
 		"users",
 		"api_keys",
 		"mock_scripts",
+		"memory_embeddings",
+		"cases",
+		"case_evaluations",
 	}
 	for _, name := range wantTables {
 		if !tableExists(t, name) {
@@ -499,6 +502,72 @@ func TestInsertTaskOrphanSessionID(t *testing.T) {
 	}
 	// If we got an error, that's a valid outcome too — just log it.
 	t.Logf("InsertTask with orphan session_id returned error (FK enforced): %v", err)
+}
+
+// --- cases / case_evaluations tables ---------------------------------------
+
+// TestCasesMigrationRegistered verifies the v17 cases and case_evaluations
+// migration is recorded in schema_migrations after Init.
+func TestCasesMigrationRegistered(t *testing.T) {
+	freshDB(t)
+
+	var exists bool
+	err := DB.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=?)`, 17,
+	).Scan(&exists)
+	if err != nil {
+		t.Fatalf("query schema_migrations for v17: %v", err)
+	}
+	if !exists {
+		t.Errorf("migration v17 not registered in schema_migrations")
+	}
+}
+
+// TestCasesAndEvaluationsTablesExist verifies the v17 migration created the
+// cases and case_evaluations tables with their supporting indexes.
+func TestCasesAndEvaluationsTablesExist(t *testing.T) {
+	freshDB(t)
+	for _, name := range []string{"cases", "case_evaluations"} {
+		if !tableExists(t, name) {
+			t.Errorf("expected table %q missing after migration v17", name)
+		}
+	}
+}
+
+// TestCasesTablesUsable exercises a basic INSERT/SELECT round-trip to prove
+// the schema matches the intended types and constraints.
+func TestCasesTablesUsable(t *testing.T) {
+	freshDB(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	_, err := DB.Exec(`
+		INSERT INTO cases (id, name, description, icon, category, system_prompt,
+			default_input, contract_json, tags_json, is_builtin, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"case_hello", "Hello Case", "desc", "icon", "basic",
+		"You are a tester.", "say hello", `{}`, `["tag1","tag2"]`, 1, now, now,
+	)
+	if err != nil {
+		t.Fatalf("insert cases: %v", err)
+	}
+
+	_, err = DB.Exec(`
+		INSERT INTO case_evaluations (task_id, case_id, passed, score, reason, evaluated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"task_1", "case_hello", 1, 0.95, "all assertions passed", now,
+	)
+	if err != nil {
+		t.Fatalf("insert case_evaluations: %v", err)
+	}
+
+	var gotCaseID string
+	err = DB.QueryRow(`SELECT case_id FROM case_evaluations WHERE task_id=?`, "task_1").Scan(&gotCaseID)
+	if err != nil {
+		t.Fatalf("select case_evaluations: %v", err)
+	}
+	if gotCaseID != "case_hello" {
+		t.Errorf("case_evaluations.case_id = %q, want %q", gotCaseID, "case_hello")
+	}
 }
 
 // --- mock_scripts table ----------------------------------------------------

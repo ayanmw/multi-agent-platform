@@ -246,6 +246,45 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);`,
 	},
+
+	// v17: Create cases and case_evaluations tables for the Case management feature.
+	//
+	// cases store built-in or user-defined test cases (contract, prompts, tags,
+	// category). case_evaluations store the result of executing a case against
+	// a task, supporting pass/fail tracking and optional scoring. Both tables
+	// are created idempotently and indexed on the query paths used by the
+	// repository layer in subsequent tasks.
+	{
+		Version:     17,
+		Description: "Create cases and case_evaluations tables",
+		SQL: `CREATE TABLE IF NOT EXISTS cases (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			icon TEXT,
+			category TEXT,
+			system_prompt TEXT,
+			default_input TEXT,
+			contract_json TEXT NOT NULL,
+			tags_json TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_cases_category ON cases(category);
+		CREATE INDEX IF NOT EXISTS idx_cases_is_builtin ON cases(is_builtin);
+
+		CREATE TABLE IF NOT EXISTS case_evaluations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			case_id TEXT NOT NULL,
+			passed INTEGER NOT NULL,
+			score REAL,
+			reason TEXT,
+			evaluated_at DATETIME NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_eval_task ON case_evaluations(task_id);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
