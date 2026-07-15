@@ -118,17 +118,13 @@ func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service)
 	tags := parseTagFilter(r.URL.Query().Get("tag"))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 
-	all, err := svc.List(nil, category)
+	all, err := svc.List(tags, category)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if all == nil {
 		all = []cases.Case{}
-	}
-
-	if len(tags) > 0 {
-		all = filterCasesByAnyTag(all, tags)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -138,37 +134,14 @@ func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service)
 // parseTagFilter splits a comma-separated tag query parameter into normalized tags.
 func parseTagFilter(s string) []string {
 	parts := strings.Split(s, ",")
-	var result []string
+	result := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p != "" {
-			result = append(result, strings.ToLower(p))
+			result = append(result, p)
 		}
 	}
 	return result
-}
-
-// filterCasesByAnyTag returns cases that contain at least one of the requested tags.
-func filterCasesByAnyTag(all []cases.Case, tags []string) []cases.Case {
-	var result []cases.Case
-	for _, c := range all {
-		if caseMatchesAnyTag(c, tags) {
-			result = append(result, c)
-		}
-	}
-	return result
-}
-
-// caseMatchesAnyTag reports whether the case has at least one tag in common with tags.
-func caseMatchesAnyTag(c cases.Case, tags []string) bool {
-	for _, t := range tags {
-		for _, ct := range c.Tags {
-			if strings.EqualFold(strings.TrimSpace(ct), t) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // handleGetCase handles GET /api/cases/{id}.
@@ -239,8 +212,8 @@ func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 	}
 	updated, err := svc.Update(id, req)
 	if err != nil {
-		if isBuiltinError(err) {
-			http.Error(w, "cannot modify built-in case", http.StatusForbidden)
+		if errors.Is(err, cases.ErrBuiltinImmutable) {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -271,23 +244,14 @@ func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 	}
 
 	if err := svc.Delete(id); err != nil {
-		if isBuiltinError(err) {
-			http.Error(w, "cannot delete built-in case", http.StatusForbidden)
+		if errors.Is(err, cases.ErrBuiltinImmutable) {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// isBuiltinError reports whether an error is the built-in immutability rejection.
-func isBuiltinError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "built-in") || strings.Contains(msg, "builtin")
 }
 
 // === Session API ===

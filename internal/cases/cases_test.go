@@ -414,7 +414,7 @@ func TestRepositoryListExcludesBuiltins(t *testing.T) {
 		t.Fatalf("create custom: %v", err)
 	}
 
-	all, err := repo.List()
+	all, err := repo.List("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestRepositoryCRUD(t *testing.T) {
 		t.Errorf("expected name %q, got %q", c.Name, got.Name)
 	}
 
-	all, err := repo.List()
+	all, err := repo.List("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

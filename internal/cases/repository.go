@@ -157,12 +157,19 @@ func (r *Repository) GetByID(id string) (*Case, error) {
 	return scanCase(row)
 }
 
-// List returns all custom cases from the database without filtering.
+// List returns all custom cases from the database, optionally filtered by category.
 // 内置用例（is_builtin=1）由代码管理，不在这里返回，避免 Service 合并时重复。
-func (r *Repository) List() ([]Case, error) {
-	rows, err := r.db.Query(`
+func (r *Repository) List(category string) ([]Case, error) {
+	query := `
 		SELECT id, name, description, icon, category, system_prompt, default_input, contract_json, tags_json, is_builtin, created_at, updated_at
-		FROM cases WHERE is_builtin = 0 ORDER BY created_at DESC`)
+		FROM cases WHERE is_builtin = 0`
+	var args []any
+	if strings.TrimSpace(category) != "" {
+		query += ` AND category = ?`
+		args = append(args, category)
+	}
+	query += ` ORDER BY created_at DESC`
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query cases: %w", err)
 	}

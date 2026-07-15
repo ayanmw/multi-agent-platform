@@ -139,10 +139,11 @@ func (s *Service) Get(id string) (*Case, error) {
 	return s.repo.GetByID(id)
 }
 
-// List returns all cases (builtin + custom) with optional in-memory tag/category filtering.
-// tags filter uses AND semantics: a case must contain all requested tags.
+// List returns all cases (builtin + custom) with optional tag/category filtering.
+// tags filter uses OR semantics: a case matches if it contains ANY of the requested tags.
 func (s *Service) List(tags []string, category string) ([]Case, error) {
-	custom, err := s.repo.List()
+	category = strings.TrimSpace(category)
+	custom, err := s.repo.List(category)
 	if err != nil {
 		return nil, fmt.Errorf("list custom cases: %w", err)
 	}
@@ -155,21 +156,20 @@ func (s *Service) List(tags []string, category string) ([]Case, error) {
 	for _, t := range tags {
 		t = strings.TrimSpace(t)
 		if t != "" {
-			filterTags = append(filterTags, t)
+			filterTags = append(filterTags, strings.ToLower(t))
 		}
 	}
-	category = strings.TrimSpace(category)
 
 	if len(filterTags) == 0 && category == "" {
 		return all, nil
 	}
 
-	var result []Case
+	result := make([]Case, 0)
 	for _, c := range all {
 		if category != "" && !strings.EqualFold(c.Category, category) {
 			continue
 		}
-		if !hasAllTags(c.Tags, filterTags) {
+		if !hasAnyTag(c.Tags, filterTags) {
 			continue
 		}
 		result = append(result, c)
@@ -177,27 +177,28 @@ func (s *Service) List(tags []string, category string) ([]Case, error) {
 	return result, nil
 }
 
-// hasAllTags reports whether caseTags contains every tag in required (case-insensitive).
-func hasAllTags(caseTags, required []string) bool {
+// hasAnyTag reports whether caseTags contains at least one tag in required (case-insensitive).
+// An empty required set matches every case.
+func hasAnyTag(caseTags, required []string) bool {
 	if len(required) == 0 {
 		return true
 	}
-	lower := make(map[string]struct{}, len(caseTags))
 	for _, t := range caseTags {
-		lower[strings.ToLower(strings.TrimSpace(t))] = struct{}{}
-	}
-	for _, t := range required {
-		if _, ok := lower[strings.ToLower(t)]; !ok {
-			return false
+		lower := strings.ToLower(strings.TrimSpace(t))
+		for _, r := range required {
+			if lower == r {
+				return true
+			}
 		}
 	}
-	return true
+	return false
 }
 
 // Update modifies an existing custom case; builtin cases cannot be updated.
+var ErrBuiltinImmutable = errors.New("cannot modify or delete built-in case")
 func (s *Service) Update(id string, req UpdateCaseRequest) (*Case, error) {
 	if s.isBuiltin(id) {
-		return nil, fmt.Errorf("cannot update built-in case %s", id)
+		return nil, ErrBuiltinImmutable
 	}
 	c, err := s.repo.GetByID(id)
 	if err != nil {
@@ -243,7 +244,7 @@ func (s *Service) Update(id string, req UpdateCaseRequest) (*Case, error) {
 // Delete removes a custom case by id; builtin cases cannot be deleted.
 func (s *Service) Delete(id string) error {
 	if s.isBuiltin(id) {
-		return fmt.Errorf("cannot delete built-in case %s", id)
+		return ErrBuiltinImmutable
 	}
 	return s.repo.Delete(id)
 }
