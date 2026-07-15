@@ -18,9 +18,9 @@
 //
 // # Episode Summarization
 //
-// The current summarization uses keyword extraction from conversation content.
-// In Phase 6+, this will be replaced with an LLM-based summarization using a
-// dedicated summarizer model. The generated summaries include:
+// Phase 6-F: episode summarization delegates to an LLMSummarizer (which
+// falls back to the legacy keyword implementation when the LLM call
+// fails). The generated summaries include:
 //   - Tools used and their results
 //   - Errors encountered
 //   - Final task outcome
@@ -56,11 +56,12 @@ import (
 //	go hb.Start(context.Background())
 //	defer hb.Stop()
 type Heartbeat struct {
-	db       MemoryDB
-	interval time.Duration
-	state    *HeartbeatState
-	mu       sync.Mutex
-	cancel   context.CancelFunc
+	db         MemoryDB
+	summarizer LLMSummarizer
+	interval   time.Duration
+	state      *HeartbeatState
+	mu         sync.Mutex
+	cancel     context.CancelFunc
 }
 
 // HeartbeatState tracks the heartbeat's progress so it can resume from the
@@ -171,12 +172,16 @@ func (s *SqliteMemoryDB) UpdateSessionContextSize(sessionID string, totalTokens 
 }
 
 // NewHeartbeat creates a new Heartbeat with the default 5-minute interval.
-// The database parameter implements the MemoryDB interface for all DB operations.
-func NewHeartbeat(database MemoryDB) *Heartbeat {
+// The database parameter implements the MemoryDB interface for all DB
+// operations. summarizer is consulted for each task's episode summary; if
+// nil the Heartbeat falls back to its own keyword implementation to
+// preserve Phase 5-B behavior.
+func NewHeartbeat(database MemoryDB, summarizer LLMSummarizer) *Heartbeat {
 	interval := 5 * time.Minute
 	return &Heartbeat{
-		db:       database,
-		interval: interval,
+		db:         database,
+		summarizer: summarizer,
+		interval:   interval,
 		state: &HeartbeatState{
 			LastRunAt:           time.Now(),
 			NextIntervalSeconds: int(interval.Seconds()),
@@ -279,7 +284,25 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		default:
 		}
 
-		summary, err := hb.generateEpisodeSummary(taskID)
+		// Load conversation history and steps for this task
+		convs, convErr := hb.db.QueryConversationsByTask(taskID)
+		steps, stepErr := hb.db.QueryStepsByTaskForMemory(taskID)
+		if convErr != nil {
+			log.Printf("[Heartbeat] Warning: failed to query conversations for task %s: %v", taskID, convErr)
+		}
+		if stepErr != nil {
+			log.Printf("[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, stepErr)
+		}
+		// Phase 6-F: prefer LLMSummarizer (falls back to keyword internally);
+		// if no summarizer is configured we use the legacy keyword path directly.
+		var summary string
+		var err error
+		if hb.summarizer != nil {
+			summary, err = hb.summarizer.SummarizeEpisode(ctx, taskID, convs, steps)
+		}
+		if summary == "" || err != nil {
+			summary, err = hb.generateEpisodeSummary(ctx, taskID)
+		}
 		if err != nil {
 			log.Printf("[Heartbeat] Failed to summarize task %s: %v", taskID, err)
 			report.Errors++
@@ -346,8 +369,9 @@ func (hb *Heartbeat) adaptiveInterval(newEventCount int) time.Duration {
 }
 
 // generateEpisodeSummary reads the conversation history for a task and produces
-// a structured summary string. This is a keyword-based extraction for now;
-// Phase 6+ will use LLM-based summarization.
+// a structured summary string. This is the legacy keyword-based path retained
+// as a fallback target for the Phase 6-F LLMSummarizer. The public entry
+// point for the KeywordSummarizer interface is SummarizeEpisode below.
 //
 // The summary captures:
 //   - User input / task goal
@@ -355,7 +379,7 @@ func (hb *Heartbeat) adaptiveInterval(newEventCount int) time.Duration {
 //   - Errors encountered
 //   - Final outcome
 //   - Key observations
-func (hb *Heartbeat) generateEpisodeSummary(taskID string) (string, error) {
+func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) (string, error) {
 	convs, err := hb.db.QueryConversationsByTask(taskID)
 	if err != nil {
 		return "", fmt.Errorf("query conversations for task %s: %w", taskID, err)
@@ -418,6 +442,7 @@ func (hb *Heartbeat) generateEpisodeSummary(taskID string) (string, error) {
 	sb.WriteString(fmt.Sprintf("Stats: %d tools, %d errors, %d messages\n",
 		toolCount, errorCount, len(convs)))
 
+	_ = ctx
 	return sb.String(), nil
 }
 

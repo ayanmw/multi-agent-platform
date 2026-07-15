@@ -1,22 +1,48 @@
 <!-- MemoryBrowser.vue — memory browsing and management panel
-     Displays a filterable list of memories organized by scope/project/tier,
-     with expandable detail view and scope management controls.
+     Displays a filterable, paginated list of memories organized by scope/project/tier/type/status,
+     with expandable detail view, inline editing, embedding trigger, and creation dialog.
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useMemoryStore } from '../composables/useMemoryStore'
 import { useProjectStore } from '../composables/useProjectStore'
+import MemoryCreateDialog from './MemoryCreateDialog.vue'
 import type { MemoryItem } from '../composables/useMemoryStore'
 
+const emit = defineEmits<{
+  (e: 'select-memory', id: string): void
+}>()
+
 const {
-  memories, loading, error, filter, stats,
-  loadMemories, updateScope, deleteMemory,
+  memories, loading, error, filter, stats, pagination, selectedMemoryId,
+  loadMemories, updateScope, updateMemory, embedMemory, deleteMemory, loadStats,
+  nextPage, prevPage,
 } = useMemoryStore()
 const { projects, loadProjects } = useProjectStore()
 
 // Expanded memory detail
 const expandedId = ref<string | null>(null)
 const deleteConfirm = ref<string | null>(null)
+
+// Inline editing state
+const editingId = ref<string | null>(null)
+const editContent = ref('')
+const editConfidence = ref(0.8)
+const editStatus = ref('active')
+
+// Create dialog visibility
+const showCreateDialog = ref(false)
+
+const memoryTypes = [
+  'preference',
+  'rule',
+  'fact',
+  'lesson',
+  'reflection',
+  'session_summary',
+]
+
+const statusOptions = ['', 'active', 'archived', 'pending', 'deprecated']
 
 // Scope label colors
 const scopeColors: Record<string, string> = {
@@ -48,17 +74,55 @@ const scopeLabels: Record<string, string> = {
   global: 'Global',
 }
 
+const statusColors: Record<string, string> = {
+  active: '#2ecc71',
+  archived: '#7f8c8d',
+  pending: '#f1c40f',
+  deprecated: '#e74c3c',
+}
+
+const computedStats = computed(() => {
+  const s = {
+    total: memories.value.length,
+    byScope: {} as Record<string, number>,
+    byTier: {} as Record<string, number>,
+    byType: {} as Record<string, number>,
+  }
+  for (const m of memories.value) {
+    s.byScope[m.scope] = (s.byScope[m.scope] || 0) + 1
+    s.byTier[m.tier] = (s.byTier[m.tier] || 0) + 1
+    s.byType[m.type] = (s.byType[m.type] || 0) + 1
+  }
+  return s
+})
+
 onMounted(() => {
   loadProjects()
   loadMemories()
+  loadStats().catch(() => {
+    // computedStats fallback is already live via computed
+  })
 })
 
 function toggleExpand(id: string) {
   expandedId.value = expandedId.value === id ? null : id
+  if (expandedId.value === id) {
+    emit('select-memory', id)
+  }
 }
 
 async function handleFilterChange() {
+  filter.offset = 0
   await loadMemories()
+}
+
+function isTypeSelected(type: string): boolean {
+  return filter.type === type
+}
+
+function toggleType(type: string) {
+  filter.type = filter.type === type ? '' : type
+  handleFilterChange()
 }
 
 async function handleScopeChange(mem: MemoryItem, newScope: string) {
@@ -79,6 +143,49 @@ async function handleDelete(mem: MemoryItem) {
   }
 }
 
+function startEdit(mem: MemoryItem) {
+  editingId.value = mem.id
+  editContent.value = mem.content
+  editConfidence.value = mem.confidence
+  editStatus.value = mem.status || 'active'
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editContent.value = ''
+  editConfidence.value = 0.8
+  editStatus.value = 'active'
+}
+
+async function commitEdit(mem: MemoryItem) {
+  try {
+    await updateMemory(mem.id, {
+      content: editContent.value,
+      confidence: Number(editConfidence.value),
+      status: editStatus.value,
+    })
+    cancelEdit()
+  } catch {
+    // Error handled by store
+  }
+}
+
+async function handleEmbed(mem: MemoryItem) {
+  try {
+    await embedMemory(mem.id)
+  } catch {
+    // Error handled by store
+  }
+}
+
+async function handleCreate(payload: { project_id?: string; scope: string; type: string; tier: string; content: string; confidence: number }) {
+  try {
+    await useMemoryStore().createMemory(payload)
+  } catch {
+    // Error handled by store
+  }
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return 'N/A'
   return new Date(dateStr).toLocaleString()
@@ -95,8 +202,8 @@ function truncate(s: string, maxLen: number): string {
     <div class="memory-header">
       <h2>🧠 Memory Browser</h2>
       <div class="memory-stats">
-        <span class="stat-badge total">{{ stats.total }} total</span>
-        <span v-for="(count, scope) in stats.byScope" :key="scope"
+        <span class="stat-badge total">{{ computedStats.total }} total</span>
+        <span v-for="(count, scope) in computedStats.byScope" :key="scope"
           class="stat-badge" :style="{ borderColor: scopeColors[scope] || '#999' }">
           {{ scopeLabels[scope] || scope }}: {{ count }}
         </span>
@@ -119,7 +226,26 @@ function truncate(s: string, maxLen: number): string {
         <option value="consolidated">Consolidated</option>
         <option value="semantic">Semantic</option>
       </select>
+      <select v-model="filter.status" @change="handleFilterChange" class="filter-select">
+        <option v-for="s in statusOptions" :key="s" :value="s">
+          {{ s === '' ? 'All Statuses' : s }}
+        </option>
+      </select>
       <button @click="loadMemories" class="btn-refresh" title="Refresh">🔄</button>
+      <button class="btn-create" @click="showCreateDialog = true">+ Create</button>
+    </div>
+
+    <!-- Type chips -->
+    <div class="type-filter-row">
+      <span class="filter-label">Type:</span>
+      <button
+        v-for="t in memoryTypes"
+        :key="t"
+        :class="['type-chip', { active: isTypeSelected(t) }]"
+        @click="toggleType(t)"
+      >
+        {{ typeIcons[t] || '📄' }} {{ t }}
+      </button>
     </div>
 
     <!-- Error state -->
@@ -139,8 +265,13 @@ function truncate(s: string, maxLen: number): string {
 
     <!-- Memory list -->
     <div class="memory-list">
-      <div v-for="mem in memories" :key="mem.id" class="memory-card"
-        :class="{ expanded: expandedId === mem.id }">
+      <div
+        v-for="mem in memories"
+        :key="mem.id"
+        class="memory-card"
+        :class="{ expanded: expandedId === mem.id, selected: selectedMemoryId === mem.id }"
+        :id="`memory-${mem.id}`"
+      >
         <!-- Card header -->
         <div class="memory-card-header" @click="toggleExpand(mem.id)">
           <span class="memory-type-icon">{{ typeIcons[mem.type] || '📄' }}</span>
@@ -153,6 +284,7 @@ function truncate(s: string, maxLen: number): string {
               {{ scopeLabels[mem.scope] || mem.scope }}
             </span>
             <span class="tag tier-tag">{{ tierLabels[mem.tier] || mem.tier }}</span>
+            <span class="tag status-tag" :style="{ color: statusColors[mem.status] || '#aaa' }">{{ mem.status }}</span>
             <span class="tag confidence-tag">{{ Math.round(mem.confidence * 100) }}%</span>
           </div>
         </div>
@@ -161,7 +293,29 @@ function truncate(s: string, maxLen: number): string {
         <div v-if="expandedId === mem.id" class="memory-card-detail">
           <div class="detail-section">
             <h4>Full Content</h4>
-            <pre class="detail-content">{{ mem.content }}</pre>
+            <div v-if="editingId === mem.id" class="edit-form">
+              <textarea v-model="editContent" class="edit-textarea" rows="5"></textarea>
+              <div class="edit-controls">
+                <label class="edit-label">Confidence</label>
+                <input
+                  v-model.number="editConfidence"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  class="edit-number"
+                />
+                <select v-model="editStatus" class="edit-select">
+                  <option value="active">active</option>
+                  <option value="archived">archived</option>
+                  <option value="pending">pending</option>
+                  <option value="deprecated">deprecated</option>
+                </select>
+                <button class="btn-save" @click="commitEdit(mem)">Save</button>
+                <button class="btn-cancel" @click="cancelEdit">Cancel</button>
+              </div>
+            </div>
+            <pre v-else class="detail-content">{{ mem.content }}</pre>
           </div>
 
           <div class="detail-meta">
@@ -188,6 +342,13 @@ function truncate(s: string, maxLen: number): string {
             <div class="meta-row">
               <span class="meta-label">Access Count:</span>
               <span class="meta-value">{{ mem.access_count }}</span>
+            </div>
+            <div class="meta-row" v-if="mem.embedding_dimensions || mem.embedding_model">
+              <span class="meta-label">Embedding:</span>
+              <span class="meta-value">
+                {{ mem.embedding_dimensions || '?' }} dims
+                <span v-if="mem.embedding_model">({{ mem.embedding_model }})</span>
+              </span>
             </div>
             <div class="meta-row" v-if="mem.promotion_reason">
               <span class="meta-label">Promotion:</span>
@@ -225,16 +386,49 @@ function truncate(s: string, maxLen: number): string {
                 {{ scopeLabels[scope] }}
               </button>
             </div>
-            <button
-              @click="handleDelete(mem)"
-              :class="['btn-delete', { confirm: deleteConfirm === mem.id }]"
-            >
-              {{ deleteConfirm === mem.id ? '⚠️ Confirm Delete' : '🗑 Delete' }}
-            </button>
+            <div class="action-group">
+              <button class="btn-edit" @click="startEdit(mem)">✎ Edit</button>
+              <button class="btn-embed" @click="handleEmbed(mem)">⚡ Embed</button>
+              <button
+                @click="handleDelete(mem)"
+                :class="['btn-delete', { confirm: deleteConfirm === mem.id }]"
+              >
+                {{ deleteConfirm === mem.id ? '⚠️ Confirm Delete' : '🗑 Delete' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Pagination -->
+    <div v-if="memories.length > 0" class="memory-pagination">
+      <button
+        class="page-btn"
+        :disabled="!pagination.hasPrev"
+        @click="prevPage"
+      >
+        ← Prev
+      </button>
+      <span class="page-info">
+        {{ pagination.offset + 1 }}–{{ pagination.offset + memories.length }} of {{ pagination.total }}
+      </span>
+      <button
+        class="page-btn"
+        :disabled="!pagination.hasNext"
+        @click="nextPage"
+      >
+        Next →
+      </button>
+    </div>
+
+    <!-- Create dialog -->
+    <MemoryCreateDialog
+      :visible="showCreateDialog"
+      :project-id="filter.project"
+      @close="showCreateDialog = false"
+      @create="handleCreate"
+    />
   </div>
 </template>
 
@@ -284,8 +478,9 @@ function truncate(s: string, maxLen: number): string {
 .memory-filters {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .filter-select {
@@ -303,17 +498,68 @@ function truncate(s: string, maxLen: number): string {
   border-color: #3498db;
 }
 
-.btn-refresh {
-  padding: 6px 10px;
+.btn-refresh,
+.btn-create {
+  padding: 6px 12px;
   background: #2a2a2a;
   border: 1px solid #444;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  color: #ddd;
 }
 
-.btn-refresh:hover {
+.btn-refresh:hover,
+.btn-create:hover {
   background: #3a3a3a;
+  color: #fff;
+}
+
+.btn-create {
+  background: #2a3a2a;
+  border-color: #3a5a3a;
+  color: #7fbf7f;
+}
+
+.btn-create:hover {
+  background: #3a5a3a;
+  color: #fff;
+}
+
+.type-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.type-chip {
+  padding: 4px 10px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 12px;
+  color: #aaa;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: capitalize;
+}
+
+.type-chip:hover {
+  border-color: #666;
+  color: #ddd;
+}
+
+.type-chip.active {
+  background: #4a9eff;
+  border-color: #4a9eff;
+  color: #fff;
 }
 
 .memory-error {
@@ -374,6 +620,11 @@ function truncate(s: string, maxLen: number): string {
 
 .memory-card.expanded {
   border-color: #3498db;
+}
+
+.memory-card.selected {
+  border-color: #f1c40f;
+  box-shadow: 0 0 0 1px #f1c40f33;
 }
 
 .memory-card-header {
@@ -439,6 +690,11 @@ function truncate(s: string, maxLen: number): string {
   border: 1px solid #555;
 }
 
+.status-tag {
+  background: #333;
+  border: 1px solid #555;
+}
+
 .confidence-tag {
   background: #333;
   color: #f1c40f;
@@ -476,6 +732,84 @@ function truncate(s: string, maxLen: number): string {
   overflow-y: auto;
 }
 
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.edit-textarea {
+  background: #111;
+  color: #ddd;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  border: 1px solid #444;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.edit-textarea:focus {
+  border-color: #4a9eff;
+}
+
+.edit-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.edit-label {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.edit-number,
+.edit-select {
+  padding: 5px 8px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #ddd;
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.edit-number {
+  width: 70px;
+}
+
+.btn-save,
+.btn-cancel {
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-save {
+  background: #4a9eff;
+  color: #fff;
+}
+
+.btn-save:hover {
+  background: #3a8eef;
+}
+
+.btn-cancel {
+  background: #333;
+  color: #ccc;
+}
+
+.btn-cancel:hover {
+  background: #444;
+  color: #fff;
+}
+
 .detail-meta {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -510,7 +844,8 @@ function truncate(s: string, maxLen: number): string {
   gap: 12px;
 }
 
-.scope-change-group {
+.scope-change-group,
+.action-group {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -547,15 +882,43 @@ function truncate(s: string, maxLen: number): string {
   cursor: default;
 }
 
+.btn-edit,
+.btn-embed,
 .btn-delete {
-  padding: 6px 14px;
-  background: #2a1a1a;
-  border: 1px solid #5a2a2a;
+  padding: 6px 12px;
   border-radius: 4px;
-  color: #ff6b6b;
   font-size: 0.8rem;
   cursor: pointer;
   transition: all 0.2s;
+  border: none;
+}
+
+.btn-edit {
+  background: #2a2a3a;
+  border: 1px solid #3a3a5a;
+  color: #9f9fff;
+}
+
+.btn-edit:hover {
+  background: #3a3a5a;
+  color: #fff;
+}
+
+.btn-embed {
+  background: #2a2a2a;
+  border: 1px solid #555;
+  color: #f1c40f;
+}
+
+.btn-embed:hover {
+  background: #3a3a2a;
+  border-color: #f1c40f;
+}
+
+.btn-delete {
+  background: #2a1a1a;
+  border: 1px solid #5a2a2a;
+  color: #ff6b6b;
 }
 
 .btn-delete:hover {
@@ -573,5 +936,41 @@ function truncate(s: string, maxLen: number): string {
 @keyframes pulse {
   from { opacity: 0.8; }
   to { opacity: 1; }
+}
+
+.memory-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #333;
+}
+
+.page-btn {
+  padding: 6px 14px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #ddd;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 0.85rem;
+  color: #888;
 }
 </style>

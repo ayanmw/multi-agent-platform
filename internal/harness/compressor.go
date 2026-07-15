@@ -11,10 +11,14 @@
 //   - Persist: summary as a session-scoped consolidated memory
 //   - Replace: old session_messages are deleted; summary is injected as a system message
 //
-// Phase 6+ will add LLM-based summarization for higher-quality compression.
+// Phase 6-F: per-turn summarization delegates to a LLMSummarizer (which
+//
+//	falls back to the legacy keyword implementation when the LLM call
+//	fails).
 package harness
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +31,8 @@ import (
 // when thresholds are exceeded. It keeps the most recent N turns intact and
 // summarizes older turns into memory records.
 type ContextCompressor struct {
-	db CompressorDB
+	db         CompressorDB
+	summarizer LLMSummarizer
 }
 
 // CompressorDB is the minimal DB interface needed by the compressor.
@@ -58,8 +63,10 @@ type CompressResult struct {
 }
 
 // NewContextCompressor creates a new ContextCompressor backed by the given DB.
-func NewContextCompressor(database CompressorDB) *ContextCompressor {
-	return &ContextCompressor{db: database}
+// summarizer is consulted for every per-turn summary; if nil the compressor
+// falls back to its own keyword implementation to preserve Phase 5-B behavior.
+func NewContextCompressor(database CompressorDB, summarizer LLMSummarizer) *ContextCompressor {
+	return &ContextCompressor{db: database, summarizer: summarizer}
 }
 
 const (
@@ -132,10 +139,19 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 	}
 
 	// Generate a per-turn summary for each older turn.
+	// Phase 6-F: prefer LLMSummarizer (which falls back to keyword internally);
+	// if no summarizer is configured we use the legacy keyword path directly.
 	var turnSummaries []string
+	ctx := context.Background()
 	for turn := 0; turn < cutoffTurn; turn++ {
 		if msgs, ok := oldMessagesByTurn[turn]; ok {
-			summary := cc.generateTurnSummary(turn, msgs)
+			var summary string
+			if cc.summarizer != nil {
+				summary, _ = cc.summarizer.SummarizeTurn(ctx, turn, msgs)
+			}
+			if summary == "" {
+				summary = cc.generateTurnSummary(turn, msgs)
+			}
 			turnSummaries = append(turnSummaries, summary)
 		}
 	}
@@ -203,7 +219,8 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 }
 
 // generateTurnSummary creates a keyword-based summary for a single turn.
-// Phase 5-B does not call the LLM; Phase 6+ will replace this with LLM-based summarization.
+// Phase 6-F: kept as the legacy fallback path; the public entry point for
+// the keyword summarization interface is SummarizeTurn below.
 func (cc *ContextCompressor) generateTurnSummary(turnIndex int, messages []db.SessionMessageRecord) string {
 	var userInput, finalAnswer string
 	toolCount := 0

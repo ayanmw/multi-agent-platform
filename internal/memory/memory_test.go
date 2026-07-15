@@ -20,11 +20,9 @@ func approxEq(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 // ============================================================================
 
 func TestCosineSimilarity(t *testing.T) {
-	// 注意：源码 CosineSimilarity 的分母用了 magA*magB（平方和乘积），
-	// 而标准余弦相似度应为 sqrt(magA)*sqrt(magB)（模的乘积）。
-	// 这导致任何非单位向量的相似度被系统性低估（BUG）。
-	// 单位向量、正交向量、反向向量因平方和恰好=1 而不受影响，结果正确。
-	// 下方 buggy 用例用 t.Skip 记录该 bug；修复后去掉 skip 即可自动验证。
+	// CosineSimilarity 实现标准余弦公式：dot(a,b) / (||a|| * ||b||)。
+	// 单位向量因 ||v||=1 而行为退化为 dot(a,b)；非单位向量也按模长归一化。
+	// 下表覆盖单位向量、正交向量、反向向量、缩放向量、非整角向量及各种边界。
 	cases := []struct {
 		name string
 		a, b []float32
@@ -52,12 +50,33 @@ func TestCosineSimilarity(t *testing.T) {
 	}
 }
 
-// TestCosineSimilarityBugDemonstration 验证 identical 非单位向量按定义返回 1.0
-func TestCosineSimilarityBugDemonstration(t *testing.T) {
-	a := []float32{1, 2, 3}
-	got := CosineSimilarity(a, a)
-	if !approxEq(got, 1.0) {
-		t.Errorf("CosineSimilarity([1,2,3],[1,2,3]) = %f, want 1.0（identical vectors）", got)
+// TestCosineSimilarityRegression — 回归测试：覆盖三组非单位向量，
+// 验证 CosineSimilarity 真的按标准余弦公式返回正确值（而非 sqrt 误算）。
+//
+// 期望值推导：
+//   [1,2,3] 与 [1,2,3]：dot=14, ||a||=||b||=sqrt(14) → 1.0
+//   [1,2,3] 与 [4,5,6]：dot=32, ||a||=sqrt(14), ||b||=sqrt(77) → 32/sqrt(1078) ≈ 0.9746318462
+//   [1,2,3] 与 [-1,-2,-3]：dot=-14, ||a||=||b||=sqrt(14) → -1.0
+func TestCosineSimilarityRegression(t *testing.T) {
+	// 32 / sqrt(14*77) 不是 Go 常量（math.Sqrt 非 const 函数），所以在运行时计算。
+	want123v456 := 32.0 / math.Sqrt(14.0*77.0)
+
+	cases := []struct {
+		name string
+		a, b []float32
+		want float64
+	}{
+		{"identical non-unit [1,2,3] vs [1,2,3]", []float32{1, 2, 3}, []float32{1, 2, 3}, 1.0},
+		{"non-unit [1,2,3] vs [4,5,6]", []float32{1, 2, 3}, []float32{4, 5, 6}, want123v456},
+		{"opposite non-unit [1,2,3] vs [-1,-2,-3]", []float32{1, 2, 3}, []float32{-1, -2, -3}, -1.0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := CosineSimilarity(c.a, c.b)
+			if !approxEq(got, c.want) {
+				t.Errorf("CosineSimilarity(%v, %v) = %.10f, want %.10f", c.a, c.b, got, c.want)
+			}
+		})
 	}
 }
 

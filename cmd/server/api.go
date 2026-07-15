@@ -2,10 +2,12 @@ package main
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,10 +20,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/memory"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/anmingwei/multi-agent-platform/pkg/event"
 	"github.com/google/uuid"
 )
 
@@ -464,8 +468,9 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 // === Memory API (Phase 6) ===
 
-// handleListMemories returns memory records filtered by scope, tier, and project.
-// GET /api/memories?scope=session&tier=consolidated&project=default
+// handleListMemories returns memory records filtered by scope, tier, type,
+// status, and project with pagination.
+// GET /api/memories?scope=session&tier=consolidated&type=rule&status=active&project=default&limit=20&offset=0
 func handleListMemories(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
@@ -473,29 +478,241 @@ func handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	scope := r.URL.Query().Get("scope")
 	tier := r.URL.Query().Get("tier")
+	memType := r.URL.Query().Get("type")
+	status := r.URL.Query().Get("status")
 
-	var memories []db.MemoryRecord
-	var err error
-	switch {
-	case scope != "" && tier != "":
-		memories, err = db.QueryMemoriesByScopeAndTier(projectID, scope, tier)
-	case scope != "":
-		memories, err = db.QueryMemoriesByScope(projectID, scope)
-	case tier != "":
-		memories, err = db.QueryMemoriesByTier(projectID, tier)
-	default:
-		memories, err = db.QueryMemoriesByProject(projectID)
+	limit := 20
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if n, err := parseInt(limitStr); err == nil && n > 0 {
+			limit = n
+		}
 	}
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if n, err := parseInt(offsetStr); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	items, total, err := db.ListMemoriesPaged(projectID, scope, tier, status, memType, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if memories == nil {
-		memories = []db.MemoryRecord{}
+	if items == nil {
+		items = []db.MemoryRecord{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(memories)
+	json.NewEncoder(w).Encode(map[string]any{
+		"items":  items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+// memoryCreateRequest is the JSON body for POST /api/memories.
+type memoryCreateRequest struct {
+	ProjectID  string   `json:"project_id"`
+	Scope      string   `json:"scope"`      // session | project | global
+	SessionID  string   `json:"session_id"`
+	Type       string   `json:"type"`       // preference | rule | fact | lesson | reflection
+	Tier       string   `json:"tier"`       // consolidated | semantic
+	Content    string   `json:"content"`
+	Confidence float64  `json:"confidence"`
+	Status     string   `json:"status"`
+	Tags       []string `json:"tags,omitempty"` // only used in metadata, may be ignored
+}
+
+// memoryUpdateRequest is the JSON body for PUT /api/memories/{id}.
+type memoryUpdateRequest struct {
+	Content    string  `json:"content"`
+	Confidence float64 `json:"confidence"`
+	Status     string  `json:"status"`
+}
+
+// handleMemoryByID handles GET / PUT / DELETE /api/memories/{id} and
+// POST /api/memories/{id}/embed.
+func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+	switch r.Method {
+	case http.MethodGet:
+		record, err := db.QueryMemoryByID(id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "memory not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(record)
+
+	case http.MethodPut:
+		var req memoryUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Content == "" && req.Status == "" && req.Confidence == 0 {
+			http.Error(w, "at least one field must be provided", http.StatusBadRequest)
+			return
+		}
+		// Verify the memory exists before mutating.
+		existing, err := db.QueryMemoryByID(id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "memory not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fieldsChanged := []string{}
+		if req.Content != "" && req.Content != existing.Content {
+			if err := db.UpdateMemoryContent(id, req.Content); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fieldsChanged = append(fieldsChanged, "content")
+		}
+		if req.Confidence != 0 && req.Confidence != existing.Confidence {
+			if err := db.UpdateMemoryConfidence(id, req.Confidence); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fieldsChanged = append(fieldsChanged, "confidence")
+		}
+		if req.Status != "" && req.Status != existing.Status {
+			if err := db.UpdateMemoryStatus(id, req.Status); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fieldsChanged = append(fieldsChanged, "status")
+		}
+		record, err := db.QueryMemoryByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if hub != nil {
+			hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
+				"memory_id":      id,
+				"fields_changed": fieldsChanged,
+			}))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(record)
+
+	case http.MethodDelete:
+		// Reuse the existing delete handler logic so we don't diverge, then
+		// broadcast the deletion event with the deleted memory details.
+		record, lookupErr := db.QueryMemoryByID(id)
+		if lookupErr != nil {
+			if lookupErr == sql.ErrNoRows {
+				http.Error(w, "memory not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, lookupErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		handleDeleteMemory(w, r, id)
+		if hub != nil {
+			hub.SendEvent(event.NewEvent(event.EventMemoryDeleted, "", "server", 0, map[string]any{
+				"memory_id": id,
+				"tier":      record.Tier,
+				"scope":     record.Scope,
+			}))
+		}
+
+	default:
+		http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleMemoryEmbed handles POST /api/memories/{id}/embed. It embeds the
+// memory content and stores the vector in the configured VectorStore.
+func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	record, err := db.QueryMemoryByID(id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	vec, err := embedProvider.Embed(record.Content)
+	if err != nil {
+		// Degrade gracefully: the memory exists but its embedding could not be
+		// computed. Return a 422 so the frontend notices without retry storms.
+		log.Printf("[API] embed memory %s failed: %v", id, err)
+		http.Error(w, "embedding failed: "+err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	model := resolveProviderNameForAPI(embedProvider)
+	dims := len(vec)
+	metadata := map[string]any{
+		"memory_id": record.ID,
+		"type":      record.Type,
+		"tier":      record.Tier,
+		"scope":     record.Scope,
+	}
+	if err := vectorStore.Upsert(id, vec, metadata); err != nil {
+		log.Printf("[API] vector store upsert for memory %s failed: %v", id, err)
+		http.Error(w, "vector store upsert failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	encoded, err := encodeFloat32ToBytes(vec)
+	if err != nil {
+		log.Printf("[API] encode embedding for memory %s failed: %v", id, err)
+	} else {
+		if err := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, dims); err != nil {
+			log.Printf("[API] persist embedding for memory %s failed: %v", id, err)
+			// Embedding is in VectorStore already; DB persistence is best-effort.
+		}
+	}
+
+	if hub != nil {
+		hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
+			"memory_id":       id,
+			"fields_changed":  []string{"embedding_dims", "embedding_model"},
+			"embedding_dims":  dims,
+			"embedding_model": model,
+		}))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"memory_id": id,
+		"dims":      dims,
+		"model":     model,
+	})
+}
+
+// resolveProviderNameForAPI returns a human-readable model name for an
+// embedding provider. Falls back to "unknown" when the provider is nil.
+func resolveProviderNameForAPI(provider llm.EmbeddingProvider) string {
+	if provider == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%T", provider)
+}
+
+// encodeFloat32ToBytes serializes a []float32 vector into a little-endian
+// byte slice suitable for the memory_embeddings table.
+func encodeFloat32ToBytes(vec []float32) ([]byte, error) {
+	buf := make([]byte, 4*len(vec))
+	for i, v := range vec {
+		bits := math.Float32bits(v)
+		binary.LittleEndian.PutUint32(buf[i*4:], bits)
+	}
+	return buf, nil
 }
 
 // handleUpdateMemoryScope updates the scope (and optional session_id) of a memory.
@@ -545,7 +762,8 @@ func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) 
 // DELETE /api/memories/{id}
 func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 	// Verify the memory exists before attempting to delete.
-	if _, err := db.QueryMemoryByID(id); err != nil {
+	record, err := db.QueryMemoryByID(id)
+	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -560,8 +778,118 @@ func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"id":      id,
+		"tier":    record.Tier,
+		"scope":   record.Scope,
 		"message": "Memory deleted successfully",
 	})
+}
+
+// handleCreateMemory creates a new memory from a user request.
+// POST /api/memories
+func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req memoryCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Content == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+	if req.Scope == "" {
+		req.Scope = "project"
+	}
+	if req.Scope != "session" && req.Scope != "project" && req.Scope != "global" {
+		http.Error(w, "scope must be session, project, or global", http.StatusBadRequest)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "fact"
+	}
+	if !db.IsValidMemoryType(req.Type) {
+		http.Error(w, "invalid memory type: "+req.Type, http.StatusBadRequest)
+		return
+	}
+	if req.Tier == "" {
+		req.Tier = "consolidated"
+	}
+	if req.Tier != "consolidated" && req.Tier != "semantic" {
+		http.Error(w, "tier must be consolidated or semantic", http.StatusBadRequest)
+		return
+	}
+	if req.ProjectID == "" {
+		req.ProjectID = "default"
+	}
+	if req.Status == "" {
+		req.Status = "active"
+	}
+	if req.Confidence == 0 {
+		req.Confidence = 1.0
+	}
+	now := time.Now()
+	id := uuid.New().String()
+	record := db.MemoryRecord{
+		ID:         id,
+		ProjectID:  req.ProjectID,
+		Scope:      req.Scope,
+		SessionID:  req.SessionID,
+		Type:       req.Type,
+		Tier:       req.Tier,
+		Content:    req.Content,
+		Confidence: req.Confidence,
+		Status:     req.Status,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := db.InsertMemory(record); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Best-effort embedding: do not fail the create API if embedding/vector
+	// persistence is unavailable.
+	if vectorStore != nil && embedProvider != nil {
+		if vec, err := embedProvider.Embed(record.Content); err == nil {
+			metadata := map[string]any{
+				"memory_id": record.ID,
+				"type":      record.Type,
+				"tier":      record.Tier,
+				"scope":     record.Scope,
+			}
+			if upsertErr := vectorStore.Upsert(id, vec, metadata); upsertErr != nil {
+				log.Printf("[API] vector upsert for new memory %s failed: %v", id, upsertErr)
+			}
+			if encoded, encErr := encodeFloat32ToBytes(vec); encErr == nil {
+				model := resolveProviderNameForAPI(embedProvider)
+				if dbErr := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, len(vec)); dbErr != nil {
+					log.Printf("[API] persist embedding for new memory %s failed: %v", id, dbErr)
+				}
+			}
+		} else {
+			log.Printf("[API] embed new memory %s failed: %v", id, err)
+		}
+	}
+	if hub != nil {
+		hub.SendEvent(event.NewEvent(event.EventMemoryCreated, "", "server", 0, map[string]any{
+			"memory_id": record.ID,
+			"project_id": record.ProjectID,
+			"scope":      record.Scope,
+			"type":       record.Type,
+			"tier":       record.Tier,
+			"source":     "user",
+		}))
+	}
+	created, err := db.QueryMemoryByID(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(created)
 }
 
 // handlePromoteMemories triggers the promotion pipeline manually.
@@ -587,6 +915,50 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(report)
+}
+
+// handleMemoryStats returns aggregate memory statistics for a project.
+// GET /api/memories/stats?project=default
+func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	projectID := r.URL.Query().Get("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+	grouped, err := db.CountMemoriesGrouped(projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if grouped == nil {
+		grouped = map[string]int{}
+	}
+	// Add a computed total field for convenience.
+	grouped["total"] = 0
+	for k, v := range grouped {
+		if strings.HasPrefix(k, "tier_") {
+			grouped["total"] += v
+		}
+	}
+
+	top, err := db.TopAccessedMemories(projectID, 10)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if top == nil {
+		top = []db.MemoryRecord{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"project_id": projectID,
+		"counts":     grouped,
+		"top_accessed": top,
+	})
 }
 
 // handleRecallPreview previews what memories would be recalled for a given task.
@@ -948,7 +1320,9 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	}
 
 	// 上下文压缩：在创建新 Task 前检查是否需要压缩
-	compressor := harness.NewContextCompressor(memDB)
+	// Phase 6-F: pass the same LLM summarizer used by Heartbeat so summaries are
+	// high quality. nil summarizer falls back to keyword path inside Compressor.
+	compressor := harness.NewContextCompressor(memDB, nil)
 	if result, err := compressor.CompressIfNeeded(id); err != nil {
 		log.Printf("[SessionChat] Compression failed: %v", err)
 	} else if result.Compressed {

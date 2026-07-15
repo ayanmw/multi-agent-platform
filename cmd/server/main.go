@@ -46,7 +46,8 @@ func main() {
 
 	// First, register the WebSocket control handler. It uses the package-level
 	// cancelRegistry so WebSocket control messages can cancel running tasks.
-	var _ = cancelRegistry
+	// (sync.Map carries a noCopy lock; just take its address for the side effect.)
+	_ = &cancelRegistry
 
 	// Phase 6-D: Initialize structured logging level from configuration.
 	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(os.Getenv("LOG_LEVEL")))
@@ -160,15 +161,43 @@ func main() {
 
 	// Initialize Memory infrastructure — Heartbeat for episode consolidation
 	memDB := &harness.SqliteMemoryDB{}
-	heartbeat := harness.NewHeartbeat(memDB)
+	// Phase 6-F: build an LLM-driven summarizer that falls back to the
+	// existing keyword path on failure. The provider reuses the engine's
+	// CreateProviderFromConfig (real LLM in real mode, mock in mock mode).
+	summarizerProvider, _ := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, "memory-summarizer")
+	keywordAdapter := harness.NewKeywordAdapter(
+		nil,
+		func(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error) {
+			return harness.BuildKeywordEpisodeSummary(memDB, taskID)
+		},
+	)
+	var summarizer harness.LLMSummarizer
+	if summarizerProvider != nil {
+		summarizer = harness.NewLLMSummarizerImpl(summarizerProvider, cfg.LLMModel, keywordAdapter, nil)
+	}
+	heartbeat := harness.NewHeartbeat(memDB, summarizer)
 	go heartbeat.Start(context.Background())
 	log.Println("Memory Heartbeat started (5min interval, adaptive)")
 
 	// Initialize MemoryRecall with vector store for semantic memory recall.
-	// The local embedding provider (TF-IDF/one-hot hash) and in-memory vector
-	// store enable cosine-similarity search over consolidated and semantic memories.
+	// The local embedding provider (TF-IDF/one-hot hash) and SQLite-backed
+	// vector store enable cosine-similarity search over consolidated and
+	// semantic memories. Vector embeddings are persisted to the
+	// memory_embeddings table (v16 migration) so the in-memory index can
+	// be rebuilt at startup via SqliteVectorStore.Reload().
 	embedProvider := llm.NewLocalEmbeddingProvider(2048)
-	vectorStore := memory.NewInMemoryVectorStore(embedProvider)
+	var vectorStore memory.VectorStore
+	if db.DB != nil {
+		vs, err := memory.NewSqliteVectorStore(db.DB, embedProvider)
+		if err != nil {
+			observability.DefaultLogger.Warn("memory", "failed to create sqlite vector store, falling back to in-memory", map[string]any{"error": err.Error()})
+			vectorStore = memory.NewInMemoryVectorStore(embedProvider)
+		} else {
+			vectorStore = vs
+		}
+	} else {
+		vectorStore = memory.NewInMemoryVectorStore(embedProvider)
+	}
 	memRecall := harness.NewMemoryRecallWithVectorStore(memDB, embedProvider, vectorStore)
 
 	// Build the vector index from existing memories (best-effort — failures
@@ -922,18 +951,26 @@ func main() {
 	})
 
 	// Memory API (Phase 6 / Phase 5-B)
-	// GET /api/memories?scope=...&tier=...&project=... — list memories
-	// PUT /api/memories/{id}/scope — update memory scope
+	// GET  /api/memories?scope=...&tier=...&type=...&status=...&project=...&limit=...&offset=...
+	// POST /api/memories — create memory
+	// GET  /api/memories/{id} — get memory
+	// PUT  /api/memories/{id} — update memory content/confidence/status
 	// DELETE /api/memories/{id} — delete memory
+	// PUT  /api/memories/{id}/scope — update memory scope
+	// POST /api/memories/{id}/embed — generate and store embedding
+	// GET  /api/memories/stats — project memory statistics
 	// POST /api/memories/promote — manually trigger promotion
-	// GET /api/memories/recall?task=xxx&project=default&max=3 — preview what would be recalled
+	// GET  /api/memories/recall?task=xxx&project=default&max=3 — preview recall
 	memGateway := harness.NewPromotionGate(memDB)
 	http.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
+		switch r.Method {
+		case http.MethodGet:
+			handleListMemories(w, r)
+		case http.MethodPost:
+			handleCreateMemory(w, r, hub, vectorStore, embedProvider)
+		default:
+			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		}
-		handleListMemories(w, r)
 	})
 	http.HandleFunc("/api/memories/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/memories/")
@@ -955,7 +992,16 @@ func main() {
 			handleRecallPreview(w, r, memRecall)
 			return
 		}
-		// /api/memories/{id}/scope or /api/memories/{id}
+		// GET /api/memories/stats?project=default
+		if path == "stats" {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET only", http.StatusMethodNotAllowed)
+				return
+			}
+			handleMemoryStats(w, r)
+			return
+		}
+		// /api/memories/{id}/scope or /api/memories/{id} or /api/memories/{id}/embed
 		parts := strings.Split(path, "/")
 		id := parts[0]
 		if id == "" {
@@ -965,8 +1011,10 @@ func main() {
 		switch {
 		case len(parts) == 2 && parts[1] == "scope" && r.Method == http.MethodPut:
 			handleUpdateMemoryScope(w, r, id)
-		case len(parts) == 1 && r.Method == http.MethodDelete:
-			handleDeleteMemory(w, r, id)
+		case len(parts) == 2 && parts[1] == "embed" && r.Method == http.MethodPost:
+			handleMemoryEmbed(w, r, id, hub, vectorStore, embedProvider)
+		case len(parts) == 1:
+			handleMemoryByID(w, r, id, hub, vectorStore, embedProvider)
 		default:
 			http.Error(w, "unsupported memory operation", http.StatusMethodNotAllowed)
 		}

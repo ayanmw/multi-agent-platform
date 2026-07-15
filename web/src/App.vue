@@ -34,6 +34,8 @@ import TurnList from './components/TurnList.vue'
 import AgentConfig from './components/AgentConfig.vue'
 import ProjectConfig from './components/ProjectConfig.vue'
 import MemoryBrowser from './components/MemoryBrowser.vue'
+import RAGPreviewPanel from './components/RAGPreviewPanel.vue'
+import MemoryEventsTimeline from './components/MemoryEventsTimeline.vue'
 import CaseCard from './components/CaseCard.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
 import Toast from './components/Toast.vue'
@@ -44,6 +46,7 @@ import ModelPricesDialog from './components/ModelPricesDialog.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
+import { useMemoryEvents } from './composables/useMemoryEvents'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
@@ -161,10 +164,14 @@ const autoApprovePolicy = ref(false)
 // Project config view toggle
 const showProjectConfig = ref(false)
 
-/** Whether the Memory Browser overlay is open.
- *  Unlike showProjectConfig, this renders as a modal layer on top of the
- *  existing main content so the session/task view remains interactive underneath. */
+/** Singleton memory event listener + timeline state for Phase 6-F */
+const { events: memoryEvents, clear: clearMemoryEvents } = useMemoryEvents()
+
+/** Whether the Memory overlay is open */
 const showMemoryBrowser = ref(false)
+
+/** Active tab inside the memory overlay: 'browser' | 'rag' | 'events' */
+const memoryTab = ref<'browser' | 'rag' | 'events'>('browser')
 
 /** Toggle the Memory overlay open/closed without replacing main content. */
 function toggleMemoryBrowser() {
@@ -174,6 +181,24 @@ function toggleMemoryBrowser() {
 /** Close the Memory overlay and return to the previous view. */
 function closeMemoryBrowser() {
   showMemoryBrowser.value = false
+}
+
+/** Switch memory overlay tab and auto-scroll to selected memory from timeline. */
+function switchMemoryTab(tab: 'browser' | 'rag' | 'events') {
+  memoryTab.value = tab
+}
+
+function handleTimelineMemorySelect(id: string) {
+  memoryTab.value = 'browser'
+  // Let browser render then scroll to the selected card
+  nextTick(() => {
+    const el = document.getElementById(`memory-${id}`) as HTMLElement | null
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('timeline-highlight')
+      setTimeout(() => el.classList.remove('timeline-highlight'), 2000)
+    }
+  })
 }
 
 // Collapsed state for project groups in sidebar
@@ -461,6 +486,8 @@ const projectGroups = computed<ProjectGroup[]>(() => {
 // Connect WebSocket on mount, load projects and sessions
 onMounted(async () => {
   connect()
+  // Phase 6-F: subscribe memory events singleton before any component renders
+  useMemoryEvents()
   console.log('[App] onMounted: loading projects...')
   await loadProjects().catch(err => console.error('Failed to load projects:', err))
   console.log('[App] onMounted: projects loaded, count:', projects.value.length)
@@ -995,17 +1022,62 @@ function formatShortTime(ts: number): string {
       <!-- Project Config view — replaces main content when active -->
       <ProjectConfig v-else-if="showProjectConfig" @back="handleProjectConfigBack" />
 
-      <!-- Memory Browser overlay — rendered on top of the normal main content.
-           The main view stays mounted underneath, so sidebar navigation continues
-           to work while the overlay is open. -->
+      <!-- Memory overlay with tabbed Browser / RAG / Events panels -->
       <div v-if="showMemoryBrowser" class="memory-overlay" @click.self="closeMemoryBrowser">
         <div class="memory-overlay-panel">
           <div class="memory-overlay-header">
-            <button class="memory-close-btn" @click="closeMemoryBrowser" title="Close Memory Browser">
-              × Close
-            </button>
+            <div class="memory-tabs">
+              <button
+                :class="['memory-tab', { active: memoryTab === 'browser' }]"
+                @click="switchMemoryTab('browser')"
+              >
+                🧠 Browser
+              </button>
+              <button
+                :class="['memory-tab', { active: memoryTab === 'rag' }]"
+                @click="switchMemoryTab('rag')"
+              >
+                🔍 RAG
+              </button>
+              <button
+                :class="['memory-tab', { active: memoryTab === 'events' }]"
+                @click="switchMemoryTab('events')"
+              >
+                📡 Events
+                <span v-if="memoryEvents.length > 0" class="memory-tab-badge">{{ memoryEvents.length }}</span>
+              </button>
+            </div>
+            <div class="memory-header-actions">
+              <button
+                v-if="memoryTab === 'events'"
+                class="memory-action-btn"
+                @click="clearMemoryEvents"
+              >
+                Clear
+              </button>
+              <button class="memory-close-btn" @click="closeMemoryBrowser" title="Close Memory Browser">
+                × Close
+              </button>
+            </div>
           </div>
-          <MemoryBrowser class="memory-overlay-browser" />
+          <div class="memory-overlay-body">
+            <MemoryBrowser
+              v-if="memoryTab === 'browser'"
+              class="memory-overlay-browser"
+              @select-memory="handleTimelineMemorySelect"
+            />
+            <RAGPreviewPanel
+              v-else-if="memoryTab === 'rag'"
+              :project-id="activeProjectId"
+              class="memory-overlay-rag"
+            />
+            <MemoryEventsTimeline
+              v-else-if="memoryTab === 'events'"
+              :events="memoryEvents"
+              class="memory-overlay-events"
+              @select-memory="handleTimelineMemorySelect"
+            />
+          </div>
         </div>
       </div>
 
@@ -1777,12 +1849,95 @@ function formatShortTime(ts: number): string {
 
 .memory-overlay-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-primary, #333);
   flex-shrink: 0;
   background: var(--bg-secondary, #1e1e22);
+}
+
+.memory-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.memory-tab {
+  padding: 6px 12px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #aaa;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-tab:hover {
+  background: #3a3a3a;
+  color: #ddd;
+}
+
+.memory-tab.active {
+  background: #4a9eff;
+  border-color: #4a9eff;
+  color: #fff;
+}
+
+.memory-tab-badge {
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  font-size: 10px;
+}
+
+.memory-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.memory-action-btn {
+  padding: 5px 12px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.memory-action-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.memory-overlay-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-overlay-browser,
+.memory-overlay-rag,
+.memory-overlay-events {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Highlight generated when timeline selects a memory */
+.timeline-highlight {
+  animation: memory-flash 2s ease;
+}
+
+@keyframes memory-flash {
+  0% { background: rgba(241, 196, 15, 0.2); }
+  100% { background: transparent; }
 }
 
 .memory-close-btn {

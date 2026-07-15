@@ -27,6 +27,16 @@ export type EventType =
   | 'system_info'
   | 'system_error'
   | 'session_status'
+  // Memory / RAG events (Phase 6-F)
+  | 'memory_created'
+  | 'memory_updated'
+  | 'memory_deleted'
+  | 'memory_promoted'
+  | 'memory_summarize_started'
+  | 'memory_summarize_completed'
+  | 'memory_summarize_failed'
+  | 'memory_recall_performed'
+  | 'heartbeat_beat'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

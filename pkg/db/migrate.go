@@ -221,6 +221,31 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		Description: "Add workspace_dir and workspace_auto columns to sessions table",
 		SQL:         `ALTER TABLE sessions ADD COLUMN workspace_dir TEXT DEFAULT ''; ALTER TABLE sessions ADD COLUMN workspace_auto BOOLEAN DEFAULT 1`,
 	},
+
+	// v16: Create memory_embeddings table for the SqliteVectorStore (Phase 6-F).
+	//
+	// Decouples vector storage from the memories table itself: embedding rows
+	// live in their own keyed table so that (a) vector I/O can be batched
+	// without scanning the full memories row, (b) swapping the embedding model
+	// only invalidates a subset (filtered by the model column), and (c) the
+	// ON DELETE CASCADE keeps the table consistent when a memory is removed.
+	//
+	// The embedding BLOB is a little-endian float32 serialization (length =
+	// dims * 4 bytes). See pkg/db/memory_embedding.go for the encode/decode
+	// helpers and the design rationale.
+	{
+		Version:     16,
+		Description: "Create memory_embeddings table for SqliteVectorStore persistence",
+		SQL: `CREATE TABLE IF NOT EXISTS memory_embeddings (
+			memory_id  TEXT PRIMARY KEY,
+			embedding  BLOB NOT NULL,
+			model      TEXT NOT NULL,
+			dims       INTEGER NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

@@ -20,8 +20,39 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// MemoryTypes is the allow-list of memory type values accepted by the
+// Memory CRUD API. Keeping the list as a package-level slice lets handlers
+// validate user input without hard-coding strings in multiple files.
+var MemoryTypes = []string{
+	"preference",
+	"rule",
+	"fact",
+	"lesson",
+	"reflection",
+	"session_summary",
+	"heartbeat_state",
+}
+
+// validMemoryTypeSet is a lookup map derived from MemoryTypes for O(1)
+// existence checks in IsValidMemoryType.
+var validMemoryTypeSet = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(MemoryTypes))
+	for _, t := range MemoryTypes {
+		m[t] = struct{}{}
+	}
+	return m
+}()
+
+// IsValidMemoryType reports whether t is a recognized memory type value.
+// It is used by API handlers to reject unknown "type" values early.
+func IsValidMemoryType(t string) bool {
+	_, ok := validMemoryTypeSet[t]
+	return ok
+}
 
 // MemoryRecord mirrors the memories table.
 // It holds either a consolidated episodic summary (tier=consolidated) or a
@@ -310,6 +341,230 @@ func DeleteMemory(id string) error {
 	}
 	_, err := DB.Exec(`DELETE FROM memories WHERE id = ?`, id)
 	return err
+}
+
+// UpdateMemoryContent replaces the content of a memory and bumps updated_at.
+func UpdateMemoryContent(id, content string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	now := time.Now()
+	_, err := DB.Exec(
+		`UPDATE memories SET content = ?, updated_at = ? WHERE id = ?`,
+		content, now, id,
+	)
+	return err
+}
+
+// UpdateMemoryConfidence replaces the confidence score and bumps updated_at.
+func UpdateMemoryConfidence(id string, confidence float64) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	now := time.Now()
+	_, err := DB.Exec(
+		`UPDATE memories SET confidence = ?, updated_at = ? WHERE id = ?`,
+		confidence, now, id,
+	)
+	return err
+}
+
+// CountMemoriesByFilter returns the total number of memory records matching
+// the given filters. Empty strings are treated as "no filter" for that field.
+func CountMemoriesByFilter(projectID, scope, tier, status string) (int, error) {
+	if DB == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	var args []any
+	var conds []string
+	conds = append(conds, "project_id = ?")
+	args = append(args, projectID)
+	if scope != "" {
+		conds = append(conds, "scope = ?")
+		args = append(args, scope)
+	}
+	if tier != "" {
+		conds = append(conds, "tier = ?")
+		args = append(args, tier)
+	}
+	if status != "" {
+		conds = append(conds, "status = ?")
+		args = append(args, status)
+	}
+	where := strings.Join(conds, " AND ")
+	var count int
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM memories WHERE %s`, where)
+	err := DB.QueryRow(query, args...).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// ListMemoriesPaged returns a paginated slice of memory records plus the
+// total matching count. Filters on scope, tier, status, and type are
+// composable; empty strings mean "no filter".
+func ListMemoriesPaged(projectID, scope, tier, status, memType string, limit, offset int) ([]MemoryRecord, int, error) {
+	if DB == nil {
+		return nil, 0, fmt.Errorf("db not initialized")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var args []any
+	var conds []string
+	conds = append(conds, "project_id = ?")
+	args = append(args, projectID)
+	if scope != "" {
+		conds = append(conds, "scope = ?")
+		args = append(args, scope)
+	}
+	if tier != "" {
+		conds = append(conds, "tier = ?")
+		args = append(args, tier)
+	}
+	if status != "" {
+		conds = append(conds, "status = ?")
+		args = append(args, status)
+	}
+	if memType != "" {
+		conds = append(conds, "type = ?")
+		args = append(args, memType)
+	}
+	where := strings.Join(conds, " AND ")
+
+	var total int
+	err := DB.QueryRow(
+		fmt.Sprintf(`SELECT COUNT(*) FROM memories WHERE %s`, where),
+		args...,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := DB.Query(
+		fmt.Sprintf(`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
+			 COALESCE(confidence,1.0), COALESCE(status,'active'),
+			 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
+			 COALESCE(promotion_reason,''),
+			 COALESCE(access_count,0), last_accessed, last_reviewed,
+			 created_at, updated_at
+			 FROM memories WHERE %s ORDER BY updated_at DESC LIMIT ? OFFSET ?`, where),
+		append(args, limit, offset)...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	records, err := scanMemoryRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return records, total, nil
+}
+
+// CountMemoriesGrouped returns aggregate counts grouped by tier, scope, and
+// status. The map keys follow the convention "tier_<value>", "scope_<value>",
+// and "status_<value>" so callers can add more dimensions without collisions.
+// Note: projectID filters the base set; dimensions are counts over that set.
+func CountMemoriesGrouped(projectID string) (map[string]int, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT COALESCE(tier,''), COALESCE(scope,''), COALESCE(status,''), COUNT(*)
+		 FROM memories
+		 WHERE project_id = ?
+		 GROUP BY tier, scope, status`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	grouped := make(map[string]int)
+	for rows.Next() {
+		var tier, scope, status string
+		var count int
+		if err := rows.Scan(&tier, &scope, &status, &count); err != nil {
+			return nil, err
+		}
+		grouped[fmt.Sprintf("tier_%s", tier)] += count
+		grouped[fmt.Sprintf("scope_%s", scope)] += count
+		grouped[fmt.Sprintf("status_%s", status)] += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return grouped, nil
+}
+
+// TopAccessedMemories returns the N most frequently accessed memories for a
+// project, ordered by access_count descending. Ties are broken by updated_at
+// descending so newer memories rank higher.
+func TopAccessedMemories(projectID string, n int) ([]MemoryRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if n <= 0 {
+		n = 10
+	}
+	rows, err := DB.Query(
+		`SELECT id, project_id, scope, session_id, type, tier, content, COALESCE(embedding,''),
+			 COALESCE(confidence,1.0), COALESCE(status,'active'),
+			 COALESCE(source_task_ids,'[]'), COALESCE(source_event_ids,'[]'),
+			 COALESCE(promotion_reason,''),
+			 COALESCE(access_count,0), last_accessed, last_reviewed,
+			 created_at, updated_at
+			 FROM memories
+			 WHERE project_id = ?
+			 ORDER BY access_count DESC, updated_at DESC
+			 LIMIT ?`,
+		projectID, n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanMemoryRows(rows)
+}
+
+// scanMemoryRows scans sql.Rows into a slice of MemoryRecord. It is a local
+// helper private to memory.go so callers within this file avoid duplicating
+// the column list and JSON unmarshalling logic. memory_scope.go uses its own
+// scanMemoryRecords for the same purpose.
+func scanMemoryRows(rows *sql.Rows) ([]MemoryRecord, error) {
+	var records []MemoryRecord
+	for rows.Next() {
+		var r MemoryRecord
+		var embedding []byte
+		var sourceTaskIDsJSON, sourceEventIDsJSON string
+		var lastAccessed, lastReviewed sql.NullTime
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Scope, &r.SessionID, &r.Type, &r.Tier, &r.Content,
+			&embedding, &r.Confidence, &r.Status,
+			&sourceTaskIDsJSON, &sourceEventIDsJSON, &r.PromotionReason,
+			&r.AccessCount, &lastAccessed, &lastReviewed,
+			&r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		r.Embedding = embedding
+		json.Unmarshal([]byte(sourceTaskIDsJSON), &r.SourceTaskIDs)
+		json.Unmarshal([]byte(sourceEventIDsJSON), &r.SourceEventIDs)
+		if lastAccessed.Valid {
+			r.LastAccessed = &lastAccessed.Time
+		}
+		if lastReviewed.Valid {
+			r.LastReviewed = &lastReviewed.Time
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
 }
 
 // InsertMemoryLink creates a relationship between two memory records.

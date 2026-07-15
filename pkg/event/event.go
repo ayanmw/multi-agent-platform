@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+// Memory lifecycle events broadcast over WebSocket. These are produced by the
+// Memory CRUD API handlers so the frontend can keep its cache in sync.
+const (
+	EventMemoryCreated    = "memory_created"
+	EventMemoryUpdated    = "memory_updated"
+	EventMemoryDeleted    = "memory_deleted"
+	EventMemoryPromoted   = "memory_promoted"
+	EventMemoryRecallDone = "memory_recall_performed"
+	EventHeartbeatBeat    = "heartbeat_beat"
+)
+
 // Event represents a structured event sent over WebSocket
 type Event struct {
 	EventID   string                 `json:"event_id"`

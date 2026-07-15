@@ -302,9 +302,9 @@ const activeTaskId = ref<string | null>(null)
 
 **目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理、可观测性
 
-**完成日期**: 2026-07-08
-**Git commit**: `Phase 6-E: auth middleware + RAG memory recall`
-**版本**: v0.6 Alpha
+**完成日期**: 2026-07-15
+**Git commit**: `Phase 6-F: memory type system + CRUD + LLM summarizer + vector persistence + frontend observability`
+**版本**: v0.6.5 Alpha
 
 ### Phase 6-C 交付物（技术债务修复 + 骨架）
 - [x] 多厂商 LLM Provider: AnthropicProvider + DeepSeek reasoning_content + Provider 工厂
@@ -332,6 +332,15 @@ const activeTaskId = ref<string | null>(null)
 - [x] `/api/costs` 查询端点: 按 task_id / session_id / project_id 聚合，从 repository 读取
 - [x] `modelRegistry` 注入 CostTracker: tier / provider / pricing 字段正确填充
 - [x] 验证: `go build ./...`, `go vet ./...` 通过；curl `/healthz`, `/metrics`, `/api/costs` 均返回正确数据；任务运行后 `cost_records` 产生真实记录
+
+### Phase 6-F 交付物（Memory 类型体系 + CRUD + LLM 摘要 + 向量持久化 + 前端可观测性）
+- [x] CosineSimilarity 复核并清理过时 BUG 注释，补充非单位向量回归测试
+- [x] 向量库 SQLite 持久化: migration v16 `memory_embeddings` 表 + `SqliteVectorStore` 启动加载 + 写时同步
+- [x] 真实 LLM 摘要: `LLMSummarizerImpl` 接管 `ContextCompressor` / `Heartbeat`，失败回退 keyword 路径
+- [x] Memory 类型体系: `preference/rule/fact/lesson/reflection/session_summary` 校验 + API filter/pagination/stats
+- [x] Memory CRUD API: `GET/POST/PUT/DELETE /api/memories` + `/api/memories/:id/embed` + `/api/memories/stats`
+- [x] 前端可观测性: `MemoryBrowser` + `RAGPreviewPanel` + `MemoryEventsTimeline` + `MemoryCreateDialog` + tabbed overlay
+- [x] 验证: `go build ./...`, `go vet ./...`, `go test ./...`, `vue-tsc --noEmit`, `vite build` 全通过
 
 ### Phase 6-E 交付物（Auth 实际生效 + RAG 向量召回落地，非空壳）
 - [x] migration v12: 创建 `users` 表与 `api_keys` 表（bcrypt 哈希存储，prefix 索引加速验证）
@@ -486,3 +495,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.6 Alpha | 2026-07-08 | Phase 6 完成: 6-C 技术债务修复 + 6-D 可观测性/成本持久化真实落地 |
 | v0.6.1 Alpha | 2026-07-08 | Phase 6-E 完成: Auth 中间件实际生效 + RAG 本地向量召回接入 MemoryRecall |
 | v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
+| v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |

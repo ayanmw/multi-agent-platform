@@ -55,6 +55,51 @@
 - [x] 更新 ROADMAP 标记 6-E 完成
 - [x] Git commit: `Phase 6-E: auth middleware + RAG memory recall`
 
+## Phase 6-F: Memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性
+
+> 作为 `phase-6-tech-debt-completion` 的补充任务，收尾 Phase 6+ 所有剩余技术债务。
+> 设计约束：无 embedding 模型可用，但 LLM (deepseek-v4-flash) 可用；所有 RAG/memory 操作必须前端可观测（白盒 Agent 哲学）。
+
+### 6-F.1 Embedding / CosineSimilarity BUG 修复
+- [x] 复核 `internal/memory/vector_store.go` 的 `CosineSimilarity` 实现：已使用 `math.Sqrt(magA) * math.Sqrt(magB)`，无需再修
+- [x] 清理 `internal/memory/memory_test.go` 中过时的 "BUG" 注释，补充非单位向量回归测试
+
+### 6-F.2 向量库 SQLite 持久化
+- [x] migration v16: 创建 `memory_embeddings` 表（`memory_id`, `model`, `dimensions`, `embedding` BLOB, `updated_at`）
+- [x] `pkg/db/memory_embedding.go`: `MemoryEmbeddingRow` + CRUD（insert/replace, load all/by model, delete）
+- [x] `internal/memory/sqlite_vector_store.go`: `SqliteVectorStore` 实现 `VectorStore` 接口，启动时从 SQLite 加载到内存镜像，写入时同步落盘
+- [x] 单元测试覆盖 `sqlite_vector_store.go`
+
+### 6-F.3 真实 LLM 摘要替换 keyword-based
+- [x] `internal/harness/summarizer.go`: 新增 `LLMSummarizer` / `KeywordSummarizer` / `LLMSummarizerImpl` + `HubEmitter`
+- [x] `ContextCompressor` 接入 `LLMSummarizer`，LLM 失败时回退 keyword 摘要
+- [x] `Heartbeat` 接入 `LLMSummarizer`，LLM 失败时回退 keyword 摘要
+- [x] `cmd/server/main.go`: 用 `CreateProviderFromConfig` 创建 summarizer provider，构造 keyword adapter 并注入 Heartbeat
+- [x] 单元测试覆盖正常路径 / fallback / 超时 / keyword adapter / HubEmitter
+
+### 6-F.4 Memory 类型体系 & CRUD API
+- [x] `pkg/db/memory.go`: 扩展 memory type 校验函数 + stats/pagination 查询
+- [x] `pkg/event/event.go`: 新增 memory 相关事件常量
+- [x] `cmd/server/api.go`: 完整 memory CRUD + `/embed` + `/stats`，支持 filter/pagination
+
+### 6-F.5 前端可观测性
+- [x] `web/src/types/events.ts`: 扩展 `EventType` 与 memory/RAG 事件
+- [x] `web/src/composables/useMemoryEvents.ts`: module-level memory 事件订阅器 + 统计 + 自动刷新 memory 列表
+- [x] `web/src/composables/useMemoryStore.ts`: 补充 create/update/embed/stats/pagination
+- [x] `web/src/components/MemoryCreateDialog.vue`: 创建 memory 弹窗
+- [x] `web/src/components/RAGPreviewPanel.vue`: RAG recall 预览面板
+- [x] `web/src/components/MemoryEventsTimeline.vue`: memory 事件时间线
+- [x] `web/src/components/MemoryBrowser.vue`: filters / create / inline edit / embed / pagination
+- [x] `web/src/App.vue`: tabbed Memory overlay（Browser / RAG / Events），header 入口按钮
+
+### 6-F.6 收尾
+- [x] `go build ./...`, `go vet ./...` 通过
+- [x] `go test ./...` 通过
+- [x] `vue-tsc --noEmit` 通过
+- [x] `vite build` 通过
+- [x] 更新 `roadmaps/ROADMAP.md` 标记 6-F 完成
+- [x] Git commit: `Phase 6-F: memory type system + CRUD + LLM summarizer + vector persistence + frontend observability`
+
 ## Phase 7（远期，仅规划）
 - 接入外部向量数据库（LanceDB / ChromaDB / pgvector）
 - 接入外部 Embedding API（OpenAI/Cohere）
