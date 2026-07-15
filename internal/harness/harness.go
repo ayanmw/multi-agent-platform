@@ -679,6 +679,15 @@ func (r *PathTraversalRule) Check(toolName string, input map[string]any, contrac
 type AcceptanceEvaluator struct {
 	scope  string     // working directory for resolving relative paths
 	judge  *LLMJudge  // optional LLM judge for semantic criteria (nil = soft pass)
+
+	// Evaluation context populated by SetEvaluationContext. It carries the
+	// original task goal, user input, agent final answer and recent tool
+	// outputs to the LLM judge so the prompt includes real evidence instead
+	// of empty placeholders.
+	goal        string
+	userInput   string
+	finalAnswer string
+	toolOutputs []string
 }
 
 // NewAcceptanceEvaluator creates a new AcceptanceEvaluator with the given scope.
@@ -690,6 +699,17 @@ func NewAcceptanceEvaluator(scope string) *AcceptanceEvaluator {
 // Passing nil clears any previously attached judge.
 func (ae *AcceptanceEvaluator) SetLLMJudge(judge *LLMJudge) {
 	ae.judge = judge
+}
+
+// SetEvaluationContext provides the AcceptanceEvaluator with the runtime
+// information needed by LLMJudge criteria. The judge prompt includes Goal,
+// UserInput, FinalAnswer and recent ToolOutputs when evaluating semantic
+// rubrics.
+func (ae *AcceptanceEvaluator) SetEvaluationContext(goal, userInput, finalAnswer string, toolOutputs []string) {
+	ae.goal = goal
+	ae.userInput = userInput
+	ae.finalAnswer = finalAnswer
+	ae.toolOutputs = toolOutputs
 }
 
 // EvalResult is the result of evaluating a single acceptance criterion.
@@ -863,10 +883,11 @@ func (ae *AcceptanceEvaluator) checkLLMJudge(criterion AcceptanceCriterion, star
 	}
 
 	result, err := ae.judge.Evaluate(context.Background(), JudgeRequest{
-		Goal:        "",
+		Goal:        ae.goal,
 		Rubric:      criterion.Target,
-		UserInput:   "",
-		FinalAnswer: "",
+		UserInput:   ae.userInput,
+		FinalAnswer: ae.finalAnswer,
+		ToolOutputs: ae.toolOutputs,
 	})
 	if err != nil {
 		return EvalResult{

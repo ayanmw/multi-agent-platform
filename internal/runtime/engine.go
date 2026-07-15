@@ -845,8 +845,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Task 4: If this run is associated with a case, evaluate the acceptance
 			// criteria and broadcast a task_evaluated event. Errors here are logged
 			// but do not change the task's successful status.
-			// TODO: implement evaluateAndBroadcast in cases package integration
-			// e.evaluateAndBroadcast(userInput, content)
+			e.evaluateAndBroadcast(userInput, content)
 
 			return content, e.totalTokens, nil
 		}
@@ -1112,6 +1111,10 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		evaluator.SetLLMJudge(judge)
 	}
 
+	// Provide the judge with the runtime context so the semantic prompt
+	// includes the real goal, user input, agent answer, and tool evidence.
+	evaluator.SetEvaluationContext(e.cfg.Contract.Goal, userInput, finalAnswer, toolOutputs)
+
 	report, err := evaluator.Evaluate(e.cfg.Contract.AcceptanceCriteria)
 
 	passed := false
@@ -1130,6 +1133,28 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 					reason = r.Message
 					break
 				}
+			}
+		}
+
+		// Compute an aggregate score from LLMJudge criteria. Deterministic
+		// criteria (file_exists, content_contains, etc.) do not contribute
+		// numeric scores; judge criteria average their returned scores.
+		if len(report.Results) > 0 {
+			var judgeScoreSum float64
+			var judgeCount int
+			for _, r := range report.Results {
+				if r.Criterion.Type == harness.AcceptLLMJudge {
+					// The judge result message contains "score=%.2f"; parse it
+					// as a fallback if the EvalResult did not expose Score directly.
+					// EvalResult currently stores only Message, so we scan the message.
+					if s, ok := parseScoreFromJudgeMessage(r.Message); ok {
+						judgeScoreSum += s
+						judgeCount++
+					}
+				}
+			}
+			if judgeCount > 0 {
+				score = judgeScoreSum / float64(judgeCount)
 			}
 		}
 	}
@@ -1157,6 +1182,25 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	}))
 }
 
+// parseScoreFromJudgeMessage extracts the numeric score from the formatted
+// message produced by checkLLMJudge: "LLM judge passed=true score=0.85 reason=...".
+// It returns the score and true if found and parsed.
+func parseScoreFromJudgeMessage(msg string) (float64, bool) {
+	idx := strings.Index(msg, "score=")
+	if idx == -1 {
+		return 0, false
+	}
+	rest := msg[idx+len("score="):]
+	// Stop at first space.
+	if space := strings.Index(rest, " "); space != -1 {
+		rest = rest[:space]
+	}
+	var s float64
+	if _, err := fmt.Sscanf(rest, "%f", &s); err == nil {
+		return s, true
+	}
+	return 0, false
+}
 
 // formatToolErrorObservation produces a concise, stable fingerprint of a tool
 // execution failure. The content is fed back to the LLM as a tool result so it
