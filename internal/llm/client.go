@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -333,6 +334,31 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 			continue
 		}
 		choice := chunk.Choices[0]
+
+		// Handle finish_reason semantics. The SSE transport layer signals the end
+		// of the stream with "data: [DONE]", but the semantic layer uses
+		// choices[0].finish_reason to tell us WHY generation stopped. We log
+		// unexpected reasons so operators can detect protocol drift or model
+		// behavior changes.
+		switch choice.FinishReason {
+		case "":
+			// Still generating — no action needed.
+		case "stop":
+			// Natural text completion.
+		case "tool_calls":
+			// Tool call generation finished; accumulated toolCalls will be returned.
+		case "length":
+			// Hit max_tokens limit. The response is truncated; log it because this
+			// can produce incomplete tool arguments that fail json.Unmarshal later.
+			log.Printf("[Client] ChatStream finished due to length limit (model=%s)", req.Model)
+		case "content_filter":
+			log.Printf("[Client] ChatStream finished due to content filter (model=%s)", req.Model)
+		default:
+			// Unknown finish_reason — log loudly so we can discover new enum values
+			// introduced by providers (e.g., "function_call" legacy value).
+			log.Printf("[Client] ChatStream finished with unexpected reason %q (model=%s)",
+				choice.FinishReason, req.Model)
+		}
 
 		// Accumulate text content — each delta may contain 1+ tokens
 		if choice.Delta.Content != "" {

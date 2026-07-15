@@ -93,6 +93,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
@@ -360,31 +361,31 @@ type EngineConfig struct {
 // The * suffix indicates events that may repeat multiple times (streaming tokens,
 // multiple tool calls, multiple loop iterations).
 type Engine struct {
-	cfg              EngineConfig                     // immutable configuration set at creation
-	llm              llm.Provider                     // LLM Provider interface (abstracts API protocol)
-	tools            *tool.Registry                   // the tool registry shared across agents
-	bus              EventBus                         // event transport for real-time frontend updates
-	persist          Persistence                      // optional persistence backend (nil = no persistence)
-	gate             *harness.PolicyGate              // optional policy enforcement (nil = allow all)
-	progress         *harness.ProgressManager         // optional progress tracking (nil = skip)
-	taskProgress     *harness.TaskProgress            // current progress state (nil if progress is nil)
-	taskID           string                           // unique task identifier for correlation
-	messages         []llm.Message                    // full conversation history (system + user + assistant + tool)
-	stepIdx          int                              // current ReAct loop iteration (0-based)
-	totalTokens      int                              // cumulative total tokens across all LLM calls
-	tokenUsage       llm.Usage                        // cumulative detailed token usage (input/cache/output)
-	startTime        time.Time                        // task start time for duration tracking
-	durationMs       int64                            // total task duration in milliseconds
-	approvalHandler  harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
-	agentBus         AgentBus                         // optional inter-agent communication channel (nil = disabled)
-	checkpoint       *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
-	sessionMsgWriter func(SessionMessageRecord) error // optional session message writer (nil = skip)
-	turnIndex        int                              // current turn index within the session (0-based)
-	caseID           string                           // optional case ID hint for MockProvider script matching
-	providers        map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
-	selectedModel    string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
-	lastError        string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
-	consecutiveErrors int                             // how many times the same recoverable error has occurred in a row
+	cfg               EngineConfig                     // immutable configuration set at creation
+	llm               llm.Provider                     // LLM Provider interface (abstracts API protocol)
+	tools             *tool.Registry                   // the tool registry shared across agents
+	bus               EventBus                         // event transport for real-time frontend updates
+	persist           Persistence                      // optional persistence backend (nil = no persistence)
+	gate              *harness.PolicyGate              // optional policy enforcement (nil = allow all)
+	progress          *harness.ProgressManager         // optional progress tracking (nil = skip)
+	taskProgress      *harness.TaskProgress            // current progress state (nil if progress is nil)
+	taskID            string                           // unique task identifier for correlation
+	messages          []llm.Message                    // full conversation history (system + user + assistant + tool)
+	stepIdx           int                              // current ReAct loop iteration (0-based)
+	totalTokens       int                              // cumulative total tokens across all LLM calls
+	tokenUsage        llm.Usage                        // cumulative detailed token usage (input/cache/output)
+	startTime         time.Time                        // task start time for duration tracking
+	durationMs        int64                            // total task duration in milliseconds
+	approvalHandler   harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
+	agentBus          AgentBus                         // optional inter-agent communication channel (nil = disabled)
+	checkpoint        *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
+	sessionMsgWriter  func(SessionMessageRecord) error // optional session message writer (nil = skip)
+	turnIndex         int                              // current turn index within the session (0-based)
+	caseID            string                           // optional case ID hint for MockProvider script matching
+	providers         map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
+	selectedModel     string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
+	lastError         string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
+	consecutiveErrors int                              // how many times the same recoverable error has occurred in a row
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -765,8 +766,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}()
 		}
 
-		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, usage=%+v",
-			e.stepIdx, len(content), len(toolCalls), usage)
+		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
+			e.stepIdx, len(content), len(toolCalls), reportModel, usage)
 
 		// =====================================================================
 		// CHECK: Did the LLM produce a final answer or request tool calls?
@@ -805,13 +806,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// has finished successfully. Include the cumulative token breakdown
 			// so the frontend can display accurate token metrics.
 			e.bus.SendEvent(event.NewEvent("task_completed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"result":                    content,
-				"total_tokens":              e.totalTokens,
-				"total_steps":               e.stepIdx,
-				"prompt_tokens":             e.tokenUsage.PromptTokens,
-				"prompt_cache_hit_tokens":   e.tokenUsage.PromptCacheHitTokens,
-				"prompt_cache_miss_tokens":  e.tokenUsage.PromptCacheMissTokens,
-				"completion_tokens":         e.tokenUsage.CompletionTokens,
+				"result":                   content,
+				"total_tokens":             e.totalTokens,
+				"total_steps":              e.stepIdx,
+				"prompt_tokens":            e.tokenUsage.PromptTokens,
+				"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
+				"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
+				"completion_tokens":        e.tokenUsage.CompletionTokens,
 			}))
 
 			// Persist the completed status. Pass the cumulative total (e.totalTokens)
@@ -886,10 +887,22 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// error observation to the conversation history. The next think
 				// iteration will see both and can decide to retry or try a different
 				// tool.
+				//
+				// IMPORTANT: if the failure was due to malformed JSON arguments, the
+				// raw tc.Function.Arguments string is invalid JSON. Serializing it
+				// back into the next API request would trigger a 400 BadRequestError
+				// because the provider parses the nested JSON inside arguments. We
+				// therefore sanitize the tool_call to a syntactically valid JSON
+				// object before appending it to conversation history. The actual
+				// error is still preserved in the tool result observation.
+				sanitizedTC := tc
+				if strings.Contains(toolErr.Error(), "invalid arguments JSON") {
+					sanitizedTC.Function.Arguments = `{"_error":"invalid arguments JSON"}`
+				}
 				e.messages = append(e.messages, llm.Message{
 					Role:      "assistant",
 					Content:   content,
-					ToolCalls: []llm.ToolCall{tc},
+					ToolCalls: []llm.ToolCall{sanitizedTC},
 				})
 				e.messages = append(e.messages, llm.Message{
 					Role:       "tool",
@@ -1247,6 +1260,16 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		CaseID:      e.caseID,
 	}
 
+	//// DEBUG: log the full request payload before sending it to the LLM API.
+	//// This is essential for diagnosing 400 BadRequestError responses caused by
+	//// malformed tool call arguments in the conversation history.
+	//if reqDebug, err := json.MarshalIndent(req, "", "  "); err == nil {
+	//	log.Printf("[Engine] think request payload (step=%d, model=%s, messages=%d):\n%s",
+	//		e.stepIdx, selectedModel, len(e.messages), string(reqDebug))
+	//} else {
+	//  log.Printf("[Engine] think request payload marshal failed: %v", err)
+	//}
+
 	// Call the LLM with streaming. The onChunk callback is invoked for each SSE
 	// chunk. Each text delta is forwarded to the frontend as an llm_delta event
 	// so the UI can render tokens in real time (typewriter effect).
@@ -1401,11 +1424,38 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 
 	// Parse the tool call arguments from JSON. The LLM returns arguments as a
 	// JSON string (not an object) because it streams them incrementally.
-	// If parsing fails (e.g., the LLM produced malformed JSON), we fall back
-	// to an empty map — the tool may still execute with default values.
+	// If parsing fails (e.g., the LLM produced malformed JSON), we first try a
+	// best-effort repair for the common "unterminated string/object" case (see
+	// repairToolArgumentsJSON). If repair also fails, we return a clear error so
+	// the ReAct loop can feed it back to the LLM without poisoning the next API
+	// request with malformed JSON.
 	var args map[string]any
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		args = make(map[string]any) // fallback to empty args
+	if parseErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); parseErr != nil {
+		repaired, repairErr := repairToolArgumentsJSON(tc.Function.Arguments)
+		if repairErr == nil {
+			log.Printf("[Engine] Repaired malformed arguments JSON for %s (orig error: %v)", tc.Function.Name, parseErr)
+			args = repaired
+		} else {
+			errMsg := fmt.Sprintf("invalid arguments JSON for %s: %v (raw: %q, repair failed: %v)",
+				tc.Function.Name, parseErr, tc.Function.Arguments, repairErr)
+			log.Printf("[Engine] %s", errMsg)
+			e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"tool":        tc.Function.Name,
+				"error":       errMsg,
+				"duration_ms": 0,
+				"args":        tc.Function.Arguments,
+			}))
+			e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"type": "tool_call",
+			}))
+			e.saveStep(StepRecord{
+				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+				Type: "tool_call", Status: "failed",
+				ToolName: tc.Function.Name, ToolInput: map[string]any{"_raw_arguments": tc.Function.Arguments},
+				ToolOutput: errMsg,
+			})
+			return "", fmt.Errorf("%s", errMsg)
+		}
 	}
 
 	// Inject the session workspace_dir into the tool input if the user (LLM)
@@ -1431,6 +1481,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// Execute the tool and measure its duration. The duration is tracked
 	// for performance monitoring and debugging — slow tools are bottlenecks
 	// that hurt user experience.
+	// DEBUG log.Printf("[Engine] executeTool %s with parsed args: %+v", tc.Function.Name, args)
 	start := time.Now()
 	// Route through PolicyGate if configured; otherwise execute directly.
 	// The PolicyGate checks the tool call against the policy chain (FileScopeRule,
@@ -1515,6 +1566,9 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 
 		return "", execErr
 	}
+
+	// DEBUG
+	log.Printf("[Engine] executeTool %s succeeded, result type=%T", tc.Function.Name, result)
 
 	// Serialize the tool result to JSON for the LLM conversation. The LLM
 	// expects tool results as JSON strings so it can parse the structured data.
@@ -1769,6 +1823,35 @@ func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 		"msg_type":   msgType,
 		"content":    content,
 	}))
+}
+
+// repairToolArgumentsJSON attempts a best-effort repair of malformed tool
+// arguments produced by the LLM. The most common failure mode observed in
+// production is an unterminated JSON string or object at the end of a long
+// content payload (e.g., write_file streaming a large HTML file and truncating
+// the closing quote/brace). Adding the missing terminator(s) often yields a
+// parseable object and avoids an extra LLM round-trip.
+//
+// This is intentionally conservative: it only appends missing closing tokens
+// and gives up if the result is still invalid. It is not a general JSON
+// fixer, but it covers the high-frequency case cheaply.
+func repairToolArgumentsJSON(raw string) (map[string]any, error) {
+	// Sequence of repairs to try, from least to most invasive.
+	candidates := []string{
+		raw + "\"",     // unterminated string value
+		raw + "\" }",   // unterminated string value + close object
+		raw + "\" }",   // typo variant: space before brace
+		raw + "}",      // unterminated object
+		raw + "\" } }", // nested unterminated string/object
+	}
+
+	for _, candidate := range candidates {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(candidate), &m); err == nil {
+			return m, nil
+		}
+	}
+	return nil, fmt.Errorf("unable to repair arguments JSON")
 }
 
 // saveCheckpoint persists the current engine state as a checkpoint for crash recovery.
