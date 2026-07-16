@@ -155,25 +155,50 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 	}
 }
 
-// RunBlocking launches all agents concurrently and blocks until they all complete.
+// RunBlocking launches all agents and blocks until they all complete.
 // Returns a slice of results, one per agent. The order matches the input specs.
+//
+// When strategy is "sequential", agents run one after another: the result of
+// agent i is sent via the AgentBus to agent i+1 before it starts. This enables
+// researcher → writer pipelines where writer needs the research output.
+// For any other strategy (including empty), agents run concurrently as before.
 //
 // The rootTaskID is passed through to each agent so child tasks can set their
 // parent_task_id to the root task. This is the hook used by the persistence
 // layer to build the child_tasks tree.
-func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, specs []AgentSpec) []AgentResult {
+func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strategy string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
-	var wg sync.WaitGroup
 
-	for i, spec := range specs {
-		wg.Add(1)
-		go func(idx int, s AgentSpec) {
-			defer wg.Done()
-			results[idx] = o.runAgent(ctx, rootTaskID, s)
-		}(i, spec)
+	if strategy == "sequential" {
+		// Sequential pipeline: each agent's output is forwarded to the next
+		// agent via the AgentBus before the next agent starts. This creates a
+		// chain like researcher → writer where writer sees researcher output
+		// as a user message in its conversation history.
+		for i, spec := range specs {
+			results[i] = o.runAgent(ctx, rootTaskID, spec)
+			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
+				next := specs[i+1]
+				o.agentBus.SendMessage(runtime.AgentMessage{
+					FromAgentID: spec.AgentID,
+					ToAgentID:   next.AgentID,
+					Type:        "observation",
+					Content:     results[i].Result,
+				})
+			}
+		}
+	} else {
+		var wg sync.WaitGroup
+
+		for i, spec := range specs {
+			wg.Add(1)
+			go func(idx int, s AgentSpec) {
+				defer wg.Done()
+				results[idx] = o.runAgent(ctx, rootTaskID, s)
+			}(i, spec)
+		}
+
+		wg.Wait()
 	}
-
-	wg.Wait()
 
 	// Once all child agents finish, derive and persist the root task terminal
 	// status. The root task itself has no engine loop; its status reflects the
@@ -555,7 +580,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 	case "multi_agent":
 		// Multi-agent case: split into researcher + writer + reviewer
 		return &DecomposeResult{
-			Strategy: "pipeline",
+			Strategy: "sequential",
 			Agents: []AgentSpec{
 				{
 					AgentID: "agent_researcher",

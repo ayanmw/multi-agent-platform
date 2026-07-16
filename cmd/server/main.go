@@ -444,12 +444,14 @@ func main() {
 		switch req.Action {
 
 		case "multi-agent":
-			// Multi-agent orchestration: decompose task and run agents concurrently
+			// Multi-agent orchestration: decompose task and run agents
 			specs := req.Agents
+			strategy := "parallel"
 			if len(specs) == 0 {
 				decomposer := &orchestrator.TaskDecomposer{}
 				result := decomposer.Decompose(req.Input, req.CaseType)
 				specs = result.Agents
+				strategy = result.Strategy
 			}
 
 			// Build Working Memory for all agents in this orchestration
@@ -489,6 +491,7 @@ func main() {
 				"input":       req.Input,
 				"agent_ids":   agentIDs,
 				"agent_count": len(specs),
+				"strategy":    strategy,
 			}))
 
 			go func() {
@@ -496,7 +499,7 @@ func main() {
 				cancelRegistry.Store(taskID, cancel)
 				defer cancelRegistry.Delete(taskID)
 				defer cancel()
-				orch.RunBlocking(ctx, taskID, specs)
+				orch.RunBlocking(ctx, taskID, strategy, specs)
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 				log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
 			}()
@@ -878,12 +881,14 @@ func main() {
 
 		// Decompose task into agent specs
 		var specs []orchestrator.AgentSpec
+		strategy := "parallel"
 		if len(req.Agents) > 0 {
 			specs = req.Agents
 		} else {
 			decomposer := &orchestrator.TaskDecomposer{}
 			result := decomposer.Decompose(req.Input, req.CaseType)
 			specs = result.Agents
+			strategy = result.Strategy
 		}
 
 		// Apply global MaxSteps override if provided
@@ -948,9 +953,10 @@ func main() {
 			"input":       req.Input,
 			"agent_ids":   agentIDs,
 			"agent_count": len(specs),
+			"strategy":    strategy,
 		}))
 
-		// Launch agents concurrently
+		// Launch agents with the requested coordination strategy.
 		go func() {
 			// Multi-agent orchestration timeouts default to 10 minutes. If every
 			// spec has the same TimeoutSeconds override, derive a single deadline
@@ -973,7 +979,7 @@ func main() {
 			cancelRegistry.Store(taskID, cancel)
 			defer cancelRegistry.Delete(taskID)
 			defer cancel()
-			orch.RunBlocking(ctx, taskID, specs)
+			orch.RunBlocking(ctx, taskID, strategy, specs)
 			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 			log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
 		}()
