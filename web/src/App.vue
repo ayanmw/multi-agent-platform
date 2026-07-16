@@ -55,6 +55,7 @@ import { useCaseStore } from './composables/useCaseStore'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 import type { Case, CreateCaseRequest, UpdateCaseRequest } from './types/case'
+import type { ContextWindowSnapshotData } from './types/events'
 
 const {
   taskCache,
@@ -151,7 +152,35 @@ const autoApprovePolicy = ref(false)
 const showProjectConfig = ref(false)
 
 /** Singleton context window snapshot listener */
-const { latest: latestContextSnapshot } = useContextWindow()
+const { setActiveTaskId: setContextWindowTaskId, currentSnapshot: latestContextSnapshot } = useContextWindow()
+
+watch(activeTaskId, (taskId) => {
+  setContextWindowTaskId(taskId || '')
+}, { immediate: true })
+
+/** Refetch the context window snapshot on demand from the REST API. */
+async function fetchContextWindowSnapshot() {
+  const taskId = activeTaskId.value
+  if (!taskId) return
+  try {
+    const resp = await fetch(`/api/tasks/${taskId}/context_window`)
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        console.warn('[App] Context snapshot not found for task', taskId)
+      } else {
+        console.error('[App] Failed to fetch context snapshot:', resp.statusText)
+      }
+      return
+    }
+    const data = (await resp.json()) as ContextWindowSnapshotData
+    // Only replace if the returned snapshot matches the currently active task.
+    if (activeTaskId.value === taskId) {
+      latestContextSnapshot.value = data
+    }
+  } catch (err) {
+    console.error('[App] Network error fetching context snapshot:', err)
+  }
+}
 
 /** Singleton memory event listener + timeline state for Phase 6-F */
 const { events: memoryEvents, clear: clearMemoryEvents } = useMemoryEvents()
@@ -1072,7 +1101,11 @@ function formatShortTime(ts: number): string {
             </div>
           </div>
           <div class="memory-overlay-body">
-            <ContextWindowPanel class="memory-overlay-browser" />
+            <ContextWindowPanel
+              class="memory-overlay-browser"
+              :active-task-id="activeTaskId || ''"
+              @refresh="fetchContextWindowSnapshot"
+            />
           </div>
         </div>
       </div>
@@ -1143,7 +1176,6 @@ function formatShortTime(ts: number): string {
           <h1 class="app-title">🤖 Multi-Agent Platform</h1>
           <div class="app-header-right">
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
-            <button class="agents-btn" @click="toggleContextWindow" title="Context Window">🪟 Context</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
             <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
             <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>
@@ -1197,6 +1229,7 @@ function formatShortTime(ts: number): string {
           @pause="pauseTask"
           @resume="resumeTask"
           @cancel="cancelTask"
+          @toggle-context-window="toggleContextWindow"
         />
 
         <!-- Case library cards — shown when active session has no task / task is empty -->

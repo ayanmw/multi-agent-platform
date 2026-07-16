@@ -402,18 +402,44 @@ func main() {
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
 
-	// API: Start a chat task with real Agent Loop
+	// Preserve the original /api/tasks POST handler as a closure so it can be
+	// reused for both exact /api/tasks and, historically, /api/tasks/.
+	var handleTasksRoot func(http.ResponseWriter, *http.Request)
+	_ = handleTasksRoot // avoid declared-and-not-used if registration moves
+
+	// API: task detail / list / context window snapshots, and create task
 	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
-		// GET /api/tasks — list recent tasks
-		if r.Method == http.MethodGet {
-			// GET /api/tasks?id=xxx — single task detail
-			if r.URL.Query().Get("id") != "" {
-				handleGetTask(w, r)
-				return
-			}
-			handleListTasks(w, r)
+		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
+			handleTasksRoot(w, r)
 			return
 		}
+
+		path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+		if path == "" {
+			http.Error(w, "task ID required", http.StatusNotFound)
+			return
+		}
+
+		if strings.HasSuffix(path, "/context_window") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET only", http.StatusMethodNotAllowed)
+				return
+			}
+			id := strings.TrimSuffix(path, "/context_window")
+			handleGetTaskContextWindow(w, r, id)
+			return
+		}
+
+		// GET /api/tasks/:id — single task detail (also supports /api/tasks?id=xxx)
+		if r.Method == http.MethodGet {
+			// Pass through to the existing query-param based handler.
+			handleGetTask(w, r)
+			return
+		}
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+	})
+
+	handleTasksRoot = func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -608,7 +634,7 @@ func main() {
 		default:
 			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
 		}
-	})
+	}
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {

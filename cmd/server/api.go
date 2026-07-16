@@ -29,6 +29,119 @@ import (
 	"github.com/google/uuid"
 )
 
+// handleGetTaskContextWindow returns the current context-window snapshot for a
+// task (GET /api/tasks/:id/context_window). For live tasks the snapshot is read
+// from the in-memory runtime store written by Engine.think(). For persisted/idle
+// tasks the snapshot is reconstructed from conversations and steps. Returns 404
+// if the task does not exist.
+func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Prefer the live in-memory snapshot when the engine is thinking.
+	if snapshot, ok := runtime.GetTaskContextSnapshot(id); ok {
+		encodeContextWindowSnapshot(w, snapshot)
+		return
+	}
+
+	// 2. Otherwise, reconstruct from persistence if the task exists.
+	task, err := db.QueryTaskByID(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if task == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	var messages []llm.Message
+
+	// Reconstruct the system prompt. We use a minimal system prompt because the
+	// exact version used during execution is not fully recoverable from the DB.
+	systemPrompt := "system"
+	if task.SessionID != "" {
+		if s, err := db.QuerySessionByID(task.SessionID); err == nil && s.Name != "" {
+			systemPrompt = s.Name
+		}
+	}
+	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+
+	// Append conversations in chronological order.
+	conversations, err := db.QueryConversationsByTask(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, c := range conversations {
+		messages = append(messages, llm.Message{Role: c.Role, Content: c.Content})
+	}
+
+	// Append steps as assistant/tool/observation messages if no conversation
+	// records exist. This is a best-effort fallback for older persisted tasks.
+	if len(conversations) == 0 {
+		steps, err := db.QueryStepsByTask(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		lastThinkContent := ""
+		for _, s := range steps {
+			switch s.Type {
+			case "think":
+				messages = append(messages, llm.Message{Role: "assistant", Content: s.Content})
+				lastThinkContent = s.Content
+			case "tool_call":
+				// Only emit assistant + tool pair if it follows a think step so we
+				// don't double-count isolated tool calls.
+				if lastThinkContent != "" {
+					// Tool call reconstruction preserves the tool name as a lightweight
+					// marker so the snapshot remains meaningful.
+					messages = append(messages, llm.Message{
+						Role:      "assistant",
+						Content:   lastThinkContent,
+						ToolCalls: []llm.ToolCall{{Function: llm.FunctionCall{Name: s.ToolName}}},
+					})
+					lastThinkContent = ""
+				}
+				messages = append(messages, llm.Message{Role: "tool", Content: s.ToolOutput, ToolCallID: s.ID})
+			case "observation":
+				// Observations already appended via tool_call outputs above.
+			}
+		}
+	}
+
+	model := "unknown"
+	if len(task.AgentIDs) > 0 {
+		if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent.Model != "" {
+			model = agent.Model
+		}
+	}
+	maxTokens := llm.EstimateModelContextWindow(nil, model)
+	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages)
+	encodeContextWindowSnapshot(w, snapshot)
+}
+
+// encodeContextWindowSnapshot writes a snapshot as JSON. It reuses the same
+// field names the WebSocket event emits so the frontend can treat both sources
+// identically.
+func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWindowSnapshot) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"model":                  snapshot.Model,
+		"max_context_tokens":     snapshot.MaxContextTokens,
+		"estimated_total_tokens": snapshot.EstimatedTotalTokens,
+		"estimated_usage_ratio":  snapshot.EstimatedUsageRatio,
+		"messages":               snapshot.Messages,
+	})
+}
+
 // === Task History API ===
 
 // handleListTasks returns recent tasks (GET /api/tasks)

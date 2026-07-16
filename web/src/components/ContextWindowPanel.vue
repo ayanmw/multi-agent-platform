@@ -2,21 +2,67 @@
   ContextWindowPanel.vue — real-time context window observability
 
   Displays the latest backend `context_window_snapshot` as:
-    1. A compact header with model name and token totals.
+    1. A compact header with model name, token totals, and refresh action.
     2. A progress bar showing estimated total tokens / max context tokens.
     3. A role-grouped bar chart with per-role token share.
     4. Expandable message cards so the user can inspect exactly what the
        agent sees (system prompt, user input, assistant reasoning, tool results).
 
-  This component is deliberately lightweight: it receives all data through
-  `useContextWindow` and only handles presentation.
+  This component requests an on-demand snapshot from the API when it mounts/
+  opens if no snapshot is available yet (auto-refresh). A manual refresh button
+  is also available in the header.
+
+  Props:
+    activeTaskId: the task currently selected in the main UI.
+    modelRegistry: optional registry object used by useContextWindow.
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
 import type { ContextSnapshotMessage } from '../types/events'
 
-const { latest } = useContextWindow()
+const props = defineProps<{
+  activeTaskId: string
+}>()
+
+const emit = defineEmits<{
+  refresh: []
+}>()
+
+const { currentSnapshot, setActiveTaskId } = useContextWindow()
+const latest = computed(() => currentSnapshot.value)
+
+const isLoading = ref(false)
+
+async function requestRefresh() {
+  if (!props.activeTaskId) return
+  isLoading.value = true
+  try {
+    emit('refresh')
+  } finally {
+    // Keep spinner visible briefly to avoid flicker.
+    setTimeout(() => { isLoading.value = false }, 200)
+  }
+}
+
+// Keep the composable's active task in sync with the prop.
+watch(
+  () => props.activeTaskId,
+  (taskId) => {
+    setActiveTaskId(taskId)
+    if (taskId && !currentSnapshot.value) {
+      requestRefresh()
+    }
+  },
+  { immediate: true },
+)
+
+// Auto-refresh once when mounted/opened if snapshot is empty but a task exists.
+onMounted(() => {
+  if (props.activeTaskId && !currentSnapshot.value) {
+    requestRefresh()
+  }
+})
 
 const usagePercent = computed(() => {
   if (!latest.value) return 0
@@ -110,19 +156,31 @@ function messageRatio(msg: ContextSnapshotMessage): number {
 
 <template>
   <div class="h-full flex flex-col gap-4 p-4 overflow-hidden bg-gray-900 text-gray-100">
-    <!-- Header row: title + model chip -->
+    <!-- Header row: title + model chip + refresh -->
     <div class="flex items-center justify-between gap-3 min-w-0">
-      <h2 class="text-lg font-semibold whitespace-nowrap">🪟 Context Window</h2>
-      <span
-        v-if="latest"
-        class="shrink-0 inline-flex items-center px-2 py-1 rounded-full text-[10px] leading-none font-medium bg-gray-800 text-gray-400 border border-gray-700 truncate max-w-[150px]"
+      <div class="flex items-center gap-3 min-w-0">
+        <h2 class="text-lg font-semibold whitespace-nowrap">🪟 Context Window</h2>
+        <span
+          v-if="latest"
+          class="shrink-0 inline-flex items-center px-2 py-1 rounded-full text-[10px] leading-none font-medium bg-gray-800 text-gray-400 border border-gray-700 truncate max-w-[150px]"
+        >
+          {{ latest.model || 'unknown model' }}
+        </span>
+      </div>
+      <button
+        class="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Refresh context window snapshot"
+        :disabled="!activeTaskId || isLoading"
+        @click="requestRefresh"
       >
-        {{ latest.model || 'unknown model' }}
-      </span>
+        <span v-if="isLoading" class="inline-block w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+        <span v-else>🔄</span>
+        Refresh
+      </button>
     </div>
 
     <div v-if="!latest" class="text-sm text-gray-400">
-      Waiting for the next agent think step...
+      {{ isLoading ? 'Loading snapshot...' : 'Waiting for the next agent think step...' }}
     </div>
 
     <template v-else>

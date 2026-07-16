@@ -1408,6 +1408,11 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// accurate enough for proportion visualizations and capacity warnings.
 	maxContextTokens := llm.EstimateModelContextWindow(e.cfg.Registry, selectedModel)
 	snapshot := llm.BuildContextWindowSnapshot(selectedModel, maxContextTokens, e.messages)
+
+	// Cache the snapshot so the REST API can return the live context window
+	// on demand without running another LLM call.
+	RecordTaskContextSnapshot(e.taskID, snapshot)
+
 	e.bus.SendEvent(event.NewEvent(event.EventContextWindowSnapshot, e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"model":                  snapshot.Model,
 		"max_context_tokens":     snapshot.MaxContextTokens,

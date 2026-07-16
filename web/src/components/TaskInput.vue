@@ -45,6 +45,7 @@ const emit = defineEmits<{
   pause: []
   resume: []
   cancel: []
+  toggleContextWindow: []
 }>()
 
 const inputText = ref('')
@@ -146,6 +147,13 @@ function setTimeoutSeconds(seconds: number) {
         @click="showOptions = !showOptions"
       >
         ⚙️ Options
+      </button>
+      <button
+        class="options-toggle"
+        title="Open context window panel"
+        @click="emit('toggleContextWindow')"
+      >
+        🪟 Context
       </button>
       <span v-if="!showOptions" class="options-summary">
         Max steps: {{ maxSteps }} · Timeout: {{ timeoutSeconds === 0 ? 'Unlimited' : (timeoutSeconds / 60) + ' min' }}
