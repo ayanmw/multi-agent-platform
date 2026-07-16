@@ -832,6 +832,33 @@ func QuerySessionMessages(sessionID string) ([]SessionMessageRecord, error) {
 	return msgs, rows.Err()
 }
 
+// QuerySessionMessagesByTask returns all messages for a specific task,
+// ordered by turn_index ASC, created_at ASC. This is the primary source for
+// reconstructing the LLM context window of a persisted task.
+func QuerySessionMessagesByTask(taskID string) ([]SessionMessageRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, session_id, task_id, turn_index, role, content, COALESCE(tool_call_id,''), COALESCE(tool_calls,''), COALESCE(token_count,0), created_at
+		 FROM session_messages WHERE task_id=? ORDER BY turn_index ASC, created_at ASC`, taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []SessionMessageRecord
+	for rows.Next() {
+		var m SessionMessageRecord
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.TaskID, &m.TurnIndex, &m.Role, &m.Content, &m.ToolCallID, &m.ToolCalls, &m.TokenCount, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
 // DeleteSessionMessages deletes all messages for a session.
 func DeleteSessionMessages(sessionID string) error {
 	if DB == nil {

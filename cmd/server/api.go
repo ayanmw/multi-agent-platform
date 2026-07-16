@@ -73,46 +73,70 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 	}
 	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 
-	// Append conversations in chronological order.
-	conversations, err := db.QueryConversationsByTask(id)
+	// 2. Otherwise, reconstruct from session_messages persisted during execution.
+	//    Each engine writes to session_messages via the SessionMessageWriter,
+	//    so this is the most faithful persisted source.
+	msgs, err := db.QuerySessionMessagesByTask(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for _, c := range conversations {
-		messages = append(messages, llm.Message{Role: c.Role, Content: c.Content})
+
+	for _, m := range msgs {
+		var toolCalls []llm.ToolCall
+		if m.ToolCalls != "" {
+			_ = json.Unmarshal([]byte(m.ToolCalls), &toolCalls) // best-effort
+		}
+		messages = append(messages, llm.Message{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
+			ToolCalls:  toolCalls,
+		})
 	}
 
-	// Append steps as assistant/tool/observation messages if no conversation
-	// records exist. This is a best-effort fallback for older persisted tasks.
-	if len(conversations) == 0 {
-		steps, err := db.QueryStepsByTask(id)
+	// 3. Best-effort fallback: if no session_messages exist, try the older
+	//    conversations table or steps table.
+	if len(messages) == 1 {
+		conversations, err := db.QueryConversationsByTask(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		lastThinkContent := ""
-		for _, s := range steps {
-			switch s.Type {
-			case "think":
-				messages = append(messages, llm.Message{Role: "assistant", Content: s.Content})
-				lastThinkContent = s.Content
-			case "tool_call":
-				// Only emit assistant + tool pair if it follows a think step so we
-				// don't double-count isolated tool calls.
-				if lastThinkContent != "" {
-					// Tool call reconstruction preserves the tool name as a lightweight
-					// marker so the snapshot remains meaningful.
-					messages = append(messages, llm.Message{
-						Role:      "assistant",
-						Content:   lastThinkContent,
-						ToolCalls: []llm.ToolCall{{Function: llm.FunctionCall{Name: s.ToolName}}},
-					})
-					lastThinkContent = ""
+		if len(conversations) > 0 {
+			// Reset to just the system prompt, then append conversation records.
+			messages = messages[:1]
+			for _, c := range conversations {
+				messages = append(messages, llm.Message{Role: c.Role, Content: c.Content})
+			}
+		} else {
+			steps, err := db.QueryStepsByTask(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			// Drop the placeholder system message; steps-based reconstruction
+			// rebuilds the full list below.
+			messages = nil
+			lastThinkContent := ""
+			for _, s := range steps {
+				switch s.Type {
+				case "think":
+					messages = append(messages, llm.Message{Role: "assistant", Content: s.Content})
+					lastThinkContent = s.Content
+				case "tool_call":
+					if lastThinkContent != "" {
+						messages = append(messages, llm.Message{
+							Role:      "assistant",
+							Content:   lastThinkContent,
+							ToolCalls: []llm.ToolCall{{Function: llm.FunctionCall{Name: s.ToolName}}},
+						})
+						lastThinkContent = ""
+					}
+					messages = append(messages, llm.Message{Role: "tool", Content: s.ToolOutput, ToolCallID: s.ID})
+				case "observation":
+					// Observations already appended via tool_call outputs above.
 				}
-				messages = append(messages, llm.Message{Role: "tool", Content: s.ToolOutput, ToolCallID: s.ID})
-			case "observation":
-				// Observations already appended via tool_call outputs above.
 			}
 		}
 	}
