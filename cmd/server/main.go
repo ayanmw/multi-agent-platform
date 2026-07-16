@@ -410,6 +410,11 @@ func main() {
 	// API: task detail / list / context window snapshots, and create task
 	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
+			if r.Method == http.MethodGet {
+				// The frontend still uses /api/tasks?id=xxx for on-demand task loading.
+				handleGetTask(w, r)
+				return
+			}
 			handleTasksRoot(w, r)
 			return
 		}
