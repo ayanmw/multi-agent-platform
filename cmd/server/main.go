@@ -407,12 +407,20 @@ func main() {
 	var handleTasksRoot func(http.ResponseWriter, *http.Request)
 	_ = handleTasksRoot // avoid declared-and-not-used if registration moves
 
-	// API: task detail / list / context window snapshots, and create task
+	// API: Start a chat task with real Agent Loop, list tasks, get task detail,
+	// fetch context window snapshots, and create new tasks.
 	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		// Exact /api/tasks (or /api/tasks/) is the root entrypoint. The standard
+		// library strips trailing slashes before invoking the handler, so the
+		// "/api/tasks/" branch is defensive for direct or reverse-proxy access.
 		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
+			// GET /api/tasks — list recent tasks, or get a single task by ?id=xxx.
 			if r.Method == http.MethodGet {
-				// The frontend still uses /api/tasks?id=xxx for on-demand task loading.
-				handleGetTask(w, r)
+				if r.URL.Query().Get("id") != "" {
+					handleGetTask(w, r)
+					return
+				}
+				handleListTasks(w, r)
 				return
 			}
 			handleTasksRoot(w, r)
