@@ -1,7 +1,7 @@
 # Multi-Agent Platform
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.6.4 Alpha**
+> **当前版本：v0.6.6 Alpha**
 > **Phase 状态：0–6 已完成，Phase 7 规划中**
 
 ## 快速开始
