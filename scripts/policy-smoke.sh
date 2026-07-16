@@ -12,8 +12,9 @@
 #   3. FileScopeRule        — 越界绝对路径文件写拦截
 #   4. ApprovalRule         — 高风险路径 (/etc/) 审批拦截
 #   5. 控制测试              — 安全命令正常执行（验证 policy 不误杀）
-#   6. TokenBudgetRule      — SKIP（默认 contract TokenBudget=0，无法端到端触发）
-#   7. ToolWhitelistRule    — SKIP（默认 contract AllowedTools=nil，无法触发）
+#   6. TokenBudgetRule      — 通过 body 传 token_budget=1 触发 budget exceeded 拦截
+#   7. ToolWhitelistRule    — 通过 body 传 allowed_tools=["write_file"] 拦截 run_shell
+#   8. CostBudgetRule       — 通过 body 传 cost_budget_usd=0.0000001 触发 budget exceeded
 #
 # 独立端口 18102 + 独立临时 DB，不污染仓库环境。
 # =============================================================================
@@ -37,6 +38,41 @@ RM_TEST_DIR="/tmp/policy-smoke-rm-test-$$"
 SCOPE_TEST_FILE="C:/policy_scope_test_$$.txt"
 # 审批规则测试目标文件（在 scope 内但路径含 /etc/，触发 ApprovalRule 误判）
 APPROVAL_TEST_FILE="./etc/policy_approval_test.txt"
+
+# WebSocket 用于发送 approve decision（如需要测试 approved 路径）
+WS_URL="ws://localhost:${PORT}/ws"
+
+# 通过 WS 发送审批决定的辅助函数
+# send_approval_decision <approval_id> <approve|deny>
+send_approval_decision() {
+  local approval_id="$1" decision="$2"
+  if command -v websocat >/dev/null 2>&1; then
+    echo "{\"type\":\"approval_decision\",\"approval_id\":\"${approval_id}\",\"decision\":\"${decision}\"}" | websocat -n1 "${WS_URL}" 2>/dev/null || true
+  elif command -v wscat >/dev/null 2>&1; then
+    # wscat -n 发送一次就退出（Node 版 wscat 无 -n，这里用 timeout 兜底）
+    timeout 2 bash -c "echo '{\"type\":\"approval_decision\",\"approval_id\":\"${approval_id}\",\"decision\":\"${decision}\"}' | wscat -c '${WS_URL}'" 2>/dev/null || true
+  else
+    # 无 WS 工具时静默跳过（approved 路径测试会 SKIP）
+    true
+  fi
+}
+
+# 启动一个 chat task 并覆盖 TaskContract 字段，返回 task_id
+# start_task_with_contract <case_id> <input_text> [contract_json_extra]
+start_task_with_contract() {
+  local case_id="$1" input="$2" extra="${3:-}"
+  local body
+  body="{\"action\":\"chat\",\"input\":\"${input}\",\"max_steps\":2"
+  if [[ -n "$extra" ]]; then
+    body="${body},${extra}"
+  fi
+  body="${body}}"
+  local resp
+  resp=$(curl -s -X POST "${BASE}/api/tasks?case=${case_id}" \
+    -H 'Content-Type: application/json' \
+    --data "$body" 2>/dev/null)
+  jget "$resp" "task_id"
+}
 
 cleanup() {
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -251,44 +287,92 @@ MOCK_EOF
 echo "  注入 pol-safe-echo (echo policy_safe_marker)"
 post_json_file /api/mock/scripts /tmp/mock-pol-safe.json > /dev/null
 
+# --- 6. TokenBudgetRule: 触发 token budget exceeded ---
+# 让 MockProvider 先返回一次 tool_call（消耗 token），再返回 text，
+# 但 max_steps=2 + token_budget=1，第一轮 think 后 token usage 就会 >=1，
+# 从而 tool_call 被 TokenBudgetRule 拦截。
+cat > /tmp/mock-pol-budget-token.json <<'MOCK_EOF'
+{"id":"pol-budget-token","case_id":"pol-budget-token","priority":200,"match_input":["policy-test-budget-token"],"responses":[{"type":"tool_call","tool_calls":[{"idx":0,"id":"call_budget_token","type":"function","function":{"name":"run_shell","arguments":"{\"command\":\"echo budget_token\"}"}}]}]}
+MOCK_EOF
+echo "  注入 pol-budget-token (run_shell, token_budget=1)"
+post_json_file /api/mock/scripts /tmp/mock-pol-budget-token.json > /dev/null
+
+# --- 7. ToolWhitelistRule: 白名单只含 write_file，拦截 run_shell ---
+cat > /tmp/mock-pol-whitelist.json <<'MOCK_EOF'
+{"id":"pol-whitelist","case_id":"pol-whitelist","priority":200,"match_input":["policy-test-whitelist"],"responses":[{"type":"tool_call","tool_calls":[{"idx":0,"id":"call_whitelist","type":"function","function":{"name":"run_shell","arguments":"{\"command\":\"echo whitelist_test\"}"}}]}]}
+MOCK_EOF
+echo "  注入 pol-whitelist (run_shell, allowed_tools=[\"write_file\"])"
+post_json_file /api/mock/scripts /tmp/mock-pol-whitelist.json > /dev/null
+
+# --- 8. CostBudgetRule: 极低成本预算触发 budget exceeded ---
+# 任何真实/mock LLM 调用产生 cost > 1e-7 USD，设置 cost_budget_usd=1e-7
+# 第一轮 think 产生 cost 后，tool_call 被 CostBudgetRule 拦截。
+cat > /tmp/mock-pol-budget-cost.json <<'MOCK_EOF'
+{"id":"pol-budget-cost","case_id":"pol-budget-cost","priority":200,"match_input":["policy-test-budget-cost"],"responses":[{"type":"tool_call","tool_calls":[{"idx":0,"id":"call_budget_cost","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"cost_budget_test.txt\",\"content\":\"cost budget test\"}"}}]}]}
+MOCK_EOF
+echo "  注入 pol-budget-cost (write_file, cost_budget_usd=0.0000001)"
+post_json_file /api/mock/scripts /tmp/mock-pol-budget-cost.json > /dev/null
+
+# 为 CostBudget 启用 mock 价格，使任何 usage 都产生非 0 cost
+# /api/models/prices/{model} PUT 可更新内存中的模型价格
+PRICE_PUT_RESP=$(curl -s -X PUT "${BASE}/api/models/prices/deepseek-v4-flash-local" \
+  -H 'Content-Type: application/json' \
+  --data '{"input_price":1000000.0,"output_price":1000000.0}' 2>/dev/null)
+echo "  设置 mock 高价: ${PRICE_PUT_RESP}"
+
 echo "[setup] Mock 脚本注入完成 ✓"
 
 # 验证脚本注入成功
 MOCK_COUNT=$(curl -s "${BASE}/api/mock/scripts" 2>/dev/null | grep -o '"id":"pol-[^"]*"' | wc -l)
-if [[ "$MOCK_COUNT" -lt 5 ]]; then
-  echo "[WARN] 只注入了 ${MOCK_COUNT} 个 mock 脚本（期望 5），检查注入逻辑"
+if [[ "$MOCK_COUNT" -lt 8 ]]; then
+  echo "[WARN] 只注入了 ${MOCK_COUNT} 个 mock 脚本（期望 8），检查注入逻辑"
 fi
 
 # =============================================================================
 # 启动所有测试任务（并发）
 # =============================================================================
 print_section "启动测试任务（串行启动，间隔 1.2s 避免 task_id 碰撞）"
-echo "  [1/5] DangerousCommandRule — rm -rf ..."
+echo "  [1/8] DangerousCommandRule — rm -rf ..."
 TASK_DANG=$(start_task "pol-dang-rm" "policy-test-danger")
 echo "    task_id=${TASK_DANG}"
 sleep 1.2
 
-echo "  [2/5] PathTraversalRule — /etc/passwd ..."
+echo "  [2/8] PathTraversalRule — /etc/passwd ..."
 TASK_TRAV=$(start_task "pol-traversal" "policy-test-traversal")
 echo "    task_id=${TASK_TRAV}"
 sleep 1.2
 
-echo "  [3/5] FileScopeRule — 绝对路径越界 ..."
+echo "  [3/8] FileScopeRule — 绝对路径越界 ..."
 TASK_SCOPE=$(start_task "pol-scope" "policy-test-scope")
 echo "    task_id=${TASK_SCOPE}"
 sleep 1.2
 
-echo "  [4/5] ApprovalRule — /etc/ 路径审批 ..."
+echo "  [4/8] ApprovalRule — ./etc/ 路径不触发审批 ..."
 TASK_APPROVAL=$(start_task "pol-approval" "policy-test-approval")
 echo "    task_id=${TASK_APPROVAL}"
 sleep 1.2
 
-echo "  [5/5] 控制测试 — 安全 echo ..."
+echo "  [5/8] 控制测试 — 安全 echo ..."
 TASK_SAFE=$(start_task "pol-safe-echo" "policy-test-safe")
 echo "    task_id=${TASK_SAFE}"
+sleep 1.2
+
+echo "  [6/8] TokenBudgetRule — token_budget=1 ..."
+TASK_BUDGET_TOKEN=$(start_task_with_contract "pol-budget-token" "policy-test-budget-token" '"token_budget":1')
+echo "    task_id=${TASK_BUDGET_TOKEN}"
+sleep 1.2
+
+echo "  [7/8] ToolWhitelistRule — allowed_tools=[\"write_file\"] ..."
+TASK_WHITELIST=$(start_task_with_contract "pol-whitelist" "policy-test-whitelist" '"allowed_tools":["write_file"]')
+echo "    task_id=${TASK_WHITELIST}"
+sleep 1.2
+
+echo "  [8/8] CostBudgetRule — cost_budget_usd=0.0000001 ..."
+TASK_BUDGET_COST=$(start_task_with_contract "pol-budget-cost" "policy-test-budget-cost" '"cost_budget_usd":0.0000001')
+echo "    task_id=${TASK_BUDGET_COST}"
 
 # 检查所有 task_id 都获取成功
-for tid_var in TASK_DANG TASK_TRAV TASK_SCOPE TASK_APPROVAL TASK_SAFE; do
+for tid_var in TASK_DANG TASK_TRAV TASK_SCOPE TASK_APPROVAL TASK_SAFE TASK_BUDGET_TOKEN TASK_WHITELIST TASK_BUDGET_COST; do
   tid="${!tid_var}"
   if [[ -z "$tid" ]]; then
     echo "[FATAL] ${tid_var} 未获取到 task_id，服务可能异常"
@@ -303,8 +387,8 @@ done
 print_section "轮询任务结果（最多 90s，含 30s 审批超时等待）"
 echo "  等待所有任务完成..."
 
-ALL_TASKS=("$TASK_DANG" "$TASK_TRAV" "$TASK_SCOPE" "$TASK_APPROVAL" "$TASK_SAFE")
-ALL_STATUS=("" "" "" "" "")
+ALL_TASKS=("$TASK_DANG" "$TASK_TRAV" "$TASK_SCOPE" "$TASK_APPROVAL" "$TASK_SAFE" "$TASK_BUDGET_TOKEN" "$TASK_WHITELIST" "$TASK_BUDGET_COST")
+ALL_STATUS=("" "" "" "" "" "" "" "")
 deadline=$((SECONDS + 90))
 while [[ $SECONDS -lt $deadline ]]; do
   all_done=true
@@ -475,18 +559,59 @@ fi
 # --- 6. TokenBudgetRule ---
 echo ""
 echo "--- 6. TokenBudgetRule: token 预算耗尽拦截 ---"
-echo "  默认 DefaultContract.TokenBudget=0 (unlimited)，API 请求无法设置 budget 参数"
-echo "  → 无法端到端触发，需单测覆盖（已有 policy_test.go TestTokenBudgetRule 覆盖）"
-record_result "TokenBudgetRule" "SKIP" \
-  "DefaultContract TokenBudget=0 (unlimited)，API 无参数可覆盖，无法端到端触发"
+BT_DETAIL=$(get_task_detail "$TASK_BUDGET_TOKEN")
+BT_PARSED=$(parse_detail "$BT_DETAIL")
+BT_STATUS=$(pget "$BT_PARSED" "task_status")
+BT_TOOL_DONE=$(pget "$BT_PARSED" "completed_tool_steps")
+BT_OUTPUT=$(pget "$BT_PARSED" "first_tool_output")
+echo "  task_status=${BT_STATUS}, completed_tool_steps=${BT_TOOL_DONE}"
+echo "  tool_output: ${BT_OUTPUT}"
+if [[ "$BT_STATUS" == "failed" && "$BT_TOOL_DONE" == "0" ]]; then
+  record_result "TokenBudgetRule" "PASS" \
+    "task=failed, 无 completed tool 步骤 → token budget=1 在第一轮 think 后触发拦截"
+else
+  record_result "TokenBudgetRule" "FAIL" \
+    "task=${BT_STATUS}, tool_done=${BT_TOOL_DONE} → token budget 未拦截"
+  FINDINGS+=("[TokenBudgetRule] 设置 token_budget=1 后仍允许工具执行，budget 未生效")
+fi
 
 # --- 7. ToolWhitelistRule ---
 echo ""
 echo "--- 7. ToolWhitelistRule: 非白名单 tool 拦截 ---"
-echo "  默认 DefaultContract.AllowedTools=nil (全部允许)，API 请求无法设置 whitelist"
-echo "  → 无法端到端触发，需单测覆盖（已有 policy_test.go TestToolWhitelistRule 覆盖）"
-record_result "ToolWhitelistRule" "SKIP" \
-  "DefaultContract AllowedTools=nil (全部允许)，API 无参数可覆盖，无法端到端触发"
+WL_DETAIL=$(get_task_detail "$TASK_WHITELIST")
+WL_PARSED=$(parse_detail "$WL_DETAIL")
+WL_STATUS=$(pget "$WL_PARSED" "task_status")
+WL_TOOL_DONE=$(pget "$WL_PARSED" "completed_tool_steps")
+WL_OUTPUT=$(pget "$WL_PARSED" "first_tool_output")
+echo "  task_status=${WL_STATUS}, completed_tool_steps=${WL_TOOL_DONE}"
+echo "  tool_output: ${WL_OUTPUT}"
+if [[ "$WL_STATUS" == "failed" && "$WL_TOOL_DONE" == "0" ]]; then
+  record_result "ToolWhitelistRule" "PASS" \
+    "task=failed, 无 completed tool 步骤 → run_shell 不在白名单 [write_file] 中被拦截"
+else
+  record_result "ToolWhitelistRule" "FAIL" \
+    "task=${WL_STATUS}, tool_done=${WL_TOOL_DONE} → run_shell 被白名单错误放行"
+  FINDINGS+=("[ToolWhitelistRule] 设置 allowed_tools=[write_file] 后 run_shell 仍执行")
+fi
+
+# --- 8. CostBudgetRule ---
+echo ""
+echo "--- 8. CostBudgetRule: USD 成本预算耗尽拦截 ---"
+CB_DETAIL=$(get_task_detail "$TASK_BUDGET_COST")
+CB_PARSED=$(parse_detail "$CB_DETAIL")
+CB_STATUS=$(pget "$CB_PARSED" "task_status")
+CB_TOOL_DONE=$(pget "$CB_PARSED" "completed_tool_steps")
+CB_OUTPUT=$(pget "$CB_PARSED" "first_tool_output")
+echo "  task_status=${CB_STATUS}, completed_tool_steps=${CB_TOOL_DONE}"
+echo "  tool_output: ${CB_OUTPUT}"
+if [[ "$CB_STATUS" == "failed" && "$CB_TOOL_DONE" == "0" ]]; then
+  record_result "CostBudgetRule" "PASS" \
+    "task=failed, 无 completed tool 步骤 → cost_budget_usd=1e-7 在第一轮 think 后触发拦截"
+else
+  record_result "CostBudgetRule" "FAIL" \
+    "task=${CB_STATUS}, tool_done=${CB_TOOL_DONE} → cost budget 未拦截"
+  FINDINGS+=("[CostBudgetRule] 设置 cost_budget_usd=0.0000001 后仍允许工具执行，budget 未生效")
+fi
 
 # =============================================================================
 # 汇总
@@ -515,7 +640,7 @@ fi
 
 # 静态分析发现（不依赖运行时测试）
 echo ""
-echo "  [静态分析] 本轮已修复的 policy 缺口（对照 TEST_REPORT S1/S7/M1/M2）："
+echo "  [静态分析] 本轮已修复的 policy 缺口（对照 TEST_REPORT S1/S7/M1/M2/M3）："
 echo "  1. [已修复 S7] Engine 不再把 ErrBlockedByPolicy 转为 ErrApprovalRequired。"
 echo "     PathTraversal / FileScope / TokenBudget / ToolWhitelist / CostBudget 命中"
 echo "     时立即失败并把拦截原因作为 observation 反馈给 LLM，不再等 30s 审批。"
@@ -527,11 +652,15 @@ echo "  4. [已修复 S1] FileScopeRule 新增 isUnixAbsolutePath 判定，/etc/
 echo "     Windows 上不再被 filepath.Join 并入 scope 放行。"
 echo "  5. [已修复 低危] ApprovalRule.isHighRiskFilePath 用 HasPrefix 替代 Contains，"
 echo "     ./etc/x 相对路径不再被误判为系统 /etc/ 路径。"
+echo "  6. [已修复 M3] /api/tasks POST 请求体现在支持 scope / allowed_tools /"
+echo "     token_budget / cost_budget_usd 覆盖 DefaultContract，本脚本已可端到端"
+echo "     触发 TokenBudgetRule / ToolWhitelistRule / CostBudgetRule。"
 echo ""
 echo "  [未修复/已知缺口]"
-echo "  A. [API 缺口 M3] /api/tasks POST 请求体仍无法设置 TaskContract 的 Scope /"
-echo "     AllowedTools / TokenBudget / CostBudgetUSD / Permissions，端到端无法触发"
-echo "     TokenBudget / ToolWhitelist（默认 0/nil），需单测覆盖。"
+echo "  A. [审批 approved 路径] mock 模式下 DangerousCommandRule 返回 ErrApprovalRequired，"
+echo "     但 policy-smoke 未配置真实 ApprovalHandler/WS decision；approved 放行路径仍"
+echo "     需 websocat/wscat 支持在 approval_required 事件后发送 approval_decision。"
+echo "  B. [API 缺口] /api/tasks 仍不支持设置 Permissions / Scope 外的其他 TaskContract 字段。"
 
 echo ""
 if [[ $FAIL -gt 0 ]]; then
