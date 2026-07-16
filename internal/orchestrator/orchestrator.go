@@ -84,6 +84,14 @@ type AgentSpec struct {
 	// Empty for root-level agents.
 	ParentAgentID string
 
+	// OutputTo is the list of agent IDs that should receive this agent's final
+	// result via the AgentBus when it completes. This decouples the data flow
+	// from the execution strategy (parallel vs sequential): an agent can forward
+	// its output to other agents regardless of whether they are running at the
+	// same time. If parallel, messages are queued and delivered when the target
+	// registers its handler.
+	OutputTo []string
+
 	// WorkingMemory is optional context from prior tasks, injected into the
 	// system prompt before the agent starts. Built by MemoryRecall before
 	// orchestration. When set, it is prepended to the system prompt.
@@ -170,10 +178,10 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 	results := make([]AgentResult, len(specs))
 
 	if strategy == "sequential" {
-		// Sequential pipeline: each agent's output is forwarded to the next
-		// agent via the AgentBus before the next agent starts. This creates a
-		// chain like researcher → writer where writer sees researcher output
-		// as a user message in its conversation history.
+		// Sequential pipeline: agents run one after another. Each agent's output
+		// is forwarded to the next agent via the AgentBus before it starts. This
+		// creates a chain like researcher -> writer where writer sees researcher
+		// output as a user message in its conversation history.
 		for i, spec := range specs {
 			results[i] = o.runAgent(ctx, rootTaskID, spec)
 			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
@@ -194,6 +202,19 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			go func(idx int, s AgentSpec) {
 				defer wg.Done()
 				results[idx] = o.runAgent(ctx, rootTaskID, s)
+				// Forward result to any target agents declared in OutputTo, even when
+				// running in parallel. The AgentBus queues messages if the target has
+				// not registered its handler yet.
+				if results[idx].Status == "completed" && o.agentBus != nil {
+					for _, targetID := range s.OutputTo {
+						o.agentBus.SendMessage(runtime.AgentMessage{
+							FromAgentID: s.AgentID,
+							ToAgentID:   targetID,
+							Type:        "observation",
+							Content:     results[idx].Result,
+						})
+					}
+				}
 			}(i, spec)
 		}
 
@@ -591,7 +612,8 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 						"If you need external information not available from local files or shell commands, " +
 						"state the limitation and answer based on your training knowledge. " +
 						"Output your findings as a clear, structured report.",
-					Input: "Research the following topic: " + input + ". Provide a structured summary of findings.",
+					Input:    "Research the following topic: " + input + ". Provide a structured summary of findings.",
+					OutputTo: []string{"agent_writer"},
 				},
 				{
 					AgentID: "agent_writer",
