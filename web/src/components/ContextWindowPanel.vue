@@ -30,6 +30,13 @@ const usageColor = computed(() => {
   return 'bg-red-500'
 })
 
+const usageTextColor = computed(() => {
+  const p = usagePercent.value
+  if (p < 50) return 'text-emerald-400'
+  if (p < 80) return 'text-amber-400'
+  return 'text-red-400'
+})
+
 const roleColors: Record<string, string> = {
   system: 'bg-purple-500',
   user: 'bg-blue-500',
@@ -102,10 +109,14 @@ function messageRatio(msg: ContextSnapshotMessage): number {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-4 space-y-4 overflow-hidden bg-gray-900 text-gray-100">
-    <div class="flex items-center justify-between">
-      <h2 class="text-lg font-semibold">🪟 Context Window</h2>
-      <span v-if="latest" class="text-xs text-gray-400 truncate max-w-[180px]">
+  <div class="h-full flex flex-col gap-4 p-4 overflow-hidden bg-gray-900 text-gray-100">
+    <!-- Header row: title + model chip -->
+    <div class="flex items-center justify-between gap-3 min-w-0">
+      <h2 class="text-lg font-semibold whitespace-nowrap">🪟 Context Window</h2>
+      <span
+        v-if="latest"
+        class="shrink-0 inline-flex items-center px-2 py-1 rounded-full text-[10px] leading-none font-medium bg-gray-800 text-gray-400 border border-gray-700 truncate max-w-[150px]"
+      >
         {{ latest.model || 'unknown model' }}
       </span>
     </div>
@@ -116,94 +127,123 @@ function messageRatio(msg: ContextSnapshotMessage): number {
 
     <template v-else>
       <!-- Total usage -->
-      <div class="bg-gray-800 rounded-lg p-4 space-y-2">
-        <div class="flex items-end justify-between">
-          <span class="text-sm text-gray-300">Context Window</span>
-          <span class="font-mono text-sm">
-            {{ formatTokens(latest.estimated_total_tokens) }} / {{ formatTokens(latest.max_context_tokens) }}
+      <div class="bg-gray-800 rounded-xl p-4 flex flex-col gap-3 border border-gray-700 shadow-sm">
+        <div class="flex items-baseline justify-between gap-2">
+          <span class="text-sm font-medium text-gray-200">Context Window</span>
+          <span class="font-mono text-xs text-gray-400 shrink-0">
+            {{ formatTokens(latest.estimated_total_tokens) }} / {{ formatTokens(latest.max_context_tokens) }} tokens
           </span>
         </div>
-        <div class="w-full h-4 bg-gray-700 rounded-full overflow-hidden">
+        <div class="flex items-end gap-3">
+          <span class="text-3xl font-bold tracking-tight" :class="usageTextColor">
+            {{ usagePercent.toFixed(1) }}%
+          </span>
+        </div>
+        <div class="w-full h-5 bg-gray-700 rounded-full overflow-hidden">
           <div
-            class="h-full transition-all duration-300"
+            class="h-full transition-all duration-500 ease-out"
             :class="usageColor"
             :style="{ width: `${usagePercent}%` }"
           />
         </div>
-        <div class="text-xs text-gray-400">
-          {{ usagePercent.toFixed(1) }}% estimated (local heuristic, not API exact tokens)
-        </div>
+        <p class="text-[11px] leading-snug text-gray-500">
+          estimated (local heuristic, not API exact tokens)
+        </p>
       </div>
 
-      <!-- Role breakdown bar chart -->
-      <div class="bg-gray-800 rounded-lg p-4 space-y-3">
-        <h3 class="text-sm font-medium text-gray-300">Role breakdown</h3>
-        <div
-          v-for="row in roleSummary"
-          :key="row.role"
-          class="space-y-1"
-        >
-          <div class="flex items-center justify-between text-sm">
-            <span class="capitalize">{{ roleLabels[row.role] || row.role }}</span>
-            <span class="font-mono text-gray-300">
-              {{ (row.ratio * 100).toFixed(0) }}%
-            </span>
-          </div>
-          <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-            <div
-              class="h-full rounded-full"
-              :class="roleBars[row.role] || 'bg-gray-500'"
-              :style="roleBarStyle(row.ratio)"
-            />
-          </div>
-          <div class="text-xs text-gray-500">
-            {{ row.count }} message{{ row.count > 1 ? 's' : '' }} · {{ formatTokens(row.tokens) }} tok
+      <!-- Role breakdown grid -->
+      <div class="bg-gray-800 rounded-xl p-4 border border-gray-700 shadow-sm flex flex-col gap-3">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500">Role breakdown</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <div
+            v-for="row in roleSummary"
+            :key="row.role"
+            class="bg-gray-900/60 rounded-lg p-3 border border-gray-700/60 flex flex-col gap-2"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <span
+                class="inline-block w-2 h-2 rounded-full shrink-0"
+                :class="roleColors[row.role] || 'bg-gray-500'"
+              />
+              <span class="text-xs font-medium text-gray-300 truncate">
+                {{ roleLabels[row.role] || row.role }}
+              </span>
+            </div>
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="text-xl font-bold text-gray-100">
+                {{ (row.ratio * 100).toFixed(0) }}%
+              </span>
+              <span class="font-mono text-[10px] text-gray-500 shrink-0">
+                {{ formatTokens(row.tokens) }} tok
+              </span>
+            </div>
+            <div class="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+              <div
+                class="h-full rounded-full"
+                :class="roleBars[row.role] || 'bg-gray-500'"
+                :style="roleBarStyle(row.ratio)"
+              />
+            </div>
+            <div class="text-[10px] text-gray-600">
+              {{ row.count }} message{{ row.count > 1 ? 's' : '' }}
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Message list -->
-      <div class="flex-1 overflow-y-auto space-y-2 min-h-0">
+      <div class="flex-1 overflow-y-auto min-h-0 pr-1 space-y-3">
         <div
           v-for="(msg, idx) in latest.messages"
           :key="idx"
-          class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden"
+          class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-sm"
         >
           <details class="group">
-            <summary class="cursor-pointer p-3 flex items-center justify-between select-none">
+            <summary class="cursor-pointer p-3 flex items-center justify-between gap-3 select-none">
               <div class="flex items-center gap-2 min-w-0">
                 <span
                   class="inline-block w-2 h-2 rounded-full shrink-0"
                   :class="roleColors[msg.role] || 'bg-gray-500'"
                 />
-                <span class="text-sm font-medium truncate">
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-700 text-gray-200 truncate">
                   {{ roleLabels[msg.role] || msg.role }}
                 </span>
-                <span class="text-xs text-gray-400">
+                <span class="text-[10px] text-gray-500">
                   {{ (messageRatio(msg) * 100).toFixed(0) }}%
                 </span>
               </div>
               <div class="flex items-center gap-3 shrink-0">
-                <span class="text-xs font-mono text-gray-400">
+                <span class="text-[10px] font-mono text-gray-400">
                   {{ formatTokens(msg.estimated_tokens) }} tok
                 </span>
-                <span class="text-xs text-gray-500 group-open:rotate-90 transition-transform">
+                <span class="text-[10px] text-gray-500 group-open:rotate-90 transition-transform duration-200">
                   ▶
                 </span>
               </div>
             </summary>
-            <div class="px-3 pb-3 text-sm whitespace-pre-wrap break-words font-mono bg-gray-850/50">
-              <div v-if="msg.reasoning" class="mb-2 p-2 bg-gray-700 rounded text-xs border-l-2 border-gray-500">
-                <strong>Reasoning:</strong>
-{{ msg.reasoning }}
+            <div class="px-3 pb-3 space-y-2 text-sm">
+              <div
+                v-if="msg.reasoning"
+                class="p-2.5 rounded-lg bg-gray-700/50 border-l-2 border-purple-500/80 text-xs text-gray-300 whitespace-pre-wrap break-words"
+              >
+                <span class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Reasoning</span>
+                {{ msg.reasoning }}
               </div>
-              <div v-if="msg.tool_call_id" class="mb-2 text-xs text-gray-400">
-                tool_call_id: {{ msg.tool_call_id }}
+              <div
+                v-if="msg.tool_call_id"
+                class="p-2 rounded-lg bg-gray-900/60 border border-gray-700 text-[10px] text-gray-500 font-mono break-all"
+              >
+                <span class="text-gray-600">tool_call_id:</span> {{ msg.tool_call_id }}
               </div>
-              <div v-if="msg.tool_calls && msg.tool_calls.length" class="mb-2 text-xs text-gray-400">
-                tool_calls: {{ msg.tool_calls.length }}
+              <div
+                v-if="msg.tool_calls && msg.tool_calls.length"
+                class="p-2 rounded-lg bg-gray-900/60 border border-gray-700 text-[10px] text-gray-500 font-mono"
+              >
+                <span class="text-gray-600">tool_calls:</span> {{ msg.tool_calls.length }}
               </div>
-              <div class="text-gray-200">{{ msg.content || '(empty content)' }}</div>
+              <div class="p-3 rounded-lg bg-gray-900/60 border border-gray-700 text-gray-200 font-mono text-xs whitespace-pre-wrap break-words">
+                {{ msg.content || '(empty content)' }}
+              </div>
             </div>
           </details>
         </div>
