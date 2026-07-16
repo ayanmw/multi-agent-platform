@@ -160,14 +160,13 @@
 
 | # | case | 当前问题/风险 | 目标脚本/扩展 |
 |---|------|-------------|--------------|
-| 1 | **修复 multi-agent 真实 LLM green** | researcher 系统提示硬依赖未注册 web_search；malformed tool_call JSON 回传导致 API 400 | 代码修复 task #21，然后用 `real-llm-smoke.sh` 场景3 验证 completed |
-| 2 | **真实 LLM multi-agent 端到端 green（D1 已验证，R7/R8 修复后）** | D1 fallback chain 已验证；必须修复 R7/R8 后重新断言场景3 completed | `scripts/real-llm-smoke.sh` 场景3 |
-| 3 | **D3 cost 小对话非 0 验证** | ✅ 已验证（2026-07-16），`total_cost_usd=0.00085` 级 | `scripts/real-llm-smoke.sh` 场景4 |
-| 4 | **AgentBus 真实 agent 间通信** | `sendAgentMessage` 无调用方，researcher→writer 数据不传递 | 新增 `scripts/agentbus-smoke.sh` 或扩展 multi-agent case |
-| 5 | **子任务树独立回放** | child_tasks 仍可能空/合并 steps；前端无法点开单个 agent 历史 | 扩展 `multi-agent-smoke.sh` 断言每个 agent 有独立 task + steps |
-| 6 | **CostBudgetRule 端到端触发** | 已接入但在 smoke 中未设置 `cost_budget_usd` | 扩展 `policy-smoke.sh` 或新增 `cost-budget-smoke.sh` |
-| 7 | **TokenBudgetRule / ToolWhitelistRule 触发** | API body 已支持 but 未在冒烟中传入 | 扩展 `policy-smoke.sh` body 传 `token_budget` / `allowed_tools` |
-| 8 | **审批 approved 路径** | mock 下 DangerousCommand 走审批超时拒绝，approved 放行分支未测 | 扩展 `policy-smoke.sh` 加 approve decision WS 消息 |
+| 1 | **✅ 修复 multi-agent 真实 LLM green** | researcher 不再依赖未注册 web_search；tool_call Arguments 回写 history 前统一 sanitize，场景 3 completed（commit `0d19eb7`） | `scripts/real-llm-smoke.sh` 场景3 |
+| 2 | **AgentBus 真实 agent 间通信** | `sendAgentMessage` 无调用方，researcher→writer 数据不传递；需构造 case 让 writer 真正消费 researcher 产出 | 新增 `scripts/agentbus-smoke.sh` 或扩展 multi-agent case |
+| 3 | **子任务树独立回放** | child_tasks 已非空，但子任务 status/steps 仍挂在 root taskID 下；前端无法点开单个 agent 历史 | 扩展 `multi-agent-smoke.sh` 断言每个 agent 子任务有独立 steps、parent_task_id 正确、子任务 status=completed |
+| 4 | **CostBudgetRule 端到端触发** | 已接入但在 smoke 中未设置 `cost_budget_usd` | 扩展 `policy-smoke.sh` 或新增 `cost-budget-smoke.sh` |
+| 5 | **TokenBudgetRule / ToolWhitelistRule 触发** | API body 已支持 but 未在冒烟中传入 | 扩展 `policy-smoke.sh` body 传 `token_budget` / `allowed_tools` |
+| 6 | **审批 approved 路径** | mock 下 DangerousCommand 走审批超时拒绝，approved 放行分支未测 | 扩展 `policy-smoke.sh` 加 approve decision WS 消息 |
+| 7 | **真实 LLM multi-agent 产物断言** | 场景 3 只断言 status=completed；未验证 writer 是否真正使用了 researcher 的结果 | 扩展 `real-llm-smoke.sh` 场景3：断言最终答案包含 research 关键词或 writer 产物文件存在 |
 
 ### 🟡 中优先级（鲁棒性 / 可观测性）
 
@@ -210,26 +209,27 @@
 
 ### 6.1 立即执行（本轮无新增开发）
 
-目标：**验证 D1 + D3**
+目标：**验证 R7/R8 修复后 multi-agent 真实 LLM green**
 
 ```bash
 bash scripts/real-llm-smoke.sh
 ```
 
-预期新增断言：
-- 场景3 multi-agent：`status=completed`，`child_tasks` 非空且 2 个 agent 都有 steps
-- 场景4 dialogue：`GET /api/costs?task_id=...` 返回 `total_cost_usd > 0`（浮点数，约 $0.001~$0.01）
+预期断言：
+- 场景3 multi-agent：`status=completed`，无 `web_search` / `tool not found` 错误，无 `400 Unterminated string`
+- 场景4 dialogue：`GET /api/costs?task_id=...` 返回 `total_cost_usd > 0`（浮点数）
 
 ### 6.2 下一轮 smoke 开发优先级（建议顺序）
 
 1. **扩展 `policy-smoke.sh`**：
    - body 传 `cost_budget_usd` / `token_budget` / `allowed_tools`
    - 通过 WS 发送 approve decision，验证 approved 路径
-2. **新增 `agentbus-smoke.sh`**（mock）：
+2. **扩展 `multi-agent-smoke.sh`**：
+   - 断言每个 child task 有独立 task_id、子任务 status=completed、parent_task_id 正确
+   - 断言子任务 steps 不合并到 root task
+3. **新增 `agentbus-smoke.sh`**（mock / real）：
    - 构造两个 agent，agentA finish 后通过 AgentBus 给 agentB 发消息
    - 断言 agentB 的 input 包含 agentA 结果
-3. **扩展 `multi-agent-smoke.sh`**：
-   - 断言每个 child task 有独立 task_id、独立 steps、parent_task_id 正确
 4. **新增 `memory-smoke.sh`**（mock，可选 embed provider mock）：
    - POST /api/memories → GET /api/memories → PUT → DELETE → embed
 5. **新增 `control-smoke.sh`**：需先实现 cancel handler / pause/resume
@@ -241,14 +241,14 @@ bash scripts/real-llm-smoke.sh
 
 | 系统模块 | 当前覆盖度 | 说明 |
 |----------|-----------|------|
-| 单 Agent ReAct Loop | **75%** | 基础路径 mock+real 都 ok；pause/resume/cancel、tool-error 真实事件缺失 |
-| Router 分层模型 | **80%** | primary + fallback chain 真实验证；复杂 intent 组合未覆盖 |
-| 多 Agent 编排 | **45%** | 入口跑通、D1 fallback 验证；child tree / agent bus / strategy / 并发控制仍未验证，真实 LLM 下 researcher 系统提示需修复 |
+| 单 Agent ReAct Loop | **80%** | 基础路径 mock+real 全绿；pause/resume/cancel、tool-error 真实事件仍可补 |
+| Router 分层模型 | **85%** | primary + fallback chain 真实验证，multi-agent pro→efficient 回退路径真实跑通 |
+| 多 Agent 编排 | **60%** | 入口真实 LLM green；child tree 结构基本正确，但子任务独立 steps/status、AgentBus、strategy、并发控制仍未验证 |
 | Policy 安全门 | **50%** | 主要规则 mock 测试；budget/whitelist/approved 路径未测；Windows 路径缺陷未修 |
 | Auth | **70%** | Bearer + key 生命周期完整；RBAC、GET 保护、细粒度 route 未测 |
-| Cost / Metrics | **65%** | 链路通；float64 精度与价格编辑未真实验证 |
+| Cost / Metrics | **70%** | 真实 LLM 下 cost 链路完整；价格编辑 API 真实验证未做 |
 | Memory / RAG | **20%** | API 存在，冒烟几乎未碰 |
 | Tools / Sandbox | **30%** | 3 内置工具 ok；Docker sandbox 未验证；动态注册未测 |
 | WS 事件与背压 | **60%** | 顺序字段 ok；背压/慢客户端未测 |
 
-**结论**：当前冒烟测试对"入口 API 能跑、单 agent 能完成、基础安全能拦截、Router fallback chain 能工作"覆盖较好，但对**多 Agent 协调的完整性（真实 LLM 下 researcher/writer  green、AgentBus）、复杂 Policy 组合、Memory、鲁棒性（重试/节流/背压）**覆盖不足。接下来应优先修复真实 LLM multi-agent 的 R7/R8，然后补齐 AgentBus、子任务树、budget/whitelist policy 这些复杂 case。
+**结论**：当前冒烟测试对"入口 API 能跑、单 agent 能完成、基础安全能拦截、Router fallback chain 能工作、真实 LLM multi-agent 能完成"覆盖较好。接下来应优先补齐 **AgentBus 真实通信、子任务树独立回放、复杂 Policy 组合（budget/whitelist/approved）、Memory CRUD**，并提升 **WS 背压 / 并发节流**等鲁棒性 case。
