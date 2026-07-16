@@ -57,32 +57,32 @@ import (
 // Each agent has its own configuration, system prompt, and task.
 type AgentSpec struct {
 	// AgentID is a unique identifier for this agent (e.g., "code_writer", "reviewer").
-	AgentID string
+	AgentID string `json:"agent_id"`
 
 	// Name is the human-readable display name (e.g., "Code Writer", "Code Reviewer").
-	Name string
+	Name string `json:"name"`
 
 	// SystemPrompt defines the agent's personality, capabilities, and constraints.
 	// Each agent type (writer, reviewer, researcher) has a different system prompt.
-	SystemPrompt string
+	SystemPrompt string `json:"system_prompt"`
 
 	// Input is the task description for this specific agent.
-	Input string
+	Input string `json:"input"`
 
 	// Model is the LLM model for this agent. If empty, the orchestrator default is used.
-	Model string
+	Model string `json:"model,omitempty"`
 
 	// Contract is the TaskContract for this agent. Defines scope, budget, tools, etc.
 	// If nil, DefaultContract(Input) is used.
-	Contract *harness.TaskContract
+	Contract *harness.TaskContract `json:"contract,omitempty"`
 
 	// AllowedTools is the list of tool names this agent is allowed to use.
 	// If empty, all registered tools are available.
-	AllowedTools []string
+	AllowedTools []string `json:"allowed_tools,omitempty"`
 
 	// ParentAgentID is the agent that spawned this agent (for agent-to-agent communication).
 	// Empty for root-level agents.
-	ParentAgentID string
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
 
 	// OutputTo is the list of agent IDs that should receive this agent's final
 	// result via the AgentBus when it completes. This decouples the data flow
@@ -90,12 +90,12 @@ type AgentSpec struct {
 	// its output to other agents regardless of whether they are running at the
 	// same time. If parallel, messages are queued and delivered when the target
 	// registers its handler.
-	OutputTo []string
+	OutputTo []string `json:"output_to,omitempty"`
 
 	// WorkingMemory is optional context from prior tasks, injected into the
 	// system prompt before the agent starts. Built by MemoryRecall before
 	// orchestration. When set, it is prepended to the system prompt.
-	WorkingMemory string
+	WorkingMemory string `json:"working_memory,omitempty"`
 }
 
 // AgentResult holds the result of a single agent's execution.
