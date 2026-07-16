@@ -562,7 +562,9 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					Name:    "Researcher",
 					SystemPrompt: "You are a research agent. Your job is to gather information, " +
 						"analyze facts, and provide a structured research summary. " +
-						"Use web_search and read_file tools to gather data. " +
+						"Use the available tools (read_file and run_shell) to gather data. " +
+						"If you need external information not available from local files or shell commands, " +
+						"state the limitation and answer based on your training knowledge. " +
 						"Output your findings as a clear, structured report.",
 					Input: "Research the following topic: " + input + ". Provide a structured summary of findings.",
 				},

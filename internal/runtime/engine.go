@@ -93,7 +93,6 @@ import (
 	"fmt"
 	"log"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
@@ -931,17 +930,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// iteration will see both and can decide to retry or try a different
 				// tool.
 				//
-				// IMPORTANT: if the failure was due to malformed JSON arguments, the
-				// raw tc.Function.Arguments string is invalid JSON. Serializing it
-				// back into the next API request would trigger a 400 BadRequestError
-				// because the provider parses the nested JSON inside arguments. We
-				// therefore sanitize the tool_call to a syntactically valid JSON
-				// object before appending it to conversation history. The actual
-				// error is still preserved in the tool result observation.
-				sanitizedTC := tc
-				if strings.Contains(toolErr.Error(), "invalid arguments JSON") {
-					sanitizedTC.Function.Arguments = `{"_error":"invalid arguments JSON"}`
-				}
+				// IMPORTANT: if tc.Function.Arguments is malformed JSON, serializing
+				// the raw string back into the next API request triggers a 400
+				// BadRequestError because the provider parses the nested JSON inside
+				// arguments. We sanitize every tool_call before appending it to
+				// conversation history; the actual error is preserved in the tool
+				// result observation.
+				sanitizedTC := sanitizeToolCallArguments(tc)
 				e.messages = append(e.messages, llm.Message{
 					Role:      "assistant",
 					Content:   content,
@@ -971,10 +966,16 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			//
 			// This is what makes the ReAct loop work: the LLM sees the
 			// consequences of its actions and adapts accordingly.
+			//
+			// IMPORTANT: successful tool calls can still carry malformed
+			// arguments in rare cases (e.g. the LLM produced invalid JSON but
+			// executeTool repaired it locally). Always sanitize the arguments
+			// before appending to conversation history to avoid 400 errors on
+			// the next think step.
 			e.messages = append(e.messages, llm.Message{
 				Role:      "assistant",
 				Content:   content,
-				ToolCalls: []llm.ToolCall{tc},
+				ToolCalls: []llm.ToolCall{sanitizeToolCallArguments(tc)},
 			})
 			e.messages = append(e.messages, llm.Message{
 				Role:       "tool",
@@ -1999,6 +2000,28 @@ func repairToolArgumentsJSON(raw string) (map[string]any, error) {
 		}
 	}
 	return nil, fmt.Errorf("unable to repair arguments JSON")
+}
+
+// sanitizeToolCallArguments returns a copy of tc with syntactically valid JSON
+// in Function.Arguments. If the raw arguments string is already valid JSON, the
+// original value is preserved. Otherwise it is replaced with a minimal valid
+// object that records the original error, preventing malformed nested JSON from
+// poisoning the next LLM API request with 400 BadRequestError.
+func sanitizeToolCallArguments(tc llm.ToolCall) llm.ToolCall {
+	sanitized := tc
+	if !isValidToolArgumentsJSON(tc.Function.Arguments) {
+		sanitized.Function.Arguments = `{"_error":"invalid arguments JSON"}`
+	}
+	return sanitized
+}
+
+// isValidToolArgumentsJSON reports whether s is syntactically valid JSON.
+// It is used when appending tool_calls back into conversation history so
+// that malformed arguments (e.g. unterminated strings from streaming)
+// do not poison the next LLM request with 400 BadRequestError.
+func isValidToolArgumentsJSON(s string) bool {
+	var dummy map[string]any
+	return json.Unmarshal([]byte(s), &dummy) == nil
 }
 
 // saveCheckpoint persists the current engine state as a checkpoint for crash recovery.
