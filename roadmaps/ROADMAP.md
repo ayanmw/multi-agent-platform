@@ -370,6 +370,32 @@ const activeTaskId = ref<string | null>(null)
 - [x] `/api/memories/recall?query=` 端点: 纯向量检索返回按相似度排序的记忆列表
 - [x] 验证: `go build ./...`, `go vet ./...` 通过；启动后 auth 端点 CRUD 正常（auth on/off 双模式）；向量召回端点返回正确结构
 
+----
+
+## Phase 6-G: 上下文窗口可观测性 ✅ (2026-07-16)
+
+> **版本**: v0.6.6 Alpha  
+> **Commit**: `Phase 6-G: context window observability — snapshot events + UI panel + smoke test`
+
+### 交付物
+- [x] 后端 Token 估算：`internal/llm/token_estimate.go` + 单元测试
+- [x] Engine 每次 `think()` 前发射 `context_window_snapshot` 事件，含 model / max_context_tokens / estimated_total_tokens / estimated_usage_ratio / messages
+- [x] 前端 `ContextWindowPanel.vue`：总量进度条 + role 分组条形图 + 可展开 message 列表
+- [x] 前端 `useContextWindow.ts` 快照累积与清理
+- [x] 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`，real-LLM 冒烟测试验证事件字段
+
+### 验证
+- `go test ./internal/llm` ✅
+- `go build ./cmd/server` ✅
+- `cd web && npm run build` ✅
+- `bash scripts/context-window-smoke.sh` (LLM_USE_MOCK=false) ✅ PASS 9 / FAIL 0
+
+### 已知限制
+- token 数为本地启发式估算（~4 字符/token），非 API 精确值；字段命名已作 `estimated_*` 区分。
+- 超长 tool 输出 message 会完整进入事件 payload，后续若出现性能问题可再引入 truncation + 按需拉取。
+
+---
+
 ## Phase 6 收尾：安全与质量修复批次 ✅ (2026-07-10 ~ 2026-07-11)
 
 > **版本**: v0.6.2 Alpha
@@ -446,6 +472,12 @@ const activeTaskId = ref<string | null>(null)
 
 ## Phase 7: 生产化与深度集成 🔜 PLANNING (暂不实施)
 
+### 候选特性
+- [ ] 在线 tokenizer（tiktoken / cl100k_base）替换当前字符启发式估算
+- [ ] 后端 context window 压缩策略：按 token 预算自动截断/摘要历史 messages
+- [ ] `/api/tasks/:id/context_window` 历史快照查询端点（当前仅 WS 实时事件）
+- [ ] F8 / F9 遗留修复（WS 重连补事件、maxSteps 滑块同步）
+- [ ] RBAC enforcement + Auth 敏感端点保护
 **目标**: 在 Phase 6 落地的 Auth（API key + RBAC 骨架）与 RAG（本地 TF-IDF + 内存向量库）之上，推进生产化、多用户、深度可观测与外部集成。延续 6-D/6-E 的"非空壳、真实运行"原则。
 
 **状态**: 仅规划，暂不实施。各子阶段可独立交付，实施前需为每个 7-X 子阶段新建 OpenSpec change。

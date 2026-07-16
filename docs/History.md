@@ -126,6 +126,40 @@
 
 ---
 
+## 2026-07-16 上下文窗口可观测性
+
+### 问题
+多轮会话时 context window 持续增长，用户无法直观看到：
+- 当前已经用了多少 tokens、距离模型上限有多远；
+- system prompt / user / assistant / tool 各占多少比例；
+- 真正传给 LLM 的每一条 message 内容是什么。
+
+### 改动
+- 后端 `internal/llm/token_estimate.go`：新增基于字符启发式的 token 估算与 `ContextWindowSnapshot` 结构，标注 `estimated_*` 以区别于 API 精确值。
+- 后端 `internal/runtime/engine.go`：每次 `think()` 调用前计算当前 messages 的上下文占用，并发射 `context_window_snapshot` 事件。
+- 事件系统 `pkg/event/event.go` 增加 `EventContextWindowSnapshot` 常量；前端 `web/src/types/events.ts` 增加 `ContextWindowSnapshotData`、`ContextSnapshotMessage` 类型。
+- 前端新增 `web/src/composables/useContextWindow.ts` 累积快照。
+- 前端新增 `web/src/components/ContextWindowPanel.vue`：
+  - 顶部总量进度条（已用 / 上限 + 百分比）
+  - 按 role 分组的条形图（system/user/assistant/tool 占比）
+  - 每条 message 可展开查看完整 content、reasoning、tool_call_id
+- 前端 `App.vue` 增加入口按钮，Context Window 面板作为右侧 overlay 打开。
+- 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`：real LLM 冒烟测试验证事件字段正确。
+
+### 涉及文件
+`internal/llm/token_estimate.go`, `internal/llm/token_estimate_test.go`, `internal/llm/model_profile.go`
+`internal/runtime/engine.go`, `pkg/event/event.go`
+`web/src/types/events.ts`, `web/src/composables/useContextWindow.ts`, `web/src/components/ContextWindowPanel.vue`, `web/src/App.vue`
+`scripts/context-window-smoke.sh`, `scripts/context-window-smoke.go`
+
+### 验证
+- `go test ./internal/llm` ✅
+- `go build ./cmd/server` ✅
+- `cd web && npm run build` ✅
+- `bash scripts/context-window-smoke.sh` (real LLM) ✅ PASS 9 / FAIL 0
+
+---
+
 ## 相关支撑改动：任务耗时统计
 
 与上述修复批次一并落盘：
