@@ -381,11 +381,12 @@ const activeTaskId = ref<string | null>(null)
 - [x] 后端 Token 估算：`internal/llm/token_estimate.go` + 单元测试
 - [x] Engine 每次 `think()` 前发射 `context_window_snapshot` 事件，含 model / max_context_tokens / estimated_total_tokens / estimated_usage_ratio / messages
 - [x] 前端 `ContextWindowPanel.vue`：总量进度条 + role 分组条形图 + 可展开 message 列表
-- [x] 前端 `useContextWindow.ts` 快照累积与清理
+- [x] 前端 `useContextWindow.ts`：task-scoped 快照 + 自动/手动 Refresh
+- [x] 后端 API `GET /api/tasks/:id/context_window`：内存优先 + DB 重建
 - [x] 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`，real-LLM 冒烟测试验证事件字段
 
 ### 验证
-- `go test ./internal/llm` ✅
+- `go test ./internal/llm ./internal/runtime` ✅
 - `go build ./cmd/server` ✅
 - `cd web && npm run build` ✅
 - `bash scripts/context-window-smoke.sh` (LLM_USE_MOCK=false) ✅ PASS 9 / FAIL 0
@@ -393,6 +394,7 @@ const activeTaskId = ref<string | null>(null)
 ### 已知限制
 - token 数为本地启发式估算（~4 字符/token），非 API 精确值；字段命名已作 `estimated_*` 区分。
 - 超长 tool 输出 message 会完整进入事件 payload，后续若出现性能问题可再引入 truncation + 按需拉取。
+- refresh API 对非活跃任务只能基于 DB 对话记录做 best-effort 重建，tool_call 结构可能不完整。
 
 ---
 

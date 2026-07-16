@@ -146,17 +146,35 @@
 - 前端 `App.vue` 增加入口按钮，Context Window 面板作为右侧 overlay 打开。
 - 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`：real LLM 冒烟测试验证事件字段正确。
 
+## 2026-07-16 上下文窗口可观测性：Refresh 与 Task-scoped 快照
+
+### 问题
+初版 Context Window Panel 有两个体验问题：
+- 无快照时只能被动等待下一次 `think()` 触发事件；
+- `useContextWindow.ts` 累积所有历史快照，导致切任务时显示旧任务数据。
+
+### 改动
+- 后端新增 `internal/runtime/context_snapshot_store.go`：引擎在 `think()` 前把当前 messages 快照写入内存；任务结束后自动清理。
+- 后端新增 API `GET /api/tasks/:id/context_window`：优先读内存快照，若引擎未运行则从 DB 对话记录重建，返回统一字段格式。
+- 前端 `useContextWindow.ts` 改为 task-scoped：保留当前 active task 的最新快照，切换任务时清空，避免数据串扰。
+- 前端 `ContextWindowPanel.vue`：
+  - header 增加手动 Refresh 按钮与 loading 状态；
+  - 首次挂载/打开且快照为空时自动请求一次 refresh；
+  - 更清晰的进度条、role 占比卡片、可展开 message 列表。
+- 前端 `TaskInput.vue`：将 Context Window 入口按钮从全局 header 移到输入框附近（Send/Options 同一行）。
+- 前端 `App.vue`：监听 `activeTaskId` 同步给 `useContextWindow`，提供 `fetchContextWindowSnapshot` bound 到 panel 的 `@refresh`。
+
 ### 涉及文件
-`internal/llm/token_estimate.go`, `internal/llm/token_estimate_test.go`, `internal/llm/model_profile.go`
-`internal/runtime/engine.go`, `pkg/event/event.go`
-`web/src/types/events.ts`, `web/src/composables/useContextWindow.ts`, `web/src/components/ContextWindowPanel.vue`, `web/src/App.vue`
-`scripts/context-window-smoke.sh`, `scripts/context-window-smoke.go`
+`internal/runtime/context_snapshot_store.go`, `internal/runtime/context_snapshot_store_test.go`, `internal/runtime/engine.go`
+`cmd/server/api.go`, `cmd/server/main.go`
+`web/src/composables/useContextWindow.ts`, `web/src/components/ContextWindowPanel.vue`, `web/src/components/TaskInput.vue`, `web/src/App.vue`
 
 ### 验证
+- `go test ./internal/runtime` ✅（新增 context_snapshot_store_test.go）
 - `go test ./internal/llm` ✅
 - `go build ./cmd/server` ✅
 - `cd web && npm run build` ✅
-- `bash scripts/context-window-smoke.sh` (real LLM) ✅ PASS 9 / FAIL 0
+- `git merge feature/context-window-ui-polish` → `main` Fast-forward ✅
 
 ---
 
