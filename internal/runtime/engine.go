@@ -554,6 +554,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}))
 			// Persist the failure status so the task history shows it as failed.
 			e.updateTask("failed", "", e.totalTokens)
+			// 任务失败后清理内存中的上下文窗口快照，避免内存无限累积。
+			DeleteTaskContextSnapshot(e.taskID)
 			// Re-panic to preserve the original stack trace for server-side logging.
 			// The panic will be caught by the HTTP server's recovery middleware
 			// or the caller's deferred recovery.
@@ -672,6 +674,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("failed", "", 0)
 			e.updateTaskDuration()
+			// 任务取消后清理内存中的上下文窗口快照，避免快照无限累积。
+			DeleteTaskContextSnapshot(e.taskID)
 			return "", e.totalTokens, ctx.Err()
 		default:
 			// Context is still valid — continue to the think phase.
@@ -721,6 +725,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				e.durationMs = time.Since(e.startTime).Milliseconds()
 				e.updateTask("failed", "", e.totalTokens)
 				e.updateTaskDuration()
+				// 重复 LLM 错误导致任务失败，清理上下文窗口快照以释放内存。
+				DeleteTaskContextSnapshot(e.taskID)
 				return "", e.totalTokens, fmt.Errorf("think step %d: repeated LLM error: %w", e.stepIdx, err)
 			}
 			e.recordFeedbackError(obsContent)
@@ -856,6 +862,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("completed", content, e.totalTokens)
 			e.updateTaskDuration()
+			// 任务成功完成后清理内存中的上下文窗口快照，避免已完成任务长期占用内存。
+			DeleteTaskContextSnapshot(e.taskID)
 
 			// Task 4: If this run is associated with a case, evaluate the acceptance
 			// criteria and broadcast a task_evaluated event. Errors here are logged
@@ -1007,6 +1015,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	e.durationMs = time.Since(e.startTime).Milliseconds()
 	e.updateTask("failed", "", e.totalTokens)
 	e.updateTaskDuration()
+	// 超过最大步数导致失败，清理上下文窗口快照以释放内存。
+	DeleteTaskContextSnapshot(e.taskID)
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
 }
 
@@ -1413,13 +1423,12 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// on demand without running another LLM call.
 	RecordTaskContextSnapshot(e.taskID, snapshot)
 
-	e.bus.SendEvent(event.NewEvent(event.EventContextWindowSnapshot, e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"model":                  snapshot.Model,
-		"max_context_tokens":     snapshot.MaxContextTokens,
-		"estimated_total_tokens": snapshot.EstimatedTotalTokens,
-		"estimated_usage_ratio":  snapshot.EstimatedUsageRatio,
-		"messages":               snapshot.Messages,
-	}))
+	// 为了与 REST API（encodeContextWindowSnapshot）保持字段一致，
+	// 这里直接序列化 snapshot 结构体，避免手写 map 导致字段不同步。
+	snapshotData, _ := json.Marshal(snapshot)
+	var snapshotMap map[string]any
+	_ = json.Unmarshal(snapshotData, &snapshotMap)
+	e.bus.SendEvent(event.NewEvent(event.EventContextWindowSnapshot, e.taskID, e.cfg.AgentID, e.stepIdx, snapshotMap))
 
 	req := llm.ChatRequest{
 		Model:       selectedModel,

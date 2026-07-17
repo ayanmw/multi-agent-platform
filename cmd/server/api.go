@@ -84,13 +84,16 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 		}
 	}
 	if systemPrompt == "" {
-		// Last-resort fallback to session name only when the agent's system prompt
-		// is unavailable. This keeps historical tasks viewable even if the agent
-		// record was deleted.
+		// 当 agent 系统提示不可用时，使用一段显式占位文本，而不是用 session.Name
+		// 这种替代虽然不如原始 prompt 精确，但避免了用用户会话名充当系统提示的语义失真。
+		systemPrompt = "[system prompt unavailable for historical task]"
 		if task.SessionID != "" {
-			if s, err := db.QuerySessionByID(task.SessionID); err == nil && s != nil && s.Name != "" {
-				systemPrompt = s.Name
-				log.Printf("[ContextWindow] task=%s fallback system prompt from session name", id)
+			if s, err := db.QuerySessionByID(task.SessionID); err != nil {
+				log.Printf("[ContextWindow] task=%s 查询 session 失败，无法作为 system prompt fallback: %v", id, err)
+			} else if s == nil || s.Name == "" {
+				log.Printf("[ContextWindow] task=%s session 不存在或名称为空，system prompt 使用占位符", id)
+			} else {
+				log.Printf("[ContextWindow] task=%s 原始系统提示不可用，已用占位符代替；可归属 session=%s", id, s.Name)
 			}
 		}
 	}
@@ -124,7 +127,10 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 		for _, m := range msgs {
 			var toolCalls []llm.ToolCall
 			if m.ToolCalls != "" {
-				_ = json.Unmarshal([]byte(m.ToolCalls), &toolCalls) // best-effort
+				if err := json.Unmarshal([]byte(m.ToolCalls), &toolCalls); err != nil {
+					// ToolCalls 损坏时记录日志但继续返回其他字段，保持 API 可用。
+					log.Printf("[ContextWindow] task=%s 解析 ToolCalls 失败: %v", id, err)
+				}
 			}
 			messages = append(messages, llm.Message{
 				Role:       m.Role,
@@ -162,16 +168,13 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 
 // encodeContextWindowSnapshot writes a snapshot as JSON. It reuses the same
 // field names the WebSocket event emits so the frontend can treat both sources
-// identically.
+// identically. Errors during encoding are logged but cannot be returned once
+// the response has started.
 func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWindowSnapshot) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"model":                  snapshot.Model,
-		"max_context_tokens":     snapshot.MaxContextTokens,
-		"estimated_total_tokens": snapshot.EstimatedTotalTokens,
-		"estimated_usage_ratio":  snapshot.EstimatedUsageRatio,
-		"messages":               snapshot.Messages,
-	})
+	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
+		log.Printf("[ContextWindow] 编码快照响应失败: %v", err)
+	}
 }
 
 // === Task History API ===
@@ -653,6 +656,16 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "session not found: "+sessErr.Error(), http.StatusNotFound)
 			return
 		}
+		// 删除 session 下所有 task 的上下文窗口快照缓存，避免内存泄漏。
+		tasks, err := db.QueryTasksBySession(id)
+		if err == nil {
+			for _, t := range tasks {
+				runtime.DeleteTaskContextSnapshot(t.ID)
+			}
+		} else {
+			log.Printf("[API] DELETE /api/sessions/%s: 查询 tasks 失败，无法清理上下文快照: %v", id, err)
+		}
+
 		if err := db.DeleteSession(id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -15,7 +15,7 @@
     activeTaskId: the task currently selected in the main UI.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
 import type { ContextSnapshotMessage } from '../types/events'
 
@@ -31,17 +31,30 @@ const { currentSnapshot, setActiveTaskId } = useContextWindow()
 const latest = computed(() => currentSnapshot.value)
 
 const isLoading = ref(false)
+let loadingTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearLoadingTimer() {
+  if (loadingTimer) {
+    clearTimeout(loadingTimer)
+    loadingTimer = null
+  }
+}
 
 async function requestRefresh() {
   if (!props.activeTaskId) return
   isLoading.value = true
+  clearLoadingTimer()
   try {
     emit('refresh')
   } finally {
-    // Keep spinner visible briefly to avoid flicker.
-    setTimeout(() => { isLoading.value = false }, 300)
+    // 保持 spinner 一小段时间，避免闪烁；组件卸载时由 onUnmounted 清理。
+    loadingTimer = setTimeout(() => { isLoading.value = false }, 300)
   }
 }
+
+onUnmounted(() => {
+  clearLoadingTimer()
+})
 
 // Keep the composable's active task in sync with the prop.
 // Immediate: true also covers the initial mount, so we do not need an extra
@@ -60,7 +73,9 @@ watch(
 
 const usagePercent = computed(() => {
   if (!latest.value) return 0
-  return Math.min(100, latest.value.estimated_usage_ratio * 100)
+  const ratio = latest.value.estimated_usage_ratio
+  if (!Number.isFinite(ratio) || ratio < 0) return 0
+  return Math.min(100, ratio * 100)
 })
 
 const usageColorClass = computed(() => {
