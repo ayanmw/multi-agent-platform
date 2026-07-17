@@ -62,8 +62,16 @@ type BuiltinTool struct {
 	executor    func(input map[string]any) (any, error)
 }
 
+// Namespace returns the tool's namespace. Built-in tools live in the global
+// namespace (empty string), so their Name and FullName are identical.
+func (t *BuiltinTool) Namespace() string { return "" }
+
 // Name returns the tool's unique identifier, e.g. "run_shell".
 func (t *BuiltinTool) Name() string { return t.name }
+
+// FullName returns the tool's fully-qualified identifier. For built-in tools
+// Namespace is empty, so FullName equals Name.
+func (t *BuiltinTool) FullName() string { return t.name }
 
 // Description returns a human-readable explanation of the tool's purpose,
 // suitable for inclusion in LLM system prompts.
@@ -73,6 +81,9 @@ func (t *BuiltinTool) Description() string { return t.description }
 // The schema follows the JSON Schema (draft-07) convention with "type",
 // "properties", and "required" keys.
 func (t *BuiltinTool) Parameters() map[string]any { return t.parameters }
+
+// Tags returns the tool's tags. Built-in tools are untagged by default.
+func (t *BuiltinTool) Tags() []string { return nil }
 
 // Execute runs the tool with the given input map and returns the result.
 // The input map must conform to the schema returned by Parameters().
