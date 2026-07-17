@@ -1134,7 +1134,14 @@ func main() {
 		// SPA fallback: any request that doesn't match an API route or a static file
 		// should serve index.html (Vue Router handles client-side routing).
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// API and WebSocket routes are handled by their own handlers registered above
+			// API and WebSocket routes are handled by their own handlers registered above.
+			// The trailing-slash form is never seen by this handler (ServeMux canonicalizes
+			// paths), but we guard both for clarity and proxy compatibility.
+			if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws") ||
+				r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+				http.NotFound(w, r)
+				return
+			}
 			if r.URL.Path == "/" || r.URL.Path == "/index.html" || !fileExists(distFS, r.URL.Path) {
 				// Serve index.html for SPA client-side routing (e.g., /agents, /tasks/123)
 				// But only if the path doesn't match a real file in dist/
