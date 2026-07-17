@@ -515,6 +515,12 @@ type AgentBus struct {
 	handlers map[string]func(AgentMessage) // agentID → message handler
 	queue    []AgentMessage                 // pending messages for agents not yet registered
 	maxQueue int                            // max pending messages
+
+	// persistFn is an optional hook invoked asynchronously for every message
+	// that flows through the bus (delivered or queued). It lets the
+	// orchestrator persist AgentBus traffic to SQLite without coupling the
+	// runtime AgentBus package to the db package.
+	persistFn func(AgentMessage) error
 }
 
 // NewAgentBus creates a new AgentBus with a default queue size of 100.
@@ -523,6 +529,18 @@ func NewAgentBus() *AgentBus {
 		handlers: make(map[string]func(AgentMessage)),
 		maxQueue: 100,
 	}
+}
+
+// SetPersistFn installs a callback that receives every AgentMessage after
+// SendMessage assigns Timestamp. It runs in its own goroutine so a slow
+// persistence write never blocks message delivery.
+//
+// Pass nil to disable persistence (the default). Used by main.go to wire
+// db.InsertAgentMessage into the bus.
+func (b *AgentBus) SetPersistFn(fn func(AgentMessage) error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.persistFn = fn
 }
 
 // RegisterHandler registers a message handler for a specific agent.
@@ -553,8 +571,25 @@ func (b *AgentBus) UnregisterHandler(agentID string) {
 // SendMessage sends a message from one agent to another.
 // If the target agent has a registered handler, the handler is called immediately.
 // Otherwise, the message is queued for later delivery.
+//
+// When a persistence callback has been installed via SetPersistFn, every
+// message — delivered or queued — is also handed to that callback in a
+// goroutine so message routing is never blocked on storage I/O.
 func (b *AgentBus) SendMessage(msg AgentMessage) {
 	msg.Timestamp = time.Now()
+
+	// Fire the persistence hook asynchronously. Snapshot the function under
+	// the lock to avoid a race with SetPersistFn; a nil hook is a no-op.
+	b.mu.RLock()
+	persist := b.persistFn
+	b.mu.RUnlock()
+	if persist != nil {
+		go func(m AgentMessage) {
+			if err := persist(m); err != nil {
+				log.Printf("[AgentBus] persist message failed: %v", err)
+			}
+		}(msg)
+	}
 
 	b.mu.RLock()
 	handler, ok := b.handlers[msg.ToAgentID]

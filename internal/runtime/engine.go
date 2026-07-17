@@ -1995,6 +1995,10 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 // AgentBus, and emits a system_info event so the frontend can display the
 // inter-agent communication.
 //
+// The TaskID is embedded in Metadata["task_id"] so downstream persistence
+// (the orchestrator.AgentBus persistFn) can route the message to the correct
+// row in the agent_messages table.
+//
 // If the AgentBus is nil, this is a no-op - agent-to-agent communication is disabled.
 func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 	if e.agentBus == nil {
@@ -2006,6 +2010,10 @@ func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 		ToAgentID:   toAgentID,
 		Type:        msgType,
 		Content:     content,
+		Metadata: map[string]string{
+			"task_id":       e.taskID,
+			"from_agent_id": e.cfg.AgentID,
+		},
 	}
 
 	e.agentBus.SendMessage(msg)

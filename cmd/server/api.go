@@ -177,6 +177,29 @@ func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWind
 	}
 }
 
+// handleGetAgentMessages returns the AgentBus message history for a task
+// (GET /api/tasks/:id/agent-messages). It always returns a non-nil
+// `messages` array — empty when the task has no inter-agent traffic — so the
+// frontend can render the timeline without a null check.
+func handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID string) {
+	msgs, err := db.QueryAgentMessages(taskID)
+	if err != nil {
+		log.Printf("[AgentMessages] query failed for task=%s: %v", taskID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if msgs == nil {
+		msgs = []db.AgentBusMessage{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"task_id":  taskID,
+		"messages": msgs,
+	}); err != nil {
+		log.Printf("[AgentMessages] encode response failed: %v", err)
+	}
+}
+
 // === Task History API ===
 
 // handleListTasks returns recent tasks (GET /api/tasks)
