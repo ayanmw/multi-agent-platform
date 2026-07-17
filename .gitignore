@@ -51,3 +51,4 @@ web/tsconfig.tsbuildinfo
 /task_progress.json
 /*.lnk
 /.claude/worktrees
+.worktrees/
