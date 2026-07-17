@@ -14,6 +14,17 @@ const currentSessionId = ref<string>('')
 /** Per-task reactive cache */
 const taskCache = ref<Record<string, TaskState>>({})
 
+/**
+ * Set of task IDs that were created optimistically before backend confirmation.
+ * When a task is started, the frontend immediately inserts a placeholder so the
+ * UI can display pending state. If the matching `task_started` WebSocket event
+ * never arrives (e.g. the request failed/cancelled before the agent emitted it),
+ * the placeholder would otherwise leak into the cache and appear in unrelated
+ * sessions. This set tracks those IDs so App.vue can prune orphans on session
+ * switch and prevent cross-session contamination.
+ */
+const optimisticTaskIds = new Set<string>()
+
 /** ID of the task currently being viewed */
 const activeTaskId = ref<string | null>(null)
 
@@ -158,7 +169,14 @@ export function useTaskStore() {
 
     if (evt.type === 'task_started') {
       activeTaskId.value = taskId
-      ensureTask(taskId)
+      const task = ensureTask(taskId)
+      // A real task_started from the backend supersedes any optimistic
+      // placeholder. Bind it to the correct session so it never bleeds into
+      // another session's timeline.
+      task.sessionId = (evt.data.session_id as string) || task.sessionId || ''
+      task.userInput = (evt.data.input as string) || task.userInput || ''
+      task.status = 'running'
+      optimisticTaskIds.delete(taskId)
       // Capture session ID for recent-mods recording
       if (evt.data.session_id) {
         currentSessionId.value = evt.data.session_id as string
@@ -188,9 +206,11 @@ export function useTaskStore() {
     const agent = task.agents[agentId]
 
     switch (evt.type) {
-      case 'task_started':
-        task.status = 'running'
+      case 'task_started': {
+        // task_started is handled above before the switch; this branch is kept
+        // for exhaustiveness only.
         break
+      }
 
       case 'agent_ready':
         agent.name = (evt.data.agent_name as string) || agentId
@@ -481,6 +501,25 @@ export function useTaskStore() {
   }
 
   /**
+   * Remove optimistic task placeholders that never received a confirming
+   * `task_started` WebSocket event. These orphans otherwise leak into the
+   * global taskCache and appear as phantom turns in whatever session is
+   * currently active.
+   */
+  function pruneOrphanTasks() {
+    if (optimisticTaskIds.size === 0) return
+    for (const tid of Array.from(optimisticTaskIds)) {
+      const t = taskCache.value[tid]
+      // A real task_started flips status from 'idle' to 'running' (and usually
+      // populates agents). If it's still idle and empty, it's an orphan.
+      if (t && t.status === 'idle' && Object.keys(t.agents).length === 0) {
+        delete taskCache.value[tid]
+      }
+    }
+    optimisticTaskIds.clear()
+  }
+
+  /**
    * Start a chat task by POSTing to /api/tasks.
    * The WebSocket events will update the task state in real time.
    */
@@ -530,7 +569,13 @@ export function useTaskStore() {
 
       const data = (await resp.json()) as { session_id: string; task_id: string }
       activeTaskId.value = data.task_id
-      ensureTask(data.task_id)
+      // Optimistic placeholder: backend accepted but authoritative state arrives
+      // via WebSocket. Mark it so we can prune orphans that never get confirmed.
+      const optimistic = ensureTask(data.task_id)
+      optimistic.sessionId = data.session_id || options.sessionId || ''
+      optimistic.userInput = input
+      optimistic.status = 'idle'
+      optimisticTaskIds.add(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
@@ -572,7 +617,11 @@ export function useTaskStore() {
 
       const data = (await resp.json()) as { session_id: string; task_id: string }
       activeTaskId.value = data.task_id
-      ensureTask(data.task_id)
+      const optimistic = ensureTask(data.task_id)
+      optimistic.sessionId = data.session_id || options.sessionId || ''
+      optimistic.userInput = `Case: ${caseId}`
+      optimistic.status = 'idle'
+      optimisticTaskIds.add(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
@@ -629,7 +678,11 @@ export function useTaskStore() {
       // that may have been set to 'failed' by a previous turn's task_failed event.
       updateSession(data.session_id, { status: 'running' })
       activeTaskId.value = data.task_id
-      ensureTask(data.task_id)
+      const optimistic = ensureTask(data.task_id)
+      optimistic.sessionId = data.session_id || options.sessionId || ''
+      optimistic.userInput = input
+      optimistic.status = 'idle'
+      optimisticTaskIds.add(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id, turnIndex: data.turn_index }
     } catch (err) {
       isTaskPending.value = false
@@ -671,7 +724,11 @@ export function useTaskStore() {
 
       const data = (await resp.json()) as { session_id: string; task_id: string }
       activeTaskId.value = data.task_id
-      ensureTask(data.task_id)
+      const optimistic = ensureTask(data.task_id)
+      optimistic.sessionId = data.session_id || options.sessionId || ''
+      optimistic.userInput = input
+      optimistic.status = 'idle'
+      optimisticTaskIds.add(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {
       isTaskPending.value = false
@@ -787,13 +844,21 @@ export function useTaskStore() {
         parent_task_id: string
         is_root: boolean
       }>
+      evaluation: {
+        case_id: string
+        passed: boolean
+        score: number
+        reason: string
+        evaluated_at: string
+      } | null
     }
 
     const task = data.task
     const steps = data.steps || []
     const childTasks = data.child_tasks || []
 
-    // Build TaskState from persisted data
+    // Build TaskState from persisted data. Always use the backend's session_id
+    // so a historical task cannot accidentally inherit the current session.
     const taskState: TaskState = {
       id: task.id,
       sessionId: task.session_id || '',
@@ -811,6 +876,16 @@ export function useTaskStore() {
         completionTokens: 0,
         totalTokens: task.total_tokens || 0,
       },
+    }
+
+    // Hydrate case evaluation result if present so historical replays display it.
+    if (data.evaluation) {
+      taskState.evaluation = {
+        case_id: data.evaluation.case_id,
+        passed: data.evaluation.passed,
+        score: data.evaluation.score,
+        reason: data.evaluation.reason,
+      }
     }
 
     // Group steps by agent_id to rebuild agent states.
@@ -976,6 +1051,7 @@ export function useTaskStore() {
     setActiveTaskId,
     loadTask,
     loadSessionTurns,
+    pruneOrphanTasks,
     pauseTask,
     resumeTask,
     cancelTask,

@@ -74,6 +74,7 @@ const {
   setActiveTaskId,
   loadTask,
   loadSessionTurns,
+  pruneOrphanTasks,
   pauseTask,
   resumeTask,
   cancelTask,
@@ -412,7 +413,7 @@ const sessionTotalTokens = computed(() => {
   const sid = activeSession.value?.id
   if (!sid) return 0
   return Object.values(taskCache.value)
-    .filter(t => !t.sessionId || t.sessionId === sid)
+    .filter(t => t.sessionId === sid)
     .reduce((sum, t) => sum + (t.totalTokens || 0), 0)
 })
 
@@ -423,7 +424,7 @@ const sessionTotalDuration = computed(() => {
   const sid = activeSession.value?.id
   if (!sid) return 0
   return Object.values(taskCache.value)
-    .filter(t => !t.sessionId || t.sessionId === sid)
+    .filter(t => t.sessionId === sid)
     .reduce((sum, t) => sum + (t.durationMs || 0), 0)
 })
 
@@ -432,10 +433,6 @@ const sessionTotalDuration = computed(() => {
  * After handleSessionSelect calls loadSessionTurns, every task for the
  * active session will be present in taskCache; this computed slices them
  * out in chronological order so TurnList can render the full timeline.
- *
- * Tasks that don't yet have a sessionId (e.g. real-time WS tasks that
- * haven't been persisted) are always included — they are implicitly the
- * current session's in-flight turn.
  */
 const sessionTurns = computed(() => {
   const sid = activeSession.value?.id
@@ -444,7 +441,7 @@ const sessionTurns = computed(() => {
   if (!sid) return turns
 
   const allTasks = Object.values(taskCache.value)
-    .filter(t => !t.sessionId || t.sessionId === sid)
+    .filter(t => t.sessionId === sid)
   // Sort by startedAt ASC so timeline is in conversation order
   allTasks.sort((a, b) => a.startedAt - b.startedAt)
   for (const t of allTasks) {
@@ -758,6 +755,10 @@ async function handleSessionSelect(session: Session) {
     userInput: session.userInput,
   }))
   setActiveSession(session.id)
+  // Prune optimistic placeholders left behind when a task was accepted by the
+  // backend but never confirmed via WebSocket. Without this, those orphans
+  // (which carry no sessionId) leak into whichever session is active next.
+  pruneOrphanTasks()
   if (session.rootTaskId) {
     console.log('[App] Loading session turns:', session.id)
     clearActiveTask()
@@ -769,6 +770,16 @@ async function handleSessionSelect(session: Session) {
         delete taskCache.value[tid]
       }
     }
+    // Also drop any remaining tasks that do not belong to this session. Tasks
+    // loaded from the backend always carry a sessionId; orphan placeholders are
+    // the only ones without one. Permitting them would let a stray turn bleed
+    // into every session the user switches to.
+    for (const tid of Object.keys(taskCache.value)) {
+      const t = taskCache.value[tid]
+      if (!t.sessionId) {
+        delete taskCache.value[tid]
+      }
+    }
     try {
       // Load ALL turns (root + continuation turns) so sessionTurns shows
       // the full conversation timeline, not just the most recent task.
@@ -777,7 +788,7 @@ async function handleSessionSelect(session: Session) {
       // chronological order (not Object.keys order), so the timeline defaults
       // to expanding the most recent turn instead of turn 1.
       const ordered = Object.values(taskCache.value)
-        .filter(t => !t.sessionId || t.sessionId === sid)
+        .filter(t => t.sessionId === sid)
         .sort((a, b) => a.startedAt - b.startedAt)
       if (ordered.length > 0) {
         activeTaskId.value = ordered[ordered.length - 1].id
@@ -1273,29 +1284,32 @@ function formatShortTime(ts: number): string {
           <p>Enter a task description above to see the agent in action.</p>
         </div>
 
-        <!-- Final result (shown when task completed) -->
-        <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
-          <div class="final-result-header">✅ Task Complete</div>
-          <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
-          <div v-if="currentTask.evaluation" class="evaluation-badge">
-            <span
-              v-if="currentTask.evaluation.passed"
-              class="evaluation-passed"
-              :title="currentTask.evaluation.reason"
-            >
-              ✅ Case 评估通过 (score: {{ typeof currentTask.evaluation.score === 'number' ? currentTask.evaluation.score.toFixed(2) : '' }})
-            </span>
-            <span
-              v-else
-              class="evaluation-failed"
-              :title="currentTask.evaluation.reason"
-            >
-              ❌ Case 评估未通过 (score: {{ typeof currentTask.evaluation.score === 'number' ? currentTask.evaluation.score.toFixed(2) : '' }})
-            </span>
+        <!-- Evaluation result (shown whenever an evaluation exists, regardless of task status) -->
+        <div v-if="currentTask?.evaluation" class="final-result evaluation-section" :class="{ 'evaluation-failed-section': !currentTask.evaluation.passed }">
+          <div class="final-result-header">
+            <template v-if="currentTask.evaluation.passed">✅ Evaluation Passed</template>
+            <template v-else>❌ Evaluation Failed</template>
+          </div>
+          <div class="evaluation-body">
+            <div class="evaluation-row">
+              <span class="evaluation-score-label">Score</span>
+              <span
+                class="evaluation-score-value"
+                :class="currentTask.evaluation.passed ? 'evaluation-passed-score' : 'evaluation-failed-score'"
+              >
+                {{ typeof currentTask.evaluation.score === 'number' ? currentTask.evaluation.score.toFixed(2) : currentTask.evaluation.score }}
+              </span>
+            </div>
             <div v-if="currentTask.evaluation.reason" class="evaluation-reason">
               {{ currentTask.evaluation.reason }}
             </div>
           </div>
+        </div>
+
+        <!-- Final result (shown when task completed) -->
+        <div v-if="currentTask?.status === 'completed' && currentTask?.finalResult" class="final-result">
+          <div class="final-result-header">✅ Task Complete</div>
+          <pre class="final-result-text">{{ currentTask.finalResult }}</pre>
         </div>
 
         <!-- Task failed (shown when task failed) -->
@@ -1969,24 +1983,61 @@ function formatShortTime(ts: number): string {
   background: #1e3a1e;
 }
 
-.evaluation-passed,
-.evaluation-failed {
-  font-size: 13px;
-  font-weight: 600;
+/* Evaluation section styles */
+.evaluation-section {
+  margin-top: 16px;
+  background: #1a2e1a;
+  border: 1px solid #2a4a2a;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.evaluation-passed {
+.evaluation-section.evaluation-failed-section {
+  background: #2e1a1a;
+  border-color: #4a2a2a;
+}
+
+.evaluation-section .final-result-header {
+  background: #1e3a1e;
+  border-bottom: 1px solid #2a4a2a;
+  color: var(--accent-green);
+}
+
+.evaluation-section.evaluation-failed-section .final-result-header {
+  background: #3a1e1e;
+  border-bottom-color: #4a2a2a;
+  color: var(--accent-red);
+}
+
+.evaluation-body {
+  padding: 14px;
+}
+
+.evaluation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.evaluation-score-label {
+  font-size: 12px;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.evaluation-score-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.evaluation-passed-score {
   color: #51cf66;
 }
 
-.evaluation-failed {
+.evaluation-failed-score {
   color: #e74c3c;
-}
-
-.evaluation-reason {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #aaa;
 }
 
 .btn-continue {
