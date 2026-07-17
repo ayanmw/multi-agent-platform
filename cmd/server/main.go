@@ -852,10 +852,26 @@ func main() {
 	// GET /api/cases/{id} — single case
 	// PUT /api/cases/{id} — update a custom case
 	// DELETE /api/cases/{id} — delete a custom case
+	// GET /api/cases/{id}/evaluations/{task_id} — evaluation for a task+case pair
 	http.HandleFunc("/api/cases/", func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimPrefix(r.URL.Path, "/api/cases/")
-		if id == "" || id == "/" {
+		path := strings.TrimPrefix(r.URL.Path, "/api/cases/")
+		if path == "" || path == "/" {
 			http.Error(w, "case ID required", http.StatusBadRequest)
+			return
+		}
+
+		parts := strings.Split(path, "/")
+		id := parts[0]
+
+		// GET /api/cases/{id}/evaluations/{task_id}
+		if len(parts) >= 2 && parts[1] == "evaluations" {
+			handleGetCaseEvaluation(w, r, id, caseService)
+			return
+		}
+
+		// Existing GET/PUT/DELETE on /api/cases/{id}
+		if len(parts) > 1 {
+			http.Error(w, "invalid case resource", http.StatusNotFound)
 			return
 		}
 		switch r.Method {

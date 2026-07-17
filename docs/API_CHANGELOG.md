@@ -115,6 +115,54 @@
   - `POST /api/mock/reset`
 - **前端适配**: 仅测试环境使用，不暴露给生产前端。
 
+### 1.10 `GET /api/cases/:id/evaluations/:task_id`
+- **端点**: `GET /api/cases/:id/evaluations/:task_id`
+- **参数**:
+  - 路径 `:id`: Case ID。
+  - 路径 `:task_id`: Task ID。
+- **返回**: `200`
+  - 找到评估记录：
+    ```json
+    {
+      "evaluation": {
+        "id": 1,
+        "task_id": "task_xxx",
+        "case_id": "code-gen",
+        "passed": true,
+        "score": 0.95,
+        "reason": "结果符合目标：生成了可运行的 Go 程序。",
+        "evaluated_at": "2026-07-17T10:00:00Z"
+      }
+    }
+    ```
+  - 无评估记录：
+    ```json
+    {
+      "evaluation": null
+    }
+    ```
+- **前端适配**: 任务详情/回放页可在已有 `GET /api/tasks?id=xxx` 回填之外，按 case+task 二次确认评估结果。
+
+### 1.11 `GET /api/tasks?id=<taskID>` 新增 `evaluation` 字段
+- **端点**: `GET /api/tasks?id=<taskID>`
+- **返回**: `200`
+  ```json
+  {
+    "task": { ... },
+    "steps": [...],
+    "child_tasks": [...],
+    "evaluation": {
+      "case_id": "code-gen",
+      "passed": true,
+      "score": 0.95,
+      "reason": "结果符合目标：生成了可运行的 Go 程序。",
+      "evaluated_at": "2026-07-17T10:00:00Z"
+    }
+  }
+  ```
+  - 若任务无评估记录，`evaluation` 为 `null`。
+- **前端适配**: 历史任务（historical task replay）详情页可直接读取 `evaluation` 展示 case 通过/失败状态，无需额外请求。前端需按 `null` 做降级，避免无 case 评估时显示错误。
+
 ---
 
 ## 2. 文档说明 / 设计确认（confirm）
@@ -218,7 +266,7 @@
 - [x] Memory 页面只使用实际存在的 5 个端点，不支持直接 `POST /api/memories`。记忆必须从 task 提升。
 - [x] 工具注册表单按 `type` 动态校验必填子字段：`shell`→`command`、`http`→`url`、`inline`→`code`。
 - [ ] Auth 开关为 true 时，所有请求带 `Authorization: Bearer <key>`。
-- [ ] 任务详情/回放依赖 `GET /api/tasks?id=`。
+- [ ] 任务详情/回放依赖 `GET /api/tasks?id=`，并展示返回的 `evaluation` 字段（若无则降级）。
 - [ ] 多 Agent 页面依据 `/api/multi-agent` 返回的 `agent_ids`。
 - [ ] WebSocket `/ws?session_id=...` 为事件流主数据源。
 
@@ -242,4 +290,4 @@
 
 ---
 
-*最后更新：2026-07-10*
+*最后更新：2026-07-17*

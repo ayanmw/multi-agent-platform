@@ -212,6 +212,7 @@ const getters = {
 - 主体：Case 卡片网格，每个卡片展示 Icon、Name、Category、Tags、Goal 摘要。
 - 点击卡片打开 `CaseDetailModal`（已有），编辑进入 `CaseForm` 弹窗。
 - 运行 Case 后，在任务详情区域显示 `EvaluationResult` 标签（pass/fail + reason）。
+- 历史任务回放：前端通过 `GET /api/tasks?id=<taskID>` 获取任务时，响应中的 `evaluation` 字段会回填本次任务对应的 Case 评估结果；无评估时该字段为 `null`。
 
 ---
 

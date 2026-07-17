@@ -190,7 +190,9 @@ func handleListTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
-// handleGetTask returns a single task with its steps (GET /api/tasks?id=xxx)
+// handleGetTask returns a single task with its steps (GET /api/tasks?id=xxx).
+// When an associated case evaluation exists, it is included under the
+// "evaluation" key in a backward-compatible way.
 func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
 	log.Printf("[API] GET /api/tasks?id=%s", taskID)
@@ -247,12 +249,54 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	// Sort merged steps by step_index for coherent ordering
 	sort.SliceStable(steps, func(i, j int) bool { return steps[i].StepIndex < steps[j].StepIndex })
 
+	// Load the task's most recent evaluation (if any) to surface case pass/fail
+	// state in the task detail view. case_evaluations is keyed by task_id; we
+	// pick the latest row regardless of case_id so the API works for all tasks.
+	eval, evalErr := queryLatestCaseEvaluation(taskID)
+	if evalErr != nil {
+		log.Printf("[API] GET /api/tasks?id=%s: evaluation query error: %v", taskID, evalErr)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"task":        task,
 		"steps":       steps,
 		"child_tasks": childTasks,
+		"evaluation":  eval,
 	})
+}
+
+// queryLatestCaseEvaluation returns the most recent case evaluation for a
+// task, or nil when none exists. Errors are returned so the caller can log
+// them without failing the task detail request.
+func queryLatestCaseEvaluation(taskID string) (map[string]any, error) {
+	if db.DB == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var caseID string
+	var passed int
+	var score float64
+	var reason string
+	var evaluatedAt time.Time
+	err := db.DB.QueryRow(`
+		SELECT case_id, passed, score, reason, evaluated_at
+		FROM case_evaluations
+		WHERE task_id = ?
+		ORDER BY evaluated_at DESC, id DESC
+		LIMIT 1`, taskID).Scan(&caseID, &passed, &score, &reason, &evaluatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return map[string]any{
+		"case_id":      caseID,
+		"passed":       passed != 0,
+		"score":        score,
+		"reason":       reason,
+		"evaluated_at": evaluatedAt,
+	}, nil
 }
 
 // === Case API ===
@@ -397,6 +441,45 @@ func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetCaseEvaluation returns the persisted evaluation for a specific
+// task+case pair (GET /api/cases/{id}/evaluations/{task_id}).
+// If no evaluation exists, it returns {"evaluation": null} with HTTP 200 so
+// non-case tasks are handled gracefully.
+func handleGetCaseEvaluation(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+	if svc == nil {
+		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract task_id from the trailing path segment.
+	path := strings.TrimPrefix(r.URL.Path, "/api/cases/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 || parts[1] != "evaluations" {
+		http.Error(w, "invalid evaluation URL", http.StatusBadRequest)
+		return
+	}
+	taskID := strings.Join(parts[2:], "/")
+
+	eval, err := svc.Repository().GetEvaluation(taskID, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"evaluation": nil})
+			return
+		}
+		log.Printf("[API] GET /api/cases/%s/evaluations/%s: db error: %v", id, taskID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"evaluation": eval})
 }
 
 // === Session API ===
