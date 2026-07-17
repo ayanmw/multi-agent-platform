@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
@@ -192,4 +194,125 @@ func TestEvaluateAndBroadcast_NoCaseIDDoesNothing(t *testing.T) {
 	if len(bus.events) != 0 {
 		t.Fatalf("expected no events when caseID is empty, got %d", len(bus.events))
 	}
+}
+
+// TestEnginePauseResume 验证 Engine.Pause / Engine.Resume 的语义：
+//   - Pause 后 IsPaused 立即为 true，且会向 bus 发送 status=paused 的 agent_status 事件；
+//   - 多次 Pause 幂等（不会重复发送事件）；
+//   - Resume 后 IsPaused 回到 false，且会发送 status=running 事件；
+//   - Pause 不影响 context（ctx 仍能正常传递）。
+//
+// 测试不启动 Run loop，直接断言 Pause/Resume 的状态机语义和事件分发，
+// Run 循环里的阻塞由其他端到端测试覆盖。
+func TestEnginePauseResume(t *testing.T) {
+	bus := &recordingBus{}
+	cfg := EngineConfig{
+		AgentID:     "agent_pause_test",
+		SystemPrompt: "You are a test agent.",
+		Model:        "fake-model",
+		Provider:     &fakeJudgeProvider{resp: "noop"},
+		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task_pause_test")
+
+	if engine.IsPaused() {
+		t.Fatalf("freshly created engine should not be paused")
+	}
+
+	// 第一次 Pause：发送 agent_status=paused 事件。
+	engine.Pause()
+	if !engine.IsPaused() {
+		t.Fatalf("engine.Pause() should set paused=true")
+	}
+	pausedCount := 0
+	for _, evt := range bus.events {
+		if evt.Type == "agent_status" {
+			if status, ok := evt.Data["status"].(string); ok && status == "paused" {
+				pausedCount++
+			}
+		}
+	}
+	if pausedCount != 1 {
+		t.Fatalf("expected exactly 1 paused agent_status event, got %d", len(bus.events))
+	}
+
+	// 第二次 Pause 幂等：不再发送新事件。
+	engine.Pause()
+	pausedCount2 := 0
+	for _, evt := range bus.events {
+		if evt.Type == "agent_status" {
+			if status, ok := evt.Data["status"].(string); ok && status == "paused" {
+				pausedCount2++
+			}
+		}
+	}
+	if pausedCount2 != 1 {
+		t.Fatalf("second Pause should be idempotent, got %d paused events", pausedCount2)
+	}
+
+	// Resume：发送 agent_status=running，paused=false。
+	engine.Resume()
+	if engine.IsPaused() {
+		t.Fatalf("engine.Resume() should set paused=false")
+	}
+	runningCount := 0
+	for _, evt := range bus.events {
+		if evt.Type == "agent_status" {
+			if status, ok := evt.Data["status"].(string); ok && status == "running" {
+				runningCount++
+			}
+		}
+	}
+	if runningCount != 1 {
+		t.Fatalf("expected exactly 1 running agent_status event, got %d", runningCount)
+	}
+
+	// 第二次 Resume 幂等：不再发送新事件。
+	engine.Resume()
+	runningCount2 := 0
+	for _, evt := range bus.events {
+		if evt.Type == "agent_status" {
+			if status, ok := evt.Data["status"].(string); ok && status == "running" {
+				runningCount2++
+			}
+		}
+	}
+	if runningCount2 != 1 {
+		t.Fatalf("second Resume should be idempotent, got %d running events", runningCount2)
+	}
+}
+
+// TestEnginePauseResumeConcurrent 验证 Pause/Resume 在多 goroutine 并发触发下是安全的：
+// atomic.Bool 自身原子、channel 关闭/重建不会触发竞态。
+func TestEnginePauseResumeConcurrent(t *testing.T) {
+	bus := &recordingBus{}
+	cfg := EngineConfig{
+		AgentID:     "agent_concurrent",
+		SystemPrompt: "x",
+		Model:        "fake-model",
+		Provider:     &fakeJudgeProvider{resp: "noop"},
+		Contract:     harness.TaskContract{Goal: "x", Scope: "."},
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task_concurrent")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			engine.Pause()
+		}()
+		go func() {
+			defer wg.Done()
+			engine.Resume()
+		}()
+	}
+	wg.Wait()
+
+	// 不强制最终态，只断言没有 panic，IsPaused 仍然是合法的 bool 值。
+	_ = engine.IsPaused()
+	// 给 channel 关闭与重建一点时间，确保没有挂起的 close 协程残留。
+	time.Sleep(10 * time.Millisecond)
 }

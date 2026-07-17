@@ -59,7 +59,10 @@ export interface AgentEvent {
 export type StepType = 'think' | 'tool_call' | 'observation'
 
 /** Step status */
-export type StepStatus = 'running' | 'completed' | 'failed'
+export type StepStatus = 'running' | 'completed' | 'failed' | 'paused'
+
+/** Agent runtime status (Phase 7-A: pause/resume 控件) */
+export type AgentStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed'
 
 /** Token usage details per agent / per task */
 export interface TokenUsage {
@@ -130,6 +133,8 @@ export interface AgentState {
   tokenUsage?: TokenUsage
   /** Cumulative duration for this agent (derived from steps or backend) */
   durationMs?: number
+  /** Agent runtime status (Phase 7-A): running / paused / completed / failed */
+  status?: AgentStatus
 }
 
 /** Per-message payload included in a context_window_snapshot event */

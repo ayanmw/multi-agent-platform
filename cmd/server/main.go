@@ -38,7 +38,103 @@ import (
 // cancelRegistry maps task_id to the context.CancelFunc for currently running
 // agent loops. WebSocket control messages can look up and invoke these
 // functions to cancel a task. Access is synchronized by sync.Map.
+//
+// Phase 7-A: key 规则扩展为支持子 agent。root task 使用纯 taskID；
+// 子 agent（multi-agent 中的某个 agent）使用 "taskID/agentID" 形式。
+// 这样 cancel/pause/resume 控制消息可以通过 agent_id 字段精确到某一个 agent。
 var cancelRegistry sync.Map
+
+// engineRegistry 把运行中的 *runtime.Engine 按 key 索引，供 control handler
+// 在收到 pause/resume 时调用 Engine.Pause / Engine.Resume。key 与
+// cancelRegistry 一致：root 任务用 taskID；子 agent 用 "taskID/agentID"。
+var engineRegistry sync.Map
+
+// storeCancel 注册 task/agent 对应的取消函数。
+//
+// 行为说明：
+//   - 当 agentID 为空或为 "orchestrator" 时，仅以 taskID 为 key；
+//   - 否则同时写入两个 key：taskID/agentID（精确查找）与 taskID（统一取消）。
+//
+// 写入两个 key 的目的是让 "取消整个任务" 与 "仅取消某个子 agent" 都能命中。
+func storeCancel(taskID, agentID string, cancel context.CancelFunc) {
+	if cancel == nil {
+		return
+	}
+	if agentID == "" || agentID == "orchestrator" {
+		cancelRegistry.Store(taskID, cancel)
+		return
+	}
+	cancelRegistry.Store(taskID+"/"+agentID, cancel)
+	cancelRegistry.Store(taskID, cancel)
+}
+
+// loadCancel 查找指定 task/agent 对应的取消函数。
+// 优先以 taskID/agentID 精确查找，未命中时回退到 taskID（兼容旧 root 行为）。
+func loadCancel(taskID, agentID string) (context.CancelFunc, bool) {
+	if taskID == "" {
+		return nil, false
+	}
+	key := taskID
+	if agentID != "" && agentID != "orchestrator" {
+		key = taskID + "/" + agentID
+	}
+	if v, ok := cancelRegistry.Load(key); ok {
+		return v.(context.CancelFunc), true
+	}
+	// 回退到 root task 的 cancel，保证向下兼容。
+	if v, ok := cancelRegistry.Load(taskID); ok {
+		return v.(context.CancelFunc), true
+	}
+	return nil, false
+}
+
+// removeCancel 同时清除 root key 与 per-agent key，避免 goroutine 退出后残留。
+func removeCancel(taskID, agentID string) {
+	cancelRegistry.Delete(taskID)
+	if agentID != "" && agentID != "orchestrator" {
+		cancelRegistry.Delete(taskID + "/" + agentID)
+	}
+}
+
+// storeEngine 把正在运行的 Engine 实例注册到全局表中，control handler
+// 通过它直接调用 Pause / Resume。注意 lock-free（sync.Map）。
+func storeEngine(taskID, agentID string, engine *runtime.Engine) {
+	if engine == nil {
+		return
+	}
+	if agentID == "" || agentID == "orchestrator" {
+		engineRegistry.Store(taskID, engine)
+		return
+	}
+	engineRegistry.Store(taskID+"/"+agentID, engine)
+	engineRegistry.Store(taskID, engine)
+}
+
+// loadEngine 取出与 task/agent 关联的 Engine 实例，便于 pause/resume 控制。
+func loadEngine(taskID, agentID string) (*runtime.Engine, bool) {
+	if taskID == "" {
+		return nil, false
+	}
+	key := taskID
+	if agentID != "" && agentID != "orchestrator" {
+		key = taskID + "/" + agentID
+	}
+	if v, ok := engineRegistry.Load(key); ok {
+		return v.(*runtime.Engine), true
+	}
+	if v, ok := engineRegistry.Load(taskID); ok {
+		return v.(*runtime.Engine), true
+	}
+	return nil, false
+}
+
+// removeEngine 清理 engineRegistry 中的两条记录。
+func removeEngine(taskID, agentID string) {
+	engineRegistry.Delete(taskID)
+	if agentID != "" && agentID != "orchestrator" {
+		engineRegistry.Delete(taskID + "/" + agentID)
+	}
+}
 
 func main() {
 	port := flag.String("port", "8080", "HTTP server port")
@@ -111,19 +207,55 @@ func main() {
 				}))
 				return
 			}
-			if cancelFn, ok := cancelRegistry.Load(msg.TaskID); ok {
-				observability.DefaultLogger.Info("control", "cancelling task", map[string]any{"task_id": msg.TaskID})
-				cancelFn.(context.CancelFunc)()
+			// Phase 7-A：优先按 agentID 精确取消；未提供 agent_id 时退回到 root 任务级取消。
+			if cancelFn, ok := loadCancel(msg.TaskID, msg.AgentID); ok {
+				target := msg.TaskID
+				if msg.AgentID != "" {
+					target = msg.TaskID + "/" + msg.AgentID
+				}
+				observability.DefaultLogger.Info("control", "cancelling task", map[string]any{"target": target, "agent_id": msg.AgentID})
+				cancelFn()
 			} else {
-				observability.DefaultLogger.Warn("control", "cancel received for unknown task", map[string]any{"task_id": msg.TaskID})
+				observability.DefaultLogger.Warn("control", "cancel received for unknown task", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
 			}
-		case "pause", "resume":
-			observability.DefaultLogger.Info("control", "not implemented control action", map[string]any{"action": msg.Action})
-			hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
-				"message":     msg.Action + " not implemented",
-				"action":      msg.Action,
-				"status_code": 501,
-			}))
+		case "pause":
+			if msg.TaskID == "" {
+				observability.DefaultLogger.Warn("control", "pause received without task_id", nil)
+				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
+					"message": "pause requires task_id",
+				}))
+				return
+			}
+			if engine, ok := loadEngine(msg.TaskID, msg.AgentID); ok {
+				observability.DefaultLogger.Info("control", "pausing engine", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
+				engine.Pause()
+			} else {
+				observability.DefaultLogger.Warn("control", "pause received for unknown task", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
+				hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
+					"message":     "pause target not found",
+					"action":      "pause",
+					"status_code": 404,
+				}))
+			}
+		case "resume":
+			if msg.TaskID == "" {
+				observability.DefaultLogger.Warn("control", "resume received without task_id", nil)
+				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
+					"message": "resume requires task_id",
+				}))
+				return
+			}
+			if engine, ok := loadEngine(msg.TaskID, msg.AgentID); ok {
+				observability.DefaultLogger.Info("control", "resuming engine", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
+				engine.Resume()
+			} else {
+				observability.DefaultLogger.Warn("control", "resume received for unknown task", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
+				hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
+					"message":     "resume target not found",
+					"action":      "resume",
+					"status_code": 404,
+				}))
+			}
 		default:
 			observability.DefaultLogger.Warn("control", "unknown control action", map[string]any{"action": msg.Action})
 		}
@@ -544,8 +676,8 @@ func main() {
 
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-				cancelRegistry.Store(taskID, cancel)
-				defer cancelRegistry.Delete(taskID)
+				storeCancel(taskID, "orchestrator", cancel)
+				defer removeCancel(taskID, "orchestrator")
 				defer cancel()
 				orch.RunBlocking(ctx, taskID, strategy, specs)
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
@@ -1040,8 +1172,8 @@ func main() {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			cancelRegistry.Store(taskID, cancel)
-			defer cancelRegistry.Delete(taskID)
+			storeCancel(taskID, "orchestrator", cancel)
+			defer removeCancel(taskID, "orchestrator")
 			defer cancel()
 			orch.RunBlocking(ctx, taskID, strategy, specs)
 			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
@@ -1427,9 +1559,12 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 
 	// Register the task's cancel function so WebSocket control messages can
 	// cancel this task (root or child). Always remove it when the goroutine
-	// exits to avoid leaking entries in cancelRegistry.
-	cancelRegistry.Store(taskID, cancel)
-	defer cancelRegistry.Delete(taskID)
+	// exits to avoid leaking entries in cancelRegistry. Phase 7-A: 同时把 Engine
+	// 实例注册到 engineRegistry，使前端 pause/resume 消息能直接拿到引擎句柄。
+	storeCancel(taskID, agentID, cancel)
+	storeEngine(taskID, agentID, engine)
+	defer removeCancel(taskID, agentID)
+	defer removeEngine(taskID, agentID)
 
 	observability.DefaultMetrics.IncrTasksStarted()
 

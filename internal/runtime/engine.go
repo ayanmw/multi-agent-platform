@@ -93,6 +93,8 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
@@ -422,6 +424,14 @@ type Engine struct {
 	selectedModel     string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
 	lastError         string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
 	consecutiveErrors int                              // how many times the same recoverable error has occurred in a row
+
+	// Pause/Resume 控件（Phase 7-A）：让前端可以在不取消 context 的情况下暂停 agent。
+	// paused 是一个 atomic.Bool，Run loop 每轮检查一次；resumeCh 用来唤醒阻塞中的 loop。
+	// resumeMu 保护 resumeCh 的 close/reopen 动作，避免并发触发 Resume 时出现
+	// "close of closed channel" panic。
+	paused   atomic.Bool
+	resumeCh chan struct{}
+	resumeMu sync.Mutex
 }
 
 // NewEngine creates a new Engine with the given configuration, tool registry,
@@ -508,6 +518,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		providers:         cfg.Providers,       // provider lookup map for Router decisions
 		lastError:         "",
 		consecutiveErrors: 0,
+		resumeCh:          make(chan struct{}),
 	}
 }
 
@@ -657,6 +668,27 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// The final answer (think phase with no tool calls) uses the current stepIdx
 	// without incrementing it.
 	for e.stepIdx < e.cfg.MaxSteps {
+		// Phase 7-A：暂停检查。
+		// 如果用户从前端触发了 Pause，paused 会被原子地置为 true，
+		// 这里在每轮循环开头阻塞等待 resumeCh 或者 ctx 取消。
+		// 注意：pause 不取消 context，所以 LLM 流式连接不会被中途打断，
+		// 这与 cancel 行为（走 ctx.Done 分支）有明显区分。
+		if e.paused.Load() {
+			select {
+			case <-e.resumeCh:
+				// Resume 已触发，继续下一轮。
+			case <-ctx.Done():
+				// 在暂停期间用户取消了任务，触发正常的取消逻辑。
+				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"reason": "cancelled",
+				}))
+				e.durationMs = time.Since(e.startTime).Milliseconds()
+				e.updateTask("failed", "", 0)
+				e.updateTaskDuration()
+				return "", e.totalTokens, ctx.Err()
+			}
+		}
+
 		// Check context cancellation before each iteration. This allows the
 		// HTTP handler to cancel the agent when the client disconnects or the
 		// user clicks "stop". Without this check, the engine would continue
@@ -2049,4 +2081,49 @@ func (e *Engine) saveCheckpoint() {
 	if err := e.checkpoint.Save(e.taskID, e.cfg.AgentID, e.stepIdx, e.totalTokens, e.messages, e.taskProgress); err != nil {
 		log.Printf("[Engine] Failed to save checkpoint: %v", err)
 	}
+}
+
+// Pause 暂停当前 Engine 的 ReAct 循环。
+//
+// 这是 Phase 7-A 新增的对外控制接口，与 context cancel 行为不同：
+//   - Pause 不取消 context，因此已经在执行的 LLM 流式请求不会被中断；
+//   - Run loop 每轮开头会检查 paused 标志位，命中后阻塞在 resumeCh 上等待恢复；
+//   - 多次 Pause 是幂等的（CompareAndSwap），不会重复发送事件。
+//
+// 调用方（cmd/server 的 control handler）通过 engineRegistry 查表后调用此方法。
+func (e *Engine) Pause() {
+	if !e.paused.CompareAndSwap(false, true) {
+		// 已经处于暂停状态，幂等返回。
+		return
+	}
+	// 通知前端此 agent 已进入 paused 状态。前端根据 agent_status 的 status 字段
+	// 把对应 AgentState.status 切换为 'paused'，从而禁用 Cancel/Pause 之外的交互。
+	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"status": "paused",
+	}))
+}
+
+// Resume 恢复被 Pause 阻塞的 Run 循环。
+//
+// 行为要点：
+//   - 只在当前处于 paused 状态时才会唤醒（避免误触）；
+//   - 通过关闭再重建 resumeCh 实现"一次性信号"，让下一次 Pause 仍可阻塞；
+//   - 同时发送 agent_status=running 事件，让前端把状态切回 running；
+//   - close + 新建 channel 的过程放在锁内，避免并发触发时出现 "close of closed channel" 竞态。
+func (e *Engine) Resume() {
+	if !e.paused.CompareAndSwap(true, false) {
+		return
+	}
+	e.resumeMu.Lock()
+	close(e.resumeCh)
+	e.resumeCh = make(chan struct{})
+	e.resumeMu.Unlock()
+	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"status": "running",
+	}))
+}
+
+// IsPaused 返回当前 Engine 是否处于暂停状态。仅用于诊断与单测，不参与主循环逻辑。
+func (e *Engine) IsPaused() bool {
+	return e.paused.Load()
 }

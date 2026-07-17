@@ -418,6 +418,13 @@ export function useTaskStore() {
       }
 
       case 'agent_status': {
+        // Phase 7-A: 根据后端 agent_status 事件把 AgentState.status 切换到 paused/running，
+        // 前端 UI 据此禁用 Cancel/Pause 之外的交互控件。
+        const incomingStatus = evt.data.status as string | undefined
+        if (incomingStatus === 'paused' || incomingStatus === 'running' ||
+          incomingStatus === 'completed' || incomingStatus === 'failed') {
+          agent.status = incomingStatus
+        }
         agent.currentStep = (evt.data.current_step as number) ?? agent.currentStep
         agent.maxSteps = (evt.data.max_steps as number) ?? agent.maxSteps
         agent.tokenUsage = {

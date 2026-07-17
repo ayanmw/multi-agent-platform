@@ -389,6 +389,11 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		Providers: o.routerProviders,
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
+	// Phase 7-A: Note — per-agent Engine/cancel registration is intentionally kept
+	// at the cmd/server layer (the caller creates the context and owns the registry
+	// tables). Orchestrator stays decoupled from those global sync.Map registries so
+	// it can be unit-tested without main.go package-level state.
+
 	// Emit agent_started event for the orchestrator to track
 	o.hub.SendEvent(event.NewEvent("agent_ready", subTaskID, spec.AgentID, 0, map[string]any{
 		"agent_name":    spec.Name,
