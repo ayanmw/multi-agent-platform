@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -297,15 +298,16 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 // and calls onChunk for each SSE event.
 //
 // Anthropic's SSE format uses TWO separate header lines:
-//   event: <event_type>
-//   data: {"type": "<event_type>", ...}
+//
+//	event: <event_type>
+//	data: {"type": "<event_type>", ...}
 //
 // Event flow:
-//   1. message_start        — extract input_tokens
-//   2. content_block_start  — initialize text or tool_use block
-//   3. content_block_delta  — accumulate text_delta or input_json_delta
-//   4. message_delta        — extract output_tokens and stop_reason
-//   5. message_stop         — stream complete
+//  1. message_start        — extract input_tokens
+//  2. content_block_start  — initialize text or tool_use block
+//  3. content_block_delta  — accumulate text_delta or input_json_delta
+//  4. message_delta        — extract output_tokens and stop_reason
+//  5. message_stop         — stream complete
 //
 // Tool use arguments arrive as incremental JSON fragments (partial_json),
 // not as complete JSON objects, so we accumulate them in a strings.Builder
@@ -491,10 +493,25 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 	}
 
 	// Assemble tool calls from the map in index order.
+	//
+	// Important: Anthropic content block indices are shared between text and
+	// tool_use blocks. If the model emits text at index 0 and tool_use at
+	// index 1, toolCallMap only contains key 1. A naive loop over
+	// [0, len(toolCallMap)) would miss index 1. We therefore collect all keys,
+	// sort them, and append the corresponding tool calls.
 	var toolCalls []ToolCall
-	for i := 0; i < len(toolCallMap); i++ {
-		if tc, ok := toolCallMap[i]; ok {
-			toolCalls = append(toolCalls, *tc)
+	if len(toolCallMap) > 0 {
+		indices := make([]int, 0, len(toolCallMap))
+		for idx := range toolCallMap {
+			indices = append(indices, idx)
+		}
+		// sort.Ints is deterministic and cheap for a small number of tool calls.
+		sort.Ints(indices)
+		for _, idx := range indices {
+			// Defensive: only emit content blocks that were actually tool_use.
+			if tc, ok := toolCallMap[idx]; ok && isToolBlock[idx] {
+				toolCalls = append(toolCalls, *tc)
+			}
 		}
 	}
 
@@ -585,10 +602,14 @@ func convertTools(tools []ToolDef) []anthropicToolDef {
 //   - "system" role messages: excluded (extracted to top-level system field by caller)
 //   - "user" role messages: content becomes a single "text" block
 //   - "assistant" role messages with tool_calls: content_blocks with type "tool_use"
-//   - "tool" role messages: role stays "user" with content_blocks of type "tool_result"
+//   - "tool" role messages: merged into the previous "user" message as
+//     content_blocks of type "tool_result" with tool_use_id.
 //
-// Anthropic requires tool-result messages to use role "user" (not "tool")
-// and wrap each result in a content_block of type "tool_result" with tool_use_id.
+// Anthropic's Messages API requires that all tool_result blocks for a single
+// assistant tool_use turn be placed together in ONE "user" message with multiple
+// content blocks. Therefore consecutive "tool" role messages are coalesced
+// into the preceding user message (creating one if necessary) rather than
+// emitted as separate messages.
 func convertMessages(messages []Message) ([]anthropicMessage, error) {
 	result := make([]anthropicMessage, 0, len(messages))
 
@@ -636,17 +657,27 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 
 		case "tool":
 			// Tool results must be role "user" with tool_result content blocks.
-			am := anthropicMessage{
-				Role: "user",
-				Content: []anthropicContent{
-					{
-						Type:      "tool_result",
-						ToolUseID: msg.ToolCallID,
-						Content:   msg.Content,
-					},
-				},
+			// Anthropic requires all results for one assistant tool_use turn to live
+			// in a SINGLE user message with multiple content blocks. If the previous
+			// result was already merged into the last user message, append to it;
+			// otherwise create a new user message and fold into it.
+			block := anthropicContent{
+				Type:      "tool_result",
+				ToolUseID: msg.ToolCallID,
+				Content:   msg.Content,
 			}
-			result = append(result, am)
+			if len(result) > 0 && result[len(result)-1].Role == "user" {
+				last := &result[len(result)-1]
+				// If the previous user message was a plain text prompt, convert it to
+				// a composite message by appending the tool_result block. Mixing text
+				// and tool_result in one user turn is unusual but allowed by Anthropic.
+				last.Content = append(last.Content, block)
+			} else {
+				result = append(result, anthropicMessage{
+					Role:    "user",
+					Content: []anthropicContent{block},
+				})
+			}
 		}
 	}
 

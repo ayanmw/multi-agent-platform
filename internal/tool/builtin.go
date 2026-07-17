@@ -253,6 +253,13 @@ func executeWriteFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("content must be a string")
 	}
 
+	// Reject paths that attempt directory traversal BEFORE resolving against
+	// workdir. filepath.Join + filepath.Clean would normalize ".." segments and
+	// silently re-root the path, defeating the traversal check.
+	if isPathTraversal(path) {
+		return nil, fmt.Errorf("path traversal detected: %s", path)
+	}
+
 	// Resolve relative path against workdir if provided. When workdir is empty
 	// (workspace_dir not bound to the session), fall back to the current
 	// working directory so relative paths still resolve predictably.
