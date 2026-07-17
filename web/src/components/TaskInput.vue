@@ -3,12 +3,14 @@
        disabled: whether the input is disabled (during task execution)
        isRunning: whether a task is currently running
        isPending: whether a task is starting
+       enableMultiAgent: whether multi-agent mode is enabled
 
      Emits:
        send: user clicked send with input text and selected options
        pause: user clicked pause
        resume: user clicked resume
        cancel: user clicked cancel
+       update:enableMultiAgent: toggled multi-agent mode
 -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -38,6 +40,7 @@ const props = defineProps<{
   disabled: boolean
   isRunning: boolean
   isPending: boolean
+  enableMultiAgent?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -46,6 +49,7 @@ const emit = defineEmits<{
   resume: []
   cancel: []
   toggleContextWindow: []
+  'update:enableMultiAgent': [value: boolean]
 }>()
 
 const inputText = ref('')
@@ -154,6 +158,14 @@ function setTimeoutSeconds(seconds: number) {
         @click="emit('toggleContextWindow')"
       >
         🪟 Context
+      </button>
+      <button
+        class="options-toggle"
+        :class="{ active: props.enableMultiAgent }"
+        title="Use multi-agent mode"
+        @click="emit('update:enableMultiAgent', !props.enableMultiAgent)"
+      >
+        🤖 Multi-Agent
       </button>
       <span v-if="!showOptions" class="options-summary">
         Max steps: {{ maxSteps }} · Timeout: {{ timeoutSeconds === 0 ? 'Unlimited' : (timeoutSeconds / 60) + ' min' }}

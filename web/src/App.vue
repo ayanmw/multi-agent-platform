@@ -152,6 +152,9 @@ const autoApprovePolicy = ref(false)
 // Project config view toggle
 const showProjectConfig = ref(false)
 
+// Multi-agent mode toggle
+const useMultiAgent = ref(false)
+
 /** Singleton context window snapshot listener */
 const {
   setActiveTaskId: setContextWindowTaskId,
@@ -569,6 +572,17 @@ onMounted(() => {
 async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
   try {
     const session = activeSession.value
+    if (useMultiAgent.value) {
+      const targetSession = session || await createSession(undefined, text, activeProjectId.value)
+      if (!session) {
+        setActiveSession(targetSession.id)
+      }
+      await startMultiAgentTask(text, {
+        sessionId: targetSession.id,
+        timeoutSeconds: options.timeoutSeconds,
+      })
+      return
+    }
     if (!session) {
       // No active session — create a new one in the current project
       const newSession = await createSession(undefined, text, activeProjectId.value)
@@ -1249,11 +1263,13 @@ function formatShortTime(ts: number): string {
           :disabled="isAgentRunning"
           :is-running="isAgentRunning"
           :is-pending="isTaskPending"
+          :enable-multi-agent="useMultiAgent"
           @send="handleSend"
           @pause="pauseTask"
           @resume="resumeTask"
           @cancel="cancelTask"
           @toggle-context-window="toggleContextWindow"
+          @update:enable-multi-agent="(v: boolean) => useMultiAgent = v"
         />
 
         <!-- Case library cards — shown when active session has no task / task is empty -->
