@@ -153,7 +153,12 @@ const autoApprovePolicy = ref(false)
 const showProjectConfig = ref(false)
 
 /** Singleton context window snapshot listener */
-const { setActiveTaskId: setContextWindowTaskId, currentSnapshot: latestContextSnapshot } = useContextWindow()
+const {
+  setActiveTaskId: setContextWindowTaskId,
+  currentSnapshot: latestContextSnapshot,
+  setSnapshot: setContextWindowSnapshot,
+  clear: clearContextWindow,
+} = useContextWindow()
 
 watch(activeTaskId, (taskId) => {
   setContextWindowTaskId(taskId || '')
@@ -174,10 +179,8 @@ async function fetchContextWindowSnapshot() {
       return
     }
     const data = (await resp.json()) as ContextWindowSnapshotData
-    // Only replace if the returned snapshot matches the currently active task.
-    if (activeTaskId.value === taskId) {
-      latestContextSnapshot.value = data
-    }
+    // 通过 useContextWindow 提供的 API 回填快照，避免直接修改 composable 内部 ref。
+    setContextWindowSnapshot(taskId, data)
   } catch (err) {
     console.error('[App] Network error fetching context snapshot:', err)
   }
@@ -730,7 +733,7 @@ function toggleProjectCollapse(projectId: string) {
   collapsedProjects.value = new Set(collapsedProjects.value)
 }
 
-/** Switch to a different project — reload sessions and clear task */
+/** Switch to a different project — reload sessions and clear task/state */
 async function handleProjectSelect(projectId: string) {
   if (projectId === activeProjectId.value) return
   setActiveProject(projectId)
@@ -738,6 +741,7 @@ async function handleProjectSelect(projectId: string) {
   collapsedProjects.value.delete(projectId)
   collapsedProjects.value = new Set(collapsedProjects.value)
   clearActiveTask()
+  clearContextWindow()
   try {
     await loadSessions(projectId)
   } catch (err) {
@@ -792,6 +796,10 @@ async function handleSessionSelect(session: Session) {
         .sort((a, b) => a.startedAt - b.startedAt)
       if (ordered.length > 0) {
         activeTaskId.value = ordered[ordered.length - 1].id
+      } else {
+        // 当前 session 没有任何 task 时清空 context window，避免展示旧 session 快照。
+        activeTaskId.value = ''
+        clearContextWindow()
       }
       console.log('[App] loadSessionTurns done, taskCache keys:', Object.keys(taskCache.value))
     } catch (err) {
@@ -800,6 +808,7 @@ async function handleSessionSelect(session: Session) {
   } else {
     console.log('[App] No rootTaskId, clearing active task')
     clearActiveTask()
+    clearContextWindow()
   }
 }
 
@@ -810,6 +819,7 @@ async function handleNewSession(projectId?: string) {
     const session = await createSession(undefined, undefined, pid)
     setActiveSession(session.id)
     clearActiveTask()
+    clearContextWindow()
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to create session')
   }
@@ -848,6 +858,7 @@ async function handleNewSessionCustom() {
     const session = await createSession(undefined, undefined, activeProjectId.value, customWorkspacePath.value)
     setActiveSession(session.id)
     clearActiveTask()
+    clearContextWindow()
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to create session')
   }
@@ -877,11 +888,13 @@ async function handleDeleteSession(session: Session) {
           }
         } else {
           clearActiveTask()
+          clearContextWindow()
         }
       } else {
         const empty = await createSession(undefined, undefined, activeProjectId.value)
         setActiveSession(empty.id)
         clearActiveTask()
+        clearContextWindow()
       }
     }
   } catch (err) {

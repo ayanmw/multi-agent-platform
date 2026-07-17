@@ -23,20 +23,23 @@ function onEvent(event: AgentEvent) {
   currentSnapshot.value = data
 }
 
-/** Set the task ID whose snapshots should be tracked; clears any stale snapshot. */
+// 设置当前追踪的 task ID；若变化则清空旧快照，防止跨任务污染。
 function setActiveTaskId(taskId: string): void {
-  if (activeTaskId.value === taskId) return
+  if (activeTaskId.value === taskId) {
+    return
+  }
   activeTaskId.value = taskId
   currentSnapshot.value = null
 }
 
-/** Return the latest snapshot for a given task, or null if none. */
-function latestFor(taskId: string): ContextWindowSnapshotData | null {
-  if (activeTaskId.value !== taskId) return null
-  return currentSnapshot.value
+// 用 REST 获取的快照回填当前快照；仅当 taskId 与当前 active 一致时才生效。
+function setSnapshot(taskId: string, data: ContextWindowSnapshotData): void {
+  if (taskId && activeTaskId.value === taskId) {
+    currentSnapshot.value = data
+  }
 }
 
-/** Clear the current snapshot (e.g. when leaving the active task). */
+// 清空当前快照（例如切换 session 时调用）。
 function clear(): void {
   currentSnapshot.value = null
 }
@@ -52,7 +55,7 @@ export function useContextWindow() {
     activeTaskId,
     currentSnapshot,
     setActiveTaskId,
-    latestFor,
+    setSnapshot,
     clear,
   }
 }
