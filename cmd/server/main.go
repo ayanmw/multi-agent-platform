@@ -409,24 +409,13 @@ func main() {
 
 	// API: Start a chat task with real Agent Loop, list tasks, get task detail,
 	// fetch context window snapshots, and create new tasks.
-	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
-		// Exact /api/tasks (or /api/tasks/) is the root entrypoint. The standard
-		// library strips trailing slashes before invoking the handler, so the
-		// "/api/tasks/" branch is defensive for direct or reverse-proxy access.
-		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
-			// GET /api/tasks — list recent tasks, or get a single task by ?id=xxx.
-			if r.Method == http.MethodGet {
-				if r.URL.Query().Get("id") != "" {
-					handleGetTask(w, r)
-					return
-				}
-				handleListTasks(w, r)
-				return
-			}
-			handleTasksRoot(w, r)
-			return
-		}
-
+	//
+	// We register "/api/tasks/" BEFORE "/api/tasks" so that sub-resource paths
+	// (e.g. /api/tasks/:id/context_window) are matched by the more specific
+	// handler. Go's ServeMux matches exact prefixes first, but since the old
+	// combined handler relied on r.URL.Path checks inside the root handler,
+	// nested paths were not reliably routed after the SPA fallback changes.
+	http.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
 		if path == "" {
 			http.Error(w, "task ID required", http.StatusNotFound)
@@ -443,13 +432,33 @@ func main() {
 			return
 		}
 
-		// GET /api/tasks/:id — single task detail (also supports /api/tasks?id=xxx)
+		// GET /api/tasks/:id — single task detail
 		if r.Method == http.MethodGet {
-			// Pass through to the existing query-param based handler.
+			r.URL.RawQuery = "id=" + path
 			handleGetTask(w, r)
 			return
 		}
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+	})
+
+	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		// Exact /api/tasks (or /api/tasks/) is the root entrypoint.
+		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
+			// GET /api/tasks — list recent tasks, or get a single task by ?id=xxx.
+			if r.Method == http.MethodGet {
+				if r.URL.Query().Get("id") != "" {
+					handleGetTask(w, r)
+					return
+				}
+				handleListTasks(w, r)
+				return
+			}
+			handleTasksRoot(w, r)
+			return
+		}
+
+		// Any path not handled here is a 404.
+		http.Error(w, "task ID required", http.StatusNotFound)
 	})
 
 	handleTasksRoot = func(w http.ResponseWriter, r *http.Request) {
@@ -633,7 +642,7 @@ func main() {
 				workingMemory = memRecall.FormatForSystemPrompt(wm)
 			}
 
-			taskID := "task_" + time.Now().Format("20060102150405")
+			taskID := newTaskID()
 			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 
 			w.Header().Set("Content-Type", "application/json")

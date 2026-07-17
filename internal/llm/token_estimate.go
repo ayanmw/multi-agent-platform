@@ -114,14 +114,20 @@ func BuildContextWindowSnapshot(model string, maxContextTokens int, messages []M
 	return out
 }
 
+// defaultContextWindow is the fallback max context length used when a model's
+// profile is unavailable. 200K aligns with current mainstream large-context
+// models and gives the UI a reasonable baseline until Phase 7 introduces a
+// provider-aware context-window registry.
+const defaultContextWindow = 200_000
+
 // EstimateModelContextWindow resolves a model's max context window from the
-// registry. If the model is unknown or the registry is nil, it returns a
-// conservative default (64000 tokens) that is sufficient for modern APIs.
+// registry. If the model is unknown or the registry is nil, it returns the
+// default 200K fallback so the UI capacity gauge is not artificially capped.
 func EstimateModelContextWindow(registry *ModelRegistry, model string) int {
 	if registry != nil && model != "" {
 		if p := registry.Get(model); p != nil && p.MaxContextWindow > 0 {
 			return p.MaxContextWindow
 		}
 	}
-	return 64000
+	return defaultContextWindow
 }

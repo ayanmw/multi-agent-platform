@@ -35,6 +35,15 @@ func (p *DBPersistence) UpdateTaskDuration(taskID string, durationMs int) error 
 	return db.UpdateTaskDuration(taskID, durationMs)
 }
 
+// newTaskID returns a human-readable, roughly time-ordered task identifier.
+// The suffix is milliseconds within the current second so that rapid task
+// creation (multi-agent fan-out, quick UI clicks, root + child tasks) does not
+// collide within the same second.
+func newTaskID() string {
+	now := time.Now()
+	return "task_" + now.Format("20060102150405") + fmt.Sprintf("%03d", now.Nanosecond()/1_000_000)
+}
+
 func (p *DBPersistence) SaveStep(s runtime.StepRecord) error {
 	// Step ID = 可读前缀 + uuid 后缀。
 	//
@@ -105,7 +114,7 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 		sessionID = newID
 	}
 
-	taskID := "task_" + time.Now().Format("20060102150405")
+	taskID := newTaskID()
 	if persist != nil {
 		if err := persist.SaveTask(taskID, userInput, []string{}); err != nil {
 			return "", "", fmt.Errorf("create task: %w", err)

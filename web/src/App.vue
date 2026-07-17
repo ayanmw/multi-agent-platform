@@ -1088,9 +1088,9 @@ function formatShortTime(ts: number): string {
       <!-- Project Config view — replaces main content when active -->
       <ProjectConfig v-else-if="showProjectConfig" @back="handleProjectConfigBack" />
 
-      <div v-if="showContextWindow" class="memory-overlay" @click.self="closeContextWindow">
-        <div class="memory-overlay-panel">
-          <div class="memory-overlay-header">
+      <div v-if="showContextWindow" class="memory-overlay context-overlay" @click.self="closeContextWindow">
+        <div class="memory-overlay-panel context-overlay-panel">
+          <div class="memory-overlay-header context-overlay-header">
             <div class="memory-tabs">
               <button class="memory-tab active" disabled>🪟 Context Window</button>
             </div>
@@ -1102,7 +1102,7 @@ function formatShortTime(ts: number): string {
           </div>
           <div class="memory-overlay-body">
             <ContextWindowPanel
-              class="memory-overlay-browser"
+              class="context-overlay-content"
               :active-task-id="activeTaskId || ''"
               @refresh="fetchContextWindowSnapshot"
             />
@@ -2152,6 +2152,39 @@ function formatShortTime(ts: number): string {
   flex: 1;
   overflow-y: auto;
   padding: 0;
+}
+
+.memory-overlay.context-overlay {
+  align-items: center;
+  padding: 32px;
+}
+
+.memory-overlay.context-overlay .memory-overlay-panel.context-overlay-panel {
+  max-width: 1100px;
+  height: calc(100vh - 56px);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #121216;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+}
+
+.memory-overlay.context-overlay .memory-overlay-header.context-overlay-header {
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.memory-overlay.context-overlay .context-overlay-content {
+  flex: 1;
+  overflow: hidden;
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
+}
+
+.memory-overlay.context-overlay .memory-tab.active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 /* Vue transition classes for the overlay fade/slide effect. */

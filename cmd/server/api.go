@@ -32,16 +32,19 @@ import (
 // handleGetTaskContextWindow returns the current context-window snapshot for a
 // task (GET /api/tasks/:id/context_window). For live tasks the snapshot is read
 // from the in-memory runtime store written by Engine.think(). For persisted/idle
-// tasks the snapshot is reconstructed from conversations and steps. Returns 404
-// if the task does not exist.
+// tasks the snapshot is reconstructed from the task's own session_messages
+// plus the agent's system prompt. Returns 404 if the task does not exist.
 func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
 
+	log.Printf("[ContextWindow] request for task=%s", id)
+
 	// 1. Prefer the live in-memory snapshot when the engine is thinking.
 	if snapshot, ok := runtime.GetTaskContextSnapshot(id); ok {
+		log.Printf("[ContextWindow] task=%s served from live runtime store", id)
 		encodeContextWindowSnapshot(w, snapshot)
 		return
 	}
@@ -50,105 +53,110 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 	task, err := db.QueryTaskByID(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[ContextWindow] task=%s not found", id)
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
+		log.Printf("[ContextWindow] task=%s db error: %v", id, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if task == nil {
+		log.Printf("[ContextWindow] task=%s not found (nil)", id)
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
+	log.Printf("[ContextWindow] task=%s found, session_id=%s agent_ids=%v", id, task.SessionID, task.AgentIDs)
 
 	var messages []llm.Message
 
-	// Reconstruct the system prompt. We use a minimal system prompt because the
-	// exact version used during execution is not fully recoverable from the DB.
-	systemPrompt := "system"
-	if task.SessionID != "" {
-		if s, err := db.QuerySessionByID(task.SessionID); err == nil && s.Name != "" {
-			systemPrompt = s.Name
+	// Reconstruct the system prompt from the task's primary agent. This is more
+	// faithful than using the session name, which is just a user-facing label.
+	systemPrompt := ""
+	model := "unknown"
+	if len(task.AgentIDs) > 0 {
+		if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent != nil {
+			systemPrompt = agent.SystemPrompt
+			model = agent.Model
+			log.Printf("[ContextWindow] task=%s resolved model=%s from agent=%s", id, model, task.AgentIDs[0])
+		} else if err != nil {
+			log.Printf("[ContextWindow] task=%s QueryAgentByID failed: %v", id, err)
 		}
 	}
-	messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+	if systemPrompt == "" {
+		// Last-resort fallback to session name only when the agent's system prompt
+		// is unavailable. This keeps historical tasks viewable even if the agent
+		// record was deleted.
+		if task.SessionID != "" {
+			if s, err := db.QuerySessionByID(task.SessionID); err == nil && s != nil && s.Name != "" {
+				systemPrompt = s.Name
+				log.Printf("[ContextWindow] task=%s fallback system prompt from session name", id)
+			}
+		}
+	}
 
-	// 2. Otherwise, reconstruct from session_messages persisted during execution.
-	//    Each engine writes to session_messages via the SessionMessageWriter,
-	//    so this is the most faithful persisted source.
+	// 3. Reconstruct from session_messages persisted during execution.
+	//    session_messages is the most faithful persisted source, and it is keyed
+	//    by task_id, so we can recover a historical task even after restart.
 	msgs, err := db.QuerySessionMessagesByTask(id)
 	if err != nil {
+		log.Printf("[ContextWindow] task=%s QuerySessionMessagesByTask failed: %v", id, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[ContextWindow] task=%s loaded session_messages count=%d", id, len(msgs))
 
-	for _, m := range msgs {
-		var toolCalls []llm.ToolCall
-		if m.ToolCalls != "" {
-			_ = json.Unmarshal([]byte(m.ToolCalls), &toolCalls) // best-effort
+	if len(msgs) > 0 {
+		// The first persisted message is normally the system prompt. If the DB
+		// already contains a system message, prepend with our recovered prompt
+		// only when it differs, otherwise avoid duplicate system messages.
+		hasSystem := false
+		for _, m := range msgs {
+			if m.Role == "system" {
+				hasSystem = true
+				break
+			}
 		}
-		messages = append(messages, llm.Message{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
-			ToolCalls:  toolCalls,
-		})
+		if !hasSystem && systemPrompt != "" {
+			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+		}
+
+		for _, m := range msgs {
+			var toolCalls []llm.ToolCall
+			if m.ToolCalls != "" {
+				_ = json.Unmarshal([]byte(m.ToolCalls), &toolCalls) // best-effort
+			}
+			messages = append(messages, llm.Message{
+				Role:       m.Role,
+				Content:    m.Content,
+				ToolCallID: m.ToolCallID,
+				ToolCalls:  toolCalls,
+			})
+		}
+	} else if systemPrompt != "" {
+		// No persisted messages: the task existed but wrote nothing to
+		// session_messages. Return a snapshot containing just the system prompt
+		// so the UI is not stuck on 404.
+		messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+	} else {
+		log.Printf("[ContextWindow] task=%s no snapshot and no reconstructable messages", id)
+		http.Error(w, "context window snapshot not available", http.StatusNotFound)
+		return
 	}
 
-	// 3. Best-effort fallback: if no session_messages exist, try the older
-	//    conversations table or steps table.
-	if len(messages) == 1 {
-		conversations, err := db.QueryConversationsByTask(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(conversations) > 0 {
-			// Reset to just the system prompt, then append conversation records.
-			messages = messages[:1]
-			for _, c := range conversations {
-				messages = append(messages, llm.Message{Role: c.Role, Content: c.Content})
-			}
-		} else {
-			steps, err := db.QueryStepsByTask(id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			// Drop the placeholder system message; steps-based reconstruction
-			// rebuilds the full list below.
-			messages = nil
-			lastThinkContent := ""
-			for _, s := range steps {
-				switch s.Type {
-				case "think":
-					messages = append(messages, llm.Message{Role: "assistant", Content: s.Content})
-					lastThinkContent = s.Content
-				case "tool_call":
-					if lastThinkContent != "" {
-						messages = append(messages, llm.Message{
-							Role:      "assistant",
-							Content:   lastThinkContent,
-							ToolCalls: []llm.ToolCall{{Function: llm.FunctionCall{Name: s.ToolName}}},
-						})
-						lastThinkContent = ""
-					}
-					messages = append(messages, llm.Message{Role: "tool", Content: s.ToolOutput, ToolCallID: s.ID})
-				case "observation":
-					// Observations already appended via tool_call outputs above.
-				}
+	if model == "unknown" || model == "" {
+		// Try model from task's first agent if we failed earlier.
+		if len(task.AgentIDs) > 0 {
+			if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent != nil && agent.Model != "" {
+				model = agent.Model
 			}
 		}
 	}
 
-	model := "unknown"
-	if len(task.AgentIDs) > 0 {
-		if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent.Model != "" {
-			model = agent.Model
-		}
-	}
 	maxTokens := llm.EstimateModelContextWindow(nil, model)
 	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages)
+	log.Printf("[ContextWindow] task=%s reconstructed snapshot model=%s messages=%d tokens=%d ratio=%.4f",
+		id, snapshot.Model, len(snapshot.Messages), snapshot.EstimatedTotalTokens, snapshot.EstimatedUsageRatio)
 	encodeContextWindowSnapshot(w, snapshot)
 }
 
@@ -1635,7 +1643,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	}
 
 	// 创建新 Task
-	taskID := "task_" + time.Now().Format("20060102150405")
+	taskID := newTaskID()
 	turnIndex := sess.TurnCount // 当前轮次（0-based）
 
 	// 持久化 Task
@@ -1897,7 +1905,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		workingMemory = memRecall.FormatForSystemPrompt(wm)
 	}
 
-	taskID := "task_" + time.Now().Format("20060102150405")
+	taskID := newTaskID()
 	go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, tools, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 
 	w.Header().Set("Content-Type", "application/json")

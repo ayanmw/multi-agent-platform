@@ -385,6 +385,15 @@ const activeTaskId = ref<string | null>(null)
 - [x] 后端 API `GET /api/tasks/:id/context_window`：内存优先 + DB 重建
 - [x] 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`，real-LLM 冒烟测试验证事件字段
 
+### 后续上下文窗口增强（本次提交）
+- [x] 默认 max context tokens 从 64K 提升到 200K，与现代主流大上下文模型对齐
+  - 修改：`internal/llm/token_estimate.go` 引入 `defaultContextWindow = 200_000`
+  - 同步更新 `internal/llm/token_estimate_registry_test.go` 断言
+- [x] 拆分 `/api/tasks` 与 `/api/tasks/` handler，修复 `/api/tasks/:id` 和 `/api/tasks/:id/context_window` 404
+- [x] `newTaskID()` 毫秒后缀：同一秒内多个 task 不再 ID 冲突
+- [x] 历史 session Context Window 从 `session_messages` 重建，不再显示 "Waiting for the next agent think step..."
+- [x] 前端移除 `ContextWindowPanel` 中 `watch(immediate)` 与 `onMounted` 双重刷新，避免重复请求 `fetchContextWindowSnapshot()`
+
 ### 验证
 - `go test ./internal/llm ./internal/runtime` ✅
 - `go build ./cmd/server` ✅

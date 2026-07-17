@@ -1,20 +1,18 @@
 <!--
   ContextWindowPanel.vue — real-time context window observability
 
-  Displays the latest backend `context_window_snapshot` as:
-    1. A compact header with model name, token totals, and refresh action.
-    2. A progress bar showing estimated total tokens / max context tokens.
-    3. A role-grouped bar chart with per-role token share.
-    4. Expandable message cards so the user can inspect exactly what the
-       agent sees (system prompt, user input, assistant reasoning, tool results).
+  Displays the latest backend `context_window_snapshot` with a refined,
+  dashboard-like aesthetic. The visual direction is "laboratory telemetry":
+  dark glass panels, subtle glows, calibrated typography, and calm motion.
 
-  This component requests an on-demand snapshot from the API when it mounts/
-  opens if no snapshot is available yet (auto-refresh). A manual refresh button
-  is also available in the header.
+  Sections:
+    1. Header — title, model identifier, refresh action.
+    2. Capacity ring — total tokens versus max context as a radial progress.
+    3. Role composition — animated stacked spectrum + per-role cards.
+    4. Message timeline — collapsible message cards with metadata chips.
 
   Props:
     activeTaskId: the task currently selected in the main UI.
-    modelRegistry: optional registry object used by useContextWindow.
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
@@ -41,11 +39,14 @@ async function requestRefresh() {
     emit('refresh')
   } finally {
     // Keep spinner visible briefly to avoid flicker.
-    setTimeout(() => { isLoading.value = false }, 200)
+    setTimeout(() => { isLoading.value = false }, 300)
   }
 }
 
 // Keep the composable's active task in sync with the prop.
+// Immediate: true also covers the initial mount, so we do not need an extra
+// onMounted refresh. Both running would double-emit 'refresh' and fetch the
+// snapshot twice for the same task.
 watch(
   () => props.activeTaskId,
   (taskId) => {
@@ -57,56 +58,44 @@ watch(
   { immediate: true },
 )
 
-// Auto-refresh once when mounted/opened if snapshot is empty but a task exists.
-onMounted(() => {
-  if (props.activeTaskId && !currentSnapshot.value) {
-    requestRefresh()
-  }
-})
-
 const usagePercent = computed(() => {
   if (!latest.value) return 0
   return Math.min(100, latest.value.estimated_usage_ratio * 100)
 })
 
-const usageColor = computed(() => {
+const usageColorClass = computed(() => {
   const p = usagePercent.value
-  if (p < 50) return 'bg-emerald-500'
-  if (p < 80) return 'bg-amber-500'
-  return 'bg-red-500'
+  if (p < 50) return 'ok'
+  if (p < 80) return 'warn'
+  return 'critical'
 })
 
-const usageTextColor = computed(() => {
-  const p = usagePercent.value
-  if (p < 50) return 'text-emerald-400'
-  if (p < 80) return 'text-amber-400'
-  return 'text-red-400'
-})
-
-const roleColors: Record<string, string> = {
-  system: 'bg-purple-500',
-  user: 'bg-blue-500',
-  assistant: 'bg-green-500',
-  tool: 'bg-orange-500',
+const roleMeta: Record<string, { label: string; icon: string; hue: number }> = {
+  system: { label: 'system', icon: '◈', hue: 260 },
+  user: { label: 'user', icon: '◇', hue: 205 },
+  assistant: { label: 'assistant', icon: '✦', hue: 145 },
+  tool: { label: 'tool', icon: '⚙', hue: 32 },
 }
 
-const roleBars: Record<string, string> = {
-  system: 'bg-purple-500/70',
-  user: 'bg-blue-500/70',
-  assistant: 'bg-green-500/70',
-  tool: 'bg-orange-500/70',
+function roleColor(role: string, alpha = 1): string {
+  const hue = roleMeta[role]?.hue ?? 210
+  return `hsla(${hue}, 85%, 62%, ${alpha})`
 }
 
-const roleLabels: Record<string, string> = {
-  system: '📋 system',
-  user: '👤 user',
-  assistant: '🤖 assistant',
-  tool: '🔧 tool',
+function roleGlow(role: string): string {
+  const hue = roleMeta[role]?.hue ?? 210
+  return `0 0 16px hsla(${hue}, 85%, 60%, 0.35)`
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 1 : 2)}k`
   return `${n}`
+}
+
+function formatPercent(ratio: number): string {
+  if (ratio < 0.01 && ratio > 0) return '<1%'
+  return `${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}%`
 }
 
 interface RoleSummary {
@@ -130,7 +119,6 @@ const roleSummary = computed<RoleSummary[]>(() => {
   for (const [role, meta] of Object.entries(byRole)) {
     rows.push({ role, count: meta.count, tokens: meta.tokens, ratio: meta.tokens / total })
   }
-  // Stable order: system, user, assistant, tool, others
   const order = ['system', 'user', 'assistant', 'tool']
   rows.sort((a, b) => {
     const ia = order.indexOf(a.role)
@@ -143,169 +131,766 @@ const roleSummary = computed<RoleSummary[]>(() => {
   return rows
 })
 
-function roleBarStyle(ratio: number) {
-  return { width: `${Math.max(0, Math.min(100, ratio * 100))}%` }
-}
+const spectrumStyle = computed(() => {
+  const stops: string[] = []
+  let cursor = 0
+  for (const row of roleSummary.value) {
+    const start = cursor
+    const end = cursor + row.ratio * 100
+    stops.push(`${roleColor(row.role, 0.85)} ${start.toFixed(2)}% ${end.toFixed(2)}%`)
+    cursor = end
+  }
+  if (stops.length === 0) return { background: 'rgba(255,255,255,0.06)' }
+  return { background: `linear-gradient(90deg, ${stops.join(', ')})` }
+})
 
 function messageRatio(msg: ContextSnapshotMessage): number {
   if (!latest.value) return 0
   const total = latest.value.estimated_total_tokens || 1
   return msg.estimated_tokens / total
 }
+
+function messageOrdinal(idx: number): string {
+  return String(idx + 1).padStart(2, '0')
+}
+
+function truncate(text: string | undefined, max: number): string {
+  if (!text) return ''
+  return text.length <= max ? text : text.slice(0, max - 1) + '…'
+}
+
+const circumference = 2 * Math.PI * 52
+const ringDash = computed(() => {
+  const fraction = Math.min(1, usagePercent.value / 100)
+  return `${circumference * fraction} ${circumference * (1 - fraction)}`
+})
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-4 p-4 overflow-hidden bg-gray-900 text-gray-100">
-    <!-- Header row: title + model chip + refresh -->
-    <div class="flex items-center justify-between gap-3 min-w-0">
-      <div class="flex items-center gap-3 min-w-0">
-        <h2 class="text-lg font-semibold whitespace-nowrap">🪟 Context Window</h2>
-        <span
-          v-if="latest"
-          class="shrink-0 inline-flex items-center px-2 py-1 rounded-full text-[10px] leading-none font-medium bg-gray-800 text-gray-400 border border-gray-700 truncate max-w-[150px]"
-        >
+  <div class="context-panel">
+    <!-- Header -->
+    <header class="context-header">
+      <div class="context-title-group">
+        <div class="context-title">Context Window</div>
+        <div v-if="latest" class="model-chip" :title="latest.model">
           {{ latest.model || 'unknown model' }}
-        </span>
+        </div>
       </div>
       <button
-        class="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        class="refresh-btn"
         title="Refresh context window snapshot"
         :disabled="!activeTaskId || isLoading"
         @click="requestRefresh"
       >
-        <span v-if="isLoading" class="inline-block w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
-        <span v-else>🔄</span>
-        Refresh
+        <span v-if="isLoading" class="refresh-spinner" />
+        <svg v-else class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.5 2v6h-6M2.5 22v-6h6M19.5 11a8 8 0 0 1-15.2 2.5M4.5 13a8 8 0 0 1 15.2-2.5" />
+        </svg>
+        <span>Refresh</span>
       </button>
-    </div>
+    </header>
 
-    <div v-if="!latest" class="text-sm text-gray-400">
-      {{ isLoading ? 'Loading snapshot...' : 'Waiting for the next agent think step...' }}
+    <div v-if="!latest" class="empty-state">
+      <span class="empty-icon">◌</span>
+      <p class="empty-title">
+        {{ isLoading ? 'Loading snapshot...' : 'Waiting for the next agent think step...' }}
+      </p>
+      <p class="empty-hint">Snapshots are emitted before every LLM call for the active task.</p>
     </div>
 
     <template v-else>
-      <!-- Total usage -->
-      <div class="bg-gray-800 rounded-xl p-4 flex flex-col gap-3 border border-gray-700 shadow-sm">
-        <div class="flex items-baseline justify-between gap-2">
-          <span class="text-sm font-medium text-gray-200">Context Window</span>
-          <span class="font-mono text-xs text-gray-400 shrink-0">
-            {{ formatTokens(latest.estimated_total_tokens) }} / {{ formatTokens(latest.max_context_tokens) }} tokens
-          </span>
+      <!-- Top telemetry grid -->
+      <section class="telemetry-grid">
+        <!-- Capacity ring -->
+        <div class="glass-card capacity-card">
+          <div class="card-label">Capacity</div>
+          <div class="ring-wrap">
+            <svg class="capacity-ring" viewBox="0 0 120 120">
+              <circle class="ring-track" cx="60" cy="60" r="52" />
+              <circle
+                class="ring-fill"
+                :class="usageColorClass"
+                cx="60"
+                cy="60"
+                r="52"
+                :stroke-dasharray="ringDash"
+                :stroke-dashoffset="0"
+              />
+            </svg>
+            <div class="ring-center">
+              <div class="ring-percent" :class="usageColorClass">{{ usagePercent.toFixed(1) }}%</div>
+              <div class="ring-fraction">
+                {{ formatTokens(latest.estimated_total_tokens) }} / {{ formatTokens(latest.max_context_tokens) }}
+              </div>
+              <div class="ring-unit">tokens</div>
+            </div>
+          </div>
+          <p class="disclaimer">Local heuristic; not API-exact token counts.</p>
         </div>
-        <div class="flex items-end gap-3">
-          <span class="text-3xl font-bold tracking-tight" :class="usageTextColor">
-            {{ usagePercent.toFixed(1) }}%
-          </span>
-        </div>
-        <div class="w-full h-5 bg-gray-700 rounded-full overflow-hidden">
-          <div
-            class="h-full transition-all duration-500 ease-out"
-            :class="usageColor"
-            :style="{ width: `${usagePercent}%` }"
-          />
-        </div>
-        <p class="text-[11px] leading-snug text-gray-500">
-          estimated (local heuristic, not API exact tokens)
-        </p>
-      </div>
 
-      <!-- Role breakdown grid -->
-      <div class="bg-gray-800 rounded-xl p-4 border border-gray-700 shadow-sm flex flex-col gap-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500">Role breakdown</h3>
-        <div class="grid grid-cols-2 gap-3">
-          <div
-            v-for="row in roleSummary"
-            :key="row.role"
-            class="bg-gray-900/60 rounded-lg p-3 border border-gray-700/60 flex flex-col gap-2"
-          >
-            <div class="flex items-center gap-2 min-w-0">
-              <span
-                class="inline-block w-2 h-2 rounded-full shrink-0"
-                :class="roleColors[row.role] || 'bg-gray-500'"
-              />
-              <span class="text-xs font-medium text-gray-300 truncate">
-                {{ roleLabels[row.role] || row.role }}
-              </span>
-            </div>
-            <div class="flex items-baseline justify-between gap-2">
-              <span class="text-xl font-bold text-gray-100">
-                {{ (row.ratio * 100).toFixed(0) }}%
-              </span>
-              <span class="font-mono text-[10px] text-gray-500 shrink-0">
-                {{ formatTokens(row.tokens) }} tok
-              </span>
-            </div>
-            <div class="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
-              <div
-                class="h-full rounded-full"
-                :class="roleBars[row.role] || 'bg-gray-500'"
-                :style="roleBarStyle(row.ratio)"
-              />
-            </div>
-            <div class="text-[10px] text-gray-600">
-              {{ row.count }} message{{ row.count > 1 ? 's' : '' }}
+        <!-- Role composition -->
+        <div class="glass-card composition-card">
+          <div class="card-label">Composition</div>
+          <div class="spectrum-track">
+            <div class="spectrum-fill" :style="spectrumStyle" />
+          </div>
+          <div class="role-grid">
+            <div
+              v-for="row in roleSummary"
+              :key="row.role"
+              class="role-item"
+            >
+              <div class="role-dot" :style="{ background: roleColor(row.role), boxShadow: roleGlow(row.role) }" />
+              <div class="role-info">
+                <div class="role-name">
+                  <span class="role-icon">{{ roleMeta[row.role]?.icon || '•' }}</span>
+                  {{ roleMeta[row.role]?.label || row.role }}
+                </div>
+                <div class="role-stats">
+                  <strong>{{ formatPercent(row.ratio) }}</strong>
+                  <span>{{ formatTokens(row.tokens) }} tok</span>
+                  <span class="role-count">{{ row.count }} msg</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- Message list -->
-      <div class="flex-1 overflow-y-auto min-h-0 pr-1 space-y-3">
-        <div
-          v-for="(msg, idx) in latest.messages"
-          :key="idx"
-          class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-sm"
-        >
-          <details class="group">
-            <summary class="cursor-pointer p-3 flex items-center justify-between gap-3 select-none">
-              <div class="flex items-center gap-2 min-w-0">
-                <span
-                  class="inline-block w-2 h-2 rounded-full shrink-0"
-                  :class="roleColors[msg.role] || 'bg-gray-500'"
-                />
-                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-700 text-gray-200 truncate">
-                  {{ roleLabels[msg.role] || msg.role }}
-                </span>
-                <span class="text-[10px] text-gray-500">
-                  {{ (messageRatio(msg) * 100).toFixed(0) }}%
-                </span>
-              </div>
-              <div class="flex items-center gap-3 shrink-0">
-                <span class="text-[10px] font-mono text-gray-400">
-                  {{ formatTokens(msg.estimated_tokens) }} tok
-                </span>
-                <span class="text-[10px] text-gray-500 group-open:rotate-90 transition-transform duration-200">
-                  ▶
-                </span>
-              </div>
+      <!-- Message timeline -->
+      <section class="timeline-section">
+        <div class="section-header">
+          <h3 class="section-title">Messages</h3>
+          <span class="section-meta">{{ latest.messages.length }} total</span>
+        </div>
+        <div class="timeline">
+          <details
+            v-for="(msg, idx) in latest.messages"
+            :key="idx"
+            class="message-item"
+          >
+            <summary class="message-summary">
+              <span class="message-ordinal">{{ messageOrdinal(idx) }}</span>
+              <span
+                class="message-dot"
+                :style="{ background: roleColor(msg.role), boxShadow: roleGlow(msg.role) }"
+              />
+              <span class="message-role">{{ roleMeta[msg.role]?.label || msg.role }}</span>
+              <span class="message-preview">{{ truncate(msg.content, 58) }}</span>
+              <span class="message-tokens">{{ formatTokens(msg.estimated_tokens) }} tok</span>
+              <span class="message-ratio">{{ (messageRatio(msg) * 100).toFixed(0) }}%</span>
+              <span class="message-chevron" />
             </summary>
-            <div class="px-3 pb-3 space-y-2 text-sm">
-              <div
-                v-if="msg.reasoning"
-                class="p-2.5 rounded-lg bg-gray-700/50 border-l-2 border-purple-500/80 text-xs text-gray-300 whitespace-pre-wrap break-words"
-              >
-                <span class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Reasoning</span>
-                {{ msg.reasoning }}
+            <div class="message-body">
+              <div v-if="msg.reasoning" class="reasoning-block">
+                <div class="block-label">Reasoning</div>
+                <pre class="block-content reasoning-text">{{ msg.reasoning }}</pre>
               </div>
-              <div
-                v-if="msg.tool_call_id"
-                class="p-2 rounded-lg bg-gray-900/60 border border-gray-700 text-[10px] text-gray-500 font-mono break-all"
-              >
-                <span class="text-gray-600">tool_call_id:</span> {{ msg.tool_call_id }}
+              <div v-if="msg.tool_call_id || (msg.tool_calls && msg.tool_calls.length)" class="tool-meta">
+                <span v-if="msg.tool_call_id" class="tool-chip">
+                  tool_call_id: {{ msg.tool_call_id }}
+                </span>
+                <span v-if="msg.tool_calls && msg.tool_calls.length" class="tool-chip">
+                  tool_calls: {{ msg.tool_calls.length }}
+                </span>
               </div>
-              <div
-                v-if="msg.tool_calls && msg.tool_calls.length"
-                class="p-2 rounded-lg bg-gray-900/60 border border-gray-700 text-[10px] text-gray-500 font-mono"
-              >
-                <span class="text-gray-600">tool_calls:</span> {{ msg.tool_calls.length }}
-              </div>
-              <div class="p-3 rounded-lg bg-gray-900/60 border border-gray-700 text-gray-200 font-mono text-xs whitespace-pre-wrap break-words">
-                {{ msg.content || '(empty content)' }}
+              <div class="content-block">
+                <div class="block-label">Content</div>
+                <pre class="block-content content-text">{{ msg.content || '(empty content)' }}</pre>
               </div>
             </div>
           </details>
         </div>
-      </div>
+      </section>
     </template>
   </div>
 </template>
+
+<style scoped>
+/* ===================================================
+   Context Window Panel — Laboratory telemetry theme
+   =================================================== */
+.context-panel {
+  --panel-bg: #15151a;
+  --glass-bg: rgba(255, 255, 255, 0.025);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --text-main: #e8e8ec;
+  --text-dim: #909099;
+  --text-faint: #5a5a62;
+  --accent-ok: #40d386;
+  --accent-warn: #f2b84b;
+  --accent-critical: #ff5c5c;
+
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 26px 26px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(74, 158, 255, 0.06), transparent 35%),
+    radial-gradient(circle at 80% 100%, rgba(64, 211, 134, 0.04), transparent 30%),
+    var(--panel-bg);
+  color: var(--text-main);
+  font-family: var(--font-sans, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+}
+
+/* Header */
+.context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.context-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.context-title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-main);
+}
+
+.model-chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  flex-shrink: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.refresh-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.refresh-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--text-main);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-dim);
+  gap: 10px;
+  min-height: 240px;
+}
+
+.empty-icon {
+  font-size: 44px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.08);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.7; }
+}
+
+.empty-title {
+  font-size: 15px;
+  color: var(--text-main);
+  font-weight: 500;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  max-width: 320px;
+}
+
+/* Glass card utility */
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 18px;
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.card-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-bottom: 14px;
+}
+
+/* Telemetry grid */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .telemetry-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Capacity ring */
+.capacity-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.card-label {
+  align-self: flex-start;
+}
+
+.ring-wrap {
+  position: relative;
+  width: 170px;
+  height: 170px;
+  margin: 2px auto 12px;
+}
+
+.capacity-ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+
+.ring-fill {
+  fill: none;
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s ease;
+}
+
+.ring-fill.ok { stroke: var(--accent-ok); filter: drop-shadow(0 0 6px rgba(64, 211, 134, 0.35)); }
+.ring-fill.warn { stroke: var(--accent-warn); filter: drop-shadow(0 0 6px rgba(242, 184, 75, 0.35)); }
+.ring-fill.critical { stroke: var(--accent-critical); filter: drop-shadow(0 0 6px rgba(255, 92, 92, 0.35)); }
+
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ring-percent {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.ring-percent.ok { color: var(--accent-ok); }
+.ring-percent.warn { color: var(--accent-warn); }
+.ring-percent.critical { color: var(--accent-critical); }
+
+.ring-fraction {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+  font-family: var(--font-mono, monospace);
+}
+
+.ring-unit {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+
+.disclaimer {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+/* Composition card */
+.composition-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.spectrum-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  margin-bottom: 18px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.spectrum-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  transition: background 0.5s ease;
+}
+
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.role-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.role-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.role-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.role-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.role-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.role-icon {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.role-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+}
+
+.role-stats strong {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.role-count {
+  color: var(--text-faint);
+}
+
+/* Timeline */
+.timeline-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.section-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.timeline {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.message-item {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 10px;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.message-item:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.message-summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 30px 12px auto 80px 46px 18px;
+  align-items: center;
+  gap: 12px;
+  list-style: none;
+  user-select: none;
+}
+
+.message-summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-ordinal {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-faint);
+  text-align: right;
+}
+
+.message-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.message-role {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.message-preview {
+  font-size: 12px;
+  color: var(--text-main);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.message-tokens,
+.message-ratio {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.message-chevron {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  transition: transform 0.2s ease;
+}
+
+.message-chevron::before {
+  content: '▸';
+  font-size: 12px;
+}
+
+.message-item[open] .message-chevron {
+  transform: rotate(90deg);
+}
+
+.message-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: expand 0.25s ease;
+  transform-origin: top;
+}
+
+@keyframes expand {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reasoning-block,
+.content-block {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.reasoning-block {
+  background: rgba(155, 89, 255, 0.055);
+  border: 1px solid rgba(155, 89, 255, 0.14);
+}
+
+.content-block {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.block-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  padding: 7px 10px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.block-content {
+  padding: 10px 12px;
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.reasoning-text {
+  color: #d4b8ff;
+}
+
+.tool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* Scrollbar for the panel */
+.timeline::-webkit-scrollbar,
+.block-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.timeline::-webkit-scrollbar-track,
+.block-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline::-webkit-scrollbar-thumb,
+.block-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.timeline::-webkit-scrollbar-thumb:hover,
+.block-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+</style>
