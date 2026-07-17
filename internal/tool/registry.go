@@ -20,18 +20,28 @@ type Tool interface {
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
+	// order preserves registration order so List() returns a deterministic
+	// sequence. The slice is append-only; re-registration of an existing tool
+	// keeps its original position to keep tool indices stable across multiple
+	// registration calls.
+	order []string
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		tools: make(map[string]Tool),
+		order: make([]string, 0),
 	}
 }
 
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.tools[tool.Name()] = tool
+	name := tool.Name()
+	if _, exists := r.tools[name]; !exists {
+		r.order = append(r.order, name)
+	}
+	r.tools[name] = tool
 }
 
 func (r *Registry) Execute(name string, input map[string]any) (any, error) {
@@ -48,8 +58,13 @@ func (r *Registry) List() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	list := make([]Tool, 0, len(r.tools))
-	for _, tool := range r.tools {
-		list = append(list, tool)
+	// Iterate in registration order for deterministic tool definitions sent to
+	// the LLM. Map iteration order is intentionally randomized in Go, so we
+	// must use the order slice rather than ranging over r.tools.
+	for _, name := range r.order {
+		if tool, ok := r.tools[name]; ok {
+			list = append(list, tool)
+		}
 	}
 	return list
 }
@@ -83,14 +98,16 @@ func (r *Registry) IsBuiltin(name string) bool {
 
 func (r *Registry) ToJSON() ([]byte, error) {
 	r.mu.RLock()
-	schema := make([]map[string]any, 0)
-	for _, tool := range r.tools {
-		schema = append(schema, map[string]any{
-			"name":        tool.Name(),
-			"description": tool.Description(),
-			"parameters":  tool.Parameters(),
-		})
+	defer r.mu.RUnlock()
+	schema := make([]map[string]any, 0, len(r.tools))
+	for _, name := range r.order {
+		if tool, ok := r.tools[name]; ok {
+			schema = append(schema, map[string]any{
+				"name":        tool.Name(),
+				"description": tool.Description(),
+				"parameters":  tool.Parameters(),
+			})
+		}
 	}
-	r.mu.RUnlock()
 	return json.Marshal(schema)
 }
