@@ -23,6 +23,15 @@ SERVER_LOG="/tmp/context-window-server-$$.log"
 SERVER_PID=""
 EVENTS_FILE="/tmp/context-window-events-$$.json"
 
+# 收集器收集窗口（秒）。real LLM 链路慢时通过环境变量调大，默认 20s。
+# 这个 deadline 必须大于任务最长耗时 + 收集器启动延迟，否则任务还在跑收集器就退出了。
+WS_DEADLINE="${WS_DEADLINE:-20}"
+
+# 收集器二进制路径。若设了 WS_COLLECTOR_BIN 且文件存在就直接复用，省去每次
+# go run 的编译开销与首请求冷启动（real LLM 下冷启动可能错过早期事件）；
+# 否则现场 go build 一次再用，避免 go run 在某些环境下行为不一致。
+WS_COLLECTOR_BIN="${WS_COLLECTOR_BIN:-/tmp/context-window-collector-$$.exe}"
+
 PASS=0
 FAIL=0
 RESULTS=()
@@ -56,6 +65,10 @@ cleanup() {
     wait "${SERVER_PID}" 2>/dev/null
   fi
   rm -f "${DB_PATH}" "${SERVER_BIN}" "${SERVER_LOG}" "${EVENTS_FILE}" 2>/dev/null
+  # 除非显式要求保留（WS_COLLECTOR_BIN 指向非 $$ 临时路径），否则清理本次编译的收集器。
+  case "${WS_COLLECTOR_BIN}" in
+    *collector-$$.exe) rm -f "${WS_COLLECTOR_BIN}" 2>/dev/null ;;
+  esac
 }
 trap cleanup EXIT
 
@@ -100,10 +113,19 @@ if [[ "${ready}" != "1" ]]; then
 fi
 
 # 启动后台 WS 收集器
-echo "===== 启动 WS 事件收集器 ====="
+echo "===== 启动 WS 事件收集器 (deadline=${WS_DEADLINE}s) ====="
+# 若未提供现成二进制，现场编译一次。预编译后启动更快、行为更稳定，
+# 避免 go run 首次编译时任务已经把事件发完而收集器还没连上 WS。
+if [[ ! -x "${WS_COLLECTOR_BIN}" ]]; then
+  if ! go build -tags cwsmoke -o "${WS_COLLECTOR_BIN}" ./scripts/context-window-smoke.go 2>/tmp/context-window-collector-build-$$.log; then
+    echo "[FATAL] 收集器编译失败"
+    cat /tmp/context-window-collector-build-$$.log
+    exit 5
+  fi
+fi
 EVENTS_FILE="/tmp/context-window-events-$$.json"
 (
-  go run -tags cwsmoke ./scripts/context-window-smoke.go "${WS_BASE}" "${EVENTS_FILE}" >/tmp/context-window-ws-out-$$.log 2>/tmp/context-window-ws-err-$$.log
+  "${WS_COLLECTOR_BIN}" "${WS_BASE}" "${EVENTS_FILE}" "${WS_DEADLINE}" >/tmp/context-window-ws-out-$$.log 2>/tmp/context-window-ws-err-$$.log
 ) &
 WS_PID=$!
 
@@ -141,9 +163,20 @@ STATUS=$(echo "$RESULT" | awk '{print $1}')
 ELAPSED=$(echo "$RESULT" | awk '{print $2}')
 echo "  轮询结果: status=${STATUS}, elapsed=${ELAPSED}s"
 
-# 等待收集器结束并读取事件
+# 等待收集器结束并读取事件。
+# 收集器收到 SIGTERM 会优雅 flush 已收集事件（见 context-window-smoke.go），
+# 这里给它 2s 缓冲让最后一批事件落盘，再 kill 兜底。
 sleep 2
-if kill -0 "$WS_PID" 2>/dev/null; then kill "$WS_PID" 2>/dev/null; wait "$WS_PID" 2>/dev/null; fi
+if kill -0 "$WS_PID" 2>/dev/null; then
+  kill -TERM "$WS_PID" 2>/dev/null
+  # 最多等 3s 让收集器 graceful flush；超时强杀。
+  for i in 1 2 3 4 5 6; do
+    kill -0 "$WS_PID" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL "$WS_PID" 2>/dev/null
+  wait "$WS_PID" 2>/dev/null
+fi
 sleep 1
 
 WS_EVENTS="[]"
