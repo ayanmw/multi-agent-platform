@@ -177,6 +177,13 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strategy string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
 
+	// Phase 7-C: "pipeline" 通过 OutputTo 链式转发实现，底层复用 parallel 调度。
+	if strategy == "pipeline" {
+		for i := 0; i < len(specs)-1; i++ {
+			specs[i].OutputTo = append(specs[i].OutputTo, specs[i+1].AgentID)
+		}
+		strategy = "parallel"
+	}
 	if strategy == "sequential" {
 		// Sequential pipeline: agents run one after another. Each agent's output
 		// is forwarded to the next agent via the AgentBus before it starts. This
@@ -636,7 +643,7 @@ type DecomposeResult struct {
 // Decompose splits a user request into agent specs based on the case type.
 // For now, the decomposition is based on the preset case definition.
 // In Phase 5+, this will use an LLM-based decomposition.
-func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeResult {
+func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeResult, error) {
 	switch caseType {
 	case "multi_agent":
 		// Multi-agent case: split into researcher + writer + reviewer
@@ -665,7 +672,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					ParentAgentID: "agent_researcher",
 				},
 			},
-		}
+		}, nil
 
 	case "code_gen":
 		// Code generation: single agent with code-gen tools
@@ -681,7 +688,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					AllowedTools: []string{"write_file", "read_file", "run_shell"},
 				},
 			},
-		}
+		}, nil
 
 	default:
 		// Default: single agent
@@ -696,7 +703,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					Input: input,
 				},
 			},
-		}
+		}, nil
 	}
 }
 

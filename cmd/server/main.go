@@ -657,8 +657,17 @@ func main() {
 			specs := req.Agents
 			strategy := "parallel"
 			if len(specs) == 0 {
-				decomposer := &orchestrator.TaskDecomposer{}
-				result := decomposer.Decompose(req.Input, req.CaseType)
+				var decomposer orchestrator.Decomposer
+				if cfg.LLMUseMock {
+					decomposer = orchestrator.NewTaskDecomposer()
+				} else {
+					decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
+				}
+				result, err := decomposer.Decompose(req.Input, req.CaseType)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 				specs = result.Agents
 				strategy = result.Strategy
 			}
@@ -1110,8 +1119,17 @@ func main() {
 		if len(req.Agents) > 0 {
 			specs = req.Agents
 		} else {
-			decomposer := &orchestrator.TaskDecomposer{}
-			result := decomposer.Decompose(req.Input, req.CaseType)
+			var decomposer orchestrator.Decomposer
+			if cfg.LLMUseMock {
+				decomposer = orchestrator.NewTaskDecomposer()
+			} else {
+				decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
+			}
+			result, err := decomposer.Decompose(req.Input, req.CaseType)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 			specs = result.Agents
 			strategy = result.Strategy
 		}
