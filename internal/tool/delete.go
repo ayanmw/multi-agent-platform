@@ -10,6 +10,8 @@ import (
 // Parameters:
 //   - path      (string,  required): File or directory path to delete.
 //   - recursive (boolean, optional): If true, delete directories and contents.
+//     Recursive deletion of directories containing files still requires the
+//     filesystem:destructive permission; this flag only controls tool behavior.
 func NewDeleteFileTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"delete_file",
@@ -30,7 +32,7 @@ func NewDeleteFileTool() *BuiltinTool {
 			"required": []string{"path"},
 		},
 		deleteFileExecutor,
-	).WithTags("filesystem", "destructive")
+	).WithTags("filesystem", "filesystem:destructive")
 }
 
 // deleteFileExecutor removes a file or directory after path traversal checks.

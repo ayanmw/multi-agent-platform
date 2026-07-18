@@ -9,16 +9,18 @@ import (
 // NewApplyDiffTool creates a text replacement tool named "core/apply_diff".
 //
 // Parameters:
-//   - path             (string, required):  File path to modify.
-//   - diffs            (array,  required):  List of diff objects.
+//   - path              (string,  required): File path to modify.
+//   - diffs             (array,   required): List of diff objects.
 //   - create_if_missing (boolean, optional): If true, create the file when it
 //     does not exist.
 //
 // Each diff object may contain:
-//   - old_string (string, optional): Text to replace.
-//   - new_string (string, optional): Replacement text.
+//   - old_string (string,  optional): Text to replace.
+//   - new_string (string,  optional): Replacement text.
 //   - line_start (integer, optional): 1-based start line for range replacement.
 //   - line_end   (integer, optional): 1-based end line for range replacement.
+//   - count      (integer, optional): Maximum number of replacements for
+//     old_string. Use -1 for "replace all". Default is 1.
 func NewApplyDiffTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"apply_diff",
@@ -53,6 +55,10 @@ func NewApplyDiffTool() *BuiltinTool {
 								"type":        "integer",
 								"description": "1-based end line for range replacement",
 							},
+							"count": map[string]any{
+								"type":        "integer",
+								"description": "Maximum replacements for old_string; -1 means replace all. Default 1.",
+							},
 						},
 					},
 				},
@@ -64,7 +70,7 @@ func NewApplyDiffTool() *BuiltinTool {
 			"required": []string{"path", "diffs"},
 		},
 		applyDiffExecutor,
-	).WithTags("filesystem", "write")
+	).WithTags("filesystem", "filesystem:write")
 }
 
 // applyDiffExecutor applies a sequence of edits to a file.
@@ -110,7 +116,14 @@ func applyDiffExecutor(input map[string]any) (any, error) {
 			if !strings.Contains(content, old) {
 				return nil, fmt.Errorf("diff[%d]: old_string not found", i)
 			}
-			content = strings.Replace(content, old, newStr, 1)
+			count := -1
+			if c, ok := diff["count"].(float64); ok {
+				count = int(c)
+			}
+			if count == 0 {
+				count = 1
+			}
+			content = strings.Replace(content, old, newStr, count)
 		default:
 			startIdx := 0
 			if start > 0 {

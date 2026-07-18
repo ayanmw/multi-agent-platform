@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,6 +15,11 @@ import (
 //   - language   (string,  required): One of python, node, bash.
 //   - code       (string,  required): Code to execute.
 //   - timeout_ms (integer, optional): Timeout in milliseconds (default 30000).
+//
+// Security: this tool is tagged exec:dangerous. The Harness TagPolicyRule will
+// block it unless TaskPermissions.AllowShellDangerous is true. Even when
+// allowed, the executor also performs lightweight static checks for common
+// destructive patterns (rm, curl|bash, etc.) as an additional defence in depth.
 func NewExecuteProgramTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"execute_program",
@@ -38,7 +44,7 @@ func NewExecuteProgramTool() *BuiltinTool {
 			"required": []string{"language", "code"},
 		},
 		executeProgramExecutor,
-	).WithTags("exec", "dangerous")
+	).WithTags("exec", "exec:dangerous")
 }
 
 // executeProgramExecutor runs code in a supported interpreter.
@@ -49,6 +55,10 @@ func executeProgramExecutor(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("language and code required")
 	}
 	timeout := time.Duration(getInt(input, "timeout_ms", 30000)) * time.Millisecond
+
+	if risk := checkDangerousCode(language, code); risk != "" {
+		return nil, fmt.Errorf("risk pattern detected: %s", risk)
+	}
 
 	var cmdArgs []string
 	switch language {
@@ -96,4 +106,57 @@ func executeProgramExecutor(input map[string]any) (any, error) {
 		"exit_code": exitCode,
 		"timed_out": false,
 	}, err
+}
+
+// dangerousPatterns maps risky keywords to a human-readable reason. These checks
+// are intentionally shallow (a determined bypass is possible). Their purpose is
+// to catch obvious accidental misuse by an LLM before spawning a process.
+var dangerousPatterns = []struct {
+	pattern string
+	reason  string
+}{
+	// Shell execution pipelines that download and execute untrusted code.
+	{`curl\s+[^|]*\|\s*(sh|bash)`, "pipe curl into shell"},
+	{`wget\s+[^|]*\|\s*(sh|bash)`, "pipe wget into shell"},
+	// Destructive filesystem operations.
+	{`\brm\s+-rf\s+/`, "recursive remove from root"},
+	{`\brm\s+-rf\s+[~\\/]`, "recursive remove home/system"},
+	// Common exfiltration / backdoor helpers.
+	{`\bnc\s+-[ecl]\s+`, "netcat remote shell"},
+	{`\bmkfifo\b`, "fifo backdoor"},
+	{`\bprivilege\s*escalation\b`, "explicit privilege escalation"},
+}
+
+// checkDangerousCode scans source code for obviously risky idioms. It returns
+// an empty string when no known pattern is found. The matching is case-insensitive.
+func checkDangerousCode(language, code string) string {
+	lower := strings.ToLower(code)
+	// Python-specific dangerous calls.
+	if language == "python" {
+		pyPatterns := []struct {
+			pattern string
+			reason  string
+		}{
+			{`\beval\s*\(`, "eval()"},
+			{`\bexec\s*\(`, "exec()"},
+			{`\bos\.system\s*\(`, "os.system()"},
+			{`\bsubprocess\.call\s*\(.*shell\s*=\s*true`, "subprocess shell=True"},
+			{`\bsubprocess\.run\s*\(.*shell\s*=\s*true`, "subprocess shell=True"},
+			{`__import__\s*\(\s*['"]os['"]`, "dynamic os import"},
+			{`__import__\s*\(\s*['"]subprocess['"]`, "dynamic subprocess import"},
+		}
+		for _, p := range pyPatterns {
+			re := regexp.MustCompile(p.pattern)
+			if re.MatchString(lower) {
+				return p.reason
+			}
+		}
+	}
+	for _, p := range dangerousPatterns {
+		re := regexp.MustCompile(p.pattern)
+		if re.MatchString(lower) {
+			return p.reason
+		}
+	}
+	return ""
 }
