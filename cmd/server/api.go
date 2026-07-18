@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2097,4 +2098,69 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		"session_id": req.SessionID,
 		"status":     "started",
 	})
+}
+
+// handleAudit returns recent audit records from the default auditor.
+// GET /api/audit?limit=N
+func handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	records := observability.DefaultAuditor.List(limit)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
+
+// handleTraces returns all buffered trace spans from the process-level tracer.
+// GET /api/traces
+func handleTraces(w http.ResponseWriter, r *http.Request) {
+	data, _ := tracer.JSON()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+// handleReplay replays task execution events from persistent storage.
+// GET /api/replay/tasks/{task_id}
+func handleReplay(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/replay/tasks/"), "/")
+	taskID := parts[0]
+	if taskID == "" {
+		http.Error(w, "task_id required", http.StatusBadRequest)
+		return
+	}
+	events := buildReplayEvents(taskID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
+}
+
+// buildReplayEvents reconstructs a flat event sequence from steps and conversations.
+func buildReplayEvents(taskID string) []map[string]any {
+	var events []map[string]any
+	steps, _ := db.QueryStepsByTask(taskID)
+	for _, s := range steps {
+		events = append(events, map[string]any{
+			"type":        s.Type,
+			"task_id":     s.TaskID,
+			"agent_id":    s.AgentID,
+			"step_index":  s.StepIndex,
+			"content":     s.Content,
+			"tool_name":   s.ToolName,
+			"tool_input":  s.ToolInput,
+			"tool_output": s.ToolOutput,
+			"timestamp":   s.ID, // steps table has no created_at; use id as stable ordering proxy
+		})
+	}
+	convs, _ := db.QueryConversationsByTask(taskID)
+	for _, c := range convs {
+		events = append(events, map[string]any{
+			"type":      c.Role + "_message",
+			"task_id":   c.TaskID,
+			"content":   c.Content,
+			"timestamp": c.CreatedAt.UnixMilli(),
+		})
+	}
+	return events
 }

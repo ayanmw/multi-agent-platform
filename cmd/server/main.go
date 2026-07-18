@@ -50,7 +50,13 @@ var cancelRegistry sync.Map
 // cancelRegistry 一致：root 任务用 taskID；子 agent 用 "taskID/agentID"。
 var engineRegistry sync.Map
 
-// storeCancel 注册 task/agent 对应的取消函数。
+// Package-level process observability state (Phase 7-C).
+var (
+	// tracer is the shared dependency-free trace span collector.
+	tracer = observability.NewTracer(2000)
+	// traceRegistry holds root trace contexts so handlers can pass them into engines.
+	traceRegistry sync.Map
+)
 //
 // 行为说明：
 //   - 当 agentID 为空或为 "orchestrator" 时，仅以 taskID 为 key；
@@ -923,6 +929,11 @@ func main() {
 			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
 		}
 	}
+
+	// Phase 7-C: observability REST endpoints.
+	http.HandleFunc("/api/audit", handleAudit)
+	http.HandleFunc("/api/traces", handleTraces)
+	http.HandleFunc("/api/replay/tasks/", handleReplay)
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
