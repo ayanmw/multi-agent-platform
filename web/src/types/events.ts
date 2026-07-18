@@ -88,7 +88,14 @@ export interface DurationSummary {
 
 /** Tool call data stored in a step */
 export interface ToolCallData {
+  /** Fully-qualified tool name (e.g. "core/write_file") */
   name: string
+  /** Optional namespace parsed from name */
+  namespace?: string
+  /** Short tool name without namespace */
+  shortName?: string
+  /** Optional risk tags forwarded from tool_call_started event */
+  tags?: string[]
   input: Record<string, unknown>
   output: string
   duration: number

@@ -35,10 +35,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -48,8 +50,9 @@ import (
 // ---------------------------------------------------------------------------
 
 // BuiltinTool is a concrete implementation of the Tool interface backed by
-// a simple executor function. It stores the tool's metadata (name, description,
-// JSON Schema parameters) and delegates execution to the provided executor.
+// a simple executor function. It stores the tool's metadata (name, namespace,
+// description, JSON Schema parameters, aliases and tags) and delegates
+// execution to the provided executor.
 //
 // BuiltinTool is used internally by the built-in tool constructors
 // (NewRunShellTool, NewWriteFileTool, NewReadFileTool). External callers
@@ -57,13 +60,29 @@ import (
 // NewToolFromJSON instead.
 type BuiltinTool struct {
 	name        string
+	namespace   string
 	description string
 	parameters  map[string]any
+	tags        []string
+	aliases     []string
 	executor    func(input map[string]any) (any, error)
 }
 
+// Namespace returns the tool's namespace. Empty string means the tool lives in
+// the global namespace; non-empty namespaces produce a "namespace/name" FullName.
+func (t *BuiltinTool) Namespace() string { return t.namespace }
+
 // Name returns the tool's unique identifier, e.g. "run_shell".
 func (t *BuiltinTool) Name() string { return t.name }
+
+// FullName returns the tool's fully-qualified identifier. When namespace is
+// non-empty, it returns "namespace/name"; otherwise it returns Name.
+func (t *BuiltinTool) FullName() string {
+	if t.namespace == "" {
+		return t.name
+	}
+	return t.namespace + "/" + t.name
+}
 
 // Description returns a human-readable explanation of the tool's purpose,
 // suitable for inclusion in LLM system prompts.
@@ -74,10 +93,108 @@ func (t *BuiltinTool) Description() string { return t.description }
 // "properties", and "required" keys.
 func (t *BuiltinTool) Parameters() map[string]any { return t.parameters }
 
+// Tags returns the tool's tags. Tags are used for discovery and filtering.
+func (t *BuiltinTool) Tags() []string { return t.tags }
+
+// Aliases returns alternative names that resolve to this tool.
+func (t *BuiltinTool) Aliases() []string { return t.aliases }
+
+// WithAliases attaches aliases to a BuiltinTool and returns it for chaining.
+func (t *BuiltinTool) WithAliases(aliases ...string) *BuiltinTool {
+	t.aliases = append(t.aliases, aliases...)
+	return t
+}
+
 // Execute runs the tool with the given input map and returns the result.
 // The input map must conform to the schema returned by Parameters().
 func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
 	return t.executor(input)
+}
+
+// NewBuiltinTool creates a new BuiltinTool with the given metadata.
+// When namespace is non-empty, the tool's FullName becomes "namespace/name".
+func NewBuiltinTool(name, namespace, description string, parameters map[string]any, executor func(input map[string]any) (any, error)) *BuiltinTool {
+	return &BuiltinTool{
+		name:        name,
+		namespace:   namespace,
+		description: description,
+		parameters:  parameters,
+		executor:    executor,
+		tags:        []string{},
+		aliases:     []string{},
+	}
+}
+
+// WithTags attaches tags to a BuiltinTool and returns it for chaining.
+func (t *BuiltinTool) WithTags(tags ...string) *BuiltinTool {
+	t.tags = append(t.tags, tags...)
+	return t
+}
+
+// ---------------------------------------------------------------------------
+// Generic helpers for reading typed values from tool input maps
+// ---------------------------------------------------------------------------
+
+// getString extracts a string value from m[key], returning def when missing
+// or when the value is not a string.
+func getString(m map[string]any, key, def string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return def
+}
+
+// getBool extracts a bool value from m[key], returning def when missing
+// or when the value is not a bool.
+func getBool(m map[string]any, key string, def bool) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return def
+}
+
+// getInt extracts an integer value from m[key], returning def when missing
+// or when the value is not a numeric type. JSON numbers unmarshal as float64,
+// while callers may also pass int or int64 directly.
+func getInt(m map[string]any, key string, def int) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	default:
+		return def
+	}
+}
+
+// getMap extracts a nested map value from m[key], returning nil when missing
+// or when the value is not a map[string]any.
+func getMap(m map[string]any, key string) map[string]any {
+	if v, ok := m[key].(map[string]any); ok {
+		return v
+	}
+	return nil
+}
+
+// resolvePath normalizes a tool input path. Absolute paths are cleaned and
+// returned as-is. Relative paths are resolved against the input["workdir"]
+// value when present, falling back to the process working directory.
+//
+// Callers should check isPathTraversal before calling resolvePath to prevent
+// directory traversal through ".." segments.
+func resolvePath(path string, input map[string]any) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
+		return filepath.Clean(filepath.Join(workdir, path))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Clean(filepath.Join(wd, path))
+	}
+	return filepath.Clean(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -460,4 +577,149 @@ func RegisterBuiltins(registry *Registry) {
 	registry.Register(NewRunShellTool())
 	registry.Register(NewWriteFileTool())
 	registry.Register(NewReadFileTool())
+	registry.Register(NewListDirTool())
+	registry.Register(NewApplyDiffTool())
+	registry.Register(NewDeleteFileTool())
+	registry.Register(NewFetchURLTool())
+	registry.Register(NewParseJSONTool())
+	registry.Register(NewExecuteProgramTool())
+	registry.Register(NewWebSearchTool(NewNoopMCPAdapter()))
+}
+
+// NewListDirTool creates a directory listing tool named "core/list_dir".
+func NewListDirTool() *BuiltinTool {
+	return NewBuiltinTool(
+		"list_dir",
+		"core",
+		"List files and directories. Use relative paths only (resolved against working directory). Set recursive=true for nested listing; max_depth controls recursion depth (default 3).",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Directory path to list (default \".\")",
+				},
+				"recursive": map[string]any{
+					"type":        "boolean",
+					"description": "If true, list contents recursively",
+				},
+				"max_depth": map[string]any{
+					"type":        "integer",
+					"description": "Maximum recursion depth when recursive (default 3)",
+				},
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Glob pattern to filter entries by name",
+				},
+				"include_hidden": map[string]any{
+					"type":        "boolean",
+					"description": "If true, include hidden entries",
+				},
+			},
+			"required": []string{},
+		},
+		listDirExecutor,
+	).WithTags("filesystem", "filesystem:readonly")
+}
+
+// listDirExecutor implements the list_dir tool logic.
+func listDirExecutor(input map[string]any) (any, error) {
+	path := getString(input, "path", ".")
+	recursive := getBool(input, "recursive", false)
+	maxDepth := getInt(input, "max_depth", 3)
+	pattern := getString(input, "pattern", "")
+	includeHidden := getBool(input, "include_hidden", false)
+
+	if isPathTraversal(path) {
+		return nil, fmt.Errorf("path traversal not allowed: %s", path)
+	}
+	path = resolvePath(path, input)
+
+	entries, err := walkDir(path, recursive, maxDepth, pattern, includeHidden)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"path":      path,
+		"entries":   entries,
+		"total":     len(entries),
+		"truncated": false,
+	}, nil
+}
+
+// walkDir enumerates entries under root according to the supplied filters.
+func walkDir(root string, recursive bool, maxDepth int, pattern string, includeHidden bool) ([]map[string]any, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", root)
+	}
+
+	root = filepath.Clean(root)
+	rootDepth := len(strings.Split(root, string(filepath.Separator)))
+
+	var out []map[string]any
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == root {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		if !includeHidden && strings.HasPrefix(rel, ".") {
+			if d.IsDir() && recursive {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if pattern != "" {
+			matched, _ := filepath.Match(pattern, d.Name())
+			if !matched {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+		}
+		if recursive {
+			depth := len(strings.Split(p, string(filepath.Separator))) - rootDepth
+			if depth > maxDepth {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+		}
+
+		entry := map[string]any{
+			"name": d.Name(),
+			"type": "file",
+			"path": p,
+		}
+		if d.IsDir() {
+			entry["type"] = "dir"
+		}
+		if info, e := d.Info(); e == nil {
+			entry["size"] = info.Size()
+			entry["mod_time"] = info.ModTime().UTC().Format(time.RFC3339)
+		}
+
+		if !recursive && d.IsDir() {
+			// For non-recursive mode we still report the directory itself,
+			// but we must not descend into it.
+			entry["type"] = "dir"
+			out = append(out, entry)
+			return fs.SkipDir
+		}
+
+		out = append(out, entry)
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool {
+		return out[i]["path"].(string) < out[j]["path"].(string)
+	})
+	return out, err
 }

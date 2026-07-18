@@ -251,6 +251,17 @@ func (t *SandboxedShellTool) Name() string {
 	return t.fallback.Name()
 }
 
+// Namespace returns the tool's namespace, delegating to the fallback tool.
+func (t *SandboxedShellTool) Namespace() string {
+	return t.fallback.Namespace()
+}
+
+// FullName returns the tool's fully-qualified identifier, delegating to the
+// fallback tool so the Registry and LLM tool definitions see the same name.
+func (t *SandboxedShellTool) FullName() string {
+	return t.fallback.FullName()
+}
+
 // Description returns a human-readable explanation of the tool's purpose.
 // When sandbox is available, the description includes sandbox information.
 func (t *SandboxedShellTool) Description() string {
@@ -265,6 +276,16 @@ func (t *SandboxedShellTool) Description() string {
 // Parameters returns the JSON Schema for the expected input shape.
 func (t *SandboxedShellTool) Parameters() map[string]any {
 	return t.fallback.Parameters()
+}
+
+// Tags returns the tool's tags, delegating to the fallback tool.
+func (t *SandboxedShellTool) Tags() []string {
+	return t.fallback.Tags()
+}
+
+// Aliases returns alternative names for this tool, delegating to the fallback tool.
+func (t *SandboxedShellTool) Aliases() []string {
+	return t.fallback.Aliases()
 }
 
 // Execute runs the shell command. If the sandbox is available, it executes

@@ -269,8 +269,15 @@ export function useTaskStore() {
       case 'tool_call_started': {
         const lastStep = getLastStep(agent)
         if (lastStep && lastStep.type === 'tool_call') {
+          const fullName = (evt.data.tool as string) || 'unknown'
+          const parts = fullName.split('/')
+          const namespace = parts.length > 1 ? parts[0] : undefined
+          const shortName = parts.length > 1 ? parts.slice(1).join('/') : fullName
           lastStep.toolCall = {
-            name: (evt.data.tool as string) || 'unknown',
+            name: fullName,
+            namespace,
+            shortName,
+            tags: Array.isArray(evt.data.tags) ? (evt.data.tags as string[]) : undefined,
             input: (evt.data.args as Record<string, unknown>) || {},
             output: '',
             duration: 0,

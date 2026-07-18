@@ -100,13 +100,25 @@ func (t *DynamicTool) Code() string { return t.code }
 func (t *DynamicTool) ToolType() DynamicToolType { return t.toolType }
 
 // Name returns the tool's unique identifier.
-func (t *DynamicTool) Name() string { return t.name }
+func (t *DynamicTool) Namespace() string { return "" }
+func (t *DynamicTool) Name() string      { return t.name }
+
+// FullName returns the tool's fully-qualified identifier. Dynamic tools live in
+// the global namespace, so FullName equals Name.
+func (t *DynamicTool) FullName() string { return t.name }
+
+// Aliases returns alternative names for this dynamic tool. Dynamic tools do not
+// have aliases by default.
+func (t *DynamicTool) Aliases() []string { return nil }
 
 // Description returns a human-readable explanation of the tool's purpose.
 func (t *DynamicTool) Description() string { return t.description }
 
 // Parameters returns the JSON Schema describing the expected input shape.
 func (t *DynamicTool) Parameters() map[string]any { return t.parameters }
+
+// Tags returns the tool's tags. Dynamic tools are untagged by default.
+func (t *DynamicTool) Tags() []string { return nil }
 
 // Execute runs the dynamic tool with the given input map.
 // It dispatches to the appropriate execution strategy based on the tool type.

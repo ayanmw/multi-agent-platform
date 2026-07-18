@@ -705,11 +705,20 @@ func TestDefaultContract(t *testing.T) {
 	if c.MaxSteps != 30 {
 		t.Errorf("MaxSteps = %d, want 30", c.MaxSteps)
 	}
-	if !c.Permissions.AllowFileWrite || !c.Permissions.AllowShell {
-		t.Errorf("default permissions should allow file write + shell, got %+v", c.Permissions)
+	if !c.Permissions.AllowFileWrite {
+		t.Errorf("default permissions should allow file write, got %+v", c.Permissions)
+	}
+	if c.Permissions.AllowShell {
+		t.Error("default should NOT allow shell")
 	}
 	if c.Permissions.AllowShellDangerous {
 		t.Error("default should NOT allow dangerous shell")
+	}
+	if c.Permissions.AllowNetwork {
+		t.Error("default should NOT allow network")
+	}
+	if c.Permissions.AllowFileDelete {
+		t.Error("default should NOT allow file delete")
 	}
 	if c.TimeoutSeconds != 0 {
 		t.Errorf("TimeoutSeconds = %d, want 0 (unlimited)", c.TimeoutSeconds)

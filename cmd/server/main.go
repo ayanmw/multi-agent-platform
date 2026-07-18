@@ -1461,6 +1461,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	//   FileScopeRule          — restricts file ops to contract scope
 	//   DangerousCommandRule   — blocks dangerous shell commands (Phase 5)
 	//   ApprovalRule           — requires frontend approval for high-risk ops (Phase 5)
+	//   TagPolicyRule          — enforces TaskContract permissions via tool tags
 	//   TokenBudgetRule        — blocks tool calls when token budget exceeded
 	//   ToolWhitelistRule      — only allows tools listed in the contract
 	//   CostBudgetRule         — blocks tool calls when USD cost budget exceeded (M2)
@@ -1473,6 +1474,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		&harness.FileScopeRule{},
 		&harness.DangerousCommandRule{},
 		harness.NewApprovalRule(approvalHandler),
+		harness.NewTagPolicyRule(tools.ToolTags),
 		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
 		costBudgetRule,
@@ -1808,6 +1810,7 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 		&harness.FileScopeRule{},
 		&harness.DangerousCommandRule{},
 		harness.NewApprovalRule(approvalHandler),
+		harness.NewTagPolicyRule(tools.ToolTags),
 		tokenBudgetRule,
 		&harness.ToolWhitelistRule{},
 		costBudgetRule,

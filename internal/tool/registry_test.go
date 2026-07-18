@@ -19,17 +19,33 @@ import (
 // call and the last input it received so tests can assert routing and input
 // pass-through.
 type mockTool struct {
+	namespace   string
 	name        string
 	description string
 	params      map[string]any
+	tags        []string
+	aliases     []string
 	execFn      func(input map[string]any) (any, error)
 	execCalls   int
 	lastInput   map[string]any
 }
 
-func (m *mockTool) Name() string { return m.name }
-func (m *mockTool) Description() string { return m.description }
+func (m *mockTool) Namespace() string { return m.namespace }
+func (m *mockTool) Name() string      { return m.name }
+
+// FullName returns the fully-qualified tool identifier. When namespace is empty
+// it returns the short name; otherwise it returns "namespace/name".
+func (m *mockTool) FullName() string {
+	if m.namespace == "" {
+		return m.name
+	}
+	return m.namespace + "/" + m.name
+}
+
+func (m *mockTool) Description() string        { return m.description }
 func (m *mockTool) Parameters() map[string]any { return m.params }
+func (m *mockTool) Tags() []string             { return m.tags }
+func (m *mockTool) Aliases() []string          { return m.aliases }
 
 // Execute records the call and delegates to execFn if set, otherwise returns a
 // deterministic "mock-output:<name>" string.
@@ -189,6 +205,41 @@ func TestExecuteErrorPropagation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Namespace / Tags metadata
+// ---------------------------------------------------------------------------
+
+// TestToolMetadata verifies the new namespace and tags methods on the Tool
+// interface.
+func TestToolMetadata(t *testing.T) {
+	mt := &mockTool{
+		namespace: "core",
+		name:      "meta_reader",
+		tags:      []string{"readonly", "metadata"},
+	}
+	if got := mt.Namespace(); got != "core" {
+		t.Errorf("Namespace() = %q, want core", got)
+	}
+	if got := mt.Name(); got != "meta_reader" {
+		t.Errorf("Name() = %q, want meta_reader", got)
+	}
+	if got := mt.FullName(); got != "core/meta_reader" {
+		t.Errorf("FullName() = %q, want core/meta_reader", got)
+	}
+	if got := Names([]Tool{mt})[0]; got != "meta_reader" {
+		t.Errorf("Names returned %q, want meta_reader", got)
+	}
+	wantTags := []string{"readonly", "metadata"}
+	if len(mt.Tags()) != len(wantTags) {
+		t.Fatalf("Tags() = %v, want %v", mt.Tags(), wantTags)
+	}
+	for i, want := range wantTags {
+		if mt.Tags()[i] != want {
+			t.Errorf("Tags()[%d] = %q, want %q", i, mt.Tags()[i], want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Register overwrite semantics
 // ---------------------------------------------------------------------------
 
@@ -306,13 +357,13 @@ func TestIsBuiltin(t *testing.T) {
 		{"write_file", true},
 		{"read_file", true},
 		{"", false},
-		{"Run_Shell", false},      // case-sensitive
-		{"run_shell ", false},     // exact match only (no trimming)
-		{" run_shell", false},     // leading space
-		{"run_shell", true},       // duplicate to ensure determinism
+		{"Run_Shell", false},    // case-sensitive
+		{"run_shell ", false},   // exact match only (no trimming)
+		{" run_shell", false},   // leading space
+		{"run_shell", true},     // duplicate to ensure determinism
 		{"custom_tool", false},
 		{"my_tool", false},
-		{"run_shell_v2", false},   // suffix breaks exact match
+		{"run_shell_v2", false}, // suffix breaks exact match
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -419,17 +470,88 @@ func TestBuiltinToolsWriteAndReadInTempDir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Filtering / listing by full name
+// ---------------------------------------------------------------------------
+
+// TestRegistryFilterByTag verifies FilterByTag returns only tools with the
+// requested tag.
+func TestRegistryFilterByTag(t *testing.T) {
+	tools := []Tool{
+		&mockTool{name: "a", tags: []string{"readonly"}},
+		&mockTool{name: "b", tags: []string{"write", "dangerous"}},
+		&mockTool{name: "c", tags: []string{"readonly", "filesystem"}},
+		&mockTool{name: "d", tags: nil},
+	}
+
+	readonly := FilterByTag(tools, "readonly")
+	if len(readonly) != 2 {
+		t.Fatalf("expected 2 readonly tools, got %d", len(readonly))
+	}
+	got := toolNames(readonly)
+	for _, want := range []string{"a", "c"} {
+		if !contains(got, want) {
+			t.Errorf("FilterByTag(readonly) missing %s, got %v", want, got)
+		}
+	}
+
+	dangerous := FilterByTag(tools, "dangerous")
+	if len(dangerous) != 1 || dangerous[0].Name() != "b" {
+		t.Errorf("FilterByTag(dangerous) = %v, want [b]", toolNames(dangerous))
+	}
+
+	missing := FilterByTag(tools, "network")
+	if len(missing) != 0 {
+		t.Errorf("FilterByTag(network) = %v, want empty", toolNames(missing))
+	}
+}
+
+// TestRegistryListUsesFullName verifies that tools registered with a namespace
+// are keyed by their FullName in the registry, so Execute works with the fully
+// qualified name.
+func TestRegistryListUsesFullName(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&mockTool{namespace: "core", name: "reader", tags: []string{"readonly"}})
+	r.Register(&mockTool{namespace: "ext", name: "reader", tags: []string{"network"}})
+	r.Register(&mockTool{name: "plain"})
+
+	// List should contain all three tools.
+	list := r.List()
+	if len(list) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(list))
+	}
+
+	// Execute must work using full names.
+	if _, err := r.Execute("core/reader", map[string]any{}); err != nil {
+		t.Errorf("Execute(core/reader): %v", err)
+	}
+	if _, err := r.Execute("ext/reader", map[string]any{}); err != nil {
+		t.Errorf("Execute(ext/reader): %v", err)
+	}
+	if _, err := r.Execute("plain", map[string]any{}); err != nil {
+		t.Errorf("Execute(plain): %v", err)
+	}
+
+	// Shorthand "reader" should not match anything because both readers live in
+	// namespaces and the plain tool is named "plain".
+	if _, err := r.Execute("reader", map[string]any{}); err == nil {
+		t.Errorf("Execute(reader) should fail for namespaced-only registrations")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ToJSON
 // ---------------------------------------------------------------------------
 
 // TestToJSON verifies that ToJSON produces a valid JSON array describing each
-// registered tool's name, description, and parameters.
+// registered tool's namespace, name, full name, description, parameters, and tags.
 func TestToJSON(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&mockTool{
+		namespace:   "core",
 		name:        "t1",
 		description: "desc1",
 		params:      map[string]any{"type": "object"},
+		tags:        []string{"readonly"},
 	})
 	data, err := r.ToJSON()
 	if err != nil {
@@ -443,14 +565,23 @@ func TestToJSON(t *testing.T) {
 	if len(parsed) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(parsed))
 	}
+	if parsed[0]["namespace"] != "core" {
+		t.Errorf("namespace = %v, want core", parsed[0]["namespace"])
+	}
 	if parsed[0]["name"] != "t1" {
 		t.Errorf("name = %v, want t1", parsed[0]["name"])
+	}
+	if parsed[0]["full_name"] != "core/t1" {
+		t.Errorf("full_name = %v, want core/t1", parsed[0]["full_name"])
 	}
 	if parsed[0]["description"] != "desc1" {
 		t.Errorf("description = %v, want desc1", parsed[0]["description"])
 	}
 	if parsed[0]["parameters"] == nil {
 		t.Errorf("parameters should be present")
+	}
+	if parsed[0]["tags"] == nil {
+		t.Errorf("tags should be present")
 	}
 }
 
