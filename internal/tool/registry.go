@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -208,6 +209,19 @@ func (r *Registry) ToolTags(name string) []string {
 	return tool.Tags()
 }
 
+// ToolMetadata returns the namespace, description, and tags for the tool
+// registered under the given name. It is used by the Engine to emit
+// authoritative tool metadata in tool_call_started and approval events.
+func (r *Registry) ToolMetadata(name string) (namespace, description string, tags []string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tool, exists := r.tools[name]
+	if !exists {
+		return "", "", nil, false
+	}
+	return tool.Namespace(), tool.Description(), tool.Tags(), true
+}
+
 // Names returns the short Name() values for the provided tools, preserving order.
 func Names(tools []Tool) []string {
 	out := make([]string, 0, len(tools))
@@ -221,11 +235,8 @@ func Names(tools []Tool) []string {
 func FilterByTag(tools []Tool, tag string) []Tool {
 	out := make([]Tool, 0)
 	for _, t := range tools {
-		for _, tt := range t.Tags() {
-			if tt == tag {
-				out = append(out, t)
-				break
-			}
+		if slices.Contains(t.Tags(), tag) {
+			out = append(out, t)
 		}
 	}
 	return out

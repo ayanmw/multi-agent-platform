@@ -85,54 +85,42 @@ func (r *TagPolicyRule) Check(toolName string, input map[string]any, contract Ta
 		switch strings.ToLower(tag) {
 		case "exec:dangerous":
 			if !contract.Permissions.AllowShellDangerous {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowShellDangerous permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowShellDangerous permission", toolName), input)
 			}
 		case "exec":
 			if !contract.Permissions.AllowShell {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowShell permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowShell permission", toolName), input)
 			}
 		case "shell":
 			if !contract.Permissions.AllowShell {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowShell permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowShell permission", toolName), input)
 			}
 		case "filesystem:destructive", "filesystem:delete":
 			if !contract.Permissions.AllowFileDelete {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowFileDelete permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowFileDelete permission", toolName), input)
 			}
 		case "filesystem:write":
 			if !contract.Permissions.AllowFileWrite {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowFileWrite permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowFileWrite permission", toolName), input)
 			}
 		case "network", "mcp":
 			if !contract.Permissions.AllowNetwork {
-				return input, &ErrBlockedByPolicy{
-					Rule:   r.Name(),
-					Reason: fmt.Sprintf("tool %q requires AllowNetwork permission", toolName),
-					Tool:   toolName,
-				}
+				return input, newApprovalRequired(r.Name(), toolName, fmt.Sprintf("tool %q requires AllowNetwork permission", toolName), input)
 			}
 		}
 	}
 
 	return input, nil
+}
+
+// newApprovalRequired creates an ErrApprovalRequired with RuleName set so
+// the frontend can show which policy rule triggered the request.
+func newApprovalRequired(ruleName, toolName, reason string, input map[string]any) error {
+	return &ErrApprovalRequired{
+		ApprovalID: GenerateApprovalID(),
+		Tool:       toolName,
+		RuleName:   ruleName,
+		Reason:     reason,
+		Input:      input,
+	}
 }

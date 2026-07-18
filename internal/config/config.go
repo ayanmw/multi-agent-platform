@@ -36,6 +36,12 @@ type Config struct {
 	// MCPServers lists statically configured MCP servers loaded from MCP_SERVERS.
 	// Dynamic servers added at runtime are loaded separately by the MCP manager.
 	MCPServers []mcp.ServerConfig
+
+	// Sandbox configuration for execute_program (Phase 5 preview).
+	// When EnableSandbox is false (default), execute_program runs locally.
+	// When true, the runner uses Docker with the configured image.
+	EnableSandbox bool   // SANDBOX_ENABLE
+	SandboxImage  string // SANDBOX_IMAGE
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -50,11 +56,12 @@ type ModelConfig struct {
 // Load reads .env file and environment variables to populate Config
 func Load() (*Config, error) {
 	cfg := &Config{
-		LLMEndpoint: "https://aicoding.dobest.com/v1",
-		LLMModel:    "deepseek-v4-flash",
-		DBPath:      "data/app.db",
-		ServerPort:  "8080",
-		LLMUseMock:  true,
+		LLMEndpoint:  "https://aicoding.dobest.com/v1",
+		LLMModel:     "deepseek-v4-flash",
+		DBPath:       "data/app.db",
+		ServerPort:   "8080",
+		LLMUseMock:   true,
+		SandboxImage: "python:3.11-slim",
 	}
 
 	// Load .env file (lowest priority)
@@ -87,6 +94,14 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("LLM_MOCK_ENDPOINTS"); v != "" {
 		cfg.LLMMockEndpoints = splitAndTrim(v)
+	}
+
+	// Sandbox configuration: disabled by default, enabled via SANDBOX_ENABLE=true.
+	if v := os.Getenv("SANDBOX_ENABLE"); v != "" {
+		cfg.EnableSandbox = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("SANDBOX_IMAGE"); v != "" {
+		cfg.SandboxImage = v
 	}
 
 	// Load multi-model configuration

@@ -25,6 +25,12 @@ const props = defineProps<{
   autoApprove: boolean
   visible: boolean
   error?: string
+  /** Policy rule that triggered the approval request */
+  rule?: string
+  /** Tool namespace */
+  namespace?: string
+  /** Tool risk/capability tags */
+  tags?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -105,6 +111,18 @@ function truncateInput(s: string, maxLen = 500): string {
   if (s.length <= maxLen) return s
   return s.slice(0, maxLen) + '...'
 }
+
+/** Check whether a tag indicates elevated risk */
+function isRiskTag(tag: string): boolean {
+  const riskTags = ['destructive', 'dangerous', 'write', 'exec', 'shell', 'network', 'mcp']
+  return riskTags.includes(tag.toLowerCase())
+}
+
+/** Resolve the short tool name without its namespace */
+function toolShortName(name: string): string {
+  const idx = name.indexOf('/')
+  return idx > 0 ? name.slice(idx + 1) : name
+}
 </script>
 
 <template>
@@ -116,7 +134,14 @@ function truncateInput(s: string, maxLen = 500): string {
           <span class="approval-icon">&#9888;</span>
           <div class="approval-title-group">
             <h3 class="approval-title">Approval Required</h3>
-            <span class="approval-tool-name">{{ tool }}</span>
+            <span v-if="namespace" class="approval-namespace">{{ namespace }}</span>
+            <span class="approval-tool-name">{{ toolShortName(tool) }}</span>
+            <span
+              v-for="tag in tags"
+              :key="tag"
+              class="approval-tag"
+              :class="{ 'approval-tag-risk': isRiskTag(tag) }"
+            >{{ tag }}</span>
           </div>
           <span
             v-if="!error"
@@ -132,6 +157,12 @@ function truncateInput(s: string, maxLen = 500): string {
         <div v-if="error" class="approval-error-banner">
           <span class="approval-error-icon">&#9888;</span>
           <span class="approval-error-text">{{ error }}</span>
+        </div>
+
+        <!-- Rule source -->
+        <div v-if="rule" class="approval-section">
+          <span class="approval-label">Triggered Rule</span>
+          <p class="approval-rule">{{ rule }}</p>
         </div>
 
         <!-- Reason -->
@@ -221,6 +252,16 @@ function truncateInput(s: string, maxLen = 500): string {
   font-weight: 600;
 }
 
+.approval-namespace {
+  display: inline-block;
+  font-size: 11px;
+  color: #888;
+  background: #333;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+
 .approval-tool-name {
   font-size: 12px;
   color: #f0a030;
@@ -228,6 +269,24 @@ function truncateInput(s: string, maxLen = 500): string {
   background: rgba(240, 160, 48, 0.1);
   padding: 1px 8px;
   border-radius: 4px;
+}
+
+.approval-tag {
+  display: inline-block;
+  font-size: 10px;
+  color: #aaa;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 4px;
+  text-transform: lowercase;
+}
+
+.approval-tag-risk {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.12);
+  border-color: rgba(231, 76, 60, 0.4);
 }
 
 .approval-countdown {

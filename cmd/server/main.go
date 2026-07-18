@@ -538,6 +538,16 @@ func main() {
 	} else {
 		log.Println("Docker sandbox: disabled — Docker not available, using direct execution")
 	}
+
+	// Phase 5 preview: enable sandboxed execution for execute_program according to config.
+	// Default remains local execution so existing deployments are not disrupted.
+	if cfg.EnableSandbox {
+		tool.SetDefaultRunner(tool.NewDockerRunner(cfg.SandboxImage))
+		log.Printf("execute_program: sandbox enabled (image=%s)", cfg.SandboxImage)
+	} else {
+		log.Println("execute_program: local execution")
+	}
+
 	log.Printf("Registered %d built-in tools", len(toolRegistry.List()))
 
 	// Phase 5: AgentBus for inter-agent communication.

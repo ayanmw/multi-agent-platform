@@ -42,6 +42,13 @@ type ErrApprovalRequired struct {
 	ApprovalID string
 	// Tool 是需要审批的工具名称
 	Tool string
+	// RuleName 是触发此审批请求的策略规则名（如 "ApprovalRule" 或
+	// "DangerousCommandRule"），前端用于展示规则来源。
+	RuleName string
+	// Namespace 是工具所属命名空间，用于前端展示与分组。
+	Namespace string
+	// Tags 是工具的风险/能力标签，前端用于渲染风险提示。
+	Tags []string
 	// Reason 是需要审批的原因（中文描述，展示给用户）
 	Reason string
 	// Input 是工具调用的原始参数
@@ -68,7 +75,10 @@ type ApprovalHandler interface {
 	// toolName:  需要审批的工具名称
 	// reason:    审批原因（中文描述）
 	// input:     工具调用的参数
-	RequestApproval(approvalID string, toolName string, reason string, input map[string]any) error
+	// ruleName:  触发审批的规则名（如 "ApprovalRule"），用于前端展示
+	// namespace: 工具命名空间，用于前端展示
+	// tags:      工具风险/能力标签，用于前端展示
+	RequestApproval(approvalID string, toolName string, reason string, input map[string]any, ruleName string, namespace string, tags []string) error
 
 	// WaitForDecision 阻塞等待前端的审批决定，直到收到决定或超时。
 	// 返回 true 表示批准，false 表示拒绝。
@@ -118,8 +128,8 @@ func NewWebSocketApprovalHandler(bus EventSender) *WebSocketApprovalHandler {
 }
 
 // RequestApproval 向前端发送审批请求事件，并创建等待 channel。
-// 事件格式：system_info { type: "approval_required", approval_id, tool, reason, input }
-func (h *WebSocketApprovalHandler) RequestApproval(approvalID string, toolName string, reason string, input map[string]any) error {
+// 事件格式：system_info { type: "approval_required", approval_id, tool, namespace, tags, rule, reason, input }
+func (h *WebSocketApprovalHandler) RequestApproval(approvalID string, toolName string, reason string, input map[string]any, ruleName string, namespace string, tags []string) error {
 	// 创建 buffered channel（容量 1，避免发送方阻塞）
 	h.mu.Lock()
 	h.pending[approvalID] = make(chan bool, 1)
@@ -130,6 +140,9 @@ func (h *WebSocketApprovalHandler) RequestApproval(approvalID string, toolName s
 		"type":        "approval_required",
 		"approval_id": approvalID,
 		"tool":        toolName,
+		"rule":        ruleName,
+		"namespace":   namespace,
+		"tags":        tags,
 		"reason":      reason,
 		"input":       input,
 	}))
@@ -238,6 +251,7 @@ func (r *ApprovalRule) Check(toolName string, input map[string]any, contract Tas
 	return input, &ErrApprovalRequired{
 		ApprovalID: approvalID,
 		Tool:       toolName,
+		RuleName:   r.Name(),
 		Reason:     reason,
 		Input:      input,
 	}
@@ -348,6 +362,7 @@ func (r *DangerousCommandRule) Check(toolName string, input map[string]any, cont
 			return input, &ErrApprovalRequired{
 				ApprovalID: approvalID,
 				Tool:       toolName,
+				RuleName:   r.Name(),
 				Reason:     fmt.Sprintf("危险命令被策略检测: %s (匹配模式: %s)", desc, pattern),
 				Input:      input,
 			}

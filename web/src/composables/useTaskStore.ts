@@ -45,6 +45,12 @@ export interface PendingApproval {
   tool: string
   reason: string
   input: Record<string, any>
+  /** Name of the policy rule that triggered this approval request */
+  rule?: string
+  /** Tool namespace, if provided by the engine */
+  namespace?: string
+  /** Tool risk/capability tags */
+  tags?: string[]
   /** F6: error message shown in the dialog when approval times out */
   error?: string
 }
@@ -494,11 +500,15 @@ export function useTaskStore() {
       case 'system_info': {
         const infoType = evt.data.type as string
         if (infoType === 'approval_required') {
+          const rawTags = evt.data.tags
           pendingApproval.value = {
             approvalId: (evt.data.approval_id as string) || '',
             taskId: evt.task_id,
             agentId: evt.agent_id || 'agent_default',
             tool: (evt.data.tool as string) || 'unknown',
+            rule: (evt.data.rule as string) || undefined,
+            namespace: (evt.data.namespace as string) || undefined,
+            tags: Array.isArray(rawTags) ? (rawTags as string[]) : undefined,
             reason: (evt.data.reason as string) || 'Policy block',
             input: (evt.data.input as Record<string, any>) || {},
           }

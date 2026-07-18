@@ -1672,12 +1672,23 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// Emit step and tool call lifecycle events. The UI uses these to show:
 	//   - step_started: this step is now "running" in the step list
 	//   - tool_call_started: the tool name and arguments in a card
+	// We enrich tool_call_started with authoritative registry metadata
+	// (namespace, description, tags) so the frontend can render risk
+	// indicators and namespace badges without guessing.
+	toolName := tc.Function.Name
+	namespace, description, tags, _ := "", "", []string{}, false
+	if e.tools != nil {
+		namespace, description, tags, _ = e.tools.ToolMetadata(toolName)
+	}
 	e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))
 	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"tool": tc.Function.Name,
-		"args": args,
+		"tool":        toolName,
+		"namespace":   namespace,
+		"description": description,
+		"tags":        tags,
+		"args":        args,
 	}))
 
 	// Execute the tool and measure its duration. The duration is tracked
@@ -1848,6 +1859,9 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			"type":        "approval_blocked",
 			"approval_id": approvalErr.ApprovalID,
 			"tool":        approvalErr.Tool,
+			"rule":        approvalErr.RuleName,
+			"namespace":   approvalErr.Namespace,
+			"tags":        approvalErr.Tags,
 			"reason":      approvalErr.Reason,
 			"message":     "审批处理器未配置，操作被自动拒绝",
 		}))
@@ -1862,6 +1876,9 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 		"type":        "approval_required",
 		"approval_id": approvalErr.ApprovalID,
 		"tool":        approvalErr.Tool,
+		"rule":        approvalErr.RuleName,
+		"namespace":   approvalErr.Namespace,
+		"tags":        approvalErr.Tags,
 		"reason":      approvalErr.Reason,
 		"input":       approvalErr.Input,
 		"duration_ms": duration,
@@ -1875,7 +1892,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}))
 
 	// 向前端发起审批请求
-	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input); err != nil {
+	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input, approvalErr.RuleName, approvalErr.Namespace, approvalErr.Tags); err != nil {
 		log.Printf("[Engine] 审批请求发送失败: %v", err)
 		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,

@@ -1491,7 +1491,12 @@ function formatShortTime(ts: number): string {
       />
 
       <!-- Approval dialog for policy-blocked tool calls -->
+      <ApprovalDialog
+        :approval-id="pendingApproval?.approvalId ?? ''"
         :tool="pendingApproval?.tool ?? ''"
+        :rule="pendingApproval?.rule"
+        :namespace="pendingApproval?.namespace"
+        :tags="pendingApproval?.tags"
         :reason="pendingApproval?.reason ?? ''"
         :input="pendingApproval?.input ?? {}"
         :auto-approve="autoApprovePolicy"
