@@ -4,15 +4,18 @@ import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
-import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
+import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, ContextWindowSnapshotData } from '../types/events'
 import type { EvaluationResult } from '../types/case'
 
 // 模块级引用，用于最近修改记录
 const { addItem: addRecentMod } = useRecentMods()
 const currentSessionId = ref<string>('')
 
-/** Per-task reactive cache */
+/** Per-task reactive cache keyed by root task ID. */
 const taskCache = ref<Record<string, TaskState>>({})
+
+/** Per-sub-task context window snapshots keyed by sub_task_id (7-G). */
+const subTaskSnapshots = ref<Record<string, ContextWindowSnapshotData>>({})
 
 /**
  * Set of task IDs that were created optimistically before backend confirmation.
@@ -186,6 +189,18 @@ export function useTaskStore() {
         status: 'running',
         userInput: (evt.data.input as string) || '',
       })
+    }
+
+    // 7-G: cache context-window snapshots by sub_task_id so each agent instance
+    // has an isolated, inspectable view.
+    if (evt.type === 'context_window_snapshot') {
+      const subTaskID = evt.sub_task_id
+      if (subTaskID) {
+        subTaskSnapshots.value[subTaskID] = evt.data as unknown as ContextWindowSnapshotData
+      }
+      // Snapshot events update the context window cache but do not change agent
+      // steps or task status, so we can stop here.
+      return
     }
 
     const task = taskCache.value[taskId]
@@ -1041,6 +1056,7 @@ export function useTaskStore() {
   return {
     // Reactive state
     taskCache,
+    subTaskSnapshots,
     activeTaskId,
     isTaskPending,
     wsStatus: status,

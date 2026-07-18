@@ -59,6 +59,7 @@ import type { ContextWindowSnapshotData } from './types/events'
 
 const {
   taskCache,
+  subTaskSnapshots,
   activeTaskId,
   isTaskPending,
   wsStatus,
@@ -152,6 +153,9 @@ const autoApprovePolicy = ref(false)
 // Project config view toggle
 const showProjectConfig = ref(false)
 
+/** Currently selected sub-task/agent context window target. */
+const selectedSubTaskId = ref<string>('')
+
 /** Singleton context window snapshot listener */
 const {
   setActiveTaskId: setContextWindowTaskId,
@@ -162,17 +166,23 @@ const {
 
 watch(activeTaskId, (taskId) => {
   setContextWindowTaskId(taskId || '')
+  // Reset sub-task selection when the active task changes; the leader is default.
+  selectedSubTaskId.value = ''
 }, { immediate: true })
 
 /** Refetch the context window snapshot on demand from the REST API. */
 async function fetchContextWindowSnapshot() {
   const taskId = activeTaskId.value
   if (!taskId) return
+  const subTaskId = selectedSubTaskId.value
+  const url = subTaskId
+    ? `/api/tasks/${taskId}/context_window?sub_task_id=${encodeURIComponent(subTaskId)}`
+    : `/api/tasks/${taskId}/context_window`
   try {
-    const resp = await fetch(`/api/tasks/${taskId}/context_window`)
+    const resp = await fetch(url)
     if (!resp.ok) {
       if (resp.status === 404) {
-        console.warn('[App] Context snapshot not found for task', taskId)
+        console.warn('[App] Context snapshot not found for task', taskId, 'subTask', subTaskId)
       } else {
         console.error('[App] Failed to fetch context snapshot:', resp.statusText)
       }
@@ -185,6 +195,33 @@ async function fetchContextWindowSnapshot() {
     console.error('[App] Network error fetching context snapshot:', err)
   }
 }
+
+/** List the available sub-tasks (agents) for the active root task. */
+const activeSubTasks = computed(() => {
+  const taskId = activeTaskId.value
+  if (!taskId) return []
+  const tasks = [taskCache.value[taskId]].filter(Boolean)
+  const rootTask = tasks[0]
+  if (!rootTask) return []
+  // Derive sub-task IDs: each agent under the root task has its own snapshot key.
+  // For the leader, key equals taskId; for child agents, key is task_id + '_' + agent_id.
+  const agents = Object.values(rootTask.agents)
+  const list: { subTaskId: string; agentId: string; label: string }[] = []
+  for (const agent of agents) {
+    const isLeader = agent.id === Object.keys(rootTask.agents)[0]
+    // If there is only one agent it is the leader; its SubTaskID equals taskId.
+    const subTaskId = isLeader ? taskId : `${taskId}_${agent.id}`
+    list.push({
+      subTaskId,
+      agentId: agent.id,
+      label: agent.name || agent.id,
+    })
+  }
+  return list
+})
+
+/** Whether the current active task has multiple agents (true multi-agent). */
+const hasMultipleAgents = computed(() => activeSubTasks.value.length > 1)
 
 /** Singleton memory event listener + timeline state for Phase 6-F */
 const { events: memoryEvents, clear: clearMemoryEvents } = useMemoryEvents()
@@ -1125,9 +1162,27 @@ function formatShortTime(ts: number): string {
             </div>
           </div>
           <div class="memory-overlay-body">
+            <div class="context-agent-selector" v-if="hasMultipleAgents">
+              <label for="sub-task-select">Agent / SubTask</label>
+              <select
+                id="sub-task-select"
+                v-model="selectedSubTaskId"
+                @change="fetchContextWindowSnapshot"
+              >
+                <option value="">🧑‍✈️ Leader (root task)</option>
+                <option
+                  v-for="item in activeSubTasks"
+                  :key="item.subTaskId"
+                  :value="item.subTaskId"
+                >
+                  {{ item.label }}
+                </option>
+              </select>
+            </div>
             <ContextWindowPanel
               class="context-overlay-content"
               :active-task-id="activeTaskId || ''"
+              :sub-task-id="selectedSubTaskId"
               @refresh="fetchContextWindowSnapshot"
             />
           </div>

@@ -251,6 +251,13 @@ type EngineConfig struct {
 	// Empty for root tasks.
 	ParentTaskID string
 
+	// SubTaskID identifies this specific agent execution instance.
+	// For the leader agent, SubTaskID equals TaskID; child agents have their own
+	// SubTaskID derived from the root task plus the child agent ID. Events and
+	// context-window snapshots are keyed by SubTaskID so each agent instance is
+	// independently observable.
+	SubTaskID string
+
 	// IsRoot indicates whether this task is the root task of its session.
 	// Root tasks represent the primary user request; child tasks represent
 	// sub-agent work delegated from the root.
@@ -559,14 +566,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Emit task_failed with the panic details so the UI can display the error.
 			// The event is sent on a best-effort basis — if the event bus itself
 			// panicked, this send may also fail, but we try anyway.
-			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "panic",
 				"error":  fmt.Sprintf("%v", r),
 			}))
 			// Persist the failure status so the task history shows it as failed.
 			e.updateTask("failed", "", e.totalTokens)
 			// 任务失败后清理内存中的上下文窗口快照，避免内存无限累积。
-			DeleteTaskContextSnapshot(e.taskID)
+			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 			// Re-panic to preserve the original stack trace for server-side logging.
 			// The panic will be caught by the HTTP server's recovery middleware
 			// or the caller's deferred recovery.
@@ -600,7 +607,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 	// Notify the frontend that the agent is initialized and ready to process.
 	// The UI uses this event to show the agent's name, model, and limits.
-	e.bus.SendEvent(event.NewEvent("agent_ready", e.taskID, e.cfg.AgentID, 0, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("agent_ready", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, 0, map[string]any{
 		"agent_name": e.cfg.AgentID,
 		"model":      e.cfg.Model,
 		"max_steps":  e.cfg.MaxSteps,
@@ -645,7 +652,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 					// Emit a system_info event so the frontend can show the
 					// inter-agent communication in the UI.
-					e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"type":       "agent_message_received",
 						"from_agent": msg.FromAgentID,
 						"to_agent":   e.cfg.AgentID,
@@ -681,7 +688,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// Resume 已触发，继续下一轮。
 			case <-ctx.Done():
 				// 在暂停期间用户取消了任务，触发正常的取消逻辑。
-				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"reason": "cancelled",
 				}))
 				e.durationMs = time.Since(e.startTime).Milliseconds()
@@ -700,14 +707,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Context was cancelled — emit failure and return immediately.
 			// The frontend can distinguish "cancelled" from "llm_error" and
 			// "max_steps_exceeded" by the reason field in the event data.
-			e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "cancelled",
 			}))
 			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("failed", "", 0)
 			e.updateTaskDuration()
 			// 任务取消后清理内存中的上下文窗口快照，避免快照无限累积。
-			DeleteTaskContextSnapshot(e.taskID)
+			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 			return "", e.totalTokens, ctx.Err()
 		default:
 			// Context is still valid — continue to the think phase.
@@ -750,7 +757,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// -----------------------------------------------------------------
 			obsContent := fmt.Sprintf("[LLM ERROR] %s", normalizeErrorFingerprint(err.Error()))
 			if e.isRepeatingError(obsContent) {
-				e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"reason": "llm_error",
 					"error":  err.Error(),
 				}))
@@ -758,7 +765,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				e.updateTask("failed", "", e.totalTokens)
 				e.updateTaskDuration()
 				// 重复 LLM 错误导致任务失败，清理上下文窗口快照以释放内存。
-				DeleteTaskContextSnapshot(e.taskID)
+				DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 				return "", e.totalTokens, fmt.Errorf("think step %d: repeated LLM error: %w", e.stepIdx, err)
 			}
 			e.recordFeedbackError(obsContent)
@@ -770,7 +777,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.writeSessionMessage("user", obsContent, "", "", 0)
 
 			// Emit a system_info event so the frontend can surface the retry.
-			e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"type":    "llm_error_feedback",
 				"content": obsContent,
 			}))
@@ -793,7 +800,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 		// Emit an agent_status event so the frontend can display real-time
 		// token consumption detail (input / cache / output) and progress.
-		e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("agent_status", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"prompt_tokens":            e.tokenUsage.PromptTokens,
 			"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
 			"prompt_cache_miss_tokens": e.tokenUsage.PromptCacheMissTokens,
@@ -860,7 +867,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Emit the final observation — the complete answer text along with
 			// token usage statistics. The frontend uses this to display the
 			// final answer and token cost summary.
-			e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content":                  content,
 				"total_tokens":             e.totalTokens,
 				"prompt_tokens":            e.tokenUsage.PromptTokens,
@@ -879,7 +886,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// Emit task_completed — this tells the frontend that the agent
 			// has finished successfully. Include the cumulative token breakdown
 			// so the frontend can display accurate token metrics.
-			e.bus.SendEvent(event.NewEvent("task_completed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("task_completed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"result":                   content,
 				"total_tokens":             e.totalTokens,
 				"total_steps":              e.stepIdx,
@@ -895,7 +902,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.updateTask("completed", content, e.totalTokens)
 			e.updateTaskDuration()
 			// 任务成功完成后清理内存中的上下文窗口快照，避免已完成任务长期占用内存。
-			DeleteTaskContextSnapshot(e.taskID)
+			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 
 			// Task 4: If this run is associated with a case, evaluate the acceptance
 			// criteria and broadcast a task_evaluated event. Errors here are logged
@@ -956,7 +963,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 				// Emit the observation event so the frontend shows the error as
 				// feedback to the LLM, not as a terminal task failure.
-				e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"content": obsContent,
 				}))
 				e.saveStep(StepRecord{
@@ -1038,7 +1045,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// allowed number of iterations. This is a safety mechanism to prevent
 	// infinite loops (e.g., the LLM keeps calling the same tool with the same
 	// arguments without making progress).
-	e.bus.SendEvent(event.NewEvent("task_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"reason":       "max_steps_exceeded",
 		"max_steps":    e.cfg.MaxSteps,
 		"current_step": e.stepIdx,
@@ -1048,7 +1055,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	e.updateTask("failed", "", e.totalTokens)
 	e.updateTaskDuration()
 	// 超过最大步数导致失败，清理上下文窗口快照以释放内存。
-	DeleteTaskContextSnapshot(e.taskID)
+	DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
 }
 
@@ -1238,7 +1245,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		}
 	}
 
-	e.bus.SendEvent(event.NewEvent(event.EventTaskEvaluated, e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask(event.EventTaskEvaluated, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"case_id": e.caseID,
 		"passed":  passed,
 		"score":   score,
@@ -1331,14 +1338,14 @@ func (e *Engine) recordFeedbackError(errFingerprint string) {
 // tools (continue the loop) or return the text as the final answer.
 func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, error) {
 	// Emit step_started: the UI transitions this step to "running" state.
-	e.bus.SendEvent(event.NewEvent("step_started", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "think",
 	}))
 
 	// Emit llm_thinking: the UI shows a "Thinking..." indicator. This is sent
 	// BEFORE the HTTP request so the user sees immediate feedback, even if the
 	// LLM API takes several seconds to respond.
-	e.bus.SendEvent(event.NewEvent("llm_thinking", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("llm_thinking", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": "Thinking...",
 	}))
 
@@ -1425,7 +1432,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 			// model_routed event includes fallback info so the frontend can
 			// pre-display the fallback target model (white-box transparency).
-			e.bus.SendEvent(event.NewEvent("model_routed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("model_routed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":    selectedModel,
 				"intent":   routeDecision.Intent,
 				"tier":     routeDecision.Tier.String(),
@@ -1453,14 +1460,14 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 	// Cache the snapshot so the REST API can return the live context window
 	// on demand without running another LLM call.
-	RecordTaskContextSnapshot(e.taskID, snapshot)
+	RecordTaskContextSnapshot(e.cfg.SubTaskID, snapshot)
 
 	// 为了与 REST API（encodeContextWindowSnapshot）保持字段一致，
 	// 这里直接序列化 snapshot 结构体，避免手写 map 导致字段不同步。
 	snapshotData, _ := json.Marshal(snapshot)
 	var snapshotMap map[string]any
 	_ = json.Unmarshal(snapshotData, &snapshotMap)
-	e.bus.SendEvent(event.NewEvent(event.EventContextWindowSnapshot, e.taskID, e.cfg.AgentID, e.stepIdx, snapshotMap))
+	e.bus.SendEvent(event.NewEventWithSubTask(event.EventContextWindowSnapshot, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, snapshotMap))
 
 	req := llm.ChatRequest{
 		Model:       selectedModel,
@@ -1488,12 +1495,12 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	content, usage, toolCalls, err := selectedProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
 		// Stream each delta to the frontend
 		if chunk.Delta.Content != "" {
-			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("llm_delta", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content": chunk.Delta.Content,
 			}))
 		}
 		if chunk.Delta.ReasoningContent != "" {
-			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("llm_delta", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content":           chunk.Delta.Content,
 				"reasoning_content": chunk.Delta.ReasoningContent,
 			}))
@@ -1502,7 +1509,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		// 字段名不同）。同样转发到前端，保证推理型模型在 think 阶段的思维链
 		// 对用户可见（白盒哲学）。
 		if chunk.Delta.Reasoning != "" {
-			e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("llm_delta", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content":           chunk.Delta.Content,
 				"reasoning_content": chunk.Delta.Reasoning,
 			}))
@@ -1523,7 +1530,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 		req.Model = routeDecision.Fallback.Name
 		e.selectedModel = routeDecision.Fallback.Name // fallback 成功后 cost 按实际模型上报
-		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":     "model_fallback",
 			"primary":  selectedModel,
 			"fallback": routeDecision.Fallback.Name,
@@ -1544,7 +1551,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		req.Context = fallbackCtx
 		content, usage, toolCalls, err = fallbackProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
 			if chunk.Delta.Content != "" {
-				e.bus.SendEvent(event.NewEvent("llm_delta", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				e.bus.SendEvent(event.NewEventWithSubTask("llm_delta", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"content": chunk.Delta.Content,
 				}))
 			}
@@ -1564,8 +1571,8 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		return "", usage, nil, err
 	}
 
-	e.bus.SendEvent(event.NewEvent("llm_message_complete", e.taskID, e.cfg.AgentID, e.stepIdx, nil))
-	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("llm_message_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, nil))
+	e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "think",
 	}))
 
@@ -1634,13 +1641,13 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			errMsg := fmt.Sprintf("invalid arguments JSON for %s: %v (raw: %q, repair failed: %v)",
 				tc.Function.Name, parseErr, tc.Function.Arguments, repairErr)
 			log.Printf("[Engine] %s", errMsg)
-			e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"tool":        tc.Function.Name,
 				"error":       errMsg,
 				"duration_ms": 0,
 				"args":        tc.Function.Arguments,
 			}))
-			e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"type": "tool_call",
 			}))
 			e.saveStep(StepRecord{
@@ -1665,10 +1672,10 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// Emit step and tool call lifecycle events. The UI uses these to show:
 	//   - step_started: this step is now "running" in the step list
 	//   - tool_call_started: the tool name and arguments in a card
-	e.bus.SendEvent(event.NewEvent("step_started", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))
-	e.bus.SendEvent(event.NewEvent("tool_call_started", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool": tc.Function.Name,
 		"args": args,
 	}))
@@ -1711,14 +1718,14 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		var policyErr *harness.ErrBlockedByPolicy
 		if errors.As(execErr, &policyErr) {
 			reason := fmt.Sprintf("[POLICY BLOCK] %s blocked %s: %s", policyErr.Rule, policyErr.Tool, policyErr.Reason)
-			e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"tool":        tc.Function.Name,
 				"error":       reason,
 				"duration_ms": duration,
 				"args":        args,
 				"policy_rule": policyErr.Rule,
 			}))
-			e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"type": "tool_call",
 			}))
 
@@ -1741,13 +1748,13 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		// The UI will show the tool name, error message, and duration.
 		// The step is still marked as "complete" (not "running") because the
 		// tool call phase is over — it just ended in failure.
-		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       execErr.Error(),
 			"duration_ms": duration,
 			"args":        args,
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 
@@ -1777,11 +1784,11 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	//   - tool_call_complete: the tool finished successfully with duration
 	//   - observation: the data being fed back to the LLM (the "observe" phase)
 	//   - step_complete: this step is now "completed" in the step list
-	e.bus.SendEvent(event.NewEvent("tool_call_output", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":   tc.Function.Name,
 		"result": result,
 	}))
-	e.bus.SendEvent(event.NewEvent("tool_call_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":        tc.Function.Name,
 		"duration_ms": duration,
 	}))
@@ -1800,7 +1807,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// back to the ReAct loop. The frontend shows this as the "observation" phase
 	// in the Agent Tree visualization, making it clear what data the LLM will
 	// see on the next think iteration.
-	e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": resultStr,
 	}))
 
@@ -1811,7 +1818,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		Content: resultStr,
 	})
 
-	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))
 
@@ -1837,21 +1844,21 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	if e.approvalHandler == nil {
 		errMsg := fmt.Sprintf("[APPROVAL REQUIRED] %s: %s (未配置审批处理器，操作被拒绝)",
 			approvalErr.Tool, approvalErr.Reason)
-		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_blocked",
 			"approval_id": approvalErr.ApprovalID,
 			"tool":        approvalErr.Tool,
 			"reason":      approvalErr.Reason,
 			"message":     "审批处理器未配置，操作被自动拒绝",
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
 	// 发射 system_info 事件，通知前端显示审批对话框
-	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":        "approval_required",
 		"approval_id": approvalErr.ApprovalID,
 		"tool":        approvalErr.Tool,
@@ -1861,7 +1868,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}))
 
 	// 发射 tool_call_output 事件，让前端显示工具调用信息
-	e.bus.SendEvent(event.NewEvent("tool_call_output", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":        tc.Function.Name,
 		"result":      map[string]any{"status": "pending_approval", "approval_id": approvalErr.ApprovalID},
 		"duration_ms": duration,
@@ -1870,13 +1877,13 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	// 向前端发起审批请求
 	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input); err != nil {
 		log.Printf("[Engine] 审批请求发送失败: %v", err)
-		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批请求发送失败: %v", err),
 			"duration_ms": duration,
 			"args":        args,
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 		return "", fmt.Errorf("approval request failed: %w", err)
@@ -1887,19 +1894,19 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	if waitErr != nil {
 		// 超时或等待错误 — 视为拒绝
 		log.Printf("[Engine] 审批等待失败: %v", waitErr)
-		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_timeout",
 			"approval_id": approvalErr.ApprovalID,
 			"tool":        approvalErr.Tool,
 			"reason":      "审批超时，操作被自动拒绝",
 		}))
-		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批超时: %v", waitErr),
 			"duration_ms": duration,
 			"args":        args,
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 		return "", fmt.Errorf("approval timeout: %w", waitErr)
@@ -1908,19 +1915,19 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	if !approved {
 		// 用户拒绝了审批请求
 		log.Printf("[Engine] 审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
-		e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_denied",
 			"approval_id": approvalErr.ApprovalID,
 			"tool":        approvalErr.Tool,
 			"reason":      "用户拒绝了此操作",
 		}))
-		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       "用户拒绝了高风险操作",
 			"duration_ms": duration,
 			"args":        args,
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 		return "", fmt.Errorf("user denied approval for %s: %s", approvalErr.Tool, approvalErr.Reason)
@@ -1928,7 +1935,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	// 用户批准 — 绕过 PolicyGate 直接执行工具调用
 	log.Printf("[Engine] 审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
-	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":        "approval_granted",
 		"approval_id": approvalErr.ApprovalID,
 		"tool":        approvalErr.Tool,
@@ -1941,13 +1948,13 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	execDuration := time.Since(execStart).Milliseconds()
 
 	if execErr != nil {
-		e.bus.SendEvent(event.NewEvent("tool_call_failed", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       execErr.Error(),
 			"duration_ms": execDuration,
 			"args":        args,
 		}))
-		e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type": "tool_call",
 		}))
 		return "", execErr
@@ -1957,18 +1964,18 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	resultJSON, _ := json.Marshal(result)
 	resultStr := string(resultJSON)
 
-	e.bus.SendEvent(event.NewEvent("tool_call_output", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":   tc.Function.Name,
 		"result": result,
 	}))
-	e.bus.SendEvent(event.NewEvent("tool_call_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":        tc.Function.Name,
 		"duration_ms": execDuration,
 	}))
-	e.bus.SendEvent(event.NewEvent("observation", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": resultStr,
 	}))
-	e.bus.SendEvent(event.NewEvent("step_complete", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "tool_call",
 	}))
 
@@ -2011,7 +2018,7 @@ func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 	e.agentBus.SendMessage(msg)
 
 	// Emit a system_info event so the frontend can show the message in the UI.
-	e.bus.SendEvent(event.NewEvent("system_info", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":       "agent_message_sent",
 		"from_agent": e.cfg.AgentID,
 		"to_agent":   toAgentID,
@@ -2107,7 +2114,7 @@ func (e *Engine) Pause() {
 	}
 	// 通知前端此 agent 已进入 paused 状态。前端根据 agent_status 的 status 字段
 	// 把对应 AgentState.status 切换为 'paused'，从而禁用 Cancel/Pause 之外的交互。
-	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("agent_status", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"status": "paused",
 	}))
 }
@@ -2127,7 +2134,7 @@ func (e *Engine) Resume() {
 	close(e.resumeCh)
 	e.resumeCh = make(chan struct{})
 	e.resumeMu.Unlock()
-	e.bus.SendEvent(event.NewEvent("agent_status", e.taskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+	e.bus.SendEvent(event.NewEventWithSubTask("agent_status", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"status": "running",
 	}))
 }

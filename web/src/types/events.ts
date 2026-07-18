@@ -48,6 +48,8 @@ export type EventType =
 export interface AgentEvent {
   event_id: string
   task_id: string
+  /** SubTaskID identifies the concrete agent execution instance (7-G). */
+  sub_task_id: string
   agent_id: string
   step_index: number
   type: EventType

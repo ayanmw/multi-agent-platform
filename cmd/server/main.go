@@ -1536,6 +1536,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 				TokenCount: msg.TokenCount,
 			})
 		},
+		SubTaskID: taskID,
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

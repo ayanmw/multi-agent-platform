@@ -384,9 +384,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// Phase 6 Router: forward the shared Router/Registry/Providers so child
 		// agents participate in dynamic model selection. When modelRouter is nil
 		// the Engine falls back to the single-model path (legacy behavior).
-		Router:    o.modelRouter,
-		Registry:  o.routerRegistry,
-		Providers: o.routerProviders,
+		Router:            o.modelRouter,
+		Registry:          o.routerRegistry,
+		Providers:         o.routerProviders,
+		// 7-G: child agents have their own SubTaskID so events and snapshots are
+		// isolated per agent execution instance.
+		SubTaskID:         subTaskID,
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Phase 7-A: Note — per-agent Engine/cancel registration is intentionally kept
