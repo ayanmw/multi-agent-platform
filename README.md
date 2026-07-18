@@ -31,6 +31,8 @@ curl -X POST http://localhost:8080/api/mcp/servers \
 # 启动后默认已注册 default static market，可通过 REST 或前端 "市场安装" 入口一键安装示例 MCP server
 curl http://localhost:8080/api/mcp/markets
 curl http://localhost:8080/api/mcp/markets/default/servers
+curl -X POST http://localhost:8080/api/mcp/markets/default/servers/local-time/install
+
 # 方式四：SSE transport 远程 MCP server
 export MCP_SERVERS='[
   {"name":"remote-time","transport":"sse","endpoint":"http://localhost:3001/sse","enabled":true}
