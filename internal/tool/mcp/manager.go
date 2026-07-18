@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // ChangeNotifier is called after the set of loaded MCP servers (and therefore
@@ -30,6 +31,12 @@ type Manager struct {
 	registry *tool.Registry
 	loader   *Loader
 	repo     Repository
+
+	// markets wires optional marketplace providers. The manager can install a
+	// server from a market by resolving its package into a ServerConfig and
+	// adding it as a SourceDB server (Config comes from market but lifecycle is
+	// owned locally once installed).
+	markets *marketplace.Registry
 
 	mu      sync.RWMutex
 	servers map[string]*managedServer
@@ -75,9 +82,85 @@ func NewManager(registry *tool.Registry, repo Repository) *Manager {
 		registry:  registry,
 		loader:    NewLoader(registry),
 		repo:      repo,
+		markets:   marketplace.NewRegistry(),
 		servers:   make(map[string]*managedServer),
 		staticIDs: make(map[string]struct{}),
 	}
+}
+
+// RegisterMarket registers a marketplace provider.
+//
+// Static market providers are typically registered at startup; runtime
+// discovery of new markets can be added later by Phase 7 adapters.
+func (m *Manager) RegisterMarket(p marketplace.Provider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.markets.Register(p)
+}
+
+// Markets returns a snapshot of registered market providers.
+func (m *Manager) Markets() []marketplace.Provider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.markets.List()
+}
+
+// GetMarket returns a registered market provider by name.
+func (m *Manager) GetMarket(name string) (marketplace.Provider, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.markets.Get(name)
+}
+
+// InstallFromMarket resolves a package from the named market and adds it as a
+// managed server. If enabled, the server is connected immediately.
+//
+// Installed market servers are persisted with SourceDB but remember their origin
+// via the "market" key in event data. The original package ID becomes the
+// ManagedServer.ID.
+func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID string) (ManagedServer, error) {
+	m.mu.RLock()
+	provider, ok := m.markets.Get(marketName)
+	m.mu.RUnlock()
+	if !ok {
+		return ManagedServer{}, fmt.Errorf("market not found: %s", marketName)
+	}
+
+	pkg, err := provider.GetServer(ctx, pkgID)
+	if err != nil {
+		return ManagedServer{}, fmt.Errorf("lookup %s/%s: %w", marketName, pkgID, err)
+	}
+
+	resolver, ok := provider.(marketplace.ConfigResolver)
+	if !ok {
+		return ManagedServer{}, fmt.Errorf("market %s does not support installation", marketName)
+	}
+
+	cfg, err := resolver.ResolveConfig(ctx, pkgID)
+	if err != nil {
+		return ManagedServer{}, fmt.Errorf("resolve %s/%s: %w", marketName, pkgID, err)
+	}
+
+	ms := ManagedServer{
+		ID:      pkgID,
+		Source:  SourceMarket,
+		Enabled: cfg.Enabled,
+		Config: ServerConfig{
+			Name:        pkg.Name,
+			Transport:   cfg.Transport,
+			Command:     cfg.Command,
+			Args:        cfg.Args,
+			Endpoint:    cfg.Endpoint,
+			Environment: cfg.Environment,
+			Enabled:     cfg.Enabled,
+		},
+	}
+
+	if err := m.AddServer(ctx, ms); err != nil {
+		return ManagedServer{}, fmt.Errorf("add %s/%s: %w", marketName, pkgID, err)
+	}
+
+	return m.GetServer(pkgID)
 }
 
 // SetChangeNotifier registers a callback invoked after any server load/unload.

@@ -28,6 +28,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 	"github.com/anmingwei/multi-agent-platform/internal/version"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
