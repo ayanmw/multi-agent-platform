@@ -43,6 +43,20 @@ go run ./cmd/server
 curl -X POST http://localhost:8080/api/mcp/servers \
   -H 'Content-Type: application/json' \
   -d '{"id":"remote-time","config":{"name":"remote-time","transport":"sse","endpoint":"http://localhost:3001/sse"},"enabled":true}'
+
+# 方式五：从远程 marketplace 安装
+# 启动时通过 MCP_MARKETS 注册任意 JSON catalog URL，例如自建的 npm registry、GitHub releases、OpenCode 等
+export MCP_MARKETS='[
+  {"name":"opencode","url":"https://example.com/opencode-mcp-catalog.json"}
+]'
+go run ./cmd/server
+
+# 列出所有已注册市场
+curl http://localhost:8080/api/mcp/markets
+# 查看远程市场的包
+curl http://localhost:8080/api/mcp/markets/opencode/servers
+# 安装远程包
+curl -X POST http://localhost:8080/api/mcp/markets/opencode/servers/remote-time/install
 ```
 
 接入的 MCP Server 及其工具在前端 **MCP Server 管理** 弹窗中可视化：🔄 刷新列表、🏪 从市场安装、➕ 手动添加，以及启用/禁用/删除动态 Server。安装自市场的 Server 会持久化到 `mcp_servers` 表，重启后仍保留。

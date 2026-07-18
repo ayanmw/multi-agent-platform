@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-18
-> **Current version**: v0.7.3 Alpha (MCP support + SSE transport)
+> **Current version**: v0.7.4 Alpha (MCP SSE transport + remote marketplace)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -587,3 +587,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.1 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program + mcp/web_search 占位 |
 | v0.7.2 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 + MCP 市场 Provider（default static market）+ 前端市场安装入口 |
 | v0.7.3 Alpha | 2026-07-18 | MCP SSE transport: `internal/tool/mcp/sse_transport.go` + endpoint handshake + JSON-RPC over SSE + Manager/REST/前端 create dialog 已支持 `sse` transport |
+| v0.7.4 Alpha | 2026-07-18 | MCP 远程 marketplace: 新增 `URLProvider` 从 HTTP URL 拉取 JSON catalog + `MCP_MARKETS` 环境变量注册 + Manager 自动加载远程市场 + 示例与测试 |

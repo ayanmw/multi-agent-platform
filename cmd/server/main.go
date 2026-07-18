@@ -544,6 +544,21 @@ func main() {
 	} else {
 		observability.DefaultLogger.Warn("mcp", "failed to load default static market", map[string]any{"error": err.Error()})
 	}
+
+	// Register remote MCP markets configured via MCP_MARKETS.
+	for _, m := range cfg.MCPMarkets {
+		if m.URL == "" {
+			observability.DefaultLogger.Warn("mcp", "skipping remote market with empty URL", map[string]any{"name": m.Name})
+			continue
+		}
+		provider, err := marketplace.NewURLProvider(m.URL, m.Name)
+		if err != nil {
+			observability.DefaultLogger.Warn("mcp", "failed to load remote market", map[string]any{"name": m.Name, "url": m.URL, "error": err.Error()})
+			continue
+		}
+		mcpManager.RegisterMarket(provider)
+		log.Printf("MCP marketplace: registered remote %s (%s) from %s", provider.Name(), provider.DisplayName(), m.URL)
+	}
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mcpCancel()
 	if err := mcpManager.LoadStaticServers(mcpCtx, cfg.MCPServers); err != nil {
