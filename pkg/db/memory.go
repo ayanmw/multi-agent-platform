@@ -88,6 +88,10 @@ type MemoryLinkRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// PostInsertMemoryHook is called by InsertMemory after a successful insert.
+// It is set externally by cmd/server/main.go to wire the MemoryIndexer.
+var PostInsertMemoryHook func(memoryID, content string)
+
 // InsertMemory creates a new memory record.
 // All fields are written directly; the caller is responsible for setting
 // defaults (tier, status, confidence) before calling.
@@ -108,7 +112,13 @@ func InsertMemory(record MemoryRecord) error {
 		record.AccessCount, record.LastAccessed, record.LastReviewed,
 		record.CreatedAt, record.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if PostInsertMemoryHook != nil {
+		PostInsertMemoryHook(record.ID, record.Content)
+	}
+	return nil
 }
 
 // QueryMemoriesByProject returns all memory records for a given project,

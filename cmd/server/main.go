@@ -379,6 +379,15 @@ func main() {
 	}
 	memRecall := harness.NewMemoryRecallWithVectorStore(memDB, embedProvider, vectorStore)
 
+	// Incremental memory indexer: embed new memories as they are created
+	// instead of rebuilding the whole index at startup.
+	memoryIndexer := memory.NewMemoryIndexer(vectorStore, embedProvider, memory.MemoryIndexerOptions{DedupeThreshold: 0.95})
+	db.PostInsertMemoryHook = func(memoryID, content string) {
+		if err := memoryIndexer.OnMemoryCreated(memoryID, content); err != nil {
+			observability.DefaultLogger.Warn("memory-indexer", "failed to index memory", map[string]any{"memory_id": memoryID, "error": err.Error()})
+		}
+	}
+
 	// Build the vector index from existing memories (best-effort — failures
 	// only degrade recall quality, they do not break startup).
 	if err := memRecall.BuildVectorIndex(); err != nil {
