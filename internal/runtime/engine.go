@@ -1358,7 +1358,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		toolDefs = append(toolDefs, llm.ToolDef{
 			Type: "function",
 			Function: llm.FunctionDefinition{
-				Name:        t.Name(),
+				Name:        t.FullName(),
 				Description: t.Description(),
 				Parameters:  t.Parameters(),
 			},
