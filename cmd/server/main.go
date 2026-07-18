@@ -567,28 +567,47 @@ func main() {
 	}
 	tool.RegisterBuiltinsWithDispatcherAndLeaderTools(toolRegistry, dispatcher, leaderDispatchEnabled.Load, resolveApproval)
 
-	// Phase web_search: wire real search config from environment if any provider
-	// is enabled. Unregister the placeholder core/web_search first so the
-	// configured version replaces it cleanly.
+	// Phase web_search: always replace the placeholder core/web_search with the
+	// configured instance. DuckDuckGo acts as the zero-API-key fallback, so the
+	// tool is useful even when no API provider is configured.
 	webSearchCfg := tool.WebSearchConfig{
-		Provider:       cfg.WebSearchProvider,
-		EnableExa:      cfg.WebSearchEnableExa,
-		EnableParallel: cfg.WebSearchEnableParallel,
-		ExaAPIKey:      cfg.WebSearchExaAPIKey,
-		ParallelAPIKey: cfg.WebSearchParallelAPIKey,
-		UserAgent:      fmt.Sprintf("multi-agent-platform/%s", version.Version),
+		Provider:        cfg.WebSearchProvider,
+		DisableDDG:      cfg.WebSearchDisableDDG,
+		EnableExa:       cfg.WebSearchEnableExa,
+		EnableParallel:  cfg.WebSearchEnableParallel,
+		ExaAPIKey:       cfg.WebSearchExaAPIKey,
+		ParallelAPIKey:  cfg.WebSearchParallelAPIKey,
+		EnableBing:      cfg.WebSearchEnableBing,
+		BingAPIKey:      cfg.WebSearchBingAPIKey,
+		BingEndpoint:    cfg.WebSearchBingEndpoint,
+		EnableGoogle:    cfg.WebSearchEnableGoogle,
+		GoogleAPIKey:    cfg.WebSearchGoogleAPIKey,
+		GoogleCX:        cfg.WebSearchGoogleCX,
+		GoogleEndpoint:  cfg.WebSearchGoogleEndpoint,
+		EnableTavily:    cfg.WebSearchEnableTavily,
+		TavilyAPIKey:    cfg.WebSearchTavilyAPIKey,
+		TavilyEndpoint:  cfg.WebSearchTavilyEndpoint,
+		TavilySearchDepth: cfg.WebSearchTavilySearchDepth,
+		TavilyIncludeAnswer: cfg.WebSearchTavilyIncludeAnswer,
+		EnableBrave:     cfg.WebSearchEnableBrave,
+		BraveAPIKey:     cfg.WebSearchBraveAPIKey,
+		BraveEndpoint:   cfg.WebSearchBraveEndpoint,
+		EnableKimiSearch: cfg.WebSearchEnableKimiSearch,
+		EnableGlmSearch: cfg.WebSearchEnableGlmSearch,
+		UserAgent:       fmt.Sprintf("multi-agent-platform/%s", version.Version),
 	}
-	if webSearchCfg.Provider != "" || webSearchCfg.EnableExa || webSearchCfg.EnableParallel || webSearchCfg.ExaAPIKey != "" || webSearchCfg.ParallelAPIKey != "" {
-		toolRegistry.Unregister("core/web_search")
-		toolRegistry.Register(tool.NewWebSearchTool(webSearchCfg))
-		observability.DefaultLogger.Info("web_search", "provider configured", map[string]any{
-			"provider":        webSearchCfg.Provider,
-			"enable_exa":      webSearchCfg.EnableExa,
-			"enable_parallel": webSearchCfg.EnableParallel,
-		})
-	} else {
-		observability.DefaultLogger.Info("web_search", "not configured; using placeholder", nil)
-	}
+	toolRegistry.Unregister("core/web_search")
+	toolRegistry.Register(tool.NewWebSearchTool(webSearchCfg))
+	observability.DefaultLogger.Info("web_search", "tool wired", map[string]any{
+		"provider":        webSearchCfg.Provider,
+		"enable_exa":      webSearchCfg.EnableExa,
+		"enable_parallel": webSearchCfg.EnableParallel,
+		"enable_bing":     webSearchCfg.EnableBing,
+		"enable_google":   webSearchCfg.EnableGoogle,
+		"enable_tavily":   webSearchCfg.EnableTavily,
+		"enable_brave":    webSearchCfg.EnableBrave,
+		"fallback":        "duckduckgo",
+	})
 
 	// Phase MCP: initialize MCP manager and load static + persisted servers.
 	// Static configuration comes from MCP_SERVERS; dynamic servers live in the
