@@ -1006,6 +1006,9 @@ func main() {
 	http.HandleFunc("/api/audit", handleAudit)
 	http.HandleFunc("/api/traces", handleTraces)
 	http.HandleFunc("/api/replay/tasks/", handleReplay)
+	http.HandleFunc("/api/replay/events", func(w http.ResponseWriter, r *http.Request) {
+		handleReplayEvents(w, r, hub)
+	})
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
