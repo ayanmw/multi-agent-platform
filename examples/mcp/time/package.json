@@ -1,0 +1,13 @@
+{
+  "name": "@multi-agent-platform/mcp-time",
+  "version": "1.0.0",
+  "description": "Simple MCP server example that returns the current time",
+  "main": "mcp-time-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node mcp-time-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

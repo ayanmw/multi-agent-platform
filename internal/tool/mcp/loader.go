@@ -100,6 +100,17 @@ func (l *Loader) load(ctx context.Context, cfg ServerConfig, tr Transport) error
     return nil
 }
 
+// LoadedServerNames returns the names of currently loaded MCP servers.
+func (l *Loader) LoadedServerNames() []string {
+    l.mu.RLock()
+    defer l.mu.RUnlock()
+    names := make([]string, 0, len(l.connections))
+    for name := range l.connections {
+        names = append(names, name)
+    }
+    return names
+}
+
 // UnloadServer closes the transport for the named server and removes its
 // proxy tools from the registry.
 func (l *Loader) UnloadServer(name string) error {

@@ -1,0 +1,13 @@
+{
+  "name": "@multi-agent-platform/mcp-calc",
+  "version": "1.0.0",
+  "description": "Simple MCP server example that performs basic arithmetic",
+  "main": "mcp-calc-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node mcp-calc-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

@@ -60,3 +60,31 @@ type ResourceDefinition struct {
     Description string `json:"description,omitempty"`
     MIMEType    string `json:"mimeType,omitempty"`
 }
+
+// Source describes where an MCP server config comes from.
+//
+// It is stored with each persisted server so the manager can load both static
+// configuration and dynamically added servers from the same source of truth.
+type Source string
+
+const (
+    // SourceStatic comes from environment configuration (MCP_SERVERS).
+    SourceStatic Source = "static"
+
+    // SourceDB was added dynamically at runtime and persisted in the database.
+    SourceDB Source = "db"
+
+    // SourceMarket was installed from an external MCP marketplace.
+    // TODO: Phase 6 — wire marketplace adapter into Manager.Install.
+    SourceMarket Source = "market"
+)
+
+// ManagedServer is the persisted/loaded view of one MCP server.
+type ManagedServer struct {
+    ID        string       `json:"id"`
+    Source    Source       `json:"source"`
+    Config    ServerConfig `json:"config"`
+    Enabled   bool         `json:"enabled"`
+    CreatedAt string       `json:"created_at"`
+    UpdatedAt string       `json:"updated_at"`
+}

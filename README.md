@@ -1,10 +1,41 @@
 # Multi-Agent Platform
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.6.6 Alpha**
-> **Phase 状态：0–6 已完成，Phase 7 规划中**
+> **当前版本：v0.7.0 Alpha**
+> **Phase 状态：0–6 已完成，MCP 支持已落地，Phase 7 规划中**
 
 ## 快速开始
+
+### 0. MCP（Model Context Protocol）支持（新增）
+
+平台现在支持接入外部 MCP Server，作为内置工具的扩展：
+
+```bash
+# 方式一：静态配置（启动时加载）
+export MCP_SERVERS='[
+  {"name":"time","transport":"stdio","command":"node","args":["examples/mcp/time/mcp-time-server.js"],"enabled":true},
+  {"name":"calc","transport":"stdio","command":"node","args":["examples/mcp/calc/mcp-calc-server.js"],"enabled":true}
+]'
+go run ./cmd/server
+
+# 方式二：运行时动态 API 增删改查
+# 列出
+curl http://localhost:8080/api/mcp/servers
+
+# 添加
+curl -X POST http://localhost:8080/api/mcp/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"local-time","config":{"name":"local-time","transport":"stdio","command":"node","args":["examples/mcp/time/mcp-time-server.js"]},"enabled":true}'
+
+# 启用 / 禁用 / 删除
+curl -X POST http://localhost:8080/api/mcp/servers/local-time/enable
+curl -X POST http://localhost:8080/api/mcp/servers/local-time/disable
+curl -X DELETE http://localhost:8080/api/mcp/servers/local-time
+```
+
+接入的 MCP 工具在注册表中统一命名为 `mcp__<server>__<tool>`。例如 `time` Server 的 `get_current_time` 工具对 Agent 可见为 `mcp__time__get_current_time`。静态配置加载的 Server 不可通过 API 删除。
+
+---
 
 ### 1. 配置
 
@@ -81,12 +112,13 @@ curl -X POST http://localhost:8080/api/tasks \
 ```
 cmd/
   server/                  # 服务入口：HTTP Server + API 路由 + WS Hub
+  server/mcp_api.go        # MCP Server 管理 REST API（新增）
   e2e-test/                # 端到端测试工具（WebSocket 事件着色打印）
 internal/
   agent/                   # Agent 类型定义
   auth/                    # API key / 用户 / 角色 / 认证中间件
   cases/                   # 预设 Task Cases
-  config/                  # .env 加载 + 配置管理
+  config/                  # .env 加载 + 配置管理（含 MCP_SERVERS）
   cost/                    # CostTracker + CostBudgetRule
   harness/                 # PolicyChain / TaskContract / ApprovalRule
   llm/                     # LLM Provider 抽象 + OpenAI/Anthropic/DeepSeek 实现
@@ -96,10 +128,11 @@ internal/
   pool/                    # Worker Pool 并发调度
   runtime/                 # ReAct Loop 引擎 + Step 状态机 + 持久化
   tool/                    # Tool 注册表 + 内置工具 + 运行时注册
+  tool/mcp/                # MCP Client / Manager / Repository / 示例（新增）
   version/                 # 版本信息 + go:embed
   ws/                      # WebSocket Hub
 pkg/
-  db/                      # SQLite Schema（16+ 表）、迁移、CRUD
+  db/                      # SQLite Schema（17+ 表）、迁移、CRUD
   event/                   # 统一事件结构 + 序列化
 web/                       # Vue 3 + Vite + TypeScript 前端
 docs/                      # 历史/未来 Markdown 文档
@@ -109,6 +142,7 @@ openspec/                  # OpenSpec 变更产物
 scripts/                   # 测试/发布脚本（smoke-test.sh、smoke-test.ps1）
 data/                      # SQLite 数据库文件
 storage/                   # 文件存储
+examples/mcp/              # MCP Server 示例（time / calc）
 ```
 
 ## 架构概览
@@ -128,15 +162,16 @@ storage/                   # 文件存储
 
 ## 当前状态
 
-**v0.6.4 Alpha** — Phases 0–6 已完成，Phase 7 规划中。
+**v0.7.0 Alpha** — Phases 0–6 已完成，MCP 支持已落地，Phase 7 规划中。
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | WebSocket 实时通信 | ✅ | gorilla/websocket，事件驱动，多客户端广播 |
 | ReAct Loop 引擎 | ✅ | think → tool_call → observe，支持 max_steps / timeout |
 | 内置工具 | ✅ | run_shell、write_file、read_file + 运行时注册 |
+| MCP 工具扩展 | ✅ | stdio transport + Manager 生命周期 + 动态 API（新增） |
 | 工具沙箱 | ✅ | Docker 安全隔离 run_shell |
-| DB 持久化 | ✅ | modernc.org/sqlite，16+ 表，迁移 v14+ |
+| DB 持久化 | ✅ | modernc.org/sqlite，17+ 表，迁移 v14+ |
 | Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket |
 | Session / Project | ✅ | multi-turn chat，Project 分组，Session 历史 |
 | 多 Agent 并发 | ✅ | 并行派发，前端多树渲染 |
