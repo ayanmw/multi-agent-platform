@@ -915,7 +915,10 @@ func main() {
 			}
 
 			taskID := newTaskID()
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+			// Phase 7-C: create a root trace context for this task and propagate to the engine.
+			rootTraceCtx := tracer.StartRoot(taskID, "task")
+			traceRegistry.Store(taskID, rootTraceCtx)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1503,8 +1506,8 @@ func main() {
 // when LLM_USE_MOCK is false or when the request does not target a preset case.
 // modelRouter/routerProviders activate the Phase 6 Router in the Engine; pass nil
 // to fall back to the legacy single-model path.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx...)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
@@ -1515,7 +1518,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // exact case match; when empty the provider falls back to keyword matching.
 // modelRouter is the optional Phase 6 Router; when non-nil (with routerProviders)
 // the Engine classifies intent and selects a model tier before each LLM call.
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
 	isRoot := turnIndex == 0
 
 	// Persist task creation
@@ -1696,6 +1699,21 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 			})
 		},
 		SubTaskID: taskID,
+		// Phase 7-C: wire tracer, root context, and latency recorders into the engine.
+		Tracer: tracer,
+		RootTraceCtx: func() *observability.TraceContext {
+			if len(rootTraceCtx) > 0 {
+				return rootTraceCtx[0]
+			}
+			// Fallback: create a fresh root context if caller didn't provide one (e.g. tests / recovery).
+			return tracer.StartRoot(taskID, "task")
+		}(),
+		LLMLatencyRecorder: func(latency time.Duration) {
+			observability.DefaultMetrics.RecordLLMLatency(latency)
+		},
+		ToolLatencyRecorder: func(latency time.Duration) {
+			observability.DefaultMetrics.RecordToolLatency(latency)
+		},
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

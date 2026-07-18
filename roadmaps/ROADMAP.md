@@ -537,11 +537,11 @@ const activeTaskId = ref<string | null>(null)
 - [x] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
 
 ### 7-C 深度可观测
-- [ ] OpenTelemetry trace: 跨 Agent / Tool / LLM 调用链路 span
-- [ ] Prometheus SDK 替换手写 metrics，增加延迟直方图
-- [ ] 审计日志: 所有写操作记录 actor / target / before / after
-- [ ] 多 Agent 协作 trace 树可视化（前端复用 AgentTree）
-- [ ] 事件回放: 基于 SQLite 事件流重建任务执行过程
+- [x] OpenTelemetry trace: 跨 Agent / Tool / LLM 调用链路 span (dependency-free Tracer)
+- [x] Prometheus 延迟直方图: `llm_latency_ms`, `tool_latency_ms` 添加至 `/metrics`
+- [x] 审计日志: 写操作记录 actor / target / before / after，SQLite 持久化
+- [x] 多 Agent trace 树可视化: 前端 `TraceTreePanel.vue`
+- [x] 事件回放: `/api/replay/tasks/{task_id}` 从 steps + conversations 重建
 
 ### 7-D Harness 治理与合规
 - [ ] 成本预算硬限制: 触发阈值自动暂停 + 告警（强化 CostBudgetRule）
@@ -583,6 +583,6 @@ const activeTaskId = ref<string | null>(null)
 | v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
 | v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
 | v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
-<<<<<<< HEAD
 | v0.7.1 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 |
 | v0.7.2 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program、core/web_search (Exa/Parallel) + approval 元数据 + sandbox runner 预览 |
+| v0.7.3 Alpha | 2026-07-18 | Phase 7-C 深度可观测: dependency-free trace span + 审计日志 SQLite + LLM/tool 延迟直方图 + `/api/audit`/`/api/traces`/`/api/replay` 端点 + 前端 TraceTreePanel 可视化 + 事件回放 |
