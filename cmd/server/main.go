@@ -27,6 +27,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 	"github.com/anmingwei/multi-agent-platform/internal/version"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
@@ -498,6 +499,28 @@ func main() {
 	// Initialize tool registry with built-in tools
 	toolRegistry := tool.NewRegistry()
 	tool.RegisterBuiltins(toolRegistry)
+
+	// Phase MCP: initialize MCP manager and load static + persisted servers.
+	// Static configuration comes from MCP_SERVERS; dynamic servers live in the
+	// mcp_servers table and survive process restarts. Future marketplace installs
+	// will reuse the same manager and persistence layer.
+	mcpManager := mcp.NewManager(toolRegistry, mcp.DefaultRepository())
+	mcpManager.SetChangeNotifier(func() {
+		hub.SendEvent(event.NewEvent(event.EventMcpToolsChanged, "", "server", 0, map[string]any{
+			"server_count": len(mcpManager.ListServers()),
+			"tool_count":   len(toolRegistry.List()),
+		}))
+	})
+	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer mcpCancel()
+	if err := mcpManager.LoadStaticServers(mcpCtx, cfg.MCPServers); err != nil {
+		observability.DefaultLogger.Warn("mcp", "failed to load static servers", map[string]any{"error": err.Error()})
+	}
+	if err := mcpManager.LoadDBServers(mcpCtx); err != nil {
+		observability.DefaultLogger.Warn("mcp", "failed to load db servers", map[string]any{"error": err.Error()})
+	}
+	log.Printf("MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
+	defer mcpManager.Close()
 
 	// Phase 5: Docker sandbox for run_shell tool.
 	// Check Docker availability at startup. If available, wrap the run_shell tool
@@ -1072,6 +1095,9 @@ func main() {
 	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
 		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
 	})
+
+	// MCP management API: dynamic add, enable, disable, remove.
+	registerMCPRoutes(http.DefaultServeMux, mcpManager)
 
 	// Dynamic Tool Registration API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {

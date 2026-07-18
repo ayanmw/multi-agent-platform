@@ -43,6 +43,8 @@ export type EventType =
   | 'task_evaluated'
   // Context window observability
   | 'context_window_snapshot'
+  // MCP tooling changes (Phase 6-G+)
+  | 'mcp_tools_changed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

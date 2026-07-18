@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 )
 
 // Config holds application configuration loaded from environment and .env
@@ -30,6 +32,10 @@ type Config struct {
 	LLMUseMock      bool     // global default: true → mock, false → real
 	LLMRealCases    []string // case IDs that always use real providers (comma-separated from LLM_REAL_CASES)
 	LLMMockEndpoints []string // case IDs or endpoint hints that always use mock (comma-separated from LLM_MOCK_ENDPOINTS)
+
+	// MCPServers lists statically configured MCP servers loaded from MCP_SERVERS.
+	// Dynamic servers added at runtime are loaded separately by the MCP manager.
+	MCPServers []mcp.ServerConfig
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -88,7 +94,33 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load multi-model config: %w", err)
 	}
 
+	// Load static MCP server configuration
+	if err := cfg.LoadMCPConfig(); err != nil {
+		return nil, fmt.Errorf("load mcp config: %w", err)
+	}
+
 	return cfg, nil
+}
+
+// LoadMCPConfig loads static MCP server configuration from the MCP_SERVERS
+// environment variable. The value must be a JSON array of mcp.ServerConfig objects.
+//
+// Example:
+//   MCP_SERVERS=[{"name":"time","transport":"stdio","command":"node","args":["mcp/time.js"],"enabled":true}]
+//
+// Disabled servers are kept in the list but skipped by the MCP manager; this allows
+// configuration files to declare servers that are off by default.
+func (cfg *Config) LoadMCPConfig() error {
+	jsonStr := os.Getenv("MCP_SERVERS")
+	if jsonStr == "" {
+		return nil
+	}
+	var servers []mcp.ServerConfig
+	if err := json.Unmarshal([]byte(jsonStr), &servers); err != nil {
+		return fmt.Errorf("parse MCP_SERVERS JSON: %w", err)
+	}
+	cfg.MCPServers = servers
+	return nil
 }
 
 // loadEnvFile parses a simple KEY=VALUE .env file (no quotes, no interpolation)

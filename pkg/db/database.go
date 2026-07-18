@@ -257,6 +257,30 @@ func createTables() error {
 		}
 	}
 
+	// MCP servers: dynamic + marketplace server configuration persistence
+	mcpSchemas := []string{
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL DEFAULT 'db',
+			name TEXT NOT NULL,
+			transport TEXT NOT NULL DEFAULT 'stdio',
+			command TEXT,
+			args JSON DEFAULT '[]',
+			endpoint TEXT,
+			environment JSON DEFAULT '{}',
+			enabled BOOLEAN DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_mcp_servers_source ON mcp_servers(source)`,
+	}
+	for _, schema := range mcpSchemas {
+		if _, err := DB.Exec(schema); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

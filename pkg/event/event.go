@@ -21,6 +21,11 @@ const (
 	// run the AcceptanceEvaluator against the case contract. It carries passed,
 	// score, reason, and the full evaluation report.
 	EventTaskEvaluated = "task_evaluated"
+
+	// EventMcpToolsChanged is broadcast whenever the set of MCP proxy tools in the
+	// registry changes (server loaded/unloaded/enabled/disabled). Frontend should
+	// refresh its tool list / available tool definitions when receiving it.
+	EventMcpToolsChanged = "mcp_tools_changed"
 )
 
 // Event represents a structured event sent over WebSocket
