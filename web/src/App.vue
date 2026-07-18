@@ -48,6 +48,7 @@ import KeyboardTips from './components/KeyboardTips.vue'
 import ApprovalDialog from './components/ApprovalDialog.vue'
 import RecentModsDialog from './components/RecentModsDialog.vue'
 import ModelPricesDialog from './components/ModelPricesDialog.vue'
+import MCPServerDialog from './components/MCPServerDialog.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
@@ -112,6 +113,9 @@ const recentModsVisible = ref(false)
 // === 模型价格管理 Dialog 状态 ===
 // 由顶部 header 的 💲 按钮触发，与"最近修改"共用 overlay/Teleport 模式。
 const modelPricesVisible = ref(false)
+
+// === MCP Server 管理 Dialog 状态 ===
+const mcpServerDialogVisible = ref(false)
 
 const {
   items: recentMods,
@@ -1302,6 +1306,7 @@ function formatShortTime(ts: number): string {
           <div class="app-header-right">
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
+            <button class="recent-mods-btn" @click="mcpServerDialogVisible = true" title="MCP Server 管理">🔌</button>
             <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
             <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>
             <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
@@ -1510,6 +1515,12 @@ function formatShortTime(ts: number): string {
       <ModelPricesDialog
         :visible="modelPricesVisible"
         @update:visible="modelPricesVisible = $event"
+      />
+
+      <!-- MCP Server 管理 Dialog: 列出 / 添加 / 启用 / 禁用 / 删除外部 MCP Server -->
+      <MCPServerDialog
+        :visible="mcpServerDialogVisible"
+        @update:visible="mcpServerDialogVisible = $event"
       />
     </main>
   </div>

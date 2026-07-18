@@ -38,11 +38,11 @@ func registerMCPRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 
 		// POST /api/mcp/servers/:id/enable or /disable
 		if r.Method == http.MethodPost {
-			if suffix, ok := strings.CutSuffix(id, "/enable"); ok {
+			if suffix, ok := strings.CutSuffix(path, "/enable"); ok {
 				handleEnableMCPServer(w, r, mgr, suffix)
 				return
 			}
-			if suffix, ok := strings.CutSuffix(id, "/disable"); ok {
+			if suffix, ok := strings.CutSuffix(path, "/disable"); ok {
 				handleDisableMCPServer(w, r, mgr, suffix)
 				return
 			}

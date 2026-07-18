@@ -10,6 +10,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
+// ChangeNotifier is called after the set of loaded MCP servers (and therefore
+// the set of registered proxy tools) changes. It is used by cmd/server to
+// broadcast an mcp_tools_changed WebSocket event so the frontend can refresh
+// available tools.
+type ChangeNotifier func()
+
 // Manager owns the lifecycle of all configured and dynamically added MCP servers.
 //
 // It is the single integration point between static configuration, runtime API
@@ -33,6 +39,10 @@ type Manager struct {
 	// can still be enabled/disabled at runtime, but their config is reloaded
 	// on the next process restart.
 	staticIDs map[string]struct{}
+
+	// onChange is invoked whenever a server is connected or disconnected so the
+	// platform can broadcast an mcp_tools_changed event to WebSocket clients.
+	onChange ChangeNotifier
 }
 
 // managedServer is the in-memory runtime state of one loaded MCP server.
@@ -67,6 +77,24 @@ func NewManager(registry *tool.Registry, repo Repository) *Manager {
 		repo:      repo,
 		servers:   make(map[string]*managedServer),
 		staticIDs: make(map[string]struct{}),
+	}
+}
+
+// SetChangeNotifier registers a callback invoked after any server load/unload.
+// It is typically called once by cmd/server after the WebSocket hub is ready.
+func (m *Manager) SetChangeNotifier(fn ChangeNotifier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = fn
+}
+
+// notifyChange invokes the registered change notifier, if any.
+func (m *Manager) notifyChange() {
+	m.mu.RLock()
+	fn := m.onChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -255,7 +283,16 @@ func (m *Manager) DisableServer(ctx context.Context, id string) error {
 // without changing its enabled/disabled state.
 func (m *Manager) DisconnectServer(ctx context.Context, id string) error {
 	_ = ctx
-	return m.loader.UnloadServer(id)
+	err := m.loader.UnloadServer(id)
+	if err == nil {
+		m.mu.Lock()
+		if s, ok := m.servers[id]; ok {
+			s.loaded = false
+		}
+		m.mu.Unlock()
+		m.notifyChange()
+	}
+	return err
 }
 
 // ListServers returns the current state of all known servers.
@@ -312,6 +349,7 @@ func (m *Manager) connect(ctx context.Context, ms ManagedServer) error {
 		s.loadErr = nil
 	}
 	m.mu.Unlock()
+	m.notifyChange()
 	return nil
 }
 

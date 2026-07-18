@@ -505,6 +505,12 @@ func main() {
 	// mcp_servers table and survive process restarts. Future marketplace installs
 	// will reuse the same manager and persistence layer.
 	mcpManager := mcp.NewManager(toolRegistry, mcp.DefaultRepository())
+	mcpManager.SetChangeNotifier(func() {
+		hub.SendEvent(event.NewEvent(event.EventMcpToolsChanged, "", "server", 0, map[string]any{
+			"server_count": len(mcpManager.ListServers()),
+			"tool_count":   len(toolRegistry.List()),
+		}))
+	})
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mcpCancel()
 	if err := mcpManager.LoadStaticServers(mcpCtx, cfg.MCPServers); err != nil {
