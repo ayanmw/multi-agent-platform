@@ -35,13 +35,12 @@ func (p *DBPersistence) UpdateTaskDuration(taskID string, durationMs int) error 
 	return db.UpdateTaskDuration(taskID, durationMs)
 }
 
-// newTaskID returns a human-readable, roughly time-ordered task identifier.
-// The suffix is milliseconds within the current second so that rapid task
-// creation (multi-agent fan-out, quick UI clicks, root + child tasks) does not
-// collide within the same second.
+// newTaskID returns a human-readable, time-ordered task identifier.
+// It combines a timestamp prefix with the first 8 characters of a UUID so that
+// concurrent task creation (multi-agent fan-out, quick UI clicks, root + child
+// tasks) never collides.
 func newTaskID() string {
-	now := time.Now()
-	return "task_" + now.Format("20060102150405") + fmt.Sprintf("%03d", now.Nanosecond()/1_000_000)
+	return "task_" + time.Now().Format("20060102150405") + "_" + uuid.New().String()[:8]
 }
 
 func (p *DBPersistence) SaveStep(s runtime.StepRecord) error {
