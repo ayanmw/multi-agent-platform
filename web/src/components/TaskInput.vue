@@ -11,6 +11,7 @@
        resume: user clicked resume
        cancel: user clicked cancel
        update:enableMultiAgent: toggled multi-agent mode
+       openWorkflowEditor: user clicked workflow editor button
 -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -50,6 +51,7 @@ const emit = defineEmits<{
   cancel: []
   toggleContextWindow: []
   'update:enableMultiAgent': [value: boolean]
+  openWorkflowEditor: []
 }>()
 
 const inputText = ref('')
@@ -166,6 +168,14 @@ function setTimeoutSeconds(seconds: number) {
         @click="emit('update:enableMultiAgent', !props.enableMultiAgent)"
       >
         🤖 Multi-Agent
+      </button>
+      <button
+        v-if="props.enableMultiAgent"
+        class="options-toggle"
+        title="Configure multi-agent workflow"
+        @click="emit('openWorkflowEditor')"
+      >
+        🛠 Workflow
       </button>
       <span v-if="!showOptions" class="options-summary">
         Max steps: {{ maxSteps }} · Timeout: {{ timeoutSeconds === 0 ? 'Unlimited' : (timeoutSeconds / 60) + ' min' }}

@@ -22,6 +22,14 @@ const props = defineProps<{
   isDefaultExpanded: boolean
   /** Forwarded from App.vue: controls all AgentTree step expansion */
   expandAll?: boolean
+  /** Show per-agent control buttons (Phase 7-F) */
+  showAgentControls?: boolean
+}>()
+
+const emit = defineEmits<{
+  cancelAgent: [agentId: string]
+  pauseAgent: [agentId: string]
+  resumeAgent: [agentId: string]
 }>()
 
 const expanded = ref(props.isDefaultExpanded)
@@ -198,7 +206,15 @@ const turnDuration = computed(() => {
 
       <!-- Agent Trees -->
       <div v-for="agent in Object.values(task.agents)" :key="agent.id" class="turn-agent-tree">
-        <AgentTree :agent="agent" :is-running="task.status === 'running'" :expand-all="expandAll" />
+        <AgentTree
+          :agent="agent"
+          :is-running="task.status === 'running'"
+          :expand-all="expandAll"
+          :show-controls="showAgentControls"
+          @cancel="emit('cancelAgent', $event)"
+          @pause="emit('pauseAgent', $event)"
+          @resume="emit('resumeAgent', $event)"
+        />
       </div>
 
       <!-- AgentBus collaboration messages -->

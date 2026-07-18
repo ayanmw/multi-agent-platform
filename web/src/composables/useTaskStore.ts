@@ -715,7 +715,7 @@ export function useTaskStore() {
   /** Start a multi-agent task via /api/multi-agent. */
   async function startMultiAgentTask(
     input: string,
-    options: { caseType?: string; sessionId?: string; timeoutSeconds?: number } = {}
+    options: { caseType?: string; sessionId?: string; timeoutSeconds?: number; agents?: any[] } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
@@ -725,15 +725,20 @@ export function useTaskStore() {
     }, 15000)
 
     try {
+      const body: Record<string, unknown> = {
+        input,
+        action: 'multi-agent',
+        case_type: options.caseType || '',
+        session_id: options.sessionId || '',
+        timeout_seconds: options.timeoutSeconds ?? 0,
+      }
+      if (options.agents && options.agents.length > 0) {
+        body.agents = options.agents
+      }
       const resp = await fetch('/api/multi-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input,
-          case_type: options.caseType || '',
-          session_id: options.sessionId || '',
-          timeout_seconds: options.timeoutSeconds ?? 0,
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!resp.ok) {
@@ -995,36 +1000,36 @@ export function useTaskStore() {
     })
   }
 
-  /** Pause the active task */
-  function pauseTask() {
+  /** Pause the active task or a specific agent */
+  function pauseTask(agentId?: string) {
     if (!activeTaskId.value) return
     const task = taskCache.value[activeTaskId.value]
     if (!task) return
-    const agents = Object.keys(task.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'pause', task_id: task.id, agent_id: agentId })
+    const agents = agentId ? [agentId] : Object.keys(task.agents)
+    for (const id of agents) {
+      sendControl({ action: 'pause', task_id: task.id, agent_id: id })
     }
   }
 
-  /** Resume the active task */
-  function resumeTask() {
+  /** Resume the active task or a specific agent */
+  function resumeTask(agentId?: string) {
     if (!activeTaskId.value) return
     const task = taskCache.value[activeTaskId.value]
     if (!task) return
-    const agents = Object.keys(task.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'resume', task_id: task.id, agent_id: agentId })
+    const agents = agentId ? [agentId] : Object.keys(task.agents)
+    for (const id of agents) {
+      sendControl({ action: 'resume', task_id: task.id, agent_id: id })
     }
   }
 
-  /** Cancel the active task */
-  function cancelTask() {
+  /** Cancel the active task or a specific agent */
+  function cancelTask(agentId?: string) {
     if (!activeTaskId.value) return
     const task = taskCache.value[activeTaskId.value]
     if (!task) return
-    const agents = Object.keys(task.agents)
-    for (const agentId of agents) {
-      sendControl({ action: 'cancel', task_id: task.id, agent_id: agentId })
+    const agents = agentId ? [agentId] : Object.keys(task.agents)
+    for (const id of agents) {
+      sendControl({ action: 'cancel', task_id: task.id, agent_id: id })
     }
   }
 
