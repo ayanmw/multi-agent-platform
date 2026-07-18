@@ -126,6 +126,7 @@ type MemoryRecall struct {
 	db            MemoryDB
 	embedProvider llm.EmbeddingProvider
 	vectorStore   memory.VectorStore
+	ranker        *HybridRanker
 }
 
 // NewMemoryRecall creates a new MemoryRecall backed by the given MemoryDB.
@@ -139,7 +140,12 @@ func NewMemoryRecall(database MemoryDB) *MemoryRecall {
 // NewMemoryRecallWithVectorStore creates a MemoryRecall with vector similarity support.
 // When embedProvider and vectorStore are nil, falls back to keyword-only recall.
 func NewMemoryRecallWithVectorStore(database MemoryDB, embedProvider llm.EmbeddingProvider, vectorStore memory.VectorStore) *MemoryRecall {
-	return &MemoryRecall{db: database, embedProvider: embedProvider, vectorStore: vectorStore}
+	return &MemoryRecall{
+		db:            database,
+		embedProvider: embedProvider,
+		vectorStore:   vectorStore,
+		ranker:        NewHybridRanker(embedProvider, vectorStore, DefaultHybridWeights),
+	}
 }
 
 // BuildWorkingMemory loads layered memories for the given project, session, and
@@ -471,23 +477,12 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 }
 
 // blendVectorScores combines keyword-based and vector-based relevance scores.
-// Weight: 0.3 * keywordScore + 0.7 * cosineSimilarity * 100
+// It delegates to HybridRanker when available.
 func (mr *MemoryRecall) blendVectorScores(content, query string) float64 {
-	kwScore := keywordScore(content, query)
-	if mr.embedProvider == nil || mr.vectorStore == nil {
-		return kwScore
+	if mr.ranker == nil {
+		return keywordScore(content, query)
 	}
-	// Try to get vector similarity
-	queryVec, err := mr.embedProvider.Embed(query)
-	if err != nil {
-		return kwScore
-	}
-	contentVec, err := mr.embedProvider.Embed(content)
-	if err != nil {
-		return kwScore
-	}
-	vecScore := memory.CosineSimilarity(queryVec, contentVec) * 100
-	return 0.3*kwScore + 0.7*vecScore
+	return mr.ranker.Score(content, query)
 }
 
 // stringify converts a float64 to a string with four decimal places.

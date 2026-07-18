@@ -349,6 +349,26 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		SQL: `ALTER TABLE agent_messages ADD COLUMN sub_task_id TEXT DEFAULT '';
 		ALTER TABLE agent_messages ADD COLUMN from_sub_task_id TEXT DEFAULT '';`,
 	},
+
+	// v21: audit_records table for compliance and forensics (Phase 7-C).
+	{
+		Version:     21,
+		Description: "Create audit_records table",
+		SQL: `CREATE TABLE IF NOT EXISTS audit_records (
+			id TEXT PRIMARY KEY,
+			timestamp DATETIME NOT NULL,
+			actor TEXT NOT NULL,
+			action TEXT NOT NULL,
+			target TEXT NOT NULL,
+			before_json TEXT DEFAULT '{}',
+			after_json TEXT DEFAULT '{}',
+			reason TEXT DEFAULT '',
+			ip TEXT DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_actor ON audit_records(actor);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_target ON audit_records(target);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_timestamp ON audit_records(timestamp DESC);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

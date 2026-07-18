@@ -100,6 +100,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
@@ -384,6 +385,25 @@ type EngineConfig struct {
 	// Added in Phase 7-I.
 	SupervisorDecisionHandler ApprovalDelegationHandler
 
+	// Tracer produces dependency-free trace spans for every think/tool/llm step.
+	// When nil, tracing is skipped.
+	Tracer interface {
+		StartRoot(taskID, operation string) *observability.TraceContext
+		StartChild(parent *observability.TraceContext, operation string) *observability.TraceContext
+		Finish(ctx *observability.TraceContext, err error)
+		FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
+	}
+
+	// RootTraceCtx is the root span context for the task. Tracer uses it to
+	// parent all child spans emitted by this engine.
+	RootTraceCtx *observability.TraceContext
+
+	// LLMLatencyRecorder is called after each LLM call with the observed latency.
+	LLMLatencyRecorder func(latency time.Duration)
+
+	// ToolLatencyRecorder is called after each tool execution with the observed latency.
+	ToolLatencyRecorder func(latency time.Duration)
+
 	// OnLLMUsage is an optional callback invoked after every successful LLM call
 	// in the ReAct loop. It receives the actual model selected (which may differ
 	// from cfg.Model when Router is active), the resolved ModelProfile, and the
@@ -477,6 +497,7 @@ type Engine struct {
 	selectedModel     string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
 	lastError         string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
 	consecutiveErrors int                              // how many times the same recoverable error has occurred in a row
+	rootTraceCtx      *observability.TraceContext      // root span context for the task
 
 	// Pause/Resume 控件（Phase 7-A）：让前端可以在不取消 context 的情况下暂停 agent。
 	// paused 是一个 atomic.Bool，Run loop 每轮检查一次；resumeCh 用来唤醒阻塞中的 loop。
@@ -559,6 +580,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		turnIndex:        cfg.TurnIndex,            // turn index within the session
 		caseID:           cfg.CaseID,               // case ID hint for mock script matching
 		taskID:           taskID,
+		rootTraceCtx:     cfg.RootTraceCtx,         // root span context for the task
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -1422,6 +1444,12 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		"type": "think",
 	}))
 
+	// Phase 7-C: start a child trace span for the think step.
+	var traceCtx *observability.TraceContext
+	if e.cfg.Tracer != nil && e.rootTraceCtx != nil {
+		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, "think")
+	}
+
 	// Emit llm_thinking: the UI shows a "Thinking..." indicator. This is sent
 	// BEFORE the HTTP request so the user sees immediate feedback, even if the
 	// LLM API takes several seconds to respond.
@@ -1559,16 +1587,8 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		CaseID:      e.caseID,
 	}
 
-	//// DEBUG: log the full request payload before sending it to the LLM API.
-	//// This is essential for diagnosing 400 BadRequestError responses caused by
-	//// malformed tool call arguments in the conversation history.
-	//if reqDebug, err := json.MarshalIndent(req, "", "  "); err == nil {
-	//	log.Printf("[Engine] think request payload (step=%d, model=%s, messages=%d):\n%s",
-	//		e.stepIdx, selectedModel, len(e.messages), string(reqDebug))
-	//} else {
-	//  log.Printf("[Engine] think request payload marshal failed: %v", err)
-	//}
-
+	// Phase 7-C: measure LLM call latency and record via callback.
+	llmStart := time.Now()
 	// Call the LLM with streaming. The onChunk callback is invoked for each SSE
 	// chunk. Each text delta is forwarded to the frontend as an llm_delta event
 	// so the UI can render tokens in real time (typewriter effect).
@@ -1645,10 +1665,30 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	}
 
 	if err != nil {
+		// Phase 7-C: finish think span with error.
+		if e.cfg.Tracer != nil && traceCtx != nil {
+			e.cfg.Tracer.Finish(traceCtx, err)
+		}
+		if e.cfg.LLMLatencyRecorder != nil {
+			e.cfg.LLMLatencyRecorder(time.Since(llmStart))
+		}
 		// 失败返回前清空 selectedModel，避免 Run loop 里 OnLLMUsage 误用上一次
 		// think 残留的选择（虽然失败分支不会进 OnLLMUsage，但保持状态干净）。
 		e.selectedModel = ""
 		return "", usage, nil, err
+	}
+
+	// Phase 7-C: finish think span with attributes on success.
+	if e.cfg.Tracer != nil && traceCtx != nil {
+		attrs := map[string]any{"model": selectedModel, "provider": e.cfg.Provider}
+		if routeDecision != nil {
+			attrs["intent"] = routeDecision.Intent
+			attrs["tier"] = routeDecision.Tier.String()
+		}
+		e.cfg.Tracer.FinishWithAttributes(traceCtx, nil, attrs)
+	}
+	if e.cfg.LLMLatencyRecorder != nil {
+		e.cfg.LLMLatencyRecorder(time.Since(llmStart))
 	}
 
 	e.bus.SendEvent(event.NewEventWithSubTask("llm_message_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, nil))
@@ -1789,6 +1829,9 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		result, execErr = e.tools.Execute(tc.Function.Name, args)
 	}
 	duration := time.Since(start).Milliseconds()
+	if e.cfg.ToolLatencyRecorder != nil {
+		e.cfg.ToolLatencyRecorder(time.Since(start))
+	}
 
 	if execErr != nil {
 		// === Phase 5: 审批请求处理 ===

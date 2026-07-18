@@ -45,6 +45,8 @@ export type EventType =
   | 'context_window_snapshot'
   // MCP tooling changes (Phase 6-G+)
   | 'mcp_tools_changed'
+  // Trace span events (Phase 7-C)
+  | 'trace_span'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

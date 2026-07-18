@@ -57,6 +57,14 @@ var engineRegistry sync.Map
 // 从而保证即使 tool Registry 共享，worker 也无法越权派发子 agent。
 var leaderDispatchEnabled atomic.Bool
 
+// Package-level process observability state (Phase 7-C).
+var (
+	// tracer is the shared dependency-free trace span collector.
+	tracer = observability.NewTracer(2000)
+	// traceRegistry holds root trace contexts so handlers can pass them into engines.
+	traceRegistry sync.Map
+)
+
 // storeCancel 注册 task/agent 对应的取消函数。
 //
 // 行为说明：
@@ -283,6 +291,9 @@ func main() {
 		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
 	} else {
 		observability.DefaultLogger.Info("database", "initialized", map[string]any{"path": cfg.DBPath})
+		// Phase 7-C: switch default auditor to SQLite-backed persistence now that DB is ready.
+		observability.DefaultAuditor = observability.NewSQLiteAuditor(observability.NewMemoryAuditor(10000))
+
 		var repoErr error
 		costRepo, repoErr = cost.NewSqliteCostRepository(db.DB)
 		if repoErr != nil {
@@ -343,7 +354,35 @@ func main() {
 	// semantic memories. Vector embeddings are persisted to the
 	// memory_embeddings table (v16 migration) so the in-memory index can
 	// be rebuilt at startup via SqliteVectorStore.Reload().
-	embedProvider := llm.NewLocalEmbeddingProvider(2048)
+	var embedProvider llm.EmbeddingProvider = llm.NewLocalEmbeddingProvider(2048)
+	if params := cfg.EmbeddingProviderParams(); params.Provider != "" && params.Provider != "local" {
+		switch params.Provider {
+		case "openai":
+			endpoint := params.Endpoint
+			if endpoint == "" {
+				endpoint = "https://api.openai.com/v1"
+			}
+			model := params.Model
+			if model == "" {
+				model = "text-embedding-3-small"
+			}
+			embedProvider = llm.NewOpenAIEmbeddingProvider(endpoint, params.APIKey, model, params.Dimensions)
+			observability.DefaultLogger.Info("embedding", "using OpenAI embedding provider", map[string]any{"model": model})
+		case "cohere":
+			endpoint := params.Endpoint
+			if endpoint == "" {
+				endpoint = "https://api.cohere.com"
+			}
+			model := params.Model
+			if model == "" {
+				model = "embed-english-v3.0"
+			}
+			embedProvider = llm.NewCohereEmbeddingProvider(endpoint, params.APIKey, model, params.Dimensions)
+			observability.DefaultLogger.Info("embedding", "using Cohere embedding provider", map[string]any{"model": model})
+		default:
+			observability.DefaultLogger.Warn("embedding", "unsupported embedding provider, falling back to local", map[string]any{"provider": params.Provider})
+		}
+	}
 	var vectorStore memory.VectorStore
 	if db.DB != nil {
 		vs, err := memory.NewSqliteVectorStore(db.DB, embedProvider)
@@ -357,6 +396,15 @@ func main() {
 		vectorStore = memory.NewInMemoryVectorStore(embedProvider)
 	}
 	memRecall := harness.NewMemoryRecallWithVectorStore(memDB, embedProvider, vectorStore)
+
+	// Incremental memory indexer: embed new memories as they are created
+	// instead of rebuilding the whole index at startup.
+	memoryIndexer := memory.NewMemoryIndexer(vectorStore, embedProvider, memory.MemoryIndexerOptions{DedupeThreshold: 0.95})
+	db.PostInsertMemoryHook = func(memoryID, content string) {
+		if err := memoryIndexer.OnMemoryCreated(memoryID, content); err != nil {
+			observability.DefaultLogger.Warn("memory-indexer", "failed to index memory", map[string]any{"memory_id": memoryID, "error": err.Error()})
+		}
+	}
 
 	// Build the vector index from existing memories (best-effort — failures
 	// only degrade recall quality, they do not break startup).
@@ -905,7 +953,10 @@ func main() {
 			}
 
 			taskID := newTaskID()
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+			// Phase 7-C: create a root trace context for this task and propagate to the engine.
+			rootTraceCtx := tracer.StartRoot(taskID, "task")
+			traceRegistry.Store(taskID, rootTraceCtx)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -919,6 +970,11 @@ func main() {
 			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
 		}
 	}
+
+	// Phase 7-C: observability REST endpoints.
+	http.HandleFunc("/api/audit", handleAudit)
+	http.HandleFunc("/api/traces", handleTraces)
+	http.HandleFunc("/api/replay/tasks/", handleReplay)
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
@@ -1566,8 +1622,8 @@ func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, 
 // when LLM_USE_MOCK is false or when the request does not target a preset case.
 // modelRouter/routerProviders activate the Phase 6 Router in the Engine; pass nil
 // to fall back to the legacy single-model path.
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx...)
 }
 
 // runAgentLoopWithTurn executes the full ReAct loop for a chat request within a
@@ -1578,7 +1634,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // exact case match; when empty the provider falls back to keyword matching.
 // modelRouter is the optional Phase 6 Router; when non-nil (with routerProviders)
 // the Engine classifies intent and selects a model tier before each LLM call.
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
 	isRoot := turnIndex == 0
 
 	// Phase 7-H：root agent 默认作为 leader，拥有子 agent 派发与工作流定义权限。
@@ -1790,6 +1846,21 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 			}
 			return nil
 		}(),
+		// Phase 7-C: wire tracer, root context, and latency recorders into the engine.
+		Tracer: tracer,
+		RootTraceCtx: func() *observability.TraceContext {
+			if len(rootTraceCtx) > 0 {
+				return rootTraceCtx[0]
+			}
+			// Fallback: create a fresh root context if caller didn't provide one (e.g. tests / recovery).
+			return tracer.StartRoot(taskID, "task")
+		}(),
+		LLMLatencyRecorder: func(latency time.Duration) {
+			observability.DefaultMetrics.RecordLLMLatency(latency)
+		},
+		ToolLatencyRecorder: func(latency time.Duration) {
+			observability.DefaultMetrics.RecordToolLatency(latency)
+		},
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

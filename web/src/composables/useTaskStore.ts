@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
+import { useTraceStore } from './useTraceStore'
 import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
@@ -144,7 +145,12 @@ export function useTaskStore() {
   // Initialize event listener once
   if (!initialized) {
     initialized = true
-    onEvent(handleEvent)
+    // Phase 7-C: route trace_span events to the shared trace store.
+    const traceStore = useTraceStore()
+    onEvent((evt: AgentEvent) => {
+      traceStore.onEvent(evt)
+      handleEvent(evt)
+    })
   }
 
   /**

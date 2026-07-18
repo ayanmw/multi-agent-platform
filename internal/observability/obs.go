@@ -161,11 +161,17 @@ type MetricsCollector struct {
 	llmOutputTokens uint64
 	llmTotalTokens  uint64
 	costCents       int64
+	llmLatencyHist  *HistogramCollector
+	toolLatencyHist *HistogramCollector
 }
 
 // NewMetricsCollector returns a zero-valued metrics collector.
 func NewMetricsCollector() *MetricsCollector {
-	return &MetricsCollector{}
+	buckets := []float64{10, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
+	return &MetricsCollector{
+		llmLatencyHist:  NewHistogramCollector(buckets),
+		toolLatencyHist: NewHistogramCollector(buckets),
+	}
 }
 
 // IncrTasksStarted increments the counter for agent tasks that have started.
@@ -206,6 +212,20 @@ func (m *MetricsCollector) RecordCost(cents int64) {
 	m.mu.Unlock()
 }
 
+// RecordLLMLatency records the latency of an LLM API call.
+func (m *MetricsCollector) RecordLLMLatency(d time.Duration) {
+	m.mu.Lock()
+	m.llmLatencyHist.Record(d)
+	m.mu.Unlock()
+}
+
+// RecordToolLatency records the latency of a tool execution.
+func (m *MetricsCollector) RecordToolLatency(d time.Duration) {
+	m.mu.Lock()
+	m.toolLatencyHist.Record(d)
+	m.mu.Unlock()
+}
+
 // PrometheusText returns the current metrics in Prometheus exposition format.
 // This is suitable for scraping by Prometheus, Grafana Agent, or curl.
 func (m *MetricsCollector) PrometheusText() string {
@@ -237,6 +257,8 @@ cost_cents_total %d %d
 		m.llmTotalTokens, ts,
 		m.costCents, ts,
 	)
+	out += m.llmLatencyHist.PrometheusHistogram("llm_latency_ms", "LLM call latency in milliseconds.")
+	out += m.toolLatencyHist.PrometheusHistogram("tool_latency_ms", "Tool execution latency in milliseconds.")
 	m.mu.RUnlock()
 	return out
 }
@@ -246,3 +268,6 @@ var DefaultMetrics = NewMetricsCollector()
 
 // DefaultLogger is the package-level shared logger.
 var DefaultLogger = NewStructuredLogger()
+
+// DefaultAuditor is the package-level shared auditor.
+var DefaultAuditor Auditor = NewMemoryAuditor(10000)

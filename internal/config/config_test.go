@@ -391,7 +391,31 @@ func TestSplitAndTrim(t *testing.T) {
 	}
 }
 
-// TestLoadEnvFileLoadsVarsAndDoesNotOverrideExisting verifies loadEnvFile sets
+func TestLoadEmbeddingConfig(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	for _, k := range []string{"EMBEDDING_PROVIDER", "EMBEDDING_API_KEY", "EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS", "EMBEDDING_ENDPOINT"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	t.Setenv("EMBEDDING_PROVIDER", "openai")
+	t.Setenv("EMBEDDING_API_KEY", "key")
+	t.Setenv("EMBEDDING_MODEL", "text-embedding-3-small")
+	t.Setenv("EMBEDDING_DIMENSIONS", "1536")
+	t.Setenv("EMBEDDING_ENDPOINT", "https://api.openai.com/v1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+	if cfg.EmbeddingProvider != "openai" {
+		t.Fatalf("provider = %q, want openai", cfg.EmbeddingProvider)
+	}
+	if cfg.EmbeddingDimensions != 1536 {
+		t.Fatalf("dimensions = %d, want 1536", cfg.EmbeddingDimensions)
+	}
+}
+
 // only keys that are not already present in the environment.
 func TestLoadEnvFileLoadsVarsAndDoesNotOverrideExisting(t *testing.T) {
 	dir := t.TempDir()

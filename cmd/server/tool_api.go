@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
@@ -118,6 +120,22 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		return
 	}
 
+	// Phase 7-C: audit log dynamic tool registration.
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "register_tool",
+		Target: req.Name,
+		Before: map[string]any{"exists": false},
+		After: map[string]any{
+			"name":        req.Name,
+			"type":        req.Type,
+			"command":     req.Command,
+			"url":         req.URL,
+			"method":      req.Method,
+			"description": req.Description,
+		},
+	})
+
 	// Build response
 	response := map[string]any{
 		"name":        dt.Name(),
@@ -140,7 +158,20 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleListTools handles GET /api/tools — list all registered tools
+// currentActor extracts an actor identifier from the request Authorization header.
+func currentActor(r *http.Request) string {
+	if r == nil {
+		return "system"
+	}
+	key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if key == "" {
+		return "anonymous"
+	}
+	if len(key) > 8 {
+		key = key[:8]
+	}
+	return "apikey:" + key
+}
 // (both built-in and dynamic). Each tool is returned with its metadata
 // and a "builtin" flag indicating whether it is a protected built-in tool.
 func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
@@ -207,6 +238,15 @@ func handleDeleteTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool
 		http.Error(w, fmt.Sprintf("failed to delete tool from database: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Phase 7-C: audit log dynamic tool unregistration.
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "delete_tool",
+		Target: name,
+		Before: map[string]any{"registered": true},
+		After:  map[string]any{"deleted": true},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
