@@ -1765,6 +1765,10 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if req.MaxSteps < 1 || req.MaxSteps > 200 {
+		http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+		return
+	}
 	if req.Input == "" {
 		http.Error(w, "input is required", http.StatusBadRequest)
 		return

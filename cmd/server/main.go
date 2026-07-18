@@ -805,6 +805,10 @@ func main() {
 		switch req.Action {
 
 		case "multi-agent":
+			if req.MaxSteps < 1 || req.MaxSteps > 200 {
+				http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+				return
+			}
 			// Phase 7-H：multi-agent 改为 leader-agent 驱动。
 			// 1) 解析/生成 session 与 root task；2）启动一个 Leader Agent；
 			// 3) Leader 通过 dispatch_sub_agent 工具决定派哪些子 agent。
@@ -884,6 +888,11 @@ func main() {
 			})
 
 		case "chat":
+			if req.MaxSteps < 1 || req.MaxSteps > 200 {
+				http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+				return
+			}
+
 			// Check if a preset case was specified — load its contract,
 			// default input, and system prompt before validating the request.
 			var contract harness.TaskContract
@@ -1259,6 +1268,11 @@ func main() {
 			return
 		}
 
+		if req.MaxSteps < 1 || req.MaxSteps > 200 {
+			http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+			return
+		}
+
 		if req.Input == "" && len(req.Agents) == 0 {
 			http.Error(w, "input or agents is required", http.StatusBadRequest)
 			return
@@ -1287,6 +1301,9 @@ func main() {
 
 		// Apply global MaxSteps override if provided
 		if req.MaxSteps > 0 {
+			if req.MaxSteps > 200 {
+				req.MaxSteps = 200
+			}
 			for i := range specs {
 				if specs[i].Contract == nil {
 					contract := harness.DefaultContract(specs[i].Input)

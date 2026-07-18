@@ -529,6 +529,9 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 30
 	}
+	if cfg.MaxSteps > 200 {
+		cfg.MaxSteps = 200
+	}
 	if cfg.Temperature == 0 {
 		cfg.Temperature = 0.7
 	}

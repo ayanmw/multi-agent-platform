@@ -753,7 +753,7 @@ export function useTaskStore() {
   /** Start a multi-agent task via /api/multi-agent. */
   async function startMultiAgentTask(
     input: string,
-    options: { caseType?: string; sessionId?: string; timeoutSeconds?: number; agents?: any[] } = {}
+    options: { caseType?: string; sessionId?: string; maxSteps?: number; timeoutSeconds?: number; agents?: any[] } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
@@ -770,6 +770,7 @@ export function useTaskStore() {
         session_id: options.sessionId || '',
         timeout_seconds: options.timeoutSeconds ?? 0,
       }
+      if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
       if (options.agents && options.agents.length > 0) {
         body.agents = options.agents
       }
