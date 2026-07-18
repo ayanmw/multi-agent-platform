@@ -634,9 +634,26 @@ onMounted(() => {
 /** Handle task submission from TaskInput */
 async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
   try {
+    // === Skill 前缀解析 ===
+    // 用户通过 SkillPicker 选中的 skill 会在输入文本最前面留下 `/skill-id ` 前缀。
+    // 这里在发送前做两件事：
+    //   1) 调用 POST /api/skills/{id}/enable，让后端把该 skill 加入 active 列表，
+    //      使 Engine 在渲染 system prompt 时注入该 skill 模板（幂等：已启用则不重复）。
+    //   2) 从文本中剥离 `/skill-id ` 前缀，把剩余部分作为真实的 user_input 发给 chat API。
+    // 选择前端控制 enable 的简单方案，避免改动 session/chat API 的契约。
+    const { skillId, remaining } = parseSkillPrefix(text)
+    if (skillId) {
+      try {
+        await enableSkill(skillId)
+      } catch (err) {
+        // enable 失败不阻塞发送，仅打日志——后端看到没有 active skill 仍能正常执行。
+        console.error('[App] enable skill failed:', err)
+      }
+    }
+    const finalText = remaining
     const session = activeSession.value
     if (useMultiAgent.value) {
-      const targetSession = session || await createSession(undefined, text, activeProjectId.value)
+      const targetSession = session || await createSession(undefined, finalText, activeProjectId.value)
       if (!session) {
         setActiveSession(targetSession.id)
       }
@@ -644,12 +661,12 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
         agent_id: a.agentId,
         name: a.name,
         system_prompt: a.systemPrompt,
-        input: a.input || text,
+        input: a.input || finalText,
         allowed_tools: a.allowedTools || [],
         output_to: a.outputTo || [],
         model: a.model,
       })) : undefined
-      await startMultiAgentTask(text, {
+      await startMultiAgentTask(finalText, {
         sessionId: targetSession.id,
         timeoutSeconds: options.timeoutSeconds,
         agents,
@@ -658,9 +675,9 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
     }
     if (!session) {
       // No active session — create a new one in the current project
-      const newSession = await createSession(undefined, text, activeProjectId.value)
+      const newSession = await createSession(undefined, finalText, activeProjectId.value)
       setActiveSession(newSession.id)
-      await startTask(text, {
+      await startTask(finalText, {
         timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
         sessionId: newSession.id,
@@ -668,7 +685,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
       })
     } else if (!session.rootTaskId) {
       // Session exists but no root task yet — this is the first turn
-      await startTask(text, {
+      await startTask(finalText, {
         timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
         sessionId: session.id,
@@ -677,7 +694,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
     } else {
       // Session already has a root task — this is a subsequent turn
       // Use the multi-turn chat endpoint
-      await startTurn(text, {
+      await startTurn(finalText, {
         timeoutSeconds: options.timeoutSeconds,
         sessionId: session.id,
         maxSteps: options.maxSteps,
@@ -688,6 +705,34 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
     showError(err instanceof Error ? err.message : 'Failed to start task')
   }
 }
+
+/**
+ * 解析输入文本最前面的 `/skill-id ` 前缀。
+ * 约定 skill id 由 ASCII 字母、数字、`-`、`_`、`.`、`/` 组成（与后端 skill.Skill.ID 实际字符集对齐）。
+ * 返回剩余文本（保留后续输入），若无前缀则 remaining 等于原文、skillId 为空字符串。
+ */
+function parseSkillPrefix(text: string): { skillId: string; remaining: string } {
+  // 正则：`/` 开头 + skill id 字符 + 一个空格结尾
+  const m = /^\/([A-Za-z0-9][A-Za-z0-9\-_./]*)\s+(.*)$/s.exec(text)
+  if (!m) {
+    return { skillId: '', remaining: text }
+  }
+  return { skillId: m[1], remaining: m[2] }
+}
+
+/**
+ * 调用后端启用 skill。幂等：后端在 skill 已启用时直接返回 200。
+ * 失败抛出异常，由调用方决定是否继续发送。
+ */
+async function enableSkill(skillId: string): Promise<void> {
+  const resp = await fetch(`/api/skills/${encodeURIComponent(skillId)}/enable`, {
+    method: 'POST',
+  })
+  if (!resp.ok) {
+    throw new Error(`enable skill ${skillId} failed: ${resp.status} ${resp.statusText}`)
+  }
+}
+
 
 /** Compute the next max steps when continuing a failed task */
 function nextMaxSteps(): number {
