@@ -3,7 +3,6 @@ package tool
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -47,7 +46,9 @@ func NewExecuteProgramTool() *BuiltinTool {
 	).WithTags("exec", "exec:dangerous")
 }
 
-// executeProgramExecutor runs code in a supported interpreter.
+// executeProgramExecutor runs code in a supported interpreter via the configured
+// ProgramRunner. By default this is the local host runner; SetDefaultRunner can
+// swap in the DockerRunner at startup.
 func executeProgramExecutor(input map[string]any) (any, error) {
 	language := strings.ToLower(getString(input, "language", ""))
 	code := getString(input, "code", "")
@@ -60,51 +61,24 @@ func executeProgramExecutor(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("risk pattern detected: %s", risk)
 	}
 
-	var cmdArgs []string
-	switch language {
-	case "python":
-		for _, candidate := range []string{"python", "python3", "py"} {
-			if _, err := exec.LookPath(candidate); err == nil {
-				cmdArgs = []string{candidate, "-c", code}
-				break
-			}
-		}
-		if len(cmdArgs) == 0 {
-			return nil, fmt.Errorf("python interpreter not found")
-		}
-	case "node":
-		cmdArgs = []string{"node", "-e", code}
-	case "bash":
-		cmdArgs = []string{"bash", "-c", code}
-	case "go":
+	if language == "go" {
 		return nil, fmt.Errorf("go execution not yet supported in sandbox")
-	default:
-		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
-	out, err := cmd.CombinedOutput()
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return map[string]any{
-			"stdout":    string(out),
-			"stderr":    "",
-			"exit_code": -1,
-			"timed_out": true,
-		}, nil
+	out, exitCode, err := GetDefaultRunner().Run(context.Background(), language, code, timeout)
+	timedOut := false
+	if err != nil {
+		if exitCode == -1 && (err == context.DeadlineExceeded || strings.Contains(err.Error(), "context deadline exceeded")) {
+			timedOut = true
+			err = nil
+		}
 	}
 
-	exitCode := -1
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
 	return map[string]any{
-		"stdout":    string(out),
+		"stdout":    out,
 		"stderr":    "",
 		"exit_code": exitCode,
-		"timed_out": false,
+		"timed_out": timedOut,
 	}, err
 }
 

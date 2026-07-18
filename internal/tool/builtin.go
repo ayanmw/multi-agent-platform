@@ -583,7 +583,7 @@ func RegisterBuiltins(registry *Registry) {
 	registry.Register(NewFetchURLTool())
 	registry.Register(NewParseJSONTool())
 	registry.Register(NewExecuteProgramTool())
-	registry.Register(NewWebSearchTool(NewNoopMCPAdapter()))
+	registry.Register(NewWebSearchTool(WebSearchConfig{}))
 }
 
 // NewListDirTool creates a directory listing tool named "core/list_dir".

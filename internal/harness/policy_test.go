@@ -10,6 +10,7 @@ package harness
 
 import (
 	"errors"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +20,8 @@ import (
 
 func isPolicyBlock(err error) bool {
 	var p *ErrBlockedByPolicy
-	return errors.As(err, &p)
+	var a *ErrApprovalRequired
+	return errors.As(err, &p) || errors.As(err, &a)
 }
 
 func isApprovalRequired(err error) bool {
@@ -531,9 +533,7 @@ type mutatingRule struct{ name, key, val string }
 func (r *mutatingRule) Name() string { return r.name }
 func (r *mutatingRule) Check(_ string, input map[string]any, _ TaskContract) (map[string]any, error) {
 	out := make(map[string]any, len(input)+1)
-	for k, v := range input {
-		out[k] = v
-	}
+	maps.Copy(out, input)
 	out[r.key] = r.val
 	return out, nil
 }

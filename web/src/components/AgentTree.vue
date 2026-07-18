@@ -145,10 +145,28 @@ function toolShortName(name: string): string {
   return idx > 0 ? name.slice(idx + 1) : name
 }
 
+const tagTip = computed(() => (tag: string) => {
+  const tips: Record<string, string> = {
+    destructive: 'Destructive: removes files or directories; may be irreversible',
+    dangerous: 'Dangerous: potentially destructive or system-affecting execution',
+    write: 'Write: modifies files on disk',
+    exec: 'Exec: runs external programs',
+    shell: 'Shell: executes shell commands',
+    network: 'Network: makes HTTP or external network requests',
+    mcp: 'MCP: external model-context-protocol service',
+  }
+  return tips[tag.toLowerCase()] || `Tag: ${tag}`
+})
+
+/** Determine if a step involves elevated risk based on its tool tags */
+function isHighRiskStep(step: Step): boolean {
+  if (!step.toolCall?.tags) return false
+  return step.toolCall.tags.some(tag => isRiskTagComputed(tag))
+}
+
 /** Check whether a tag indicates elevated risk */
-function isRiskTag(tag: string): boolean {
-  const riskTags = ['destructive', 'dangerous', 'write', 'exec', 'shell', 'network', 'mcp']
-  return riskTags.includes(tag.toLowerCase())
+function isRiskTagComputed(tag: string): boolean {
+  return ['destructive', 'dangerous', 'write', 'exec', 'shell', 'network', 'mcp'].includes(tag.toLowerCase())
 }
 
 /** Format tag for display */
@@ -374,6 +392,7 @@ watch(
           'step-completed': step.status === 'completed',
           'step-failed': step.status === 'failed',
           'step-expanded': expandedSteps.has(step.index),
+          'step-high-risk': isHighRiskStep(step),
         }"
       >
         <!-- Step header (always visible, clickable to expand) -->
@@ -411,7 +430,8 @@ watch(
                   v-for="tag in step.toolCall.tags"
                   :key="tag"
                   class="tool-tag"
-                  :class="{ 'tool-tag-risk': isRiskTag(tag) }"
+                  :class="{ 'tool-tag-risk': isRiskTagComputed(tag) }"
+                  :title="tagTip(tag)"
                 >{{ formatTag(tag) }}</span>
               </div>
               <span v-if="step.toolCall.duration" class="tool-duration">
@@ -635,6 +655,14 @@ watch(
 
 .step-item.step-running {
   background: #1a2a3a;
+}
+
+.step-item.step-high-risk .step-header {
+  background: rgba(231, 76, 60, 0.08);
+}
+
+.step-item.step-high-risk .step-header:hover {
+  background: rgba(231, 76, 60, 0.14);
 }
 
 /* Step header (always visible) */
