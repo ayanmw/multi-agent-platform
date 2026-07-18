@@ -586,6 +586,194 @@ func RegisterBuiltins(registry *Registry) {
 	registry.Register(NewWebSearchTool(NewNoopMCPAdapter()))
 }
 
+// SubAgentDispatcher 是 leader agent 派发子 agent 的抽象。
+// 在 Phase 7-H 中，工具层只依赖该接口，具体实现由 cmd/server 注入，避免
+// tool 包与 orchestrator 包形成双向依赖。
+type SubAgentDispatcher interface {
+	Dispatch(ctx context.Context, leaderSubTaskID string, strategy string, agents []SubAgentSpec) ([]SubAgentResult, error)
+}
+
+// SubAgentSpec 定义了一个子 agent 的规格，是 orchestrator.AgentSpec 的最小子集。
+//工具包不直接引用 orchestrator 类型，以打破 import cycle。
+type SubAgentSpec struct {
+	AgentID      string   `json:"agent_id"`
+	Name         string   `json:"name"`
+	SystemPrompt string   `json:"system_prompt"`
+	Input        string   `json:"input"`
+	Model        string   `json:"model,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	OutputTo     []string `json:"output_to,omitempty"`
+}
+
+// SubAgentResult 是子 agent 执行结果的最小子集。
+type SubAgentResult struct {
+	AgentID     string `json:"agent_id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Result      string `json:"result"`
+	TotalTokens int    `json:"total_tokens"`
+	Error       string `json:"error,omitempty"`
+	Duration    int64  `json:"duration_ms"`
+}
+
+// RegisterBuiltinsWithDispatcher 注册所有内置工具，并额外注册
+// dispatch_sub_agent 工具。当 dispatcher 为 nil 时行为与 RegisterBuiltins 一致。
+//
+// canDispatchFn 在工具执行时调用，判断当前 agent 是否有派发权限；
+// 这允许 cmd/server 在 leader 运行期间动态放开权限，同时避免 worker
+// 越权调用。
+func RegisterBuiltinsWithDispatcher(registry *Registry, dispatcher SubAgentDispatcher, canDispatchFn func() bool) {
+	RegisterBuiltins(registry)
+	if dispatcher != nil {
+		registry.Register(NewDispatchSubAgentTool(dispatcher, canDispatchFn))
+	}
+}
+
+// NewDispatchSubAgentTool 创建 dispatch_sub_agent 工具实例。
+// 工具位于全局命名空间，仅允许当前 agent 的角色为 leader 时调用。
+func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func() bool) *BuiltinTool {
+	return NewBuiltinTool(
+		"dispatch_sub_agent",
+		"",
+		"Dispatch sub-agents to solve parts of the current task. Only the leader agent may use this tool. Provide the reason, execution strategy, and a list of agent specifications. Each sub-agent will run with its own Engine in the orchestrator and the results will be returned to you as observations.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Why you are delegating this work to sub-agents",
+				},
+				"strategy": map[string]any{
+					"type":        "string",
+					"enum":        []string{"parallel", "sequential", "pipeline"},
+					"description": "How to coordinate the sub-agents: parallel, sequential, or pipeline",
+				},
+				"agents": map[string]any{
+					"type":        "array",
+					"description": "List of sub-agent specifications",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"agent_id": map[string]any{
+								"type":        "string",
+								"description": "Unique identifier for this sub-agent",
+							},
+							"system_prompt": map[string]any{
+								"type":        "string",
+								"description": "System prompt defining the sub-agent's role and constraints",
+							},
+							"input": map[string]any{
+								"type":        "string",
+								"description": "Specific task input for this sub-agent",
+							},
+							"allowed_tools": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Tool names this sub-agent is allowed to use",
+							},
+							"output_to": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Agent IDs that should receive this sub-agent's final result",
+							},
+							"model": map[string]any{
+								"type":        "string",
+								"description": "LLM model for this sub-agent (optional, defaults to leader model)",
+							},
+						},
+						"required": []string{"agent_id", "system_prompt"},
+					},
+				},
+			},
+			"required": []string{"reason", "strategy", "agents"},
+		},
+		func(input map[string]any) (any, error) {
+			if canDispatchFn == nil || !canDispatchFn() {
+				return nil, fmt.Errorf("sub-agent dispatch is only allowed for the leader agent")
+			}
+
+			strategy := getString(input, "strategy", "parallel")
+			switch strategy {
+			case "parallel", "sequential", "pipeline":
+			default:
+				return nil, fmt.Errorf("strategy must be one of parallel, sequential, pipeline")
+			}
+
+			rawAgents, ok := input["agents"].([]any)
+			if !ok || len(rawAgents) == 0 {
+				return nil, fmt.Errorf("agents must be a non-empty array")
+			}
+
+			agents := make([]SubAgentSpec, 0, len(rawAgents))
+			for i, raw := range rawAgents {
+				m, ok := raw.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("agents[%d] is not an object", i)
+				}
+
+				agentID, _ := m["agent_id"].(string)
+				if agentID == "" {
+					return nil, fmt.Errorf("agents[%d].agent_id is required", i)
+				}
+				systemPrompt, _ := m["system_prompt"].(string)
+				if systemPrompt == "" {
+					return nil, fmt.Errorf("agents[%d].system_prompt is required", i)
+				}
+
+				spec := SubAgentSpec{
+					AgentID:      agentID,
+					Name:         agentID,
+					SystemPrompt: systemPrompt,
+					Input:        getString(m, "input", ""),
+					Model:        getString(m, "model", ""),
+				}
+				if v, ok := m["allowed_tools"].([]any); ok {
+					for _, item := range v {
+						if s, ok := item.(string); ok {
+							spec.AllowedTools = append(spec.AllowedTools, s)
+						}
+					}
+				}
+				if v, ok := m["output_to"].([]any); ok {
+					for _, item := range v {
+						if s, ok := item.(string); ok {
+							spec.OutputTo = append(spec.OutputTo, s)
+						}
+					}
+				}
+				agents = append(agents, spec)
+			}
+
+			// 在 Phase 7-H 中，leader 的 SubTaskID 与 root task ID 相同，
+			// 因此这里把 leaderSubTaskID 直接作为 root task ID 传给 orchestrator。
+			results, err := dispatcher.Dispatch(context.Background(), "<leaderSubTaskID>", strategy, agents)
+			if err != nil {
+				return nil, fmt.Errorf("dispatch failed: %w", err)
+			}
+
+			// 返回可 JSON 序列化摘要，便于 observation 直接喂给 LLM。
+			resultItems := make([]map[string]any, 0, len(results))
+			for _, r := range results {
+				resultItems = append(resultItems, map[string]any{
+					"agent_id":     r.AgentID,
+					"status":       r.Status,
+					"result":       r.Result,
+					"total_tokens": r.TotalTokens,
+					"error":        r.Error,
+					"duration_ms":  r.Duration,
+				})
+			}
+
+			return map[string]any{
+				"dispatched":  true,
+				"agent_count": len(agents),
+				"strategy":    strategy,
+				"results":     resultItems,
+			}, nil
+		},
+	).WithTags("orchestration")
+}
+
 // NewListDirTool creates a directory listing tool named "core/list_dir".
 func NewListDirTool() *BuiltinTool {
 	return NewBuiltinTool(

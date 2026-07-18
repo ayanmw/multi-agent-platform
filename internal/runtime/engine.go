@@ -153,6 +153,15 @@ type EventBus interface {
 	SendEvent(event.Event)
 }
 
+// AgentRole 表示 runtime Engine 在分布式任务中的角色。
+// 与 internal/agent.AgentRole 等价，重复定义以避免 runtime 依赖 agent 包。
+type AgentRole string
+
+const (
+	AgentRoleLeader AgentRole = "leader"
+	AgentRoleWorker AgentRole = "worker"
+)
+
 // EngineConfig holds all configuration needed to create and run an Engine.
 // It is the single source of truth for an agent's identity, model settings,
 // safety limits, and persistence backend.
@@ -341,6 +350,32 @@ type EngineConfig struct {
 	// If the context expires, the Engine returns context.DeadlineExceeded and
 	// the caller emits a task_timeout failure event.
 	Timeout time.Duration
+
+	// Role 表示当前 Engine 运行的是 leader 还是 worker。
+	// 由 cmd/server 在创建 root agent 或 orchestrator 在创建子 agent 时设置。
+	// 工具层可通过该字段判断当前 agent 是否有权调用 leader 专用工具（如
+	// dispatch_sub_agent）。
+	// Added in Phase 7-H.
+	Role AgentRole
+
+	// CanDispatchSubAgents 标记当前 agent 是否可以调用 dispatch_sub_agent。
+	// 仅在 Role 为 leader 时允许置 true。
+	// Added in Phase 7-H.
+	CanDispatchSubAgents bool
+
+	// CanDefineWorkflow 标记当前 agent 是否允许自定义工作流。
+	// leader 可以定义；worker 由父级 orchestrator 决定。
+	// Added in Phase 7-H.
+	CanDefineWorkflow bool
+
+	// SupervisorSubTaskID 是当前 agent 的父级/监督 agent 的子任务 ID。
+	// worker 由 orchestrator 指向 root task；leader 留空。
+	// Added in Phase 7-H.
+	SupervisorSubTaskID string
+
+	// ApproverMode 决定高风险审批由谁处理："user" 或 "leader"。
+	// Phase 7-H 占位用，Phase I 详细实现。
+	ApproverMode string
 
 	// OnLLMUsage is an optional callback invoked after every successful LLM call
 	// in the ReAct loop. It receives the actual model selected (which may differ

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/auth"
@@ -49,6 +50,11 @@ var cancelRegistry sync.Map
 // 在收到 pause/resume 时调用 Engine.Pause / Engine.Resume。key 与
 // cancelRegistry 一致：root 任务用 taskID；子 agent 用 "taskID/agentID"。
 var engineRegistry sync.Map
+
+// leaderDispatchEnabled 控制 dispatch_sub_agent 工具是否可用。
+// 仅在 leader agent 运行期间置为 true；worker agent 运行时保持 false，
+// 从而保证即使 tool Registry 共享，worker 也无法越权派发子 agent。
+var leaderDispatchEnabled atomic.Bool
 
 // storeCancel 注册 task/agent 对应的取消函数。
 //
@@ -496,9 +502,14 @@ func main() {
 		log.Printf("[Router] disabled (no classifier provider)")
 	}
 
-	// Initialize tool registry with built-in tools
+	// Initialize multi-agent orchestrator before creating the dispatcher/tool registry,
+	// because the dispatcher depends on it.
+	orch := orchestrator.New(hub, cfg, nil, persist, nil, nil, modelRouter, modelRegistry, routerProviders)
+
+	// Initialize tool registry with built-in tools and leader dispatch tool.
 	toolRegistry := tool.NewRegistry()
-	tool.RegisterBuiltins(toolRegistry)
+	dispatcher := &orchestratorDispatcher{orch: orch}
+	tool.RegisterBuiltinsWithDispatcher(toolRegistry, dispatcher, leaderDispatchEnabled.Load)
 
 	// Phase MCP: initialize MCP manager and load static + persisted servers.
 	// Static configuration comes from MCP_SERVERS; dynamic servers live in the
@@ -538,7 +549,7 @@ func main() {
 	} else {
 		log.Println("Docker sandbox: disabled — Docker not available, using direct execution")
 	}
-	log.Printf("Registered %d built-in tools", len(toolRegistry.List()))
+	log.Printf("Registered %d built-in tools (dispatch_sub_agent enabled for leader)", len(toolRegistry.List()))
 
 	// Phase 5: AgentBus for inter-agent communication.
 	// The AgentBus is shared across all agents and allows agents to send messages
@@ -569,8 +580,10 @@ func main() {
 	checkpointMgr := runtime.NewCheckpointManager("data/checkpoints")
 	log.Println("CheckpointManager: initialized (data/checkpoints)")
 
-	// Initialize multi-agent orchestrator
-	orch := orchestrator.New(hub, cfg, toolRegistry, persist, agentBusAdapter, checkpointMgr, modelRouter, modelRegistry, routerProviders)
+	// 把共享依赖回填给 orchestrator，确保子 agent 能使用同一套工具、AgentBus 与持久化。
+	orch.SetTools(toolRegistry)
+	orch.SetAgentBus(agentBusAdapter)
+	orch.SetPersistence(persist)
 
 	// WebSocket endpoint
 	http.HandleFunc("/ws", ws.ServeWS(hub))
@@ -676,48 +689,21 @@ func main() {
 		switch req.Action {
 
 		case "multi-agent":
-			// Multi-agent orchestration: decompose task and run agents
-			specs := req.Agents
-			strategy := "parallel"
-			if len(specs) == 0 {
-				var decomposer orchestrator.Decomposer
-				if cfg.LLMUseMock {
-					decomposer = orchestrator.NewTaskDecomposer()
-				} else {
-					decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
-				}
-				result, err := decomposer.Decompose(req.Input, req.CaseType)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				specs = result.Agents
-				strategy = result.Strategy
-			}
+			// Phase 7-H：multi-agent 改为 leader-agent 驱动。
+			// 1) 解析/生成 session 与 root task；2）启动一个 Leader Agent；
+			// 3) Leader 通过 dispatch_sub_agent 工具决定派哪些子 agent。
+			// 若请求体显式提供 agents，则把强制工作流写进 leader 的输入，
+			// 保证前端既有行为仍能运行这些 agent。
 
-			// Build Working Memory for all agents in this orchestration
-			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-				workingMemory := memRecall.FormatForSystemPrompt(wm)
-				for i := range specs {
-					specs[i].WorkingMemory = workingMemory
-				}
-			}
-
-			// Resolve or create session
+			// 先生成 session/root task，便于后续子任务树定位。
 			sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
-			agentIDs := make([]string, len(specs))
-			for i, s := range specs {
-				agentIDs[i] = s.AgentID
-			}
-
 			if persist != nil {
 				persist.SaveTaskMeta(taskID, sessionID, "", true)
-				// Bind the root task to the session so the frontend can load it after refresh
 				if sessionID != "" {
 					sess, err := db.QuerySessionByID(sessionID)
 					if err == nil && sess.RootTaskID == "" {
@@ -726,31 +712,46 @@ func main() {
 				}
 			}
 
-			hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
-				"task_id":     taskID,
-				"session_id":  sessionID,
-				"input":       req.Input,
-				"agent_ids":   agentIDs,
-				"agent_count": len(specs),
-				"strategy":    strategy,
+			hub.SendEvent(event.NewEvent("task_started", taskID, "leader", 0, map[string]any{
+				"task_id":    taskID,
+				"session_id": sessionID,
+				"input":      req.Input,
+				"mode":       "leader-driven",
 			}))
 
+			// 组装 leader 的输入：如果请求给出了显式 agents，强制要求使用 dispatch_sub_agent。
+			leaderInput := req.Input
+			if len(req.Agents) > 0 {
+				strategy := "parallel"
+				for i := range req.Agents {
+					if req.Agents[i].Name == "" {
+						req.Agents[i].Name = req.Agents[i].AgentID
+					}
+				}
+				workflowJSON, _ := json.Marshal(req.Agents)
+				leaderInput += fmt.Sprintf("\n\n[MANDATORY WORKFLOW] You must use the dispatch_sub_agent tool with strategy=%q and agents=%s to complete this task.", strategy, string(workflowJSON))
+			}
+
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-				storeCancel(taskID, "orchestrator", cancel)
-				defer removeCancel(taskID, "orchestrator")
-				defer cancel()
-				orch.RunBlocking(ctx, taskID, strategy, specs)
+				// Leader 视情况调用 dispatch_sub_agent；若未调用，将作为普通 chat agent 返回答案。
+				leaderSystemPrompt := "You are the Leader agent. You coordinate sub-agents to solve complex tasks. Use the dispatch_sub_agent tool when you need to delegate work to multiple sub-agents. Each sub-agent runs independently; their results are returned as observations. If the task is simple enough, you may answer directly."
+				if cfg.LLMUseMock {
+					// mock 模式下简化 prompt，避免 mock provider 被过长文本干扰。
+					leaderSystemPrompt = "You are the Leader agent. Use dispatch_sub_agent when delegation is needed."
+				}
+				runAgentLoopWithTurn(hub, taskID, "leader", leaderSystemPrompt, leaderInput, cfg, toolRegistry, persist, harness.DefaultContract(leaderInput), sessionID, approvalHandler, "", agentBusAdapter, checkpointMgr, 0, "", "", costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+				removeCancel(taskID, "leader")
+				removeEngine(taskID, "leader")
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
-				log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
+				log.Printf("[Multi-Agent] Leader task %s completed", taskID)
 			}()
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"session_id":  sessionID,
 				"task_id":     taskID,
-				"agent_count": len(specs),
-				"agent_ids":   agentIDs,
+				"agent_count": 1,
+				"agent_ids":   []string{"leader"},
 				"status":      "started",
 			})
 		case "stream-demo":
@@ -1413,6 +1414,43 @@ func main() {
 	}
 }
 
+// orchestratorDispatcher 是 SubAgentDispatcher 在 cmd/server 层的实现。
+// 它把 dispatch_sub_agent 工具的调用转发给 orchestrator.RunBlocking。
+type orchestratorDispatcher struct {
+	orch *orchestrator.Orchestrator
+}
+
+// Dispatch 调用 orchestrator 同步运行一组子 agent。
+// 在 Phase 7-H 中，leaderSubTaskID 就是 root task ID。
+func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, strategy string, agents []tool.SubAgentSpec) ([]tool.SubAgentResult, error) {
+	orchSpecs := make([]orchestrator.AgentSpec, len(agents))
+	for i, a := range agents {
+		orchSpecs[i] = orchestrator.AgentSpec{
+			AgentID:      a.AgentID,
+			Name:         a.Name,
+			SystemPrompt: a.SystemPrompt,
+			Input:        a.Input,
+			Model:        a.Model,
+			AllowedTools: a.AllowedTools,
+			OutputTo:     a.OutputTo,
+		}
+	}
+	results := d.orch.RunBlocking(ctx, leaderSubTaskID, strategy, orchSpecs)
+	out := make([]tool.SubAgentResult, len(results))
+	for i, r := range results {
+		out[i] = tool.SubAgentResult{
+			AgentID:     r.AgentID,
+			Name:        r.Name,
+			Status:      r.Status,
+			Result:      r.Result,
+			TotalTokens: r.TotalTokens,
+			Error:       r.Error,
+			Duration:    r.Duration,
+		}
+	}
+	return out, nil
+}
+
 // runAgentLoop executes the full ReAct loop for a chat request.
 // It is a convenience wrapper around runAgentLoopWithTurn for the initial (root) turn.
 // caseID is used by MockProvider for deterministic script matching; it is ignored
@@ -1433,6 +1471,19 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // the Engine classifies intent and selects a model tier before each LLM call.
 func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
 	isRoot := turnIndex == 0
+
+	// Phase 7-H：root agent 默认作为 leader，拥有子 agent 派发与工作流定义权限。
+	role := runtime.AgentRoleWorker
+	canDispatchSubAgents := false
+	canDefineWorkflow := false
+	supervisorSubTaskID := ""
+	approverMode := "leader"
+	if isRoot {
+		role = runtime.AgentRoleLeader
+		canDispatchSubAgents = true
+		canDefineWorkflow = true
+		approverMode = "user"
+	}
 
 	// Persist task creation
 	if persist != nil {
@@ -1560,31 +1611,36 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		observability.DefaultMetrics.RecordCost(record.CostCents)
 	}
 
+	// Phase 7-H：leader 运行期间启用 dispatch_sub_agent 权限；运行结束后关闭。
+	if role == runtime.AgentRoleLeader {
+		leaderDispatchEnabled.Store(true)
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:           agentID,
-		SystemPrompt:      systemPrompt,
-		Model:             cfg.LLMModel,
-		Endpoint:          cfg.LLMEndpoint,
-		APIKey:            cfg.LLMAPIKey,
-		Provider:          provider, // mock or real provider resolved above
-		CaseID:            caseID,   // hint for MockProvider script matching
-		Temperature:       0.7,
-		MaxTokens:         4096,
-		MaxSteps:          contract.MaxSteps,
-		Persistence:       persist,
-		PolicyGate:        policyGate,
-		Progress:          progressManager,
-		Contract:          contract,
-		SessionID:         sessionID,
-		IsRoot:            isRoot,
-		ParentTaskID:      parentTaskID,
-		ApprovalHandler:   approvalHandler, // Phase 5: 审批处理器
-		WorkingMemory:     workingMemory,   // Phase 6: 工作记忆注入
-		AgentBus:          agentBus,        // Phase 5: 多Agent通信
-		CheckpointManager: checkpointMgr,   // Phase 5: 崩溃恢复
-		TurnIndex:         turnIndex,       // 当前轮次
-		WorkspaceDir:      workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
-		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
+		AgentID:              agentID,
+		SystemPrompt:         systemPrompt,
+		Model:                cfg.LLMModel,
+		Endpoint:             cfg.LLMEndpoint,
+		APIKey:               cfg.LLMAPIKey,
+		Provider:             provider, // mock or real provider resolved above
+		CaseID:               caseID,   // hint for MockProvider script matching
+		Temperature:          0.7,
+		MaxTokens:            4096,
+		MaxSteps:             contract.MaxSteps,
+		Persistence:          persist,
+		PolicyGate:           policyGate,
+		Progress:             progressManager,
+		Contract:             contract,
+		SessionID:            sessionID,
+		IsRoot:               isRoot,
+		ParentTaskID:         parentTaskID,
+		ApprovalHandler:      approvalHandler, // Phase 5: 审批处理器
+		WorkingMemory:        workingMemory,   // Phase 6: 工作记忆注入
+		AgentBus:             agentBus,        // Phase 5: 多Agent通信
+		CheckpointManager:    checkpointMgr,   // Phase 5: 崩溃恢复
+		TurnIndex:            turnIndex,       // 当前轮次
+		WorkspaceDir:         workspaceDir,    // Session-level workspace directory (write_file/run_shell CWD)
+		OnLLMUsage:           onUsage,         // Phase 6-D: 成本/指标上报
 		// Phase 6 Router: wire the model router into the Engine so the chat
 		// path actually classifies intent and selects a model tier. When
 		// modelRouter is nil (classifier unavailable) the Engine transparently
@@ -1611,7 +1667,13 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 				TokenCount: msg.TokenCount,
 			})
 		},
-		SubTaskID: taskID,
+		SubTaskID:            taskID,
+		// Phase 7-H: 角色与权限字段。
+		Role:                 role,
+		CanDispatchSubAgents: canDispatchSubAgents,
+		CanDefineWorkflow:    canDefineWorkflow,
+		SupervisorSubTaskID:  supervisorSubTaskID,
+		ApproverMode:         approverMode,
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
@@ -1641,6 +1703,13 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	storeEngine(taskID, agentID, engine)
 	defer removeCancel(taskID, agentID)
 	defer removeEngine(taskID, agentID)
+	// Phase 7-H：leader 运行结束（或失败退出）时，务必关闭 dispatch 权限，
+	// 避免后续 worker 复用同一个 tool Registry 时误开启。
+	defer func() {
+		if role == runtime.AgentRoleLeader {
+			leaderDispatchEnabled.Store(false)
+		}
+	}()
 
 	observability.DefaultMetrics.IncrTasksStarted()
 

@@ -128,6 +128,7 @@ type AgentResult struct {
 //	    fmt.Printf("%s: %s (%d tokens)\n", r.Name, r.Status, r.TotalTokens)
 //	}
 type Orchestrator struct {
+	// hub references
 	hub          *ws.Hub
 	cfg          *config.Config
 	tools        *tool.Registry
@@ -161,6 +162,22 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 		routerRegistry:  routerRegistry,
 		routerProviders: routerProviders,
 	}
+}
+
+// SetTools 允许在工具注册表创建后再设置，解决 Phase 7-H 中 dispatcher
+// 依赖 orchestrator、而 orchestrator 又依赖 tool registry 的初始化顺序问题。
+func (o *Orchestrator) SetTools(tools *tool.Registry) {
+	o.tools = tools
+}
+
+// SetAgentBus 允许在 AgentBus 创建后再设置。
+func (o *Orchestrator) SetAgentBus(agentBus *AgentBusAdapter) {
+	o.agentBus = agentBus
+}
+
+// SetPersistence 允许在 persistence 创建后再设置。
+func (o *Orchestrator) SetPersistence(persist runtime.Persistence) {
+	o.persist = persist
 }
 
 // RunBlocking launches all agents and blocks until they all complete.
@@ -397,6 +414,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// 7-G: child agents have their own SubTaskID so events and snapshots are
 		// isolated per agent execution instance.
 		SubTaskID:         subTaskID,
+		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
+		Role:              runtime.AgentRoleWorker,
+		CanDispatchSubAgents: false,
+		CanDefineWorkflow:    false,
+		SupervisorSubTaskID:  rootTaskID,
+		ApproverMode:         "leader",
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Phase 7-A: Note — per-agent Engine/cancel registration is intentionally kept
