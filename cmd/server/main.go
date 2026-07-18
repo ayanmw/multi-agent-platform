@@ -500,6 +500,29 @@ func main() {
 	toolRegistry := tool.NewRegistry()
 	tool.RegisterBuiltins(toolRegistry)
 
+	// Phase web_search: wire real search config from environment if any provider
+	// is enabled. Unregister the placeholder core/web_search first so the
+	// configured version replaces it cleanly.
+	webSearchCfg := tool.WebSearchConfig{
+		Provider:       cfg.WebSearchProvider,
+		EnableExa:      cfg.WebSearchEnableExa,
+		EnableParallel: cfg.WebSearchEnableParallel,
+		ExaAPIKey:      cfg.WebSearchExaAPIKey,
+		ParallelAPIKey: cfg.WebSearchParallelAPIKey,
+		UserAgent:      fmt.Sprintf("multi-agent-platform/%s", version.Version),
+	}
+	if webSearchCfg.Provider != "" || webSearchCfg.EnableExa || webSearchCfg.EnableParallel || webSearchCfg.ExaAPIKey != "" || webSearchCfg.ParallelAPIKey != "" {
+		toolRegistry.Unregister("core/web_search")
+		toolRegistry.Register(tool.NewWebSearchTool(webSearchCfg))
+		observability.DefaultLogger.Info("web_search", "provider configured", map[string]any{
+			"provider":        webSearchCfg.Provider,
+			"enable_exa":      webSearchCfg.EnableExa,
+			"enable_parallel": webSearchCfg.EnableParallel,
+		})
+	} else {
+		observability.DefaultLogger.Info("web_search", "not configured; using placeholder", nil)
+	}
+
 	// Phase MCP: initialize MCP manager and load static + persisted servers.
 	// Static configuration comes from MCP_SERVERS; dynamic servers live in the
 	// mcp_servers table and survive process restarts. Future marketplace installs
@@ -1983,6 +2006,12 @@ func handleSessionWorkspaceBrowse(w http.ResponseWriter, r *http.Request, sessio
 		"workspace_dir": sess.WorkspaceDir,
 		"browse_url":    "/s/" + sessionID + "/",
 	})
+}
+
+// isTruthyEnv returns true if the environment variable is "1", "true", or "yes".
+func isTruthyEnv(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 // fileExists checks if a path exists in the embedded filesystem.

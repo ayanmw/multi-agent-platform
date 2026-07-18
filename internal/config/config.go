@@ -42,6 +42,14 @@ type Config struct {
 	// When true, the runner uses Docker with the configured image.
 	EnableSandbox bool   // SANDBOX_ENABLE
 	SandboxImage  string // SANDBOX_IMAGE
+
+	// WebSearch configuration maps to environment variables for provider selection
+	// and API keys. Loaded in Load() so the server can wire the core/web_search tool.
+	WebSearchProvider       string // WEBSEARCH_PROVIDER
+	WebSearchEnableExa      bool   // WEBSEARCH_ENABLE_EXA
+	WebSearchEnableParallel bool   // WEBSEARCH_ENABLE_PARALLEL
+	WebSearchExaAPIKey      string // WEBSEARCH_EXA_API_KEY
+	WebSearchParallelAPIKey string // WEBSEARCH_PARALLEL_API_KEY
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -102,6 +110,23 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("SANDBOX_IMAGE"); v != "" {
 		cfg.SandboxImage = v
+	}
+
+	// WebSearch provider configuration.
+	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {
+		cfg.WebSearchProvider = v
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_EXA"); v != "" {
+		cfg.WebSearchEnableExa = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_PARALLEL"); v != "" {
+		cfg.WebSearchEnableParallel = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_EXA_API_KEY"); v != "" {
+		cfg.WebSearchExaAPIKey = v
+	}
+	if v := os.Getenv("WEBSEARCH_PARALLEL_API_KEY"); v != "" {
+		cfg.WebSearchParallelAPIKey = v
 	}
 
 	// Load multi-model configuration
