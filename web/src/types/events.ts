@@ -167,6 +167,15 @@ export interface ContextWindowSnapshotData {
  */
 export type TaskStatus = 'idle' | 'running' | 'completed' | 'failed'
 
+/** AgentBus message event data (Phase 7-E) */
+export interface AgentBusEventData {
+  type: 'agent_message_sent' | 'agent_message_received'
+  from_agent: string
+  to_agent: string
+  msg_type: string
+  content: string
+}
+
 /** The top-level task state */
 export interface TaskState {
   id: string
@@ -189,6 +198,8 @@ export interface TaskState {
   tokenUsage?: TokenUsage
   /** Evaluation result for case-driven tasks */
   evaluation?: EvaluationResult
+  /** AgentBus collaboration messages (Phase 7-E) */
+  agentMessages?: AgentBusEventData[]
 }
 
 /** Control message sent from client to server via WebSocket */

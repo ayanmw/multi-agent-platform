@@ -4,7 +4,7 @@ import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
-import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData } from '../types/events'
+import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData } from '../types/events'
 import type { EvaluationResult } from '../types/case'
 
 // 模块级引用，用于最近修改记录
@@ -486,6 +486,20 @@ export function useTaskStore() {
             pendingApproval.value.taskId,
             pendingApproval.value.agentId,
           )
+        } else if (infoType === 'agent_message_sent' || infoType === 'agent_message_received') {
+          const task = taskCache.value[evt.task_id]
+          if (task) {
+            if (!task.agentMessages) {
+              task.agentMessages = []
+            }
+            task.agentMessages.push({
+              type: infoType,
+              from_agent: (evt.data.from_agent as string) || evt.agent_id || 'unknown',
+              to_agent: (evt.data.to_agent as string) || 'unknown',
+              msg_type: (evt.data.msg_type as string) || 'observation',
+              content: (evt.data.content as string) || '',
+            } as AgentBusEventData)
+          }
         }
         break
       }

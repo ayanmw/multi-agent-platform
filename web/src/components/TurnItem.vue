@@ -13,6 +13,7 @@
 import { ref, computed, watch } from 'vue'
 import type { TaskState, TokenUsage } from '../types/events'
 import AgentTree from './AgentTree.vue'
+import AgentBusTimeline from './AgentBusTimeline.vue'
 
 const props = defineProps<{
   task: TaskState
@@ -198,6 +199,12 @@ const turnDuration = computed(() => {
       <!-- Agent Trees -->
       <div v-for="agent in Object.values(task.agents)" :key="agent.id" class="turn-agent-tree">
         <AgentTree :agent="agent" :is-running="task.status === 'running'" :expand-all="expandAll" />
+      </div>
+
+      <!-- AgentBus collaboration messages -->
+      <div v-if="task.agentMessages && task.agentMessages.length > 0" class="turn-agent-bus">
+        <h4 class="agent-bus-title">Agent Collaboration</h4>
+        <AgentBusTimeline :messages="task.agentMessages" />
       </div>
     </div>
   </div>
@@ -385,5 +392,15 @@ const turnDuration = computed(() => {
 
 .turn-agent-tree {
   margin-top: 8px;
+}
+
+.turn-agent-bus {
+  margin-top: 12px;
+}
+
+.agent-bus-title {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0 0 6px 0;
 }
 </style>
