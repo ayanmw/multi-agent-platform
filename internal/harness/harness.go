@@ -156,21 +156,17 @@ type TaskPermissions struct {
 }
 
 // DefaultContract returns a permissive TaskContract suitable for simple tasks.
-// The default MaxSteps is 30 because complex multi-tool tasks often need more
-// than the previous 10 iterations to converge. Frontend preferences override
-// this value on a per-task basis; this default only applies when the caller
-// does not provide an explicit step budget.
-// The default TimeoutSeconds is 0 (unlimited), preserving backward compatibility
-// with tasks that do not set an explicit timeout.
+// It allows common read/write operations but does NOT allow destructive actions,
+// network access, or shell execution by default. Callers must explicitly grant
+// those permissions when creating the contract.
 func DefaultContract(goal string) TaskContract {
 	return TaskContract{
-		Goal:        goal,
-		Scope:       ".",
-		MaxSteps:    30,
+		Goal:           goal,
+		Scope:          ".",
+		MaxSteps:       30,
 		TimeoutSeconds: 0,
 		Permissions: TaskPermissions{
 			AllowFileWrite: true,
-			AllowShell:     true,
 		},
 	}
 }
