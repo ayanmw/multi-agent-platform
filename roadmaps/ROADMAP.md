@@ -82,7 +82,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ## Phase 1.5: 扩展工具注册表 ✅ COMPLETED (2026-07-18)
 
-**目标**: 引入 namespace/tag 工具身份体系，补充常用 function tools，为 MCP 集成占位
+**目标**: 引入 namespace/tag 工具身份体系，补充常用 function tools
 
 ### 交付物
 - [x] `Tool` 接口扩展: `Namespace()` / `FullName()` / `Tags()`
@@ -94,11 +94,11 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
   - `core/delete_file` — 文件/目录删除（支持 recursive）
   - `core/fetch_url` — HTTP GET（timeout / max_bytes / headers）
   - `core/parse_json` — JSON 解析 + 点分路径查询
-  - `core/execute_program` — 解释器执行（python / node / bash）
-- [x] 新增占位工具:
-  - `mcp/web_search` — 返回 `not_implemented`，待 MCP provider 接入
+  - `core/execute_program` — 解释器执行（python / node / bash），可选 Docker 沙箱
+- [x] 新增核心工具:
+  - `core/web_search` — 本地 provider-independent 搜索，支持 Exa / Parallel（MCP over HTTP），未配置时返回友好提示
 - [x] `internal/runtime/engine.go` 使用 `FullName()` 生成 LLM tool definitions
-- [x] 所有新工具均含单元测试与风险标签（readonly / write / destructive / exec / network / mcp）
+- [x] 所有新工具均含单元测试与风险标签（readonly / write / destructive / exec / network / websearch）
 
 ### 验证结果
 - `go test ./internal/tool ./internal/runtime ./internal/harness ./internal/llm ./pkg/db -count=1` 全部通过
