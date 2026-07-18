@@ -40,11 +40,41 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
+// DefaultPublicRoutes returns GET routes that should remain public even when
+// REQUIRE_AUTH is enabled. These are typically health, metrics, and read-only
+// discovery endpoints.
+func DefaultPublicRoutes() []string {
+	return []string{
+		"GET /healthz",
+		"GET /metrics",
+		"GET /health",
+	}
+}
+
 // DefaultProtectedRoutes returns the list of METHOD + path prefix combinations
 // that require authentication when REQUIRE_AUTH is enabled.
 // Format: "METHOD /path/prefix" — e.g., "DELETE /api/sessions/"
 func DefaultProtectedRoutes() []string {
 	return []string{
+		"GET /api/tasks",
+		"GET /api/tasks/",
+		"GET /api/agents",
+		"GET /api/agents/",
+		"GET /api/sessions",
+		"GET /api/sessions/",
+		"GET /api/projects",
+		"GET /api/projects/",
+		"GET /api/memories",
+		"GET /api/memories/",
+		"GET /api/cases",
+		"GET /api/cases/",
+		"GET /api/tools",
+		"GET /api/tools/",
+		"GET /api/models",
+		"GET /api/models/",
+		"GET /api/costs",
+		"GET /api/costs/",
+		"GET /api/auth/api-keys",
 		"POST /api/tasks",
 		"DELETE /api/tasks/",
 		"POST /api/agents",
@@ -76,13 +106,14 @@ func DefaultProtectedRoutes() []string {
 	}
 }
 
+// NewAuthMiddleware creates an HTTP middleware that enforces authentication
 // on protected routes. When requireAuth is false, all requests pass through with
 // the fallback user ID injected, so auth management endpoints still work.
 //
 // Protected routes are matched by METHOD + path prefix. For example,
 // "DELETE /api/sessions/" matches DELETE requests to /api/sessions/anything.
-// GET requests are treated as public-read and are not protected.
-func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth bool, protectedRoutes []string, next http.Handler) http.Handler {
+// Public routes listed in publicRoutes are always exempt from authentication.
+func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth bool, protectedRoutes, publicRoutes []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// When auth is disabled, inject the fallback user and pass through.
 		if !requireAuth {
@@ -91,11 +122,17 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 			return
 		}
 
+		// Public routes are always allowed without authentication.
+		if isPublicRoute(r.Method, r.URL.Path, publicRoutes) {
+			ctx := WithUserID(r.Context(), fallbackUserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		// Check if this route requires authentication.
 		requiresAuth := isProtectedRoute(r.Method, r.URL.Path, protectedRoutes)
-
-		if !requiresAuth || r.Method == http.MethodGet {
-			// Public route — inject fallback user so /api/auth/api-keys still works.
+		if !requiresAuth {
+			// Unprotected non-public route — inject fallback user.
 			ctx := WithUserID(r.Context(), fallbackUserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -114,6 +151,21 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		ctx := WithUserID(r.Context(), userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isPublicRoute checks if the given method+path matches any public route.
+func isPublicRoute(method, path string, publicRoutes []string) bool {
+	for _, route := range publicRoutes {
+		parts := strings.SplitN(route, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		routeMethod, routePrefix := parts[0], parts[1]
+		if method == routeMethod && strings.HasPrefix(path, routePrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isProtectedRoute checks if the given method+path matches any protected route.

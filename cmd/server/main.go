@@ -1474,8 +1474,10 @@ func main() {
 	log.Printf("========================================")
 
 	// Wrap the default mux with auth middleware. It protects state-changing routes
-	// when REQUIRE_AUTH is true and injects a seed user ID for all routes otherwise.
-	handler := auth.NewAuthMiddleware(authStore, authAPI.SeedUserID(), requireAuth, auth.DefaultProtectedRoutes(), http.DefaultServeMux)
+	// and sensitive read endpoints when REQUIRE_AUTH is true, leaving public routes
+	// (/healthz, /metrics, /health) open. When REQUIRE_AUTH is false, all routes
+	// pass through with the seed user ID injected.
+	handler := auth.NewAuthMiddleware(authStore, authAPI.SeedUserID(), requireAuth, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
 
 	if err := http.ListenAndServe(":"+cfg.ServerPort, handler); err != nil {
 		log.Fatal(err)
