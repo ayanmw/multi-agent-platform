@@ -969,15 +969,67 @@ func SeedDefaultProject() error {
 // Metadata is stored as a JSON-encoded TEXT column — keeping it opaque avoids
 // schema churn when new metadata keys are added (e.g. correlation ID,
 // timestamps from the sender, trace context).
+//
+// SubTaskID 是目标子任务（接收方）；FromSubTaskID 是发送方子任务。两者均
+// 由 Phase 7-J 数据库迁移加入，用于前端按子任务时间线精确展示消息流向。
 type AgentBusMessage struct {
-	ID          int               `json:"id"`
-	TaskID      string            `json:"task_id"`
-	FromAgentID string            `json:"from_agent_id"`
-	ToAgentID   string            `json:"to_agent_id"`
-	Type        string            `json:"type"`
-	Content     string            `json:"content"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
+	ID            int               `json:"id"`
+	TaskID        string            `json:"task_id"`
+	SubTaskID     string            `json:"sub_task_id,omitempty"`      // Phase 7-I: 支持子任务路由
+	FromSubTaskID string            `json:"from_sub_task_id,omitempty"` // Phase 7-J: 发送方子任务
+	FromAgentID   string            `json:"from_agent_id"`
+	ToAgentID     string            `json:"to_agent_id"`
+	Type          string            `json:"type"`
+	Content       string            `json:"content"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
+}
+
+// ApprovalRecord mirrors the approvals table (Phase 7-I).
+// 记录每个高风险工具调用的审批请求及其最终决议（包括委托给 leader 的情况）。
+type ApprovalRecord struct {
+	ID                   string         `json:"id"`
+	TaskID               string         `json:"task_id"`
+	SubTaskID            string         `json:"sub_task_id"`
+	AgentID              string         `json:"agent_id"`
+	Tool                 string         `json:"tool"`
+	Reason               string         `json:"reason"`
+	Input                map[string]any `json:"input"`
+	DelegatedToLeader    bool           `json:"delegated_to_leader"`
+	LeaderSubTaskID      string         `json:"leader_sub_task_id"`
+	LeaderDecisionStepID string         `json:"leader_decision_step_id"`
+	Approved             *bool          `json:"approved"`
+	CreatedAt            time.Time      `json:"created_at"`
+	DecidedAt            *time.Time     `json:"decided_at"`
+}
+
+// InsertApproval persists a new approval request record.
+// The Approved field is nil until a decision is recorded.
+func InsertApproval(r ApprovalRecord) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	inputJSON, _ := json.Marshal(r.Input)
+	_, err := DB.Exec(
+		`INSERT INTO approvals (id, task_id, sub_task_id, agent_id, tool, reason, input, delegated_to_leader, leader_sub_task_id, leader_decision_step_id, approved)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.TaskID, r.SubTaskID, r.AgentID, r.Tool, r.Reason, string(inputJSON),
+		r.DelegatedToLeader, r.LeaderSubTaskID, r.LeaderDecisionStepID, r.Approved,
+	)
+	return err
+}
+
+// UpdateApprovalLeaderDecision updates the leader decision fields for an approval.
+func UpdateApprovalLeaderDecision(approvalID string, approved bool, reason string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	now := time.Now()
+	_, err := DB.Exec(
+		`UPDATE approvals SET approved=?, decided_at=? WHERE id=?`,
+		approved, now, approvalID,
+	)
+	return err
 }
 
 // InsertAgentMessage persists a single AgentBus message.
@@ -991,9 +1043,9 @@ func InsertAgentMessage(m AgentBusMessage) error {
 	}
 	metadataJSON, _ := json.Marshal(m.Metadata)
 	_, err := DB.Exec(
-		`INSERT INTO agent_messages (task_id, from_agent_id, to_agent_id, msg_type, content, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		m.TaskID, m.FromAgentID, m.ToAgentID, m.Type, m.Content, string(metadataJSON),
+		`INSERT INTO agent_messages (task_id, sub_task_id, from_sub_task_id, from_agent_id, to_agent_id, msg_type, content, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.TaskID, m.SubTaskID, m.FromSubTaskID, m.FromAgentID, m.ToAgentID, m.Type, m.Content, string(metadataJSON),
 	)
 	return err
 }
@@ -1009,7 +1061,7 @@ func QueryAgentMessages(taskID string) ([]AgentBusMessage, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := DB.Query(
-		`SELECT id, task_id, from_agent_id, to_agent_id, msg_type, content, COALESCE(metadata,''), created_at
+		`SELECT id, task_id, COALESCE(sub_task_id,''), COALESCE(from_sub_task_id,''), from_agent_id, to_agent_id, msg_type, content, COALESCE(metadata,''), created_at
 		 FROM agent_messages WHERE task_id=? ORDER BY created_at ASC, id ASC`, taskID,
 	)
 	if err != nil {
@@ -1021,7 +1073,7 @@ func QueryAgentMessages(taskID string) ([]AgentBusMessage, error) {
 	for rows.Next() {
 		var m AgentBusMessage
 		var metadataJSON string
-		if err := rows.Scan(&m.ID, &m.TaskID, &m.FromAgentID, &m.ToAgentID, &m.Type, &m.Content, &metadataJSON, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.SubTaskID, &m.FromSubTaskID, &m.FromAgentID, &m.ToAgentID, &m.Type, &m.Content, &metadataJSON, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		// Metadata may be NULL/empty for legacy rows; tolerate unmarshal failure.

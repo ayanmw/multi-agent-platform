@@ -69,10 +69,12 @@ type SessionMessageRecord struct {
 // TaskID is mandatory: persistence uses it as the primary lookup key when
 // the frontend requests GET /api/tasks/:id/agent-messages.
 type AgentBusMessage struct {
-	TaskID      string
-	FromAgentID string
-	ToAgentID   string
-	Type        string
-	Content     string
-	Metadata    map[string]string
+	TaskID        string
+	FromAgentID   string
+	ToAgentID     string
+	SubTaskID     string // Phase 7-I: 支持按子任务路由
+	FromSubTaskID string // Phase 7-J: 发送方子任务
+	Type          string
+	Content       string
+	Metadata      map[string]string
 }

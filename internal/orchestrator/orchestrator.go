@@ -128,19 +128,20 @@ type AgentResult struct {
 //	    fmt.Printf("%s: %s (%d tokens)\n", r.Name, r.Status, r.TotalTokens)
 //	}
 type Orchestrator struct {
-	hub          *ws.Hub
-	cfg          *config.Config
-	tools        *tool.Registry
-	persist      runtime.Persistence
-	agentBus     *AgentBusAdapter         // Phase 5: inter-agent communication
+	// hub references
+	hub           *ws.Hub
+	cfg           *config.Config
+	tools         *tool.Registry
+	persist       runtime.Persistence
+	agentBus      *AgentBusAdapter           // Phase 5: inter-agent communication
 	checkpointMgr *runtime.CheckpointManager // Phase 5: crash recovery
 
 	// Phase 6 Router: optional model router + provider lookup shared by all
 	// child agents. When non-nil, each agent's Engine classifies intent and
 	// selects a model tier before every LLM call (engine.go:1115). When nil,
 	// agents fall back to cfg.LLMModel directly (legacy behavior).
-	modelRouter    *llm.Router
-	routerRegistry *llm.ModelRegistry
+	modelRouter     *llm.Router
+	routerRegistry  *llm.ModelRegistry
 	routerProviders map[string]llm.Provider
 }
 
@@ -161,6 +162,22 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 		routerRegistry:  routerRegistry,
 		routerProviders: routerProviders,
 	}
+}
+
+// SetTools 允许在工具注册表创建后再设置，解决 Phase 7-H 中 dispatcher
+// 依赖 orchestrator、而 orchestrator 又依赖 tool registry 的初始化顺序问题。
+func (o *Orchestrator) SetTools(tools *tool.Registry) {
+	o.tools = tools
+}
+
+// SetAgentBus 允许在 AgentBus 创建后再设置。
+func (o *Orchestrator) SetAgentBus(agentBus *AgentBusAdapter) {
+	o.agentBus = agentBus
+}
+
+// SetPersistence 允许在 persistence 创建后再设置。
+func (o *Orchestrator) SetPersistence(persist runtime.Persistence) {
+	o.persist = persist
 }
 
 // RunBlocking launches all agents and blocks until they all complete.
@@ -194,10 +211,12 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
 				next := specs[i+1]
 				o.agentBus.SendMessage(runtime.AgentMessage{
-					FromAgentID: spec.AgentID,
-					ToAgentID:   next.AgentID,
-					Type:        "observation",
-					Content:     results[i].Result,
+					FromAgentID:   spec.AgentID,
+					FromSubTaskID: rootTaskID + "_" + spec.AgentID,
+					ToAgentID:     next.AgentID,
+					SubTaskID:     rootTaskID + "_" + next.AgentID,
+					Type:          "observation",
+					Content:       results[i].Result,
 				})
 			}
 		}
@@ -214,11 +233,19 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 				// not registered its handler yet.
 				if results[idx].Status == "completed" && o.agentBus != nil {
 					for _, targetID := range s.OutputTo {
+						toSubTaskID := rootTaskID + "_" + targetID
+						// Phase 7-J: 如果目标是 leader，使用 rootTaskID 作为其 SubTaskID，
+						// 因为 leader Engine 按 (leader, rootTaskID) 注册 handler。
+						if targetID == "leader" {
+							toSubTaskID = rootTaskID
+						}
 						o.agentBus.SendMessage(runtime.AgentMessage{
-							FromAgentID: s.AgentID,
-							ToAgentID:   targetID,
-							Type:        "observation",
-							Content:     results[idx].Result,
+							FromAgentID:   s.AgentID,
+							FromSubTaskID: rootTaskID + "_" + s.AgentID,
+							ToAgentID:     targetID,
+							SubTaskID:     toSubTaskID,
+							Type:          "observation",
+							Content:       results[idx].Result,
 						})
 					}
 				}
@@ -373,9 +400,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		SystemPrompt:      spec.SystemPrompt,
 		Model:             model,
 		Endpoint:          o.cfg.LLMEndpoint,
-		APIKey:           o.cfg.LLMAPIKey,
+		APIKey:            o.cfg.LLMAPIKey,
 		Provider:          provider, // mock or real provider resolved above
-		CaseID:           "",       // orchestrator specs do not carry case IDs yet
+		CaseID:            "",       // orchestrator specs do not carry case IDs yet
 		Temperature:       0.7,
 		MaxTokens:         4096,
 		MaxSteps:          contract.MaxSteps,
@@ -391,12 +418,18 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// Phase 6 Router: forward the shared Router/Registry/Providers so child
 		// agents participate in dynamic model selection. When modelRouter is nil
 		// the Engine falls back to the single-model path (legacy behavior).
-		Router:            o.modelRouter,
-		Registry:          o.routerRegistry,
-		Providers:         o.routerProviders,
+		Router:    o.modelRouter,
+		Registry:  o.routerRegistry,
+		Providers: o.routerProviders,
 		// 7-G: child agents have their own SubTaskID so events and snapshots are
 		// isolated per agent execution instance.
-		SubTaskID:         subTaskID,
+		SubTaskID: subTaskID,
+		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
+		Role:                 runtime.AgentRoleWorker,
+		CanDispatchSubAgents: false,
+		CanDefineWorkflow:    false,
+		SupervisorSubTaskID:  rootTaskID,
+		ApproverMode:         "leader",
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Phase 7-A: Note — per-agent Engine/cancel registration is intentionally kept
@@ -496,13 +529,25 @@ func (a *hubAdapter) SendEvent(evt event.Event) {
 // ============================================================================
 
 // AgentMessage is a message sent from one agent to another.
-// It carries the sender's identity, the message content, and optional metadata.
+// It carries the sender's identity, the receiver identity, an optional
+// sub-task target for precise routing, the message content, and optional metadata.
 type AgentMessage struct {
 	// FromAgentID is the agent that sent the message.
 	FromAgentID string `json:"from_agent_id"`
 
 	// ToAgentID is the target agent. If empty, the message is broadcast to all agents.
 	ToAgentID string `json:"to_agent_id"`
+
+	// SubTaskID is the target sub-task ID. Phase 7-I: when set, the message is
+	// routed to the handler registered for the exact (ToAgentID, SubTaskID) pair.
+	// Phase 7-J: leader 注册时使用 rootTaskID，因此子 agent 需要把给 leader 的
+	// 消息 ToAgentID 设为 "leader"、SubTaskID 设为 rootTaskID。
+	SubTaskID string `json:"sub_task_id,omitempty"`
+
+	// FromSubTaskID is the sender's sub-task ID. Phase 7-J: used by persistence
+	// to record which sub-task sent the message, so the frontend timeline can
+	// draw accurate inter-agent arrows.
+	FromSubTaskID string `json:"from_sub_task_id,omitempty"`
 
 	// Type describes the message type: "request", "response", "observation", "error"
 	Type string `json:"type"`
@@ -523,8 +568,11 @@ type AgentMessage struct {
 type AgentBus struct {
 	mu       sync.RWMutex
 	handlers map[string]func(AgentMessage) // agentID → message handler
-	queue    []AgentMessage                 // pending messages for agents not yet registered
-	maxQueue int                            // max pending messages
+	// subTaskHandlers maps "agentID\x1fsubTaskID" to a handler.
+	// Phase 7-I: 支持按 (agentID, subTaskID) 精确路由；空 subTaskID 等价于 RegisterHandler。
+	subTaskHandlers map[string]func(AgentMessage)
+	queue           []AgentMessage // pending messages for agents not yet registered
+	maxQueue        int            // max pending messages
 
 	// persistFn is an optional hook invoked asynchronously for every message
 	// that flows through the bus (delivered or queued). It lets the
@@ -536,8 +584,9 @@ type AgentBus struct {
 // NewAgentBus creates a new AgentBus with a default queue size of 100.
 func NewAgentBus() *AgentBus {
 	return &AgentBus{
-		handlers: make(map[string]func(AgentMessage)),
-		maxQueue: 100,
+		handlers:        make(map[string]func(AgentMessage)),
+		subTaskHandlers: make(map[string]func(AgentMessage)),
+		maxQueue:        100,
 	}
 }
 
@@ -562,12 +611,26 @@ func (b *AgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
 	b.handlers[agentID] = handler
 
 	// Deliver any pending messages for this agent
-	for i, msg := range b.queue {
-		if msg.ToAgentID == agentID {
-			handler(msg)
-			b.queue = append(b.queue[:i], b.queue[i+1:]...)
-			break
-		}
+	b.deliverPendingLocked(agentID, "", handler)
+}
+
+// RegisterHandlerBySubTask 注册一个 (agentID, subTaskID) 精确处理器。
+// 当 subTaskID 为空时行为与 RegisterHandler 一致。Phase 7-I。
+func (b *AgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	key := subTaskHandlerKey(agentID, subTaskID)
+	if subTaskID == "" {
+		b.handlers[agentID] = handler
+	} else {
+		b.subTaskHandlers[key] = handler
+	}
+
+	// 优先投递精确匹配的待处理消息，再处理仅 agentID 匹配的待处理消息。
+	b.deliverPendingLocked(agentID, subTaskID, handler)
+	if subTaskID != "" {
+		b.deliverPendingLocked(agentID, "", handler)
 	}
 }
 
@@ -578,9 +641,63 @@ func (b *AgentBus) UnregisterHandler(agentID string) {
 	delete(b.handlers, agentID)
 }
 
+// UnregisterHandlerBySubTask 移除 (agentID, subTaskID) 处理器。
+// subTaskID 为空时行为与 UnregisterHandler 一致。Phase 7-I。
+func (b *AgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if subTaskID == "" {
+		delete(b.handlers, agentID)
+		return
+	}
+	delete(b.subTaskHandlers, subTaskHandlerKey(agentID, subTaskID))
+}
+
+// subTaskHandlerKey 构造 (agentID, subTaskID) handler 的 map key。
+// 使用不可打印的 unit separator 避免与合法 agentID 冲突。
+func subTaskHandlerKey(agentID, subTaskID string) string {
+	return agentID + "\x1f" + subTaskID
+}
+
+// deliverPendingLocked 尝试把队列中匹配 target 的待处理消息投递给 handler。
+// 必须在 b.mu 已加锁的情况下调用。
+func (b *AgentBus) deliverPendingLocked(agentID, subTaskID string, handler func(AgentMessage)) {
+	// 先精确匹配 (agentID, subTaskID)
+	for i := 0; i < len(b.queue); {
+		msg := b.queue[i]
+		if matchesTarget(msg, agentID, subTaskID) {
+			handler(msg)
+			b.queue = append(b.queue[:i], b.queue[i+1:]...)
+			continue
+		}
+		i++
+	}
+}
+
+// matchesTarget 判断 msg 是否匹配给定的 (agentID, subTaskID)。
+// 当 subTaskID 非空时要求完全一致；当 subTaskID 为空时只匹配未指定
+// SubTaskID 的消息，避免精确消息被 agentID-only handler 误收。Phase 7-J。
+func matchesTarget(msg AgentMessage, agentID, subTaskID string) bool {
+	if msg.ToAgentID != agentID {
+		return false
+	}
+	if subTaskID == "" {
+		// agentID-only fallback: match if message has no specific subTaskID.
+		return msg.SubTaskID == ""
+	}
+	return msg.SubTaskID == subTaskID
+}
+
 // SendMessage sends a message from one agent to another.
 // If the target agent has a registered handler, the handler is called immediately.
 // Otherwise, the message is queued for later delivery.
+//
+// Phase 7-I: SendMessage first looks for an exact (ToAgentID, SubTaskID) handler,
+// then falls back to a ToAgentID-only handler, so sub-task specific routing takes
+// precedence. An empty SubTaskID only matches ToAgentID-only handlers.
+//
+// Phase 7-J: 队列中的消息也按同样的匹配规则重新投递，确保 message.SubTaskID
+// 改变后不会错误地进入旧的 agentID-only handler。
 //
 // When a persistence callback has been installed via SetPersistFn, every
 // message — delivered or queued — is also handed to that callback in a
@@ -602,10 +719,16 @@ func (b *AgentBus) SendMessage(msg AgentMessage) {
 	}
 
 	b.mu.RLock()
-	handler, ok := b.handlers[msg.ToAgentID]
+	var handler func(AgentMessage)
+	if msg.SubTaskID != "" {
+		handler = b.subTaskHandlers[subTaskHandlerKey(msg.ToAgentID, msg.SubTaskID)]
+	}
+	if handler == nil {
+		handler = b.handlers[msg.ToAgentID]
+	}
 	b.mu.RUnlock()
 
-	if ok {
+	if handler != nil {
 		// Deliver immediately
 		handler(msg)
 		return
@@ -671,7 +794,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeRe
 					SystemPrompt: "You are a technical writer. Your job is to take research findings " +
 						"and produce a well-structured, clear, and engaging document. " +
 						"Use write_file to save your output.",
-					Input:        "Based on the provided research, write a comprehensive report.",
+					Input:         "Based on the provided research, write a comprehensive report.",
 					ParentAgentID: "agent_researcher",
 				},
 			},

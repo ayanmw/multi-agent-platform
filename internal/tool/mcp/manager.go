@@ -11,11 +11,11 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
-// ChangeNotifier is called after the set of loaded MCP servers (and therefore
-// the set of registered proxy tools) changes. It is used by cmd/server to
-// broadcast an mcp_tools_changed WebSocket event so the frontend can refresh
-// available tools.
-type ChangeNotifier func()
+// ChangeNotifier is called with the action and affected server ID after the
+// set of loaded MCP servers (and therefore the set of registered proxy tools)
+// changes. It is used by cmd/server to broadcast an mcp_tools_changed WebSocket
+// event so the frontend can refresh available tools.
+type ChangeNotifier func(action, serverID string)
 
 // Manager owns the lifecycle of all configured and dynamically added MCP servers.
 //
@@ -160,11 +160,13 @@ func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID strin
 		// If connection failed but the server record exists, return the managed
 		// server so callers can inspect load_err and retry enable later.
 		if existing, getErr := m.GetServer(pkgID); getErr == nil {
+			m.notifyChange("add", pkgID)
 			return existing, nil
 		}
 		return ManagedServer{}, fmt.Errorf("add %s/%s: %w", marketName, pkgID, err)
 	}
 
+	m.notifyChange("add", pkgID)
 	return m.GetServer(pkgID)
 }
 
@@ -177,12 +179,12 @@ func (m *Manager) SetChangeNotifier(fn ChangeNotifier) {
 }
 
 // notifyChange invokes the registered change notifier, if any.
-func (m *Manager) notifyChange() {
+func (m *Manager) notifyChange(action, serverID string) {
 	m.mu.RLock()
 	fn := m.onChange
 	m.mu.RUnlock()
 	if fn != nil {
-		fn()
+		fn(action, serverID)
 	}
 }
 
@@ -286,6 +288,7 @@ func (m *Manager) AddServer(ctx context.Context, ms ManagedServer) error {
 			return fmt.Errorf("connect server %s: %w", ms.ID, err)
 		}
 	}
+	m.notifyChange("add", ms.ID)
 	return nil
 }
 
@@ -312,6 +315,7 @@ func (m *Manager) RemoveServer(ctx context.Context, id string) error {
 	m.mu.Lock()
 	delete(m.servers, id)
 	m.mu.Unlock()
+	m.notifyChange("delete", id)
 	return nil
 }
 
@@ -334,7 +338,11 @@ func (m *Manager) EnableServer(ctx context.Context, id string) error {
 		}
 	}
 
-	return m.connect(ctx, server)
+	if err := m.connect(ctx, server); err != nil {
+		return err
+	}
+	m.notifyChange("enable", id)
+	return nil
 }
 
 // DisableServer disconnects a server and marks it disabled.
@@ -364,6 +372,7 @@ func (m *Manager) DisableServer(ctx context.Context, id string) error {
 			return fmt.Errorf("persist disable %s: %w", id, err)
 		}
 	}
+	m.notifyChange("disable", id)
 	return nil
 }
 
@@ -378,7 +387,6 @@ func (m *Manager) DisconnectServer(ctx context.Context, id string) error {
 			s.loaded = false
 		}
 		m.mu.Unlock()
-		m.notifyChange()
 	}
 	return err
 }
@@ -437,7 +445,7 @@ func (m *Manager) connect(ctx context.Context, ms ManagedServer) error {
 		s.loadErr = nil
 	}
 	m.mu.Unlock()
-	m.notifyChange()
+	m.notifyChange("connect", ms.ID)
 	return nil
 }
 

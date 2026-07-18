@@ -309,6 +309,46 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_messages_task_id ON agent_messages(task_id);`,
 	},
+
+	// v19: Create approvals table for leader delegation of approval decisions.
+	//
+	// Each row records a high-risk tool call that required approval, including
+	// whether the request was delegated to the leader and the leader's final
+	// decision. This supports auditability, replay, and frontend dashboards.
+	{
+		Version:     19,
+		Description: "Create approvals table for leader delegated approvals",
+		SQL: `CREATE TABLE IF NOT EXISTS approvals (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			sub_task_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			reason TEXT,
+			input JSON,
+			delegated_to_leader BOOLEAN DEFAULT 0,
+			leader_sub_task_id TEXT,
+			leader_decision_step_id TEXT,
+			approved BOOLEAN,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			decided_at DATETIME
+		);
+		CREATE INDEX IF NOT EXISTS idx_approvals_task_id ON approvals(task_id);
+		CREATE INDEX IF NOT EXISTS idx_approvals_sub_task_id ON approvals(sub_task_id);`,
+	},
+
+	// v20: 补全 agent_messages 表的子任务路由字段。
+	//
+	// Phase 7-I 起 AgentBus 消息支持按 (agentID, subTaskID) 精确路由，持久化层
+	// 需要记录 sub_task_id（目标子任务）和 from_sub_task_id（发送方子任务）。
+	// 使用 ALTER TABLE ADD COLUMN 保证旧数据库平滑升级；新库在 v18 创建表样例
+	// 后由本迁移补齐列（RunMigrations 对重复列错误静默跳过）。
+	{
+		Version:     20,
+		Description: "Add sub_task_id and from_sub_task_id to agent_messages",
+		SQL: `ALTER TABLE agent_messages ADD COLUMN sub_task_id TEXT DEFAULT '';
+		ALTER TABLE agent_messages ADD COLUMN from_sub_task_id TEXT DEFAULT '';`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -207,7 +210,7 @@ func TestEvaluateAndBroadcast_NoCaseIDDoesNothing(t *testing.T) {
 func TestEnginePauseResume(t *testing.T) {
 	bus := &recordingBus{}
 	cfg := EngineConfig{
-		AgentID:     "agent_pause_test",
+		AgentID:      "agent_pause_test",
 		SystemPrompt: "You are a test agent.",
 		Model:        "fake-model",
 		Provider:     &fakeJudgeProvider{resp: "noop"},
@@ -288,7 +291,7 @@ func TestEnginePauseResume(t *testing.T) {
 func TestEnginePauseResumeConcurrent(t *testing.T) {
 	bus := &recordingBus{}
 	cfg := EngineConfig{
-		AgentID:     "agent_concurrent",
+		AgentID:      "agent_concurrent",
 		SystemPrompt: "x",
 		Model:        "fake-model",
 		Provider:     &fakeJudgeProvider{resp: "noop"},
@@ -315,4 +318,131 @@ func TestEnginePauseResumeConcurrent(t *testing.T) {
 	_ = engine.IsPaused()
 	// 给 channel 关闭与重建一点时间，确保没有挂起的 close 协程残留。
 	time.Sleep(10 * time.Millisecond)
+}
+
+// fakeAgentBus is a test AgentBus implementation that captures the registered
+// handler so a test can directly invoke it.
+type fakeAgentBus struct {
+	registerFunc    func(agentID string, handler func(AgentMessage))
+	registerSubFunc func(agentID, subTaskID string, handler func(AgentMessage))
+}
+
+func (b *fakeAgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
+	if b.registerFunc != nil {
+		b.registerFunc(agentID, handler)
+	}
+}
+func (b *fakeAgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage)) {
+	if b.registerSubFunc != nil {
+		b.registerSubFunc(agentID, subTaskID, handler)
+	}
+}
+func (b *fakeAgentBus) UnregisterHandler(agentID string)                     {}
+func (b *fakeAgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {}
+func (b *fakeAgentBus) SendMessage(msg AgentMessage)                         {}
+
+// Ensure fakeAgentBus implements runtime.AgentBus at compile time.
+var _ AgentBus = (*fakeAgentBus)(nil)
+
+// TestAgentBusMessageCreatesInputStep verifies that an incoming AgentBus message
+// is treated as a step: step_started(type=agent_message_input), appended to the
+// conversation, system_info(type=agent_message_received), step_complete, and a
+// persisted agent_message_input step.
+func TestAgentBusMessageCreatesInputStep(t *testing.T) {
+	bus := &recordingBus{}
+	sent := AgentMessage{
+		FromAgentID:   "agent_child",
+		FromSubTaskID: "task-123_child",
+		ToAgentID:     "leader",
+		SubTaskID:     "task-123",
+		Type:          "observation",
+		Content:       "child result",
+	}
+
+	var handler atomic.Value
+	agentBus := &fakeAgentBus{
+		registerSubFunc: func(agentID, subTaskID string, h func(AgentMessage)) {
+			handler.Store(h)
+		},
+	}
+
+	cfg := EngineConfig{
+		AgentID:      "leader",
+		SystemPrompt: "You are a leader.",
+		Model:        "fake-model",
+		Provider:     &fakeJudgeProvider{resp: "ack"},
+		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
+		AgentBus:     agentBus,
+		Role:         AgentRoleLeader,
+		SubTaskID:    "task-123",
+		MaxSteps:     2,
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task-123")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		// 与 debug 测试一致：持续轮询直到 handler 注册成功，再立即注入消息。
+		var h func(AgentMessage)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if v := handler.Load(); v != nil {
+				h = v.(func(AgentMessage))
+				break
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+		if h == nil {
+			return
+		}
+		h(sent)
+	}()
+
+	_, _, err := engine.Run(ctx, "go")
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("engine.Run returned unexpected error: %v", err)
+	}
+
+	var startCount, completeCount, receivedCount int
+	for _, evt := range bus.events {
+		if evt.Type == "step_started" && evt.Data["type"] == "agent_message_input" {
+			startCount++
+			if got := evt.Data["from_agent"]; got != "agent_child" {
+				t.Errorf("step_started from_agent = %v, want agent_child", got)
+			}
+			if got := evt.Data["to_sub_task_id"]; got != "task-123" {
+				t.Errorf("step_started to_sub_task_id = %v, want task-123", got)
+			}
+		}
+		if evt.Type == "step_complete" && evt.Data["type"] == "agent_message_input" {
+			completeCount++
+		}
+		if evt.Type == "system_info" && evt.Data["type"] == "agent_message_received" {
+			receivedCount++
+		}
+	}
+	if startCount == 0 {
+		t.Fatalf("expected step_started(type=agent_message_input), got %d", startCount)
+	}
+	if completeCount == 0 {
+		t.Fatalf("expected step_complete(type=agent_message_input), got %d", completeCount)
+	}
+	if receivedCount == 0 {
+		t.Fatalf("expected system_info(type=agent_message_received) for backward compatibility, got %d", receivedCount)
+	}
+
+	// The injected message should have been appended as a user message.
+	found := false
+	wantContent := "[Agent agent_child]: child result"
+	for _, m := range engine.messages {
+		if m.Role == "user" && m.Content == wantContent {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("injected AgentBus message not found in conversation as user message")
+	}
 }

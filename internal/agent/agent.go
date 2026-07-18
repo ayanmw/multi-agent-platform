@@ -6,11 +6,20 @@ import "time"
 type Status string
 
 const (
-	StatusRunning    Status = "running"
-	StatusCompleted  Status = "completed"
-	StatusFailed     Status = "failed"
-	StatusPaused     Status = "paused"
-	StatusCancelled  Status = "cancelled"
+	StatusRunning   Status = "running"
+	StatusCompleted Status = "completed"
+	StatusFailed    Status = "failed"
+	StatusPaused    Status = "paused"
+	StatusCancelled Status = "cancelled"
+)
+
+// AgentRole 表示 agent 在分布式任务中的角色。
+// 在 leader-agent 驱动的任务派发中，只有 leader 允许调用 dispatch_sub_agent。
+type AgentRole string
+
+const (
+	AgentRoleLeader AgentRole = "leader"
+	AgentRoleWorker AgentRole = "worker"
 )
 
 // Agent represents an agent configuration
@@ -24,6 +33,7 @@ type Agent struct {
 	Temperature  float32
 	MaxTokens    int
 	Tools        []string // allowed tool names
+	Role         AgentRole
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

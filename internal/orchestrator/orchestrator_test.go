@@ -126,31 +126,83 @@ func TestAgentBus_NoPersistWhenHookNil(t *testing.T) {
 	// Just assert no panic — passing means nil hook is handled correctly.
 }
 
-// TestAgentBus_MetadataForwarded ensures the persist hook receives the
-// Metadata map intact, including task_id set by Engine.sendAgentMessage.
-func TestAgentBus_MetadataForwarded(t *testing.T) {
+// TestAgentBus_RoutesBySubTask verifies that an exact (agentID, subTaskID)
+// handler receives the message while an agentID-only handler does not when
+// the message carries a different subTaskID. Phase 7-J.
+func TestAgentBus_RoutesBySubTask(t *testing.T) {
 	bus := NewAgentBus()
-	got := make(chan AgentMessage, 1)
-	bus.SetPersistFn(func(msg AgentMessage) error {
-		got <- msg
-		return nil
+
+	fallbackCalled := make(chan struct{}, 1)
+	exactCalled := make(chan AgentMessage, 1)
+
+	bus.RegisterHandler("agent_a", func(msg AgentMessage) {
+		close(fallbackCalled)
 	})
+	bus.RegisterHandlerBySubTask("agent_a", "sub-x", func(msg AgentMessage) {
+		exactCalled <- msg
+	})
+
 	bus.SendMessage(AgentMessage{
-		FromAgentID: "agent_a",
-		ToAgentID:   "agent_b",
+		FromAgentID: "agent_b",
+		ToAgentID:   "agent_a",
+		SubTaskID:   "sub-x",
 		Type:        "request",
-		Content:     "ping",
-		Metadata: map[string]string{
-			"task_id":       "task_123",
-			"from_agent_id": "agent_a",
-		},
+		Content:     "to sub-x",
 	})
+
 	select {
-	case msg := <-got:
-		if msg.Metadata["task_id"] != "task_123" {
-			t.Errorf("task_id metadata = %q, want task_123", msg.Metadata["task_id"])
+	case msg := <-exactCalled:
+		if msg.Content != "to sub-x" {
+			t.Errorf("exact handler content = %q, want to sub-x", msg.Content)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("persist hook did not fire within 2s")
+		t.Fatal("exact (agentID, subTaskID) handler not called")
+	}
+
+	select {
+	case <-fallbackCalled:
+		t.Fatal("agentID-only fallback should not receive a sub-task specific message")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: fallback not invoked.
+	}
+}
+
+// TestAgentBus_FallsBackToAgentIDOnly verifies that a message with an empty
+// SubTaskID is delivered to the agentID-only handler when an exact handler
+// also exists for a different subTaskID.
+func TestAgentBus_FallsBackToAgentIDOnly(t *testing.T) {
+	bus := NewAgentBus()
+
+	fallbackCalled := make(chan AgentMessage, 1)
+	exactCalled := make(chan struct{}, 1)
+
+	bus.RegisterHandler("agent_a", func(msg AgentMessage) {
+		fallbackCalled <- msg
+	})
+	bus.RegisterHandlerBySubTask("agent_a", "sub-x", func(msg AgentMessage) {
+		close(exactCalled)
+	})
+
+	bus.SendMessage(AgentMessage{
+		FromAgentID: "agent_b",
+		ToAgentID:   "agent_a",
+		Type:        "request",
+		Content:     "broadcast",
+	})
+
+	select {
+	case msg := <-fallbackCalled:
+		if msg.Content != "broadcast" {
+			t.Errorf("fallback content = %q, want broadcast", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agentID-only fallback not called")
+	}
+
+	select {
+	case <-exactCalled:
+		t.Fatal("exact handler should not receive a message without SubTaskID")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: exact handler not invoked.
 	}
 }

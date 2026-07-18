@@ -4,7 +4,7 @@
 
 **Goal:** 明确 `Session / Task / SubTask / Agent / AgentBus / Workflow / Turn / Step` 的边界与层级关系，引入**主 Agent（Leader）调度**模型，解决当前多 Agent 共享 `task_id` 导致的事件/步骤/上下文窗口混乱问题，并给出分 Phase 实现路径。
 
-**Status:** 规划文档，待审阅后实施。Task 7 由此升级为一个多 Phase 重构任务。
+**Status:** 规划文档，已审阅并细化权限模型。Task 7 由此升级为一个多 Phase 重构任务。
 
 ---
 
@@ -30,6 +30,7 @@
 5. **Agent 是配置模板；SubTask 是运行实例。**
 6. **主 Agent（Leader）拥有 Workflow 定义权与子 Agent 派发权；子 Agent 不能递归派生子 Agent。**
 7. **AgentBus 只存在于一次 Task 内部，不跨 Task。**
+8. **Leader Agent 同时是该 Task 的子 Agent 动作审批者（可替代 user 审批）。**
 
 ---
 
@@ -54,6 +55,7 @@
 - 当前所有 Agent 平级，没有“谁能派生子 Agent”的约束。
 - `run_shell` / `write_file` 等工具已有 PolicyGate，但“派生子 Agent”还没有对应的权限门。
 - 风险：子 Agent 理论上可能无限递归派生，导致任务爆炸。
+- **新增**：子 Agent 的危险工具审批希望由 Leader Agent 自主判定，而不是每次都需要用户介入，否则多 Agent 协作失去意义。
 
 ### 2.4 AgentBus 与 Step 的关系未显式表达
 
@@ -100,6 +102,7 @@ Session (session_id)
 | 接收 AgentBus 结果汇总 | ✅ 仅主 Agent | 其他子 Agent 默认向主 Agent 汇报 |
 | 与用户交互 / 产出最终答案 | ✅ 仅主 Agent | 最终 response 来自主 Agent |
 | 调用普通工具 | ✅ | run_shell / write_file / read_file 等 |
+| 审批子 Agent 的危险动作 | ✅ 仅主 Agent | 替代 user 成为子 Agent 动作审批者 |
 | 再次派生子 Agent | ❌ | 子 Agent 的 `allowedTools` 不包含 `dispatch_sub_agent` |
 | 定义 Workflow | ❌ | Workflow 只能是主 Agent 的输出 |
 
@@ -123,7 +126,53 @@ User Input
 - Orchestrator 不再是“车间主任”，而是**主 Agent 的调度工具**。
 - 前端可以看到 Leader 为“什么”、“怎么”派生子 Agent。
 
-### 3.4 AgentBus 通信模型
+### 3.4 审批模型：Leader 作为子 Agent 动作审批者
+
+当前系统的审批流程：
+
+```text
+子 Agent 调用危险工具
+  → Engine 创建 pause/approval 事件
+  → 前端弹窗请求 user 审批
+  → user 批准后工具才执行
+```
+
+多 Agent 模式下，每个子 Agent 的每个 `run_shell` / `write_file` 都等待 user 审批，效率极低。**应允许 Leader Agent 代替 user 审批其直属子 Agent 的动作**。
+
+新的审批流程（按审批来源优先级）：
+
+| 优先级 | 审批来源 | 适用场景 |
+|--------|----------|----------|
+| 1 | 系统自动通过 | 读操作、低风险白名单工具 |
+| 2 | Leader Agent 审批 | 子 Agent 调用危险工具，由 Leader 自主判断是否批准 |
+| 3 | User 审批 | Leader 本身调用危险工具，或未配置 Leader 审批时 |
+
+**实现要点**：
+
+1. **审批作用域按 SubTask 区分**：Leader 只能审批它自己派生的 Child SubTask，不能审批其他 Task 的 SubTask。
+2. **Leader 审批是一个内部 LLM 调用**：将子 Agent 的 tool_call 内容发送给 Leader，Leader 以 tool_call `approve_sub_agent_action` 或 `reject_sub_agent_action` 回复。
+3. **审批结果持久化**：将 Leader 的审批决定记录为一条特殊 step 或 agent_message，便于审计与回放。
+4. **失败回退**：如果 Leader 审批失败（如 Leader 已结束），回退到 user 审批或拒绝。
+
+审批事件流转：
+
+```text
+Child SubTask 调用 run_shell
+  → Engine.PauseForApproval 检查子 Agent 的审批代理者
+    → 若该 SubTask 的 SupervisorSubTaskID = Leader.SubTaskID
+      → 构造审批请求发给 Leader
+      → Leader 调用 approve_sub_agent_action / reject_sub_agent_action
+      → 结果写回 Child SubTask 的 approval channel
+    → 若无 Supervisor 或 Leader 不可用
+      → 回退到 user 审批
+```
+
+**数据模型扩展**：
+
+- `EngineConfig` 增加 `SupervisorSubTaskID string`：本 SubTask 的审批代理者（子 Agent 指向 Leader，Leader 为空）。
+- `ApprovalRequest` 增加 `delegated_to_leader bool` 与 `leader_decision_event_id string` 字段。
+
+### 3.5 AgentBus 通信模型
 
 | 通信方向 | 是否允许 | 说明 |
 |----------|----------|------|
@@ -135,7 +184,7 @@ User Input
 - AgentBus 消息持久化到 `agent_messages` 表时已包含 `task_id`、`from_sub_task_id`、`to_sub_task_id`。
 - 收到 AgentBus 消息的 SubTask，会把消息内容作为一条 `user` 角色消息追加到 conversation，并触发一个 `step_started`。
 
-### 3.5 SubTask 隔离要求
+### 3.6 SubTask 隔离要求
 
 | 资源 | 隔离级别 |
 |------|----------|
@@ -146,6 +195,7 @@ User Input
 | Token 统计 | SubTask 级独立，Task 级聚合 |
 | Checkpoints | SubTask 级独立 |
 | AgentBus 消息收件箱 | 按 `agent_id` + `sub_task_id` 注册 |
+| 审批代理关系 | SubTask 级：Leader 是 Child SubTask 的 Supervisor |
 
 ---
 
@@ -166,7 +216,15 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_subtasks
   ON agent_messages(task_id, from_sub_task_id, to_sub_task_id);
 ```
 
-### 4.3 新增 `sub_task_meta` 表（可选，若 `task_meta` 不够表达）
+### 4.3 审批记录增强
+
+```sql
+ALTER TABLE approvals ADD COLUMN delegated_to_leader BOOLEAN DEFAULT 0;
+ALTER TABLE approvals ADD COLUMN leader_sub_task_id TEXT;
+ALTER TABLE approvals ADD COLUMN leader_decision_step_id TEXT;
+```
+
+### 4.4 新增 `sub_task_meta` 表（可选，若 `task_meta` 不够表达）
 
 若 `task_meta` 以 `task_id` 为 key 已经能覆盖 SubTask，则无需新表。否则：
 
@@ -176,6 +234,7 @@ CREATE TABLE IF NOT EXISTS sub_task_meta (
     task_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     parent_task_id TEXT NOT NULL,
+    supervisor_sub_task_id TEXT,
     is_root BOOLEAN NOT NULL DEFAULT 0,
     strategy_hint TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -191,60 +250,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 **目标**：让 SubTask 有显式 ID，前端事件、Context Window、Cancel/Pause 都能精确到 SubTask。
 
-**Files：**
-- `internal/runtime/engine.go`
-- `internal/orchestrator/orchestrator.go`
-- `pkg/db/database.go`
-- `web/src/composables/useTaskStore.ts`
-- `web/src/components/ContextWindowPanel.vue`（新增或修改）
-- `web/src/types/events.ts`
-
-**拆分步骤：**
-
-- [ ] **Step A.1: Engine 明确 SubTask ID**
-
-  `EngineConfig` 增加 `SubTaskID string` 字段。`taskID` 保留为 Root Task ID，`subTaskID` 用于 SubTask 自身标识。
-
-  ```go
-  type EngineConfig struct {
-      // ... 现有字段
-      SubTaskID string // 本 Agent 的运行实例 ID；对 Leader 等于 taskID
-  }
-  ```
-
-- [ ] **Step A.2: 所有事件携带 sub_task_id**
-
-  在 `event.Event` 结构体中新增 `SubTaskID string` 字段（如果事件结构尚未支持，则通过 `data["sub_task_id"]` 传递）。
-
-  修改 Engine 中所有 `event.NewEvent` 调用，把 `e.cfg.SubTaskID` 作为事件元数据的一部分。
-
-- [ ] **Step A.3: Context Window 快照按 SubTask 隔离**
-
-  当前 `RecordTaskContextSnapshot(e.taskID, snapshot)` 改为按 `subTaskID` 记录：
-
-  ```go
-  RecordTaskContextSnapshot(e.cfg.SubTaskID, snapshot)
-  ```
-
-  REST API `/api/tasks/{id}/context-window` 增加可选 `sub_task_id` query 参数。
-
-- [ ] **Step A.4: 前端 taskCache 增加 SubTask 维度**
-
-  `TaskState.agents` 仍然按 `agent_id` 分组，但每个 `AgentState` 内部增加 `subTaskId` 字段。
-
-  `useTaskStore` 在路由事件时，根据 `data.sub_task_id` 找到对应 AgentState。
-
-- [ ] **Step A.5: ContextWindowPanel 增加 Agent/SubTask 选择器**
-
-  在多 Agent 任务下，ContextWindowPanel 顶部显示 `agent_id` 下拉选择，切换后展示对应 SubTask 的 context snapshot。
-
-- [ ] **Step A.6: 验证与提交**
-
-  - `go test ./...`
-  - `npm run build`
-  - 跑一个 multi-agent 任务，验证 Leader 和每个 Child 的 context window 都能独立查看。
-
-  Commit: `Phase 7-G: explicit sub-task identity and per-subtask context window`
+**状态：已完成。** Commit: `Phase 7-G: merge subtask identity and per-SubTask context window into main`
 
 ---
 
@@ -323,14 +329,16 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 ### Phase C: 权限约束模型（中期）
 
-**目标**：建立主/子 Agent 的权限边界，防止子 Agent 递归派生。
+**目标**：建立主/子 Agent 的权限边界，防止子 Agent 递归派生；并引入 Leader 作为子 Agent 动作审批者。
 
 **Files：**
 - `internal/agent/agent.go`
 - `internal/runtime/engine.go`
+- `internal/runtime/approval.go`（新增或改造）
 - `internal/tool/builtin.go`
 - `internal/orchestrator/orchestrator.go`
-- `internal/harness`（可选，新增 rule）
+- `internal/harness/policy.go`（可选，新增 rule）
+- `pkg/db/database.go`
 
 **拆分步骤：**
 
@@ -347,48 +355,46 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
   `Agent` 结构体增加 `Role AgentRole`。
 
-- [ ] **Step C.2: EngineConfig 增加权限字段**
+- [ ] **Step C.2: EngineConfig 增加权限与审批代理字段**
 
   ```go
   type EngineConfig struct {
       // ...
-      Role                AgentRole
+      Role                 AgentRole
       CanDispatchSubAgents bool
-      CanDefineWorkflow   bool
+      CanDefineWorkflow    bool
+      SupervisorSubTaskID  string // 审批代理者 SubTaskID；Leader 为空，子 Agent 指向 Leader
+      ApproverMode         string // "user" | "leader" | "auto"
   }
   ```
 
   初始化时根据 Role 自动设置：
-  - `leader`：`CanDispatchSubAgents = true`, `CanDefineWorkflow = true`
-  - `worker`：全部为 `false`
+  - `leader`：`CanDispatchSubAgents = true`, `CanDefineWorkflow = true`, `ApproverMode = "user"`
+  - `worker`：全部为 `false`，`ApproverMode = "leader"`
 
 - [ ] **Step C.3: Tool 层权限拦截**
 
   `dispatch_sub_agent` tool 执行时校验 `CanDispatchSubAgents`。
   未来若子 Agent 可能获得“代理”能力，需显式授权并在 `allowedTools` 中列明。
 
-- [ ] **Step C.4: 可选：PolicyGate Rule**
+- [ ] **Step C.4: Leader 审批子 Agent 动作**
 
-  新增 `SubAgentDispatchRule`：
+  1. 在 `Engine.PauseForApproval` 中，若当前 Engine 是 Worker 且 `ApproverMode == "leader"`，则将审批请求转发给 `SupervisorSubTaskID` 对应的 Leader Engine。
+  2. Leader Engine 收到审批请求后，作为一次特殊的 tool_call 调用 `approve_sub_agent_action` / `reject_sub_agent_action`。
+  3. Leader 的审批结果写回 Worker Engine 的 approval channel，继续执行。
+  4. 审批事件 `approval_delegated` / `approval_decided_by_leader` 发射到前端。
 
-  ```go
-  func (r *SubAgentDispatchRule) Check(toolName string, input map[string]any, ctx ExecutionContext) error {
-      if toolName != "dispatch_sub_agent" {
-          return nil
-      }
-      if ctx.Role != AgentRoleLeader {
-          return ErrBlockedByPolicy{Rule: "SubAgentDispatchRule", Reason: "only leader can dispatch sub-agents"}
-      }
-      return nil
-  }
-  ```
+- [ ] **Step C.5: 数据库持久化调整**
 
-- [ ] **Step C.5: 验证与提交**
+  在 `approvals` 表中增加 `delegated_to_leader`、`leader_sub_task_id`、`leader_decision_step_id` 字段。
+
+- [ ] **Step C.6: 验证与提交**
 
   - 单测：子 Agent 调用 `dispatch_sub_agent` 必须失败。
   - 单测：主 Agent 调用 `dispatch_sub_agent` 成功。
+  - 单测：子 Agent 的 Worker 调用危险工具时，Leader 能收到审批请求并返回批准/拒绝。
 
-  Commit: `Phase 7-I: leader-only sub-agent dispatch permission model`
+  Commit: `Phase 7-I: leader-only sub-agent dispatch permission model and leader delegation for approvals`
 
 ---
 
@@ -399,6 +405,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 **Files：**
 - `internal/runtime/engine.go`
 - `internal/orchestrator/agentbus.go`
+- `pkg/db/database.go`
 - `web/src/components/AgentBusTimeline.vue`
 
 **拆分步骤：**
@@ -434,6 +441,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 | Workflow 由谁管理？ | 主 Agent。子 Agent 没有定义或派发 Workflow 的权限。 |
 | AgentBus 消息能不能跨 Task？ | 不能。AgentBus 按 Task 隔离。 |
 | 子 Agent 能派生子 Agent 吗？ | 默认不能。只有主 Agent 可以。 |
+| 子 Agent 的危险动作由谁审批？ | 默认由 Leader Agent 审批；Leader 自身动作由 user 审批。 |
 | Turn 和 Task 什么关系？ | Turn 是前端一轮交互；一次 Turn 可能包含一个完整的 Task（含多个 SubTask）。 |
 | Step 属于谁？ | Step 属于某个具体的 SubTask，在 SubTask 内部编号。 |
 | Context Window 应该按什么粒度展示？ | 按 SubTask（即 Agent 实例）展示，未来支持按 Step 回溯。 |
@@ -468,6 +476,14 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 2. Tool Registry 返回 `ErrBlockedByPolicy`。
 3. Engine 将错误作为 observation 反馈给 LLM，不终止任务（除非连续重复错误）。
 
+### 场景 4：Leader 审批子 Agent 动作
+
+1. 子 Agent coder 调用 `write_file`。
+2. Engine 检查到该 SubTask 的 Supervisor 是 Leader，创建 `approval_delegated` 事件。
+3. Leader 收到审批请求，调用 `approve_sub_agent_action`。
+4. coder 的 tool 继续执行，并生成 `approval_decided_by_leader` 事件。
+5. 前端时间线显示审批由 Leader 代理完成。
+
 ---
 
 ## 8. 风险与回滚
@@ -478,11 +494,14 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 | Leader 调度增加一次 LLM 调用，延迟更高 | Leader 可对简单任务直接回答，不走 dispatch；支持配置强制 Workflow 减少 LLM 决策。 |
 | 子 Agent 权限误判导致正常任务失败 | `CanDispatchSubAgents` 默认对 leader=true，worker=false；有显式日志和事件。 |
 | AgentBus 按 SubTask 路由破坏现有 handler | 保留按 `agent_id` 注册的 fallback，新逻辑优先按 `(agentID, subTaskID)` 匹配。 |
+| Leader 审批引入循环或死锁 | 审批转发使用超时机制；Leader 不可用自动回退 user 审批。 |
+| Leader 审批结果不可解释 | 所有 Leader 审批决定作为 step / agent_message 持久化，支持回放。 |
 
 ---
 
 ## 9. 与前期任务的衔接
 
 - `Phase 7-A` ~ `Phase 7-F`（已提交）为本规划奠定了基础：per-agent cancel/pause/resume、AgentBus 持久化、LLM 分解、Workflow Editor、AgentBus 可视化。
-- `Phase 7-G` ~ `Phase 7-J` 为本规划要实现的后续任务。
-- Task 7 的 scope 从“补一个 context window 选择器”升级为“SubTask 身份显式化 + 主 Agent 调度 + 权限模型”。
+- `Phase 7-G`（已合并到 main）完成了 SubTask 身份显式化与 Context Window 隔离。
+- `Phase 7-H` ~ `Phase 7-J` 为本规划要实现的后续任务。
+- Task 7 的 scope 从“补一个 context window 选择器”升级为“SubTask 身份显式化 + 主 Agent 调度 + 权限模型 + AgentBus 绑定”。

@@ -55,11 +55,33 @@ func (a *AgentBusAdapter) RegisterHandler(agentID string, handler func(runtime.A
 	// runtime.AgentMessage doesn't have it; Metadata is forwarded.
 	a.bus.RegisterHandler(agentID, func(msg AgentMessage) {
 		handler(runtime.AgentMessage{
-			FromAgentID: msg.FromAgentID,
-			ToAgentID:   msg.ToAgentID,
-			Type:        msg.Type,
-			Content:     msg.Content,
-			Metadata:    msg.Metadata,
+			FromAgentID:   msg.FromAgentID,
+			FromSubTaskID: msg.FromSubTaskID,
+			ToAgentID:     msg.ToAgentID,
+			SubTaskID:     msg.SubTaskID,
+			Type:          msg.Type,
+			Content:       msg.Content,
+			Metadata:      msg.Metadata,
+		})
+	})
+}
+
+// RegisterHandlerBySubTask 在 adapter 层面实现 runtime.AgentBus 的按 SubTask 注册。
+// 当 subTaskID 为空时委托给 RegisterHandler，否则注册 (agentID, subTaskID) 精确 handler。
+func (a *AgentBusAdapter) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(runtime.AgentMessage)) {
+	if subTaskID == "" {
+		a.RegisterHandler(agentID, handler)
+		return
+	}
+	a.bus.RegisterHandlerBySubTask(agentID, subTaskID, func(msg AgentMessage) {
+		handler(runtime.AgentMessage{
+			FromAgentID:   msg.FromAgentID,
+			FromSubTaskID: msg.FromSubTaskID,
+			ToAgentID:     msg.ToAgentID,
+			SubTaskID:     msg.SubTaskID,
+			Type:          msg.Type,
+			Content:       msg.Content,
+			Metadata:      msg.Metadata,
 		})
 	})
 }
@@ -69,16 +91,24 @@ func (a *AgentBusAdapter) UnregisterHandler(agentID string) {
 	a.bus.UnregisterHandler(agentID)
 }
 
+// UnregisterHandlerBySubTask 移除 (agentID, subTaskID) handler。
+// subTaskID 为空时委托给 UnregisterHandler。
+func (a *AgentBusAdapter) UnregisterHandlerBySubTask(agentID, subTaskID string) {
+	a.bus.UnregisterHandlerBySubTask(agentID, subTaskID)
+}
+
 // SendMessage sends a message from one agent to another. The adapter converts
 // the runtime.AgentMessage to an orchestrator.AgentMessage before sending.
 // The Timestamp is set by the orchestrator's SendMessage method, and
 // Metadata is forwarded so downstream persistence can route by task_id.
 func (a *AgentBusAdapter) SendMessage(msg runtime.AgentMessage) {
 	a.bus.SendMessage(AgentMessage{
-		FromAgentID: msg.FromAgentID,
-		ToAgentID:   msg.ToAgentID,
-		Type:        msg.Type,
-		Content:     msg.Content,
-		Metadata:    msg.Metadata,
+		FromAgentID:   msg.FromAgentID,
+		FromSubTaskID: msg.FromSubTaskID,
+		ToAgentID:     msg.ToAgentID,
+		SubTaskID:     msg.SubTaskID,
+		Type:          msg.Type,
+		Content:       msg.Content,
+		Metadata:      msg.Metadata,
 	})
 }

@@ -153,6 +153,15 @@ type EventBus interface {
 	SendEvent(event.Event)
 }
 
+// AgentRole 表示 runtime Engine 在分布式任务中的角色。
+// 与 internal/agent.AgentRole 等价，重复定义以避免 runtime 依赖 agent 包。
+type AgentRole string
+
+const (
+	AgentRoleLeader AgentRole = "leader"
+	AgentRoleWorker AgentRole = "worker"
+)
+
 // EngineConfig holds all configuration needed to create and run an Engine.
 // It is the single source of truth for an agent's identity, model settings,
 // safety limits, and persistence backend.
@@ -342,6 +351,39 @@ type EngineConfig struct {
 	// the caller emits a task_timeout failure event.
 	Timeout time.Duration
 
+	// Role 表示当前 Engine 运行的是 leader 还是 worker。
+	// 由 cmd/server 在创建 root agent 或 orchestrator 在创建子 agent 时设置。
+	// 工具层可通过该字段判断当前 agent 是否有权调用 leader 专用工具（如
+	// dispatch_sub_agent）。
+	// Added in Phase 7-H.
+	Role AgentRole
+
+	// CanDispatchSubAgents 标记当前 agent 是否可以调用 dispatch_sub_agent。
+	// 仅在 Role 为 leader 时允许置 true。
+	// Added in Phase 7-H.
+	CanDispatchSubAgents bool
+
+	// CanDefineWorkflow 标记当前 agent 是否允许自定义工作流。
+	// leader 可以定义；worker 由父级 orchestrator 决定。
+	// Added in Phase 7-H.
+	CanDefineWorkflow bool
+
+	// SupervisorSubTaskID 是当前 agent 的父级/监督 agent 的子任务 ID。
+	// worker 由 orchestrator 指向 root task；leader 留空。
+	// Added in Phase 7-H.
+	SupervisorSubTaskID string
+
+	// ApproverMode 决定高风险审批由谁处理："user" 或 "leader"。
+	// Phase 7-H 占位用，Phase I 详细实现。
+	ApproverMode string
+
+	// SupervisorDecisionHandler 是 worker 在 ApproverMode="leader" 时把高风险
+	// 审批请求委托给 supervisor leader 的回调。实现者由 cmd/server 注入，
+	// 负责查找 supervisor Engine 并等待其通过 approve/reject_sub_agent_action
+	// 工具做出决定。
+	// Added in Phase 7-I.
+	SupervisorDecisionHandler ApprovalDelegationHandler
+
 	// OnLLMUsage is an optional callback invoked after every successful LLM call
 	// in the ReAct loop. It receives the actual model selected (which may differ
 	// from cfg.Model when Router is active), the resolved ModelProfile, and the
@@ -350,7 +392,7 @@ type EngineConfig struct {
 	//
 	// The callback is best-effort: panics are recovered and logged, and errors
 	// from the callback do not interrupt the ReAct loop.
-	OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
+	OnLLMUsage OnLLMUsage
 
 	// EvaluationRepository is an optional cases.Repository used to persist the
 	// acceptance evaluation result when a task completes. When nil, evaluation
@@ -359,9 +401,13 @@ type EngineConfig struct {
 	EvaluationRepository EvaluationRepository
 }
 
-// EvaluationRepository is the minimal interface the Engine needs from the
-// cases package to persist acceptance evaluations. It is intentionally small
-// to keep runtime decoupled from cases package internals.
+// OnLLMUsage is the callback type invoked after every successful LLM call.
+type OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
+
+// EvaluationRepository is an optional cases.Repository used to persist the
+// acceptance evaluation result when a task completes. When nil, evaluation
+// results are still broadcast via task_evaluated events but are not durably
+// stored.
 type EvaluationRepository interface {
 	SaveEvaluation(eval cases.CaseEvaluation) error
 }
@@ -622,7 +668,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	agentMsgCh := make(chan AgentMessage, 10)
 	agentBusDone := make(chan struct{})
 	if e.agentBus != nil {
-		e.agentBus.RegisterHandler(e.cfg.AgentID, func(msg AgentMessage) {
+		agentBusHandler := func(msg AgentMessage) {
 			select {
 			case agentMsgCh <- msg:
 			default:
@@ -630,19 +676,43 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// This is a safety measure; in practice, the channel should be
 				// large enough to handle bursts.
 			}
-		})
+		}
+		// Phase 7-J: leader 必须使用按 SubTaskID 注册，才能收到子 agent 发给
+		// (leader, rootTaskID) 的消息。子 agent 保持 agentID-only 兼容旧行为。
+		if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+			e.agentBus.RegisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID, agentBusHandler)
+		} else {
+			e.agentBus.RegisterHandler(e.cfg.AgentID, agentBusHandler)
+		}
 		go func() {
 			defer close(agentBusDone)
 			for {
 				select {
 				case <-ctx.Done():
 					// Context cancelled — stop listening.
-					e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+						e.agentBus.UnregisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID)
+					} else {
+						e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					}
 					return
 				case msg, ok := <-agentMsgCh:
 					if !ok {
 						return
 					}
+					// Phase 7-J: 把 AgentBus 输入当作一个独立 step，让前端时间线
+					// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
+					// 最后发射 step_complete 并持久化该 step。
+					e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"type":              "agent_message_input",
+						"from_agent":        msg.FromAgentID,
+						"from_sub_task_id":  msg.SubTaskID, // 对旧消息可能为空
+						"to_agent":          e.cfg.AgentID,
+						"to_sub_task_id":    e.cfg.SubTaskID,
+						"msg_type":          msg.Type,
+						"content":           msg.Content,
+					}))
+
 					// Append the incoming message to the conversation as a user
 					// message. The LLM will see it as a new input from another agent.
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
@@ -652,6 +722,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 					// Emit a system_info event so the frontend can show the
 					// inter-agent communication in the UI.
+					// Phase 7-J 注：保留此事件以兼容旧前端监听器，但 step 事件才是
+					// 推荐的白盒展示方式（system_info 已标记为 deprecated）。
 					e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"type":       "agent_message_received",
 						"from_agent": msg.FromAgentID,
@@ -659,6 +731,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						"msg_type":   msg.Type,
 						"content":    msg.Content,
 					}))
+
+					e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"type": "agent_message_input",
+					}))
+					e.saveStep(StepRecord{
+						TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+						Type: "agent_message_input", Status: "completed", Content: formatted,
+					})
 				}
 			}
 		}()
@@ -1717,6 +1797,14 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		// Engine 需要发射 system_info 事件到前端，等待用户批准/拒绝。
 		var approvalErr *harness.ErrApprovalRequired
 		if errors.As(execErr, &approvalErr) {
+			if e.cfg.Role == AgentRoleWorker && e.cfg.ApproverMode == "leader" {
+				return e.handleApprovalDelegation(tc, &ApprovalError{
+					ApprovalID: approvalErr.ApprovalID,
+					Tool:       approvalErr.Tool,
+					Reason:     approvalErr.Reason,
+					Input:      approvalErr.Input,
+				}, args, duration)
+			}
 			return e.handleApprovalRequired(tc, approvalErr, args, duration)
 		}
 
@@ -2025,18 +2113,55 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 //
 // If the AgentBus is nil, this is a no-op - agent-to-agent communication is disabled.
 func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
+	e.sendAgentMessageWithSubTask(toAgentID, msgType, content)
+}
+
+// SendAgentMessage is the public variant of sendAgentMessage used by external
+// callers (cmd/server) to inject an AgentBus message into this Engine's
+// listener. The toSubTaskID parameter is optional; when empty the message is
+// routed to the agentID handler. Added in Phase 7-I.
+func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
+	if e.agentBus == nil {
+		return
+	}
+	if toSubTaskID == "" {
+		toSubTaskID = e.cfg.SubTaskID
+	}
+	msg := AgentMessage{
+		FromAgentID:   e.cfg.AgentID,
+		FromSubTaskID: e.cfg.SubTaskID,
+		ToAgentID:     e.cfg.AgentID,
+		SubTaskID:     toSubTaskID,
+		Type:          msgType,
+		Content:       content,
+		Metadata: map[string]string{
+			"task_id":          e.taskID,
+			"from_agent_id":    e.cfg.AgentID,
+			"from_sub_task_id": e.cfg.SubTaskID,
+		},
+	}
+	e.agentBus.SendMessage(msg)
+}
+
+// sendAgentMessageWithSubTask sends a message to another agent via the AgentBus,
+// optionally targeting a specific subTaskID. If subTaskID is empty, the message
+// is routed to the agent's default handler. Added in Phase 7-I.
+func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content string) {
 	if e.agentBus == nil {
 		return
 	}
 
 	msg := AgentMessage{
-		FromAgentID: e.cfg.AgentID,
-		ToAgentID:   toAgentID,
-		Type:        msgType,
-		Content:     content,
+		FromAgentID:   e.cfg.AgentID,
+		FromSubTaskID: e.cfg.SubTaskID,
+		ToAgentID:     "",
+		SubTaskID:     toSubTaskID,
+		Type:          msgType,
+		Content:       content,
 		Metadata: map[string]string{
-			"task_id":       e.taskID,
-			"from_agent_id": e.cfg.AgentID,
+			"task_id":          e.taskID,
+			"from_agent_id":    e.cfg.AgentID,
+			"from_sub_task_id": e.cfg.SubTaskID,
 		},
 	}
 
@@ -2044,11 +2169,12 @@ func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 
 	// Emit a system_info event so the frontend can show the message in the UI.
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"type":       "agent_message_sent",
-		"from_agent": e.cfg.AgentID,
-		"to_agent":   toAgentID,
-		"msg_type":   msgType,
-		"content":    content,
+		"type":           "agent_message_sent",
+		"from_agent":     e.cfg.AgentID,
+		"to_agent":       "",
+		"to_sub_task_id": toSubTaskID,
+		"msg_type":       msgType,
+		"content":        content,
 	}))
 }
 
