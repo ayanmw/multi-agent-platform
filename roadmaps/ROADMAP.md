@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
 > **Last updated**: 2026-07-18
-> **Current version**: v0.7.1 Alpha (MCP support with frontend + WebSocket events)
+> **Current version**: v0.7.4 Alpha (MCP SSE transport + remote marketplace)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -515,7 +515,8 @@ const activeTaskId = ref<string | null>(null)
 - [ ] `/api/tasks/:id/context_window` 历史快照查询端点（当前仅 WS 实时事件）
 - [ ] F8 / F9 遗留修复（WS 重连补事件、maxSteps 滑块同步）
 - [ ] RBAC enforcement + Auth 敏感端点保护
-- [ ] **MCP 增强：SSE transport、远程市场安装、工具变更事件 `{mcp_tools_changed}`、按 project 的 MCP 可见性**
+- [x] **MCP 增强：SSE transport、远程市场安装、工具变更事件 `{mcp_tools_changed}`、按 project 的 MCP 可见性**
+  - 已交付（本批次）: stdio transport + Manager 生命周期 + DB 持久化 + `/api/mcp/servers` REST API + **MCP Marketplace Provider（static default market）+ 前端市场安装入口**
 
 **目标**: 在 Phase 6 落地的 Auth（API key + RBAC 骨架）与 RAG（本地 TF-IDF + 内存向量库）之上，推进生产化、多用户、深度可观测与外部集成。延续 6-D/6-E 的"非空壳、真实运行"原则。MCP 已作为 Phase 6 扩展完成核心能力（stdio transport + Manager + DB + REST API），剩余增强项入 Phase 7。
 
@@ -583,6 +584,7 @@ const activeTaskId = ref<string | null>(null)
 | v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
 | v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
 | v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
-| v0.7.1 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 |
-| v0.7.2 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program、core/web_search (Exa/Parallel) + approval 元数据 + sandbox runner 预览 |
-| v0.7.3 Alpha | 2026-07-18 | Phase 7-C 深度可观测: dependency-free trace span + 审计日志 SQLite + LLM/tool 延迟直方图 + `/api/audit`/`/api/traces`/`/api/replay` 端点 + 前端 TraceTreePanel 可视化 + 事件回放 |
+| v0.7.1 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program + mcp/web_search 占位 |
+| v0.7.2 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 + MCP 市场 Provider（default static market）+ 前端市场安装入口 |
+| v0.7.3 Alpha | 2026-07-18 | MCP SSE transport: `internal/tool/mcp/sse_transport.go` + endpoint handshake + JSON-RPC over SSE + Manager/REST/前端 create dialog 已支持 `sse` transport |
+| v0.7.4 Alpha | 2026-07-18 | MCP 远程 marketplace: 新增 `URLProvider` 从 HTTP URL 拉取 JSON catalog + `MCP_MARKETS` 环境变量注册 + Manager 自动加载远程市场 + 示例与测试 |

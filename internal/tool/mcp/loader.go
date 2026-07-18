@@ -160,7 +160,10 @@ func newTransport(cfg ServerConfig) (Transport, error) {
         }
         return newStdioTransport(cfg), nil
     case "sse":
-        return nil, fmt.Errorf("sse transport not yet implemented") // TODO: Phase 5
+        if cfg.Endpoint == "" {
+            return nil, fmt.Errorf("sse transport requires endpoint")
+        }
+        return newSSETransport(cfg), nil
     default:
         return nil, fmt.Errorf("unsupported transport %q", cfg.Transport)
     }

@@ -38,6 +38,10 @@ type Config struct {
 	// Dynamic servers added at runtime are loaded separately by the MCP manager.
 	MCPServers []mcp.ServerConfig
 
+	// MCPMarkets lists remote marketplace catalogs loaded from MCP_MARKETS.
+	// Each entry is fetched at startup and registered as a marketplace provider.
+	MCPMarkets []MCPMarketConfig
+
 	// Sandbox configuration for execute_program (Phase 5 preview).
 	// When EnableSandbox is false (default), execute_program runs locally.
 	// When true, the runner uses Docker with the configured image.
@@ -69,6 +73,13 @@ type ModelConfig struct {
 	Provider string // provider type: "openai", "anthropic", "deepseek"
 	Endpoint string // provider API base URL
 	APIKey   string // provider API key
+}
+
+// MCPMarketConfig describes a remote MCP marketplace catalog.
+// The Name field becomes the provider name; URL is the JSON catalog endpoint.
+type MCPMarketConfig struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // Load reads .env file and environment variables to populate Config
@@ -168,6 +179,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
+	// Load remote MCP marketplace configuration
+	if err := cfg.LoadMCPMarketConfig(); err != nil {
+		return nil, fmt.Errorf("load mcp market config: %w", err)
+	}
+
 	return cfg, nil
 }
 
@@ -189,6 +205,23 @@ func (cfg *Config) LoadMCPConfig() error {
 		return fmt.Errorf("parse MCP_SERVERS JSON: %w", err)
 	}
 	cfg.MCPServers = servers
+	return nil
+}
+
+// LoadMCPMarketConfig loads remote MCP marketplace catalogs from the
+// MCP_MARKETS environment variable. The value must be a JSON array of
+// MCPMarketConfig objects. Providers that fail to fetch are logged but do not
+// prevent the rest of the configuration from loading.
+func (cfg *Config) LoadMCPMarketConfig() error {
+	jsonStr := os.Getenv("MCP_MARKETS")
+	if jsonStr == "" {
+		return nil
+	}
+	var markets []MCPMarketConfig
+	if err := json.Unmarshal([]byte(jsonStr), &markets); err != nil {
+		return fmt.Errorf("parse MCP_MARKETS JSON: %w", err)
+	}
+	cfg.MCPMarkets = markets
 	return nil
 }
 

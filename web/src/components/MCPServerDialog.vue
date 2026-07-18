@@ -1,15 +1,17 @@
-<!-- MCPServerDialog.vue — manage external MCP Servers
+<!-- MCPServerDialog.vue — manage external MCP Servers and install from marketplace
      Renders as a Teleport modal overlay.
 
      Data flow:
        visible → loadServers() → list with status + loaded flag
        Create → POST /api/mcp/servers → reload list
        Enable / Disable / Delete → respective endpoints → reload list
+       Market → GET /api/mcp/markets → GET /api/mcp/markets/:name/servers
+                → POST /api/mcp/markets/:name/servers/:id/install → reload list
 
      Why this exists:
        MCP servers extend the tool registry at runtime. Operators need a UI to
-       inspect which servers are loaded, add new stdio/SSE servers, and toggle
-       them without restarting the platform.
+       inspect which servers are loaded, add new stdio/SSE servers, install from
+       curated marketplaces, and toggle them without restarting the platform.
 -->
 <template>
   <Teleport to="body">
@@ -29,6 +31,7 @@
 
           <div class="mcp-toolbar">
             <button class="btn-refresh" @click="loadServers" title="刷新列表">🔄</button>
+            <button class="btn-market" @click="openMarket">🏪 市场安装</button>
             <button class="btn-create" @click="openCreate">+ 添加 Server</button>
           </div>
 
@@ -135,6 +138,65 @@
       </div>
     </Transition>
 
+    <!-- Market dialog -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="showMarket" class="mcp-overlay" @click.self="closeMarket">
+          <div class="mcp-create-dialog">
+            <div class="mcp-header">
+              <h3>🏪 从市场安装</h3>
+              <button class="mcp-close" @click="closeMarket" title="关闭">✕</button>
+            </div>
+
+            <div v-if="marketError" class="mcp-error">{{ marketError }}</div>
+
+            <div class="mcp-form">
+              <label class="mcp-field">
+                <span>市场</span>
+                <select v-model="selectedMarket" :disabled="marketLoading" @change="onMarketChange">
+                  <option value="">请选择市场</option>
+                  <option v-for="m in markets" :key="m.name" :value="m.name">{{ m.display_name }}</option>
+                </select>
+              </label>
+
+              <div v-if="marketLoading" class="mcp-empty market-empty">加载中...</div>
+              <div v-else-if="selectedMarket && marketServers.length === 0" class="mcp-empty market-empty">
+                该市场暂无可用 Server。
+              </div>
+
+              <div v-else-if="marketServers.length > 0" class="market-list">
+                <div
+                  v-for="pkg in marketServers"
+                  :key="pkg.id"
+                  class="market-item"
+                >
+                  <div class="market-item-info">
+                    <div class="market-item-title">
+                      <span class="market-item-name">{{ pkg.name }}</span>
+                      <span class="mcp-tag transport">{{ pkg.transport }}</span>
+                      <span v-if="pkg.version" class="mcp-tag">v{{ pkg.version }}</span>
+                    </div>
+                    <div class="market-item-desc">{{ pkg.description }}</div>
+                  </div>
+                  <button
+                    class="btn-action install"
+                    :disabled="installingPkg === pkg.id"
+                    @click="doInstall(pkg)"
+                  >
+                    {{ installingPkg === pkg.id ? '安装中...' : '安装' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mcp-footer">
+              <button class="mcp-close-btn" @click="closeMarket">关闭</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <!-- Create dialog -->
     <Teleport to="body">
       <Transition name="fade">
@@ -211,11 +273,13 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import { useMCPStore, defaultMCPServerForm, type ManagedMCPServer } from '../composables/useMCPStore'
+import { useToast } from '../composables/useToast'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ 'update:visible': [v: boolean] }>()
 
-const { servers, loading, error, loadServers, createServer, enableServer, disableServer, deleteServer } = useMCPStore()
+const { servers, loading, error, loadServers, createServer, enableServer, disableServer, deleteServer, listMarkets, listMarketServers, installFromMarket } = useMCPStore()
+const { showInfo } = useToast()
 
 const dialogVisible = ref(props.visible)
 watch(() => props.visible, v => {
@@ -272,6 +336,15 @@ const form = ref(defaultMCPServerForm())
 const creating = ref(false)
 const createError = ref<string | null>(null)
 
+// Market dialog state
+const showMarket = ref(false)
+const markets = ref<{ name: string; display_name: string }[]>([])
+const selectedMarket = ref('')
+const marketServers = ref<{ id: string; name: string; description: string; version?: string; transport: 'stdio' | 'sse'; source_url?: string }[]>([])
+const marketLoading = ref(false)
+const marketError = ref<string | null>(null)
+const installingPkg = ref<string | null>(null)
+
 function openCreate() {
   form.value = defaultMCPServerForm()
   createError.value = null
@@ -280,6 +353,63 @@ function openCreate() {
 
 function closeCreate() {
   showCreate.value = false
+}
+
+async function openMarket() {
+  showMarket.value = true
+  selectedMarket.value = ''
+  marketServers.value = []
+  marketError.value = null
+  marketLoading.value = true
+  try {
+    markets.value = await listMarkets()
+    if (markets.value.length === 1) {
+      selectedMarket.value = markets.value[0].name
+      await loadMarketServers(selectedMarket.value)
+    }
+  } catch (err) {
+    marketError.value = err instanceof Error ? err.message : '加载市场失败'
+  } finally {
+    marketLoading.value = false
+  }
+}
+
+function closeMarket() {
+  showMarket.value = false
+}
+
+async function onMarketChange() {
+  marketServers.value = []
+  if (!selectedMarket.value) return
+  await loadMarketServers(selectedMarket.value)
+}
+
+async function loadMarketServers(marketName: string) {
+  marketLoading.value = true
+  marketError.value = null
+  try {
+    marketServers.value = await listMarketServers(marketName)
+  } catch (err) {
+    marketError.value = err instanceof Error ? err.message : '加载包失败'
+  } finally {
+    marketLoading.value = false
+  }
+}
+
+async function doInstall(pkg: typeof marketServers.value[number]) {
+  if (!selectedMarket.value) return
+  installingPkg.value = pkg.id
+  marketError.value = null
+  try {
+    await installFromMarket(selectedMarket.value, pkg.id)
+    showInfo?.(`已安装 ${pkg.name}`)
+    closeMarket()
+    expandedId.value = pkg.id
+  } catch (err) {
+    marketError.value = err instanceof Error ? err.message : '安装失败'
+  } finally {
+    installingPkg.value = null
+  }
 }
 
 async function submitCreate() {
@@ -323,6 +453,8 @@ onMounted(() => {
     if (e.key === 'Escape' && dialogVisible.value) {
       if (showCreate.value) {
         closeCreate()
+      } else if (showMarket.value) {
+        closeMarket()
       } else {
         close()
       }
@@ -417,7 +549,8 @@ onMounted(() => {
 }
 
 .btn-refresh,
-.btn-create {
+.btn-create,
+.btn-market {
   padding: 6px 12px;
   border-radius: 6px;
   border: 1px solid #444;
@@ -430,6 +563,64 @@ onMounted(() => {
 .btn-create {
   background: #3a5a3a;
   border-color: #4a7a4a;
+}
+
+.btn-market {
+  background: #5a4a3a;
+  border-color: #7a6a4a;
+}
+
+.market-empty {
+  padding: 20px 0;
+  font-size: 13px;
+}
+
+.market-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.market-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  background: #181825;
+}
+
+.market-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.market-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.market-item-name {
+  color: #cdd6f4;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.market-item-desc {
+  color: #6c7086;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.btn-action.install {
+  background: #89b4fa;
+  color: #1e1e2e;
 }
 
 .mcp-error {

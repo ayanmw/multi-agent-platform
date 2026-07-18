@@ -18,6 +18,11 @@ import (
 //   POST   /api/mcp/servers/:id/disable  — disconnect and disable a server
 //   DELETE /api/mcp/servers/:id          — remove a dynamic server
 func registerMCPRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
+	registerMCPServerRoutes(mux, mgr)
+	registerMCPMarketRoutes(mux, mgr)
+}
+
+func registerMCPServerRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 	mux.HandleFunc("/api/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

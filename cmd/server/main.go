@@ -28,6 +28,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 	"github.com/anmingwei/multi-agent-platform/internal/version"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
@@ -580,6 +581,30 @@ func main() {
 			"tool_count":   len(toolRegistry.List()),
 		}))
 	})
+
+	// Register the bundled default static market so the frontend can browse and
+	// install example MCP servers without any external marketplace configuration.
+	if defaultMarket, err := marketplace.DefaultStaticProvider(); err == nil {
+		mcpManager.RegisterMarket(defaultMarket)
+		log.Printf("MCP marketplace: registered %s (%s)", defaultMarket.Name(), defaultMarket.DisplayName())
+	} else {
+		observability.DefaultLogger.Warn("mcp", "failed to load default static market", map[string]any{"error": err.Error()})
+	}
+
+	// Register remote MCP markets configured via MCP_MARKETS.
+	for _, m := range cfg.MCPMarkets {
+		if m.URL == "" {
+			observability.DefaultLogger.Warn("mcp", "skipping remote market with empty URL", map[string]any{"name": m.Name})
+			continue
+		}
+		provider, err := marketplace.NewURLProvider(m.URL, m.Name)
+		if err != nil {
+			observability.DefaultLogger.Warn("mcp", "failed to load remote market", map[string]any{"name": m.Name, "url": m.URL, "error": err.Error()})
+			continue
+		}
+		mcpManager.RegisterMarket(provider)
+		log.Printf("MCP marketplace: registered remote %s (%s) from %s", provider.Name(), provider.DisplayName(), m.URL)
+	}
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mcpCancel()
 	if err := mcpManager.LoadStaticServers(mcpCtx, cfg.MCPServers); err != nil {

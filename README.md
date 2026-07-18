@@ -1,39 +1,155 @@
 # Multi-Agent Platform
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.7.0 Alpha**
-> **Phase 状态：0–6 已完成，MCP 支持已落地，Phase 7 规划中**
+> **当前版本：v0.7.4 Alpha**
+> **Phase 状态：0–6 已完成，MCP stdio / SSE / remote marketplace 已落地，Phase 7 进行中**
 
 ## 快速开始
 
-### 0. MCP（Model Context Protocol）支持（新增）
+### 0. MCP（Model Context Protocol）支持
 
-平台现在支持接入外部 MCP Server，作为内置工具的扩展：
+平台支持接入外部 MCP Server，把它们的工具扩展为 Agent 可调用的内置工具。接入方式分为五类：
+
+| 方式 | 适用场景 | 配置位置 | 持久化 |
+|------|---------|---------|--------|
+| 静态配置 | 启动时必须存在的 server | `MCP_SERVERS` 环境变量 | 仅内存，重启需重新配置 |
+| 动态 API | 运行时手动增删改 | `POST /api/mcp/servers` | 写入 `mcp_servers` 表 |
+| 内置市场安装 | 使用平台自带的示例 server | `default` static market | 写入 `mcp_servers` 表 |
+| SSE 远程 Server | 远程 HTTP+SSE MCP server | `MCP_SERVERS` 或 API | 写入 `mcp_servers` 表 |
+| 远程 Marketplace | 从外部 URL 拉取 catalog | `MCP_MARKETS` 环境变量 | 市场本身不持久化，安装后的 server 写入 `mcp_servers` 表 |
+
+#### 工具命名
+
+接入后的 MCP 工具在注册表中统一命名为 `mcp__<server>__<tool>`。例如 `time` Server 的 `get_current_time` 工具对 Agent 可见为 `mcp__time__get_current_time`。Agent 的 system prompt 或手动调用时均应使用这个全名。
+
+静态配置加载的 Server 不可通过 API 删除，但可启用/禁用。
+
+#### 方式一：静态配置（stdio）
+
+启动时通过环境变量加载，适合随服务必须存在的本地 MCP server：
 
 ```bash
-# 方式一：静态配置（启动时加载）
 export MCP_SERVERS='[
   {"name":"time","transport":"stdio","command":"node","args":["examples/mcp/time/mcp-time-server.js"],"enabled":true},
   {"name":"calc","transport":"stdio","command":"node","args":["examples/mcp/calc/mcp-calc-server.js"],"enabled":true}
 ]'
 go run ./cmd/server
+```
 
-# 方式二：运行时动态 API 增删改查
-# 列出
+#### 方式二：运行时动态 API
+
+```bash
+# 列出已配置的 server
 curl http://localhost:8080/api/mcp/servers
 
-# 添加
+# 添加一个 stdio server（启用并立即连接）
 curl -X POST http://localhost:8080/api/mcp/servers \
   -H 'Content-Type: application/json' \
   -d '{"id":"local-time","config":{"name":"local-time","transport":"stdio","command":"node","args":["examples/mcp/time/mcp-time-server.js"]},"enabled":true}'
 
-# 启用 / 禁用 / 删除
+# 启用 / 禁用 / 删除动态 server
 curl -X POST http://localhost:8080/api/mcp/servers/local-time/enable
 curl -X POST http://localhost:8080/api/mcp/servers/local-time/disable
 curl -X DELETE http://localhost:8080/api/mcp/servers/local-time
 ```
 
-接入的 MCP 工具在注册表中统一命名为 `mcp__<server>__<tool>`。例如 `time` Server 的 `get_current_time` 工具对 Agent 可见为 `mcp__time__get_current_time`。静态配置加载的 Server 不可通过 API 删除。
+#### 方式三：从内置市场安装
+
+启动后会自动注册 `default` static market，包含 `local-time` 和 `local-calc` 两个示例：
+
+```bash
+# 列出已注册市场
+curl http://localhost:8080/api/mcp/markets
+
+# 查看 default 市场里的包
+curl http://localhost:8080/api/mcp/markets/default/servers
+
+# 安装 local-time 到本地并启用
+curl -X POST http://localhost:8080/api/mcp/markets/default/servers/local-time/install
+```
+
+#### 方式四：SSE transport 远程 MCP server
+
+适合接入远程 MCP server（例如用 Python/Node 部署在另一台机器或容器中的服务）：
+
+```bash
+# 静态配置
+export MCP_SERVERS='[
+  {"name":"remote-time","transport":"sse","endpoint":"http://localhost:3001/sse","enabled":true}
+]'
+go run ./cmd/server
+
+# 或运行时用 API 添加
+curl -X POST http://localhost:8080/api/mcp/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"remote-time","config":{"name":"remote-time","transport":"sse","endpoint":"http://localhost:3001/sse"},"enabled":true}'
+```
+
+SSE 握手流程：平台先向 `/sse` 发起 GET，等待 `event: endpoint` 返回 JSON-RPC POST URL，之后所有请求 POST 到该 endpoint，响应通过 SSE `event: message` 返回。
+
+#### 方式五：从远程 Marketplace 安装
+
+通过 `MCP_MARKETS` 注册任意符合 catalog 格式的 JSON URL：
+
+```bash
+export MCP_MARKETS='[
+  {"name":"opencode","url":"https://example.com/opencode-mcp-catalog.json"}
+]'
+go run ./cmd/server
+
+# 查看该市场的包
+curl http://localhost:8080/api/mcp/markets/opencode/servers
+
+# 安装
+curl -X POST http://localhost:8080/api/mcp/markets/opencode/servers/remote-time/install
+```
+
+远程 market catalog 格式示例：
+
+```json
+{
+  "version": "1.0.0",
+  "markets": [
+    {"name": "opencode", "display_name": "OpenCode Market", "description": "社区 MCP server 集合"}
+  ],
+  "servers": [
+    {
+      "id": "remote-time",
+      "market": "opencode",
+      "name": "Remote Time",
+      "description": "返回远程服务器时间",
+      "transport": "sse",
+      "endpoint": "http://example.com/time/sse"
+    }
+  ]
+}
+```
+
+#### MCP REST API 一览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/mcp/servers` | 列出所有 managed server 及加载状态 |
+| POST | `/api/mcp/servers` | 添加动态 server |
+| POST | `/api/mcp/servers/:id/enable` | 启用并连接 server |
+| POST | `/api/mcp/servers/:id/disable` | 禁用并断开 server |
+| DELETE | `/api/mcp/servers/:id` | 删除动态 server（静态 server 会返回 403） |
+| GET | `/api/mcp/markets` | 列出已注册 market |
+| GET | `/api/mcp/markets/:market/servers` | 列出 market 中的包 |
+| POST | `/api/mcp/markets/:market/servers/:id/install` | 安装包为本地 managed server |
+
+#### 前端管理
+
+接入的 MCP Server 及其工具在前端 **MCP Server 管理** 弹窗中可视化：🔄 刷新列表、🏪 从市场安装、➕ 手动添加，以及启用/禁用/删除动态 Server。安装自市场的 Server 会持久化到 `mcp_servers` 表，重启后仍保留。
+
+Server 启用/禁用或工具数量变化时，平台会通过 WebSocket 发送 `mcp_tools_changed` 事件，前端会自动刷新可用工具列表。
+
+#### 常见问题
+
+1. **stdio server 启动失败**：请确认 `command` 在 PATH 中，且 `args` 路径相对于 server 工作目录正确。示例默认从仓库根目录运行。
+2. **SSE server 连不上**：先直接用浏览器或 curl 访问 SSE endpoint，应返回 `Content-Type: text/event-stream` 并先输出 `event: endpoint` 行。
+3. **Agent 看不到工具**：检查 server 是否处于 `loaded=true` 状态；工具名称需使用 `mcp__<server>__<tool>` 全名。
+4. **远程 market 加载失败**：server 启动日志会输出 warning；MCP_MARKETS 中某个 URL 失败不会影响其他 market 或 server 启动。
 
 ---
 
