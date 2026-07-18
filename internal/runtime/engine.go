@@ -385,7 +385,7 @@ type EngineConfig struct {
 	//
 	// The callback is best-effort: panics are recovered and logged, and errors
 	// from the callback do not interrupt the ReAct loop.
-	OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
+	OnLLMUsage OnLLMUsage
 
 	// EvaluationRepository is an optional cases.Repository used to persist the
 	// acceptance evaluation result when a task completes. When nil, evaluation
@@ -394,9 +394,13 @@ type EngineConfig struct {
 	EvaluationRepository EvaluationRepository
 }
 
-// EvaluationRepository is the minimal interface the Engine needs from the
-// cases package to persist acceptance evaluations. It is intentionally small
-// to keep runtime decoupled from cases package internals.
+// OnLLMUsage is the callback type invoked after every successful LLM call.
+type OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
+
+// EvaluationRepository is an optional cases.Repository used to persist the
+// acceptance evaluation result when a task completes. When nil, evaluation
+// results are still broadcast via task_evaluated events but are not durably
+// stored.
 type EvaluationRepository interface {
 	SaveEvaluation(eval cases.CaseEvaluation) error
 }

@@ -129,19 +129,19 @@ type AgentResult struct {
 //	}
 type Orchestrator struct {
 	// hub references
-	hub          *ws.Hub
-	cfg          *config.Config
-	tools        *tool.Registry
-	persist      runtime.Persistence
-	agentBus     *AgentBusAdapter         // Phase 5: inter-agent communication
+	hub           *ws.Hub
+	cfg           *config.Config
+	tools         *tool.Registry
+	persist       runtime.Persistence
+	agentBus      *AgentBusAdapter           // Phase 5: inter-agent communication
 	checkpointMgr *runtime.CheckpointManager // Phase 5: crash recovery
 
 	// Phase 6 Router: optional model router + provider lookup shared by all
 	// child agents. When non-nil, each agent's Engine classifies intent and
 	// selects a model tier before every LLM call (engine.go:1115). When nil,
 	// agents fall back to cfg.LLMModel directly (legacy behavior).
-	modelRouter    *llm.Router
-	routerRegistry *llm.ModelRegistry
+	modelRouter     *llm.Router
+	routerRegistry  *llm.ModelRegistry
 	routerProviders map[string]llm.Provider
 }
 
@@ -390,9 +390,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		SystemPrompt:      spec.SystemPrompt,
 		Model:             model,
 		Endpoint:          o.cfg.LLMEndpoint,
-		APIKey:           o.cfg.LLMAPIKey,
+		APIKey:            o.cfg.LLMAPIKey,
 		Provider:          provider, // mock or real provider resolved above
-		CaseID:           "",       // orchestrator specs do not carry case IDs yet
+		CaseID:            "",       // orchestrator specs do not carry case IDs yet
 		Temperature:       0.7,
 		MaxTokens:         4096,
 		MaxSteps:          contract.MaxSteps,
@@ -408,14 +408,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// Phase 6 Router: forward the shared Router/Registry/Providers so child
 		// agents participate in dynamic model selection. When modelRouter is nil
 		// the Engine falls back to the single-model path (legacy behavior).
-		Router:            o.modelRouter,
-		Registry:          o.routerRegistry,
-		Providers:         o.routerProviders,
+		Router:    o.modelRouter,
+		Registry:  o.routerRegistry,
+		Providers: o.routerProviders,
 		// 7-G: child agents have their own SubTaskID so events and snapshots are
 		// isolated per agent execution instance.
-		SubTaskID:         subTaskID,
+		SubTaskID: subTaskID,
 		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
-		Role:              runtime.AgentRoleWorker,
+		Role:                 runtime.AgentRoleWorker,
 		CanDispatchSubAgents: false,
 		CanDefineWorkflow:    false,
 		SupervisorSubTaskID:  rootTaskID,
@@ -546,8 +546,8 @@ type AgentMessage struct {
 type AgentBus struct {
 	mu       sync.RWMutex
 	handlers map[string]func(AgentMessage) // agentID → message handler
-	queue    []AgentMessage                 // pending messages for agents not yet registered
-	maxQueue int                            // max pending messages
+	queue    []AgentMessage                // pending messages for agents not yet registered
+	maxQueue int                           // max pending messages
 
 	// persistFn is an optional hook invoked asynchronously for every message
 	// that flows through the bus (delivered or queued). It lets the
@@ -694,7 +694,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeRe
 					SystemPrompt: "You are a technical writer. Your job is to take research findings " +
 						"and produce a well-structured, clear, and engaging document. " +
 						"Use write_file to save your output.",
-					Input:        "Based on the provided research, write a comprehensive report.",
+					Input:         "Based on the provided research, write a comprehensive report.",
 					ParentAgentID: "agent_researcher",
 				},
 			},
