@@ -10,6 +10,9 @@
 //   POST   /api/mcp/servers/:id/enable   — enable and connect
 //   POST   /api/mcp/servers/:id/disable  — disable and disconnect
 //   DELETE /api/mcp/servers/:id          — remove a dynamic server
+//   GET    /api/mcp/markets              — list registered marketplaces
+//   GET    /api/mcp/markets/:name/servers — list packages in a marketplace
+//   POST   /api/mcp/markets/:name/servers/:id/install — install package as server
 //
 // All mutations reload the server list so the UI reflects the latest state.
 
@@ -48,6 +51,33 @@ export interface ManagedMCPServer {
 /** Full GET /api/mcp/servers response. */
 export interface MCPServersResponse {
   servers: ManagedMCPServer[]
+}
+
+/** Marketplace metadata as returned by the backend REST API. */
+export interface MCPMarket {
+  name: string
+  display_name: string
+}
+
+/** Marketplace package summary as returned by the backend REST API. */
+export interface MCPMarketPackage {
+  id: string
+  name: string
+  description: string
+  version?: string
+  transport: MCPTransport
+  source_url?: string
+}
+
+/** GET /api/mcp/markets response. */
+export interface MCPMarketsResponse {
+  markets: MCPMarket[]
+}
+
+/** GET /api/mcp/markets/:name/servers response. */
+export interface MCPMarketServersResponse {
+  market: string
+  servers: MCPMarketPackage[]
 }
 
 /** Full POST /api/mcp/servers response. */
@@ -168,6 +198,37 @@ async function deleteServer(id: string): Promise<void> {
   }
 }
 
+/** List registered marketplace providers. */
+async function listMarkets(): Promise<MCPMarket[]> {
+  const resp = await fetch('/api/mcp/markets')
+  if (!resp.ok) throw new Error(`Failed to load MCP markets: ${resp.status}`)
+  const data = (await resp.json()) as MCPMarketsResponse
+  return data.markets || []
+}
+
+/** List packages available in a marketplace. */
+async function listMarketServers(marketName: string): Promise<MCPMarketPackage[]> {
+  const resp = await fetch(`/api/mcp/markets/${encodeURIComponent(marketName)}/servers`)
+  if (!resp.ok) throw new Error(`Failed to load market servers: ${resp.status}`)
+  const data = (await resp.json()) as MCPMarketServersResponse
+  return data.servers || []
+}
+
+/** Install a marketplace package as a managed MCP server. */
+async function installFromMarket(marketName: string, pkgId: string): Promise<ManagedMCPServer> {
+  const resp = await fetch(
+    `/api/mcp/markets/${encodeURIComponent(marketName)}/servers/${encodeURIComponent(pkgId)}/install`,
+    { method: 'POST' }
+  )
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({} as Record<string, unknown>))
+    throw new Error((body.error as string) || `Failed to install package: ${resp.status}`)
+  }
+  const data = (await resp.json()) as MCPServerCreateResponse
+  await loadServers()
+  return data.server
+}
+
 /** Convert the dialog form fields into the nested ServerConfig shape the API expects. */
 function buildConfigFromForm(form: MCPServerForm): MCPServerConfig {
   const cfg: MCPServerConfig = {
@@ -250,6 +311,9 @@ export function useMCPStore() {
     enableServer,
     disableServer,
     deleteServer,
+    listMarkets,
+    listMarketServers,
+    installFromMarket,
     defaultMCPServerForm,
   }
 }

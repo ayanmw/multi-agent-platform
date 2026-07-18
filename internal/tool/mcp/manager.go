@@ -157,6 +157,11 @@ func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID strin
 	}
 
 	if err := m.AddServer(ctx, ms); err != nil {
+		// If connection failed but the server record exists, return the managed
+		// server so callers can inspect load_err and retry enable later.
+		if existing, getErr := m.GetServer(pkgID); getErr == nil {
+			return existing, nil
+		}
 		return ManagedServer{}, fmt.Errorf("add %s/%s: %w", marketName, pkgID, err)
 	}
 

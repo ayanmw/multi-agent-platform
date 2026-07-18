@@ -1,0 +1,34 @@
+{
+  "version": "1.0.0",
+  "markets": [
+    {
+      "name": "default",
+      "display_name": "内置示例市场",
+      "description": "随平台分发的示例 MCP server，用于本地测试和教学。"
+    }
+  ],
+  "servers": [
+    {
+      "id": "local-time",
+      "market": "default",
+      "name": "本地时间",
+      "description": "返回当前服务器时间（示例 MCP server）。",
+      "version": "1.0.0",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["examples/mcp/time/mcp-time-server.js"],
+      "source_url": "examples/mcp/time"
+    },
+    {
+      "id": "local-calc",
+      "market": "default",
+      "name": "本地计算器",
+      "description": "执行加减乘除四则运算（示例 MCP server）。",
+      "version": "1.0.0",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["examples/mcp/calc/mcp-calc-server.js"],
+      "source_url": "examples/mcp/calc"
+    }
+  ]
+}

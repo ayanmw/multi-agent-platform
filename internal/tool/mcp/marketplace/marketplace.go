@@ -23,6 +23,17 @@ import (
 	"io/fs"
 )
 
+//go:embed default.json
+var defaultCatalog []byte
+
+// DefaultStaticProvider returns the bundled static market provider.
+//
+// It embeds default.json from the same package so the server binary ships with
+// a ready-to-use example market even when no external marketplace is configured.
+func DefaultStaticProvider() (*StaticProvider, error) {
+	return NewStaticProvider(defaultCatalog)
+}
+
 // Provider is the common interface implemented by every MCP marketplace adapter.
 type Provider interface {
 	// Name returns the short machine-readable market name, e.g. "default" or "opencode".

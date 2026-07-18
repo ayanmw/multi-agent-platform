@@ -512,6 +512,15 @@ func main() {
 			"tool_count":   len(toolRegistry.List()),
 		}))
 	})
+
+	// Register the bundled default static market so the frontend can browse and
+	// install example MCP servers without any external marketplace configuration.
+	if defaultMarket, err := marketplace.DefaultStaticProvider(); err == nil {
+		mcpManager.RegisterMarket(defaultMarket)
+		log.Printf("MCP marketplace: registered %s (%s)", defaultMarket.Name(), defaultMarket.DisplayName())
+	} else {
+		observability.DefaultLogger.Warn("mcp", "failed to load default static market", map[string]any{"error": err.Error()})
+	}
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mcpCancel()
 	if err := mcpManager.LoadStaticServers(mcpCtx, cfg.MCPServers); err != nil {
