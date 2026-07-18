@@ -26,6 +26,10 @@ const (
 	// registry changes (server loaded/unloaded/enabled/disabled). Frontend should
 	// refresh its tool list / available tool definitions when receiving it.
 	EventMcpToolsChanged = "mcp_tools_changed"
+
+	// EventTraceSpan is emitted when a trace span finishes so the frontend can
+	// render the call tree in real time.
+	EventTraceSpan = "trace_span"
 )
 
 // Event represents a structured event sent over WebSocket
