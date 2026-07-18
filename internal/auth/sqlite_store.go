@@ -63,9 +63,11 @@ func (s *SqliteAPIKeyStore) Create(userID, name string) (*APIKey, string, error)
 }
 
 // List returns all API keys owned by the given user, including revoked keys.
+// The key_hash column is intentionally omitted so the list response never
+// carries even a hashed credential in memory/JSON.
 func (s *SqliteAPIKeyStore) List(userID string) ([]APIKey, error) {
 	rows, err := s.db.Query(`
-		SELECT id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at
+		SELECT id, user_id, name, prefix, created_at, last_used_at, revoked_at
 		FROM api_keys
 		WHERE user_id = ?
 		ORDER BY created_at DESC
@@ -78,14 +80,13 @@ func (s *SqliteAPIKeyStore) List(userID string) ([]APIKey, error) {
 	var keys []APIKey
 	for rows.Next() {
 		var key APIKey
-		var hashStr string
 		var createdAtStr string
 		var lastUsedStr, revokedStr *string
-		if err := rows.Scan(&key.ID, &key.UserID, &key.Name, &key.Prefix, &hashStr,
+		if err := rows.Scan(&key.ID, &key.UserID, &key.Name, &key.Prefix,
 			&createdAtStr, &lastUsedStr, &revokedStr); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
 		}
-		key.KeyHash = []byte(hashStr)
+		key.KeyHash = nil
 		key.CreatedAt = parseTime(createdAtStr)
 		key.LastUsedAt = parseTimePtr(lastUsedStr)
 		key.RevokedAt = parseTimePtr(revokedStr)
@@ -208,6 +209,12 @@ func (s *SqliteAPIKeyStore) AddUser(name string, role Role) (*User, error) {
 		Role:      role,
 		CreatedAt: time.Now().UTC(),
 	}, nil
+}
+
+// GetUser wraps GetUserByID to satisfy the APIKeyStore interface.
+// It is the canonical way for the auth middleware to resolve a user's role.
+func (s *SqliteAPIKeyStore) GetUser(userID string) (*User, error) {
+	return s.GetUserByID(userID)
 }
 
 // GetUserByID loads a user record by its ID.

@@ -77,6 +77,19 @@ func (m *memoryAPIKeyStore) Revoke(keyID string) error {
 	return nil
 }
 
+func (m *memoryAPIKeyStore) GetUser(userID string) (*User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if user, ok := m.users[userID]; ok {
+		return &User{
+			ID:   user.ID,
+			Name: user.Name,
+			Role: user.Role,
+		}, nil
+	}
+	return nil, errors.New("user not found")
+}
+
 func (m *memoryAPIKeyStore) Verify(rawKey string) (*APIKey, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

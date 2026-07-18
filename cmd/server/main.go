@@ -1009,9 +1009,16 @@ func main() {
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+		// Agent 写操作仅 admin 可执行。
+		if r.Method != http.MethodGet && !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
 		handleAgents(w, r)
 	})
 	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
 		handleAgentByID(w, r)
 	})
 
@@ -1193,6 +1200,9 @@ func main() {
 			}
 			handleListCases(w, r, caseService)
 		case http.MethodPost:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleCreateCase(w, r, caseService)
 		default:
 			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -1237,8 +1247,14 @@ func main() {
 			}
 			handleGetCase(w, r, id, caseService)
 		case http.MethodPut:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleUpdateCase(w, r, id, caseService)
 		case http.MethodDelete:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleDeleteCase(w, r, id, caseService)
 		default:
 			http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
@@ -1259,10 +1275,16 @@ func main() {
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleRegisterTool(w, r, toolRegistry)
 		case http.MethodGet:
 			handleListTools(w, r, toolRegistry)
 		case http.MethodDelete:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleDeleteTool(w, r, toolRegistry)
 		default:
 			http.Error(w, "GET, POST, or DELETE only", http.StatusMethodNotAllowed)
