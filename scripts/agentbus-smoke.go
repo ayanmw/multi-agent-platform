@@ -10,6 +10,22 @@
 //   5. Assert agent_b's final result or steps contain AGENT_A_RESULT_MARK.
 //
 // Run: go run scripts/agentbus-smoke.go
+//go:build abusmoke || ignore
+
+// AgentBus smoke test — verifies inter-agent message passing end-to-end.
+//
+// Strategy:
+//   1. Start server on an isolated port + temp DB in mock mode.
+//   2. Inject two mock scripts:
+//      - agent-a: a single text response that says "AGENT_A_RESULT_MARK"
+//      - agent-b: expects a user input that contains "AGENT_A_RESULT_MARK"
+//   3. POST /api/multi-agent with two AgentSpecs where agent_a has OutputTo=["agent_b"].
+//   4. Poll until root task completed.
+//   5. Assert agent_b's final result or steps contain AGENT_A_RESULT_MARK.
+//
+// 本文件使用 `//go:build abusmoke || ignore` 构建约束隔离，避免与同目录其它
+// package main 文件在默认 `go test ./...` 构建时因 main 重复声明而冲突。
+// 需要运行本脚本时显式指定 tag: `go run -tags abusmoke scripts/agentbus-smoke.go`。
 package main
 
 import (

@@ -7,6 +7,20 @@
 // 运行: cd D:\Claude-Code-MultiAgent && go run scripts/ws-smoke.go
 //
 // 约束: 只读后端源码，不修改后端；仅本脚本可自由调整。
+//go:build wssmoke || ignore
+
+// WebSocket 事件流专项评测脚本 (维度 A)
+//
+// 本脚本编译并启动 mock 模式的 server，连接 WebSocket，
+// 通过 POST /api/tasks 触发任务，验证事件流序列、字段完整性、
+// tool_call 三联事件，以及 cancel 控制消息是否生效。
+//
+// 运行: cd D:\Claude-Code-MultiAgent && go run -tags wssmoke scripts/ws-smoke.go
+//
+// 约束: 只读后端源码，不修改后端；仅本脚本可自由调整。
+//
+// 本文件使用 `//go:build wssmoke || ignore` 构建约束隔离，避免与同目录其它
+// package main 文件在默认 `go test ./...` 构建时因 main 重复声明而冲突。
 package main
 
 import (
