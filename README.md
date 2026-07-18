@@ -27,11 +27,14 @@ curl -X POST http://localhost:8080/api/mcp/servers \
   -H 'Content-Type: application/json' \
   -d '{"id":"local-time","config":{"name":"local-time","transport":"stdio","command":"node","args":["examples/mcp/time/mcp-time-server.js"]},"enabled":true}'
 
-# 启用 / 禁用 / 删除
-curl -X POST http://localhost:8080/api/mcp/servers/local-time/enable
-curl -X POST http://localhost:8080/api/mcp/servers/local-time/disable
-curl -X DELETE http://localhost:8080/api/mcp/servers/local-time
+# 方式三：从内置市场安装
+# 启动后默认已注册 default static market，可通过 REST 或前端 "市场安装" 入口一键安装示例 MCP server
+curl http://localhost:8080/api/mcp/markets
+curl http://localhost:8080/api/mcp/markets/default/servers
+curl -X POST http://localhost:8080/api/mcp/markets/default/servers/local-time/install
 ```
+
+接入的 MCP Server 及其工具在前端 **MCP Server 管理** 弹窗中可视化：🔄 刷新列表、🏪 从市场安装、➕ 手动添加，以及启用/禁用/删除动态 Server。安装自市场的 Server 会持久化到 `mcp_servers` 表，重启后仍保留。
 
 接入的 MCP 工具在注册表中统一命名为 `mcp__<server>__<tool>`。例如 `time` Server 的 `get_current_time` 工具对 Agent 可见为 `mcp__time__get_current_time`。静态配置加载的 Server 不可通过 API 删除。
 
