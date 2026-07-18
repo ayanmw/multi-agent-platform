@@ -6,6 +6,7 @@
 // snapshots from one task leaking into another.
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
+import { useTaskStore } from './useTaskStore'
 import type { AgentEvent, ContextWindowSnapshotData } from '../types/events'
 
 // The single snapshot for the currently active task.
@@ -22,6 +23,10 @@ function onEvent(event: AgentEvent) {
   if (!data) return
   currentSnapshot.value = data
 }
+
+// Re-export subTaskSnapshots from useTaskStore so ContextWindowPanel can read
+// any agent instance's snapshot without duplicating state.
+const { subTaskSnapshots } = useTaskStore()
 
 // 设置当前追踪的 task ID；若变化则清空旧快照，防止跨任务污染。
 function setActiveTaskId(taskId: string): void {
@@ -54,6 +59,7 @@ export function useContextWindow() {
   return {
     activeTaskId,
     currentSnapshot,
+    subTaskSnapshots,
     setActiveTaskId,
     setSnapshot,
     clear,

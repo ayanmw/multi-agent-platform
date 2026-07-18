@@ -25,23 +25,32 @@ const (
 
 // Event represents a structured event sent over WebSocket
 type Event struct {
-	EventID   string         `json:"event_id"`
-	TaskID    string         `json:"task_id"`
-	AgentID   string         `json:"agent_id"`
-	StepIndex int            `json:"step_index"`
-	Type      string         `json:"type"`
-	Timestamp int64          `json:"timestamp"`
-	Data      map[string]any `json:"data"`
+	EventID    string         `json:"event_id"`
+	TaskID     string         `json:"task_id"`
+	SubTaskID  string         `json:"sub_task_id"`
+	AgentID    string         `json:"agent_id"`
+	StepIndex  int            `json:"step_index"`
+	Type       string         `json:"type"`
+	Timestamp  int64          `json:"timestamp"`
+	Data       map[string]any `json:"data"`
 }
 
 // NewEvent creates a new event with auto-generated ID and timestamp
 func NewEvent(eventType, taskID, agentID string, stepIndex int, data map[string]any) Event {
+	return NewEventWithSubTask(eventType, taskID, "", agentID, stepIndex, data)
+}
+
+// NewEventWithSubTask creates a new event that carries explicit sub-task identity.
+// taskID is the root task; subTaskID identifies the concrete agent execution instance.
+// For the leader agent, subTaskID equals taskID; child agents have their own subTaskID.
+func NewEventWithSubTask(eventType, taskID, subTaskID, agentID string, stepIndex int, data map[string]any) Event {
 	if data == nil {
 		data = make(map[string]any)
 	}
 	return Event{
 		EventID:   generateID(),
 		TaskID:    taskID,
+		SubTaskID: subTaskID,
 		AgentID:   agentID,
 		StepIndex: stepIndex,
 		Type:      eventType,

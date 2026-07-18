@@ -21,14 +21,22 @@ import type { ContextSnapshotMessage } from '../types/events'
 
 const props = defineProps<{
   activeTaskId: string
+  /** 7-G: optional sub-task ID to show the snapshot for a specific agent instance. */
+  subTaskId?: string
 }>()
 
 const emit = defineEmits<{
   refresh: []
 }>()
 
-const { currentSnapshot, setActiveTaskId } = useContextWindow()
-const latest = computed(() => currentSnapshot.value)
+const { currentSnapshot, setActiveTaskId, subTaskSnapshots } = useContextWindow()
+// 7-G: When a sub-task is selected, prefer its isolated snapshot from the store.
+const latest = computed(() => {
+  if (props.subTaskId && subTaskSnapshots.value[props.subTaskId]) {
+    return subTaskSnapshots.value[props.subTaskId]
+  }
+  return currentSnapshot.value
+})
 
 const isLoading = ref(false)
 let loadingTimer: ReturnType<typeof setTimeout> | null = null

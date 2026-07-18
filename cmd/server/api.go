@@ -30,43 +30,62 @@ import (
 )
 
 // handleGetTaskContextWindow returns the current context-window snapshot for a
-// task (GET /api/tasks/:id/context_window). For live tasks the snapshot is read
-// from the in-memory runtime store written by Engine.think(). For persisted/idle
-// tasks the snapshot is reconstructed from the task's own session_messages
-// plus the agent's system prompt. Returns 404 if the task does not exist.
+// task or a specific sub-task (GET /api/tasks/:id/context_window[?sub_task_id=xxx]).
+// The URL path id is the root task ID. If sub_task_id is provided as a query
+// parameter, the snapshot for that specific agent execution instance is returned;
+// otherwise the root task (leader agent) snapshot is returned.
+//
+// For live tasks the snapshot is read from the in-memory runtime store written by
+// Engine.think(). For persisted/idle tasks the snapshot is reconstructed from the
+// task's own session_messages plus the agent's system prompt. Returns 404 if the
+// task does not exist.
 func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
 
-	log.Printf("[ContextWindow] request for task=%s", id)
+	// Determine target sub-task identity. When omitted, default to the root task
+	// so existing API consumers continue to work.
+	subTaskID := r.URL.Query().Get("sub_task_id")
+	targetID := subTaskID
+	if targetID == "" {
+		targetID = id
+	}
+	isSubTask := subTaskID != ""
+
+	log.Printf("[ContextWindow] request task=%s sub_task_id=%s", id, subTaskID)
 
 	// 1. Prefer the live in-memory snapshot when the engine is thinking.
-	if snapshot, ok := runtime.GetTaskContextSnapshot(id); ok {
-		log.Printf("[ContextWindow] task=%s served from live runtime store", id)
+	if snapshot, ok := runtime.GetTaskContextSnapshot(targetID); ok {
+		log.Printf("[ContextWindow] task=%s sub_task_id=%s served from live runtime store", id, subTaskID)
 		encodeContextWindowSnapshot(w, snapshot)
 		return
 	}
 
 	// 2. Otherwise, reconstruct from persistence if the task exists.
-	task, err := db.QueryTaskByID(id)
+	//    For sub-tasks we load the child task row; for the root we load the root.
+	queryID := targetID
+	if !isSubTask {
+		queryID = id
+	}
+	task, err := db.QueryTaskByID(queryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			log.Printf("[ContextWindow] task=%s not found", id)
+			log.Printf("[ContextWindow] task=%s not found", queryID)
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("[ContextWindow] task=%s db error: %v", id, err)
+		log.Printf("[ContextWindow] task=%s db error: %v", queryID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if task == nil {
-		log.Printf("[ContextWindow] task=%s not found (nil)", id)
+		log.Printf("[ContextWindow] task=%s not found (nil)", queryID)
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("[ContextWindow] task=%s found, session_id=%s agent_ids=%v", id, task.SessionID, task.AgentIDs)
+	log.Printf("[ContextWindow] task=%s found, session_id=%s agent_ids=%v", queryID, task.SessionID, task.AgentIDs)
 
 	var messages []llm.Message
 
@@ -78,9 +97,9 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 		if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent != nil {
 			systemPrompt = agent.SystemPrompt
 			model = agent.Model
-			log.Printf("[ContextWindow] task=%s resolved model=%s from agent=%s", id, model, task.AgentIDs[0])
+			log.Printf("[ContextWindow] task=%s resolved model=%s from agent=%s", queryID, model, task.AgentIDs[0])
 		} else if err != nil {
-			log.Printf("[ContextWindow] task=%s QueryAgentByID failed: %v", id, err)
+			log.Printf("[ContextWindow] task=%s QueryAgentByID failed: %v", queryID, err)
 		}
 	}
 	if systemPrompt == "" {
@@ -89,25 +108,25 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 		systemPrompt = "[system prompt unavailable for historical task]"
 		if task.SessionID != "" {
 			if s, err := db.QuerySessionByID(task.SessionID); err != nil {
-				log.Printf("[ContextWindow] task=%s 查询 session 失败，无法作为 system prompt fallback: %v", id, err)
+				log.Printf("[ContextWindow] task=%s 查询 session 失败，无法作为 system prompt fallback: %v", queryID, err)
 			} else if s == nil || s.Name == "" {
-				log.Printf("[ContextWindow] task=%s session 不存在或名称为空，system prompt 使用占位符", id)
+				log.Printf("[ContextWindow] task=%s session 不存在或名称为空，system prompt 使用占位符", queryID)
 			} else {
-				log.Printf("[ContextWindow] task=%s 原始系统提示不可用，已用占位符代替；可归属 session=%s", id, s.Name)
+				log.Printf("[ContextWindow] task=%s 原始系统提示不可用，已用占位符代替；可归属 session=%s", queryID, s.Name)
 			}
 		}
 	}
 
 	// 3. Reconstruct from session_messages persisted during execution.
-	//    session_messages is the most faithful persisted source, and it is keyed
-	//    by task_id, so we can recover a historical task even after restart.
-	msgs, err := db.QuerySessionMessagesByTask(id)
+	//    session_messages is keyed by task_id, so for sub-tasks we look up
+	//    the child task's own messages; for the root task we look up root.
+	msgs, err := db.QuerySessionMessagesByTask(queryID)
 	if err != nil {
-		log.Printf("[ContextWindow] task=%s QuerySessionMessagesByTask failed: %v", id, err)
+		log.Printf("[ContextWindow] task=%s QuerySessionMessagesByTask failed: %v", queryID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[ContextWindow] task=%s loaded session_messages count=%d", id, len(msgs))
+	log.Printf("[ContextWindow] task=%s loaded session_messages count=%d", queryID, len(msgs))
 
 	if len(msgs) > 0 {
 		// The first persisted message is normally the system prompt. If the DB
@@ -129,7 +148,7 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 			if m.ToolCalls != "" {
 				if err := json.Unmarshal([]byte(m.ToolCalls), &toolCalls); err != nil {
 					// ToolCalls 损坏时记录日志但继续返回其他字段，保持 API 可用。
-					log.Printf("[ContextWindow] task=%s 解析 ToolCalls 失败: %v", id, err)
+					log.Printf("[ContextWindow] task=%s 解析 ToolCalls 失败: %v", queryID, err)
 				}
 			}
 			messages = append(messages, llm.Message{
@@ -145,7 +164,7 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 		// so the UI is not stuck on 404.
 		messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 	} else {
-		log.Printf("[ContextWindow] task=%s no snapshot and no reconstructable messages", id)
+		log.Printf("[ContextWindow] task=%s no snapshot and no reconstructable messages", queryID)
 		http.Error(w, "context window snapshot not available", http.StatusNotFound)
 		return
 	}
@@ -162,7 +181,7 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 	maxTokens := llm.EstimateModelContextWindow(nil, model)
 	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages)
 	log.Printf("[ContextWindow] task=%s reconstructed snapshot model=%s messages=%d tokens=%d ratio=%.4f",
-		id, snapshot.Model, len(snapshot.Messages), snapshot.EstimatedTotalTokens, snapshot.EstimatedUsageRatio)
+		queryID, snapshot.Model, len(snapshot.Messages), snapshot.EstimatedTotalTokens, snapshot.EstimatedUsageRatio)
 	encodeContextWindowSnapshot(w, snapshot)
 }
 
