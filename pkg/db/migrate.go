@@ -309,6 +309,26 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_messages_task_id ON agent_messages(task_id);`,
 	},
+
+	// v19: audit_records table for compliance and forensics.
+	{
+		Version:     19,
+		Description: "Create audit_records table",
+		SQL: `CREATE TABLE IF NOT EXISTS audit_records (
+			id TEXT PRIMARY KEY,
+			timestamp DATETIME NOT NULL,
+			actor TEXT NOT NULL,
+			action TEXT NOT NULL,
+			target TEXT NOT NULL,
+			before_json TEXT DEFAULT '{}',
+			after_json TEXT DEFAULT '{}',
+			reason TEXT DEFAULT '',
+			ip TEXT DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_actor ON audit_records(actor);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_target ON audit_records(target);
+		CREATE INDEX IF NOT EXISTS idx_audit_records_timestamp ON audit_records(timestamp DESC);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.
