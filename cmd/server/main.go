@@ -509,7 +509,14 @@ func main() {
 	// Initialize tool registry with built-in tools and leader dispatch tool.
 	toolRegistry := tool.NewRegistry()
 	dispatcher := &orchestratorDispatcher{orch: orch}
-	tool.RegisterBuiltinsWithDispatcher(toolRegistry, dispatcher, leaderDispatchEnabled.Load)
+	resolveApproval := func(approvalID string, approved bool, reason string) error {
+		return runtime.ResolveDelegatedApproval(runtime.DelegatedApprovalDecision{
+			ApprovalID: approvalID,
+			Approved:   approved,
+			Reason:     reason,
+		})
+	}
+	tool.RegisterBuiltinsWithDispatcherAndLeaderTools(toolRegistry, dispatcher, leaderDispatchEnabled.Load, resolveApproval)
 
 	// Phase MCP: initialize MCP manager and load static + persisted servers.
 	// Static configuration comes from MCP_SERVERS; dynamic servers live in the
@@ -1420,6 +1427,45 @@ type orchestratorDispatcher struct {
 	orch *orchestrator.Orchestrator
 }
 
+// orchestratorDispatcher 是 SubAgentDispatcher 在 cmd/server 层的实现。
+// 它把 dispatch_sub_agent 工具的调用转发给 orchestrator.RunBlocking。
+type leaderApprovalHandler struct {
+	leaderSubTaskID string
+}
+
+// RequestDelegatedApproval 在 cmd/server 层实现 runtime.ApprovalDelegationHandler。
+// 它通过全局 engineRegistry 查找 supervisor leader 的 Engine，在注册表中登记等待
+// channel，然后往 leader 发送 AgentBus 审批请求消息，最后等待 leader 调用
+// approve/reject_sub_agent_action 工具做出决定。
+func (h *leaderApprovalHandler) RequestDelegatedApproval(req runtime.DelegatedApprovalRequest) (bool, bool, error) {
+	// 在 engineRegistry 中按 subTaskID 精确查找 supervisor Engine。
+	v, ok := engineRegistry.Load(req.SupervisorSubTaskID)
+	if !ok {
+		log.Printf("[leaderApprovalHandler] supervisor engine not found: %s", req.SupervisorSubTaskID)
+		return false, false, fmt.Errorf("supervisor engine not found")
+	}
+	leaderEngine, ok := v.(*runtime.Engine)
+	if !ok {
+		return false, false, fmt.Errorf("supervisor engine record invalid")
+	}
+
+	ch := make(chan runtime.DelegatedApprovalDecision, 1)
+	runtime.RegisterDelegatedApproval(req.ApprovalID, ch)
+	defer runtime.UnregisterDelegatedApproval(req.ApprovalID)
+
+	// 通过 leader Engine 的 AgentBus listener 把审批请求作为 user message 注入。
+	content, _ := runtime.BuildApprovalDelegationContent(req)
+	leaderEngine.SendAgentMessage("approval_request", req.SupervisorSubTaskID, content)
+
+	// 等待 leader 审批决定，带超时回退。
+	decision, err := runtime.WaitForDelegatedApproval(req.ApprovalID, 30*time.Second)
+	if err != nil {
+		log.Printf("[leaderApprovalHandler] 等待 leader 审批超时: %v", err)
+		return false, false, err
+	}
+	return decision.Approved, true, nil
+}
+
 // Dispatch 调用 orchestrator 同步运行一组子 agent。
 // 在 Phase 7-H 中，leaderSubTaskID 就是 root task ID。
 func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, strategy string, agents []tool.SubAgentSpec) ([]tool.SubAgentResult, error) {
@@ -1674,6 +1720,13 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		CanDefineWorkflow:    canDefineWorkflow,
 		SupervisorSubTaskID:  supervisorSubTaskID,
 		ApproverMode:         approverMode,
+		// Phase 7-I: worker 且 leader 审批模式时，把审批委托给 supervisor Engine。
+		SupervisorDecisionHandler: func() runtime.ApprovalDelegationHandler {
+			if role == runtime.AgentRoleWorker && approverMode == "leader" {
+				return &leaderApprovalHandler{leaderSubTaskID: supervisorSubTaskID}
+			}
+			return nil
+		}(),
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

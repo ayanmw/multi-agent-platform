@@ -527,6 +527,10 @@ type AgentMessage struct {
 	// ToAgentID is the target agent. If empty, the message is broadcast to all agents.
 	ToAgentID string `json:"to_agent_id"`
 
+	// SubTaskID is the target sub-task ID. Phase 7-I: when set, the message is
+	// routed to the handler registered for the exact (ToAgentID, SubTaskID) pair.
+	SubTaskID string `json:"sub_task_id,omitempty"`
+
 	// Type describes the message type: "request", "response", "observation", "error"
 	Type string `json:"type"`
 
@@ -546,8 +550,11 @@ type AgentMessage struct {
 type AgentBus struct {
 	mu       sync.RWMutex
 	handlers map[string]func(AgentMessage) // agentID → message handler
-	queue    []AgentMessage                // pending messages for agents not yet registered
-	maxQueue int                           // max pending messages
+	// subTaskHandlers maps "agentID\x1fsubTaskID" to a handler.
+	// Phase 7-I: 支持按 (agentID, subTaskID) 精确路由；空 subTaskID 等价于 RegisterHandler。
+	subTaskHandlers map[string]func(AgentMessage)
+	queue           []AgentMessage // pending messages for agents not yet registered
+	maxQueue        int            // max pending messages
 
 	// persistFn is an optional hook invoked asynchronously for every message
 	// that flows through the bus (delivered or queued). It lets the
@@ -559,8 +566,9 @@ type AgentBus struct {
 // NewAgentBus creates a new AgentBus with a default queue size of 100.
 func NewAgentBus() *AgentBus {
 	return &AgentBus{
-		handlers: make(map[string]func(AgentMessage)),
-		maxQueue: 100,
+		handlers:        make(map[string]func(AgentMessage)),
+		subTaskHandlers: make(map[string]func(AgentMessage)),
+		maxQueue:        100,
 	}
 }
 
@@ -585,12 +593,26 @@ func (b *AgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
 	b.handlers[agentID] = handler
 
 	// Deliver any pending messages for this agent
-	for i, msg := range b.queue {
-		if msg.ToAgentID == agentID {
-			handler(msg)
-			b.queue = append(b.queue[:i], b.queue[i+1:]...)
-			break
-		}
+	b.deliverPendingLocked(agentID, "", handler)
+}
+
+// RegisterHandlerBySubTask 注册一个 (agentID, subTaskID) 精确处理器。
+// 当 subTaskID 为空时行为与 RegisterHandler 一致。Phase 7-I。
+func (b *AgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	key := subTaskHandlerKey(agentID, subTaskID)
+	if subTaskID == "" {
+		b.handlers[agentID] = handler
+	} else {
+		b.subTaskHandlers[key] = handler
+	}
+
+	// 优先投递精确匹配的待处理消息，再处理仅 agentID 匹配的待处理消息。
+	b.deliverPendingLocked(agentID, subTaskID, handler)
+	if subTaskID != "" {
+		b.deliverPendingLocked(agentID, "", handler)
 	}
 }
 
@@ -601,9 +623,58 @@ func (b *AgentBus) UnregisterHandler(agentID string) {
 	delete(b.handlers, agentID)
 }
 
+// UnregisterHandlerBySubTask 移除 (agentID, subTaskID) 处理器。
+// subTaskID 为空时行为与 UnregisterHandler 一致。Phase 7-I。
+func (b *AgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if subTaskID == "" {
+		delete(b.handlers, agentID)
+		return
+	}
+	delete(b.subTaskHandlers, subTaskHandlerKey(agentID, subTaskID))
+}
+
+// subTaskHandlerKey 构造 (agentID, subTaskID) handler 的 map key。
+// 使用不可打印的 unit separator 避免与合法 agentID 冲突。
+func subTaskHandlerKey(agentID, subTaskID string) string {
+	return agentID + "\x1f" + subTaskID
+}
+
+// deliverPendingLocked 尝试把队列中匹配 target 的待处理消息投递给 handler。
+// 必须在 b.mu 已加锁的情况下调用。
+func (b *AgentBus) deliverPendingLocked(agentID, subTaskID string, handler func(AgentMessage)) {
+	// 先精确匹配 (agentID, subTaskID)
+	for i := 0; i < len(b.queue); {
+		msg := b.queue[i]
+		if matchesTarget(msg, agentID, subTaskID) {
+			handler(msg)
+			b.queue = append(b.queue[:i], b.queue[i+1:]...)
+			continue
+		}
+		i++
+	}
+}
+
+// matchesTarget 判断 msg 是否匹配给定的 (agentID, subTaskID)。
+func matchesTarget(msg AgentMessage, agentID, subTaskID string) bool {
+	if msg.ToAgentID != agentID {
+		return false
+	}
+	if subTaskID == "" {
+		// agentID-only fallback: match if message has no specific subTaskID.
+		return msg.SubTaskID == ""
+	}
+	return msg.SubTaskID == subTaskID
+}
+
 // SendMessage sends a message from one agent to another.
 // If the target agent has a registered handler, the handler is called immediately.
 // Otherwise, the message is queued for later delivery.
+//
+// Phase 7-I: SendMessage first looks for an exact (ToAgentID, SubTaskID) handler,
+// then falls back to a ToAgentID-only handler, so sub-task specific routing takes
+// precedence. An empty SubTaskID only matches ToAgentID-only handlers.
 //
 // When a persistence callback has been installed via SetPersistFn, every
 // message — delivered or queued — is also handed to that callback in a
@@ -625,10 +696,16 @@ func (b *AgentBus) SendMessage(msg AgentMessage) {
 	}
 
 	b.mu.RLock()
-	handler, ok := b.handlers[msg.ToAgentID]
+	var handler func(AgentMessage)
+	if msg.SubTaskID != "" {
+		handler = b.subTaskHandlers[subTaskHandlerKey(msg.ToAgentID, msg.SubTaskID)]
+	}
+	if handler == nil {
+		handler = b.handlers[msg.ToAgentID]
+	}
 	b.mu.RUnlock()
 
-	if ok {
+	if handler != nil {
 		// Deliver immediately
 		handler(msg)
 		return

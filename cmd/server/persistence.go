@@ -99,9 +99,12 @@ func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
 // carries everything the agent_messages table needs (TaskID, FromAgentID,
 // Type, Content, Metadata); the persistence layer just forwards to the
 // db.InsertAgentMessage helper.
+//
+// Phase 7-I: 同时转发 SubTaskID，使 agent_messages 表能记录精确路由目标。
 func (p *DBPersistence) SaveAgentMessage(msg runtime.AgentBusMessage) error {
 	return db.InsertAgentMessage(db.AgentBusMessage{
 		TaskID:      msg.TaskID,
+		SubTaskID:   msg.SubTaskID,
 		FromAgentID: msg.FromAgentID,
 		ToAgentID:   msg.ToAgentID,
 		Type:        msg.Type,
@@ -121,6 +124,7 @@ func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMess
 	for _, r := range rows {
 		out = append(out, runtime.AgentBusMessage{
 			TaskID:      r.TaskID,
+			SubTaskID:   r.SubTaskID,
 			FromAgentID: r.FromAgentID,
 			ToAgentID:   r.ToAgentID,
 			Type:        r.Type,
@@ -129,6 +133,30 @@ func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMess
 		})
 	}
 	return out, nil
+}
+
+// InsertApproval implements runtime.ApprovalRepository by forwarding to
+// db.InsertApproval. Phase 7-I: keeps database schema details in pkg/db.
+func (p *DBPersistence) InsertApproval(record runtime.ApprovalRecord) error {
+	return db.InsertApproval(db.ApprovalRecord{
+		ID:                   record.ApprovalID,
+		TaskID:               record.TaskID,
+		SubTaskID:            record.SubTaskID,
+		AgentID:              record.AgentID,
+		Tool:                 record.Tool,
+		Reason:               record.Reason,
+		Input:                record.Input,
+		DelegatedToLeader:    record.DelegatedToLeader,
+		LeaderSubTaskID:      record.LeaderSubTaskID,
+		LeaderDecisionStepID: record.LeaderDecisionStepID,
+		Approved:             record.Approved,
+	})
+}
+
+// UpdateApprovalLeaderDecision implements runtime.ApprovalRepository by
+// forwarding to db.UpdateApprovalLeaderDecision.
+func (p *DBPersistence) UpdateApprovalLeaderDecision(approvalID string, approved bool, reason string) error {
+	return db.UpdateApprovalLeaderDecision(approvalID, approved, reason)
 }
 
 // resolveSession either uses an existing session ID or creates a new empty session.

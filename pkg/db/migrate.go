@@ -309,6 +309,33 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_messages_task_id ON agent_messages(task_id);`,
 	},
+
+	// v19: Create approvals table for leader delegation of approval decisions.
+	//
+	// Each row records a high-risk tool call that required approval, including
+	// whether the request was delegated to the leader and the leader's final
+	// decision. This supports auditability, replay, and frontend dashboards.
+	{
+		Version:     19,
+		Description: "Create approvals table for leader delegated approvals",
+		SQL: `CREATE TABLE IF NOT EXISTS approvals (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			sub_task_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			reason TEXT,
+			input JSON,
+			delegated_to_leader BOOLEAN DEFAULT 0,
+			leader_sub_task_id TEXT,
+			leader_decision_step_id TEXT,
+			approved BOOLEAN,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			decided_at DATETIME
+		);
+		CREATE INDEX IF NOT EXISTS idx_approvals_task_id ON approvals(task_id);
+		CREATE INDEX IF NOT EXISTS idx_approvals_sub_task_id ON approvals(sub_task_id);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

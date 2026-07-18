@@ -72,6 +72,7 @@ type AgentBusMessage struct {
 	TaskID      string
 	FromAgentID string
 	ToAgentID   string
+	SubTaskID   string // Phase 7-I: 支持按子任务路由
 	Type        string
 	Content     string
 	Metadata    map[string]string

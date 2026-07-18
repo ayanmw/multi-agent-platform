@@ -377,6 +377,13 @@ type EngineConfig struct {
 	// Phase 7-H 占位用，Phase I 详细实现。
 	ApproverMode string
 
+	// SupervisorDecisionHandler 是 worker 在 ApproverMode="leader" 时把高风险
+	// 审批请求委托给 supervisor leader 的回调。实现者由 cmd/server 注入，
+	// 负责查找 supervisor Engine 并等待其通过 approve/reject_sub_agent_action
+	// 工具做出决定。
+	// Added in Phase 7-I.
+	SupervisorDecisionHandler ApprovalDelegationHandler
+
 	// OnLLMUsage is an optional callback invoked after every successful LLM call
 	// in the ReAct loop. It receives the actual model selected (which may differ
 	// from cfg.Model when Router is active), the resolved ModelProfile, and the
@@ -1745,6 +1752,14 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		// Engine 需要发射 system_info 事件到前端，等待用户批准/拒绝。
 		var approvalErr *harness.ErrApprovalRequired
 		if errors.As(execErr, &approvalErr) {
+			if e.cfg.Role == AgentRoleWorker && e.cfg.ApproverMode == "leader" {
+				return e.handleApprovalDelegation(tc, &ApprovalError{
+					ApprovalID: approvalErr.ApprovalID,
+					Tool:       approvalErr.Tool,
+					Reason:     approvalErr.Reason,
+					Input:      approvalErr.Input,
+				}, args, duration)
+			}
 			return e.handleApprovalRequired(tc, approvalErr, args, duration)
 		}
 
@@ -2047,13 +2062,46 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 //
 // If the AgentBus is nil, this is a no-op - agent-to-agent communication is disabled.
 func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
+	e.sendAgentMessageWithSubTask(toAgentID, msgType, content)
+}
+
+// SendAgentMessage is the public variant of sendAgentMessage used by external
+// callers (cmd/server) to inject an AgentBus message into this Engine's
+// listener. The toSubTaskID parameter is optional; when empty the message is
+// routed to the agentID handler. Added in Phase 7-I.
+func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
+	if e.agentBus == nil {
+		return
+	}
+	msg := AgentMessage{
+		FromAgentID: e.cfg.AgentID,
+		ToAgentID:   e.cfg.AgentID,
+		SubTaskID:   toSubTaskID,
+		Type:        msgType,
+		Content:     content,
+		Metadata: map[string]string{
+			"task_id":       e.taskID,
+			"from_agent_id": e.cfg.AgentID,
+		},
+	}
+	if toSubTaskID == "" {
+		msg.SubTaskID = e.cfg.SubTaskID
+	}
+	e.agentBus.SendMessage(msg)
+}
+
+// sendAgentMessageWithSubTask sends a message to another agent via the AgentBus,
+// optionally targeting a specific subTaskID. If subTaskID is empty, the message
+// is routed to the agent's default handler. Added in Phase 7-I.
+func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content string) {
 	if e.agentBus == nil {
 		return
 	}
 
 	msg := AgentMessage{
 		FromAgentID: e.cfg.AgentID,
-		ToAgentID:   toAgentID,
+		ToAgentID:   "",
+		SubTaskID:   toSubTaskID,
 		Type:        msgType,
 		Content:     content,
 		Metadata: map[string]string{
@@ -2068,7 +2116,8 @@ func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":       "agent_message_sent",
 		"from_agent": e.cfg.AgentID,
-		"to_agent":   toAgentID,
+		"to_agent":   "",
+		"to_sub_task_id": toSubTaskID,
 		"msg_type":   msgType,
 		"content":    content,
 	}))

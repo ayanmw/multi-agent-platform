@@ -629,6 +629,24 @@ func RegisterBuiltinsWithDispatcher(registry *Registry, dispatcher SubAgentDispa
 	}
 }
 
+// RegisterBuiltinsWithDispatcherAndLeaderTools 注册所有内置工具、dispatch_sub_agent
+// 工具，以及 leader 审批工具 approve_sub_agent_action / reject_sub_agent_action。
+//
+// resolveApproval 回调负责把 leader 的决定写回 runtime 的委托审批表；
+// 工具层只负责解析输入并调用回调，不直接操作 runtime 注册表。
+func RegisterBuiltinsWithDispatcherAndLeaderTools(
+	registry *Registry,
+	dispatcher SubAgentDispatcher,
+	canDispatchFn func() bool,
+	resolveApproval func(approvalID string, approved bool, reason string) error,
+) {
+	RegisterBuiltinsWithDispatcher(registry, dispatcher, canDispatchFn)
+	if resolveApproval != nil {
+		registry.Register(NewApproveSubAgentActionTool(resolveApproval))
+		registry.Register(NewRejectSubAgentActionTool(resolveApproval))
+	}
+}
+
 // NewDispatchSubAgentTool 创建 dispatch_sub_agent 工具实例。
 // 工具位于全局命名空间，仅允许当前 agent 的角色为 leader 时调用。
 func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func() bool) *BuiltinTool {
@@ -689,7 +707,9 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func()
 		},
 		func(input map[string]any) (any, error) {
 			if canDispatchFn == nil || !canDispatchFn() {
-				return nil, fmt.Errorf("sub-agent dispatch is only allowed for the leader agent")
+				// Phase 7-I: 使用 policy-blocked 语义返回错误，让 Engine 把错误作
+				// 为 observation 反馈给 LLM，而不是当作不可恢复失败终止任务。
+				return nil, fmt.Errorf("[POLICY BLOCK] leader-only-dispatch blocked dispatch_sub_agent: sub-agent dispatch is only allowed for the leader agent")
 			}
 
 			strategy := getString(input, "strategy", "parallel")
@@ -910,4 +930,90 @@ func walkDir(root string, recursive bool, maxDepth int, pattern string, includeH
 		return out[i]["path"].(string) < out[j]["path"].(string)
 	})
 	return out, err
+}
+
+// NewApproveSubAgentActionTool 创建 approve_sub_agent_action 工具。
+// 该工具由 supervisor leader 调用，表示批准一个子 agent 的高风险动作。
+//
+// Parameters:
+//   - approval_id (string, required): 需要批准的审批请求 ID。
+//   - reason    (string, optional): 批准的原因说明。
+func NewApproveSubAgentActionTool(resolve func(approvalID string, approved bool, reason string) error) *BuiltinTool {
+	return NewBuiltinTool(
+		"approve_sub_agent_action",
+		"",
+		"Approve a delegated high-risk action from a sub-agent. Only the supervisor leader should call this tool. Provide the approval_id returned in the approval_request message and an optional reason.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"approval_id": map[string]any{
+					"type":        "string",
+					"description": "The approval request ID to approve",
+				},
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Reason for approving the action (optional)",
+				},
+			},
+			"required": []string{"approval_id"},
+		},
+		func(input map[string]any) (any, error) {
+			approvalID, ok := input["approval_id"].(string)
+			if !ok || approvalID == "" {
+				return nil, fmt.Errorf("approval_id is required")
+			}
+			reason := getString(input, "reason", "approved by leader")
+			if err := resolve(approvalID, true, reason); err != nil {
+				return nil, fmt.Errorf("failed to resolve approval: %w", err)
+			}
+			return map[string]any{
+				"approved":     true,
+				"approval_id":  approvalID,
+				"reason":       reason,
+			}, nil
+		},
+	).WithTags("orchestration", "approval")
+}
+
+// NewRejectSubAgentActionTool 创建 reject_sub_agent_action 工具。
+// 该工具由 supervisor leader 调用，表示拒绝一个子 agent 的高风险动作。
+//
+// Parameters:
+//   - approval_id (string, required): 需要拒绝的审批请求 ID。
+//   - reason    (string, optional): 拒绝的原因说明。
+func NewRejectSubAgentActionTool(resolve func(approvalID string, approved bool, reason string) error) *BuiltinTool {
+	return NewBuiltinTool(
+		"reject_sub_agent_action",
+		"",
+		"Reject a delegated high-risk action from a sub-agent. Only the supervisor leader should call this tool. Provide the approval_id returned in the approval_request message and an optional reason.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"approval_id": map[string]any{
+					"type":        "string",
+					"description": "The approval request ID to reject",
+				},
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Reason for rejecting the action (optional)",
+				},
+			},
+			"required": []string{"approval_id"},
+		},
+		func(input map[string]any) (any, error) {
+			approvalID, ok := input["approval_id"].(string)
+			if !ok || approvalID == "" {
+				return nil, fmt.Errorf("approval_id is required")
+			}
+			reason := getString(input, "reason", "rejected by leader")
+			if err := resolve(approvalID, false, reason); err != nil {
+				return nil, fmt.Errorf("failed to resolve approval: %w", err)
+			}
+			return map[string]any{
+				"approved":     false,
+				"approval_id":  approvalID,
+				"reason":       reason,
+			}, nil
+		},
+	).WithTags("orchestration", "approval")
 }
