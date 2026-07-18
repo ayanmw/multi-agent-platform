@@ -268,3 +268,6 @@ var DefaultMetrics = NewMetricsCollector()
 
 // DefaultLogger is the package-level shared logger.
 var DefaultLogger = NewStructuredLogger()
+
+// DefaultAuditor is the package-level shared auditor.
+var DefaultAuditor Auditor = NewMemoryAuditor(10000)

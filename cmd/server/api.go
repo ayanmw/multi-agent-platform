@@ -21,6 +21,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/memory"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -712,6 +713,14 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Phase 7-C: audit log for destructive write operation.
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "delete_session",
+			Target: id,
+			Before: map[string]any{"id": id, "workspace_dir": sessToDelete.WorkspaceDir},
+			After:  map[string]any{"deleted": true},
+		})
 		// Clean up workspace directory after DB deletion
 		if sessToDelete.WorkspaceDir != "" {
 			if rmErr := os.RemoveAll(sessToDelete.WorkspaceDir); rmErr != nil {
@@ -1023,6 +1032,14 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Phase 7-C: audit log memory update.
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "update_memory",
+			Target: id,
+			Before: map[string]any{"content": existing.Content, "confidence": existing.Confidence, "status": existing.Status},
+			After:  map[string]any{"content": record.Content, "confidence": record.Confidence, "status": record.Status, "fields_changed": fieldsChanged},
+		})
 		if hub != nil {
 			hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
 				"memory_id":      id,
@@ -1045,6 +1062,14 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			return
 		}
 		handleDeleteMemory(w, r, id)
+		// Phase 7-C: audit log memory deletion.
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "delete_memory",
+			Target: id,
+			Before: map[string]any{"id": id, "content": record.Content, "scope": record.Scope, "tier": record.Tier},
+			After:  map[string]any{"deleted": true},
+		})
 		if hub != nil {
 			hub.SendEvent(event.NewEvent(event.EventMemoryDeleted, "", "server", 0, map[string]any{
 				"memory_id": id,
@@ -1202,6 +1227,15 @@ func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Phase 7-C: audit log memory deletion at the lowest-level helper too,
+	// so direct callers of handleDeleteMemory still produce an audit record.
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "delete_memory",
+		Target: id,
+		Before: map[string]any{"id": id, "content": record.Content, "scope": record.Scope, "tier": record.Tier},
+		After:  map[string]any{"deleted": true},
+	})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"id":      id,
@@ -1673,6 +1707,15 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Phase 7-C: audit log project deletion.
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "delete_project",
+			Target: id,
+			Before: map[string]any{"id": id},
+			After:  map[string]any{"deleted": true},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{

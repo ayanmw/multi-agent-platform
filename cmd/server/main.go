@@ -276,6 +276,9 @@ func main() {
 		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
 	} else {
 		observability.DefaultLogger.Info("database", "initialized", map[string]any{"path": cfg.DBPath})
+		// Phase 7-C: switch default auditor to SQLite-backed persistence now that DB is ready.
+		observability.DefaultAuditor = observability.NewSQLiteAuditor(observability.NewMemoryAuditor(10000))
+
 		var repoErr error
 		costRepo, repoErr = cost.NewSqliteCostRepository(db.DB)
 		if repoErr != nil {
