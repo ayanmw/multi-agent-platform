@@ -50,11 +50,40 @@ type Config struct {
 
 	// WebSearch configuration maps to environment variables for provider selection
 	// and API keys. Loaded in Load() so the server can wire the core/web_search tool.
+	// DuckDuckGo is the zero-key fallback; all other providers default to off.
 	WebSearchProvider       string // WEBSEARCH_PROVIDER
+	WebSearchDisableDDG     bool   // WEBSEARCH_DISABLE_DDG
 	WebSearchEnableExa      bool   // WEBSEARCH_ENABLE_EXA
 	WebSearchEnableParallel bool   // WEBSEARCH_ENABLE_PARALLEL
 	WebSearchExaAPIKey      string // WEBSEARCH_EXA_API_KEY
 	WebSearchParallelAPIKey string // WEBSEARCH_PARALLEL_API_KEY
+
+	// Bing Web Search API (Azure) configuration.
+	WebSearchEnableBing   bool   // WEBSEARCH_ENABLE_BING
+	WebSearchBingAPIKey   string // WEBSEARCH_BING_API_KEY
+	WebSearchBingEndpoint string // WEBSEARCH_BING_ENDPOINT
+
+	// Google Custom Search JSON API configuration.
+	WebSearchEnableGoogle   bool   // WEBSEARCH_ENABLE_GOOGLE
+	WebSearchGoogleAPIKey   string // WEBSEARCH_GOOGLE_API_KEY
+	WebSearchGoogleCX       string // WEBSEARCH_GOOGLE_CX
+	WebSearchGoogleEndpoint string // WEBSEARCH_GOOGLE_ENDPOINT
+
+	// Tavily Search API configuration.
+	WebSearchEnableTavily        bool   // WEBSEARCH_ENABLE_TAVILY
+	WebSearchTavilyAPIKey        string // WEBSEARCH_TAVILY_API_KEY
+	WebSearchTavilyEndpoint      string // WEBSEARCH_TAVILY_ENDPOINT
+	WebSearchTavilySearchDepth   string // WEBSEARCH_TAVILY_SEARCH_DEPTH
+	WebSearchTavilyIncludeAnswer bool   // WEBSEARCH_TAVILY_INCLUDE_ANSWER
+
+	// Brave Search API configuration.
+	WebSearchEnableBrave   bool   // WEBSEARCH_ENABLE_BRAVE
+	WebSearchBraveAPIKey   string // WEBSEARCH_BRAVE_API_KEY
+	WebSearchBraveEndpoint string // WEBSEARCH_BRAVE_ENDPOINT
+
+	// Placeholder providers for future kimi_search and glm_search support.
+	WebSearchEnableKimiSearch bool // WEBSEARCH_ENABLE_KIMI_SEARCH
+	WebSearchEnableGlmSearch  bool // WEBSEARCH_ENABLE_GLM_SEARCH
 
 	// Embedding provider configuration. When provider is empty or "local", the
 	// existing LocalEmbeddingProvider is used. When "openai" or "cohere", a
@@ -137,6 +166,9 @@ func Load() (*Config, error) {
 	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {
 		cfg.WebSearchProvider = v
 	}
+	if v := os.Getenv("WEBSEARCH_DISABLE_DDG"); v != "" {
+		cfg.WebSearchDisableDDG = strings.EqualFold(v, "true") || v == "1"
+	}
 	if v := os.Getenv("WEBSEARCH_ENABLE_EXA"); v != "" {
 		cfg.WebSearchEnableExa = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -148,6 +180,67 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("WEBSEARCH_PARALLEL_API_KEY"); v != "" {
 		cfg.WebSearchParallelAPIKey = v
+	}
+
+	// Bing Web Search API configuration.
+	if v := os.Getenv("WEBSEARCH_ENABLE_BING"); v != "" {
+		cfg.WebSearchEnableBing = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_BING_API_KEY"); v != "" {
+		cfg.WebSearchBingAPIKey = v
+	}
+	if v := os.Getenv("WEBSEARCH_BING_ENDPOINT"); v != "" {
+		cfg.WebSearchBingEndpoint = v
+	}
+
+	// Google Custom Search JSON API configuration.
+	if v := os.Getenv("WEBSEARCH_ENABLE_GOOGLE"); v != "" {
+		cfg.WebSearchEnableGoogle = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_GOOGLE_API_KEY"); v != "" {
+		cfg.WebSearchGoogleAPIKey = v
+	}
+	if v := os.Getenv("WEBSEARCH_GOOGLE_CX"); v != "" {
+		cfg.WebSearchGoogleCX = v
+	}
+	if v := os.Getenv("WEBSEARCH_GOOGLE_ENDPOINT"); v != "" {
+		cfg.WebSearchGoogleEndpoint = v
+	}
+
+	// Tavily Search API configuration.
+	if v := os.Getenv("WEBSEARCH_ENABLE_TAVILY"); v != "" {
+		cfg.WebSearchEnableTavily = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_TAVILY_API_KEY"); v != "" {
+		cfg.WebSearchTavilyAPIKey = v
+	}
+	if v := os.Getenv("WEBSEARCH_TAVILY_ENDPOINT"); v != "" {
+		cfg.WebSearchTavilyEndpoint = v
+	}
+	if v := os.Getenv("WEBSEARCH_TAVILY_SEARCH_DEPTH"); v != "" {
+		cfg.WebSearchTavilySearchDepth = v
+	}
+	if v := os.Getenv("WEBSEARCH_TAVILY_INCLUDE_ANSWER"); v != "" {
+		cfg.WebSearchTavilyIncludeAnswer = strings.EqualFold(v, "true") || v == "1"
+	}
+
+	// Brave Search API configuration.
+	if v := os.Getenv("WEBSEARCH_ENABLE_BRAVE"); v != "" {
+		cfg.WebSearchEnableBrave = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_BRAVE_API_KEY"); v != "" {
+		cfg.WebSearchBraveAPIKey = v
+	}
+	if v := os.Getenv("WEBSEARCH_BRAVE_ENDPOINT"); v != "" {
+		cfg.WebSearchBraveEndpoint = v
+	}
+
+	// Placeholder kimi_search / glm_search configuration.
+	if v := os.Getenv("WEBSEARCH_ENABLE_KIMI_SEARCH"); v != "" {
+		cfg.WebSearchEnableKimiSearch = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_GLM_SEARCH"); v != "" {
+		cfg.WebSearchEnableGlmSearch = strings.EqualFold(v, "true") || v == "1"
 	}
 
 	// Embedding provider configuration.
