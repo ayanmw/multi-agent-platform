@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
@@ -50,6 +51,15 @@ type Config struct {
 	WebSearchEnableParallel bool   // WEBSEARCH_ENABLE_PARALLEL
 	WebSearchExaAPIKey      string // WEBSEARCH_EXA_API_KEY
 	WebSearchParallelAPIKey string // WEBSEARCH_PARALLEL_API_KEY
+
+	// Embedding provider configuration. When provider is empty or "local", the
+	// existing LocalEmbeddingProvider is used. When "openai" or "cohere", a
+	// remote HTTP provider is constructed from the fields below.
+	EmbeddingProvider   string // EMBEDDING_PROVIDER (local | openai | cohere)
+	EmbeddingEndpoint   string // EMBEDDING_ENDPOINT
+	EmbeddingAPIKey     string // EMBEDDING_API_KEY
+	EmbeddingModel      string // EMBEDDING_MODEL
+	EmbeddingDimensions int    // EMBEDDING_DIMENSIONS
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -127,6 +137,25 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("WEBSEARCH_PARALLEL_API_KEY"); v != "" {
 		cfg.WebSearchParallelAPIKey = v
+	}
+
+	// Embedding provider configuration.
+	if v := os.Getenv("EMBEDDING_PROVIDER"); v != "" {
+		cfg.EmbeddingProvider = v
+	}
+	if v := os.Getenv("EMBEDDING_ENDPOINT"); v != "" {
+		cfg.EmbeddingEndpoint = v
+	}
+	if v := os.Getenv("EMBEDDING_API_KEY"); v != "" {
+		cfg.EmbeddingAPIKey = v
+	}
+	if v := os.Getenv("EMBEDDING_MODEL"); v != "" {
+		cfg.EmbeddingModel = v
+	}
+	if v := os.Getenv("EMBEDDING_DIMENSIONS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil {
+			cfg.EmbeddingDimensions = d
+		}
 	}
 
 	// Load multi-model configuration
@@ -239,6 +268,31 @@ func (cfg *Config) ShouldMock(caseID string, endpointHint string) bool {
 func GetAgentConfig(agentID string) (*AgentConfig, error) {
 	_ = agentID
 	return nil, fmt.Errorf("agent config DB loading not yet implemented")
+}
+
+// BuildEmbeddingProviderParams holds the parameters needed by the server to
+// construct an embedding provider from configuration. Keeping this struct in
+// config (instead of returning a concrete provider directly) avoids an
+// import cycle between internal/config and internal/llm.
+type BuildEmbeddingProviderParams struct {
+	Provider   string // EMBEDDING_PROVIDER (local | openai | cohere)
+	Endpoint   string // EMBEDDING_ENDPOINT
+	APIKey     string // EMBEDDING_API_KEY
+	Model      string // EMBEDDING_MODEL
+	Dimensions int    // EMBEDDING_DIMENSIONS
+}
+
+// EmbeddingProviderParams returns the parameters needed to build an embedding
+// provider. The server layer constructs the concrete provider to avoid an
+// import cycle between internal/config and internal/llm.
+func (cfg *Config) EmbeddingProviderParams() BuildEmbeddingProviderParams {
+	return BuildEmbeddingProviderParams{
+		Provider:   cfg.EmbeddingProvider,
+		Endpoint:   cfg.EmbeddingEndpoint,
+		APIKey:     cfg.EmbeddingAPIKey,
+		Model:      cfg.EmbeddingModel,
+		Dimensions: cfg.EmbeddingDimensions,
+	}
 }
 
 // AgentConfig mirrors the agent configuration from the database

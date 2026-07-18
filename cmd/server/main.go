@@ -336,7 +336,35 @@ func main() {
 	// semantic memories. Vector embeddings are persisted to the
 	// memory_embeddings table (v16 migration) so the in-memory index can
 	// be rebuilt at startup via SqliteVectorStore.Reload().
-	embedProvider := llm.NewLocalEmbeddingProvider(2048)
+	var embedProvider llm.EmbeddingProvider = llm.NewLocalEmbeddingProvider(2048)
+	if params := cfg.EmbeddingProviderParams(); params.Provider != "" && params.Provider != "local" {
+		switch params.Provider {
+		case "openai":
+			endpoint := params.Endpoint
+			if endpoint == "" {
+				endpoint = "https://api.openai.com/v1"
+			}
+			model := params.Model
+			if model == "" {
+				model = "text-embedding-3-small"
+			}
+			embedProvider = llm.NewOpenAIEmbeddingProvider(endpoint, params.APIKey, model, params.Dimensions)
+			observability.DefaultLogger.Info("embedding", "using OpenAI embedding provider", map[string]any{"model": model})
+		case "cohere":
+			endpoint := params.Endpoint
+			if endpoint == "" {
+				endpoint = "https://api.cohere.com"
+			}
+			model := params.Model
+			if model == "" {
+				model = "embed-english-v3.0"
+			}
+			embedProvider = llm.NewCohereEmbeddingProvider(endpoint, params.APIKey, model, params.Dimensions)
+			observability.DefaultLogger.Info("embedding", "using Cohere embedding provider", map[string]any{"model": model})
+		default:
+			observability.DefaultLogger.Warn("embedding", "unsupported embedding provider, falling back to local", map[string]any{"provider": params.Provider})
+		}
+	}
 	var vectorStore memory.VectorStore
 	if db.DB != nil {
 		vs, err := memory.NewSqliteVectorStore(db.DB, embedProvider)
