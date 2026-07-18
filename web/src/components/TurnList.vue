@@ -18,6 +18,14 @@ const props = defineProps<{
   }>
   /** Forwarded from App.vue: controls all AgentTree step expansion */
   expandAll?: boolean
+  /** Show per-agent control buttons (Phase 7-F) */
+  showAgentControls?: boolean
+}>()
+
+const emit = defineEmits<{
+  cancelAgent: [agentId: string]
+  pauseAgent: [agentId: string]
+  resumeAgent: [agentId: string]
 }>()
 
 // Default expand the last turn (if there are multiple)
@@ -37,6 +45,10 @@ const defaultExpandedTurn = props.turns.length > 0 ? props.turns.length - 1 : 0
       :user-input="turn.userInput"
       :is-default-expanded="idx === defaultExpandedTurn"
       :expand-all="expandAll"
+      :show-agent-controls="showAgentControls"
+      @cancel-agent="emit('cancelAgent', $event)"
+      @pause-agent="emit('pauseAgent', $event)"
+      @resume-agent="emit('resumeAgent', $event)"
     />
   </div>
 </template>

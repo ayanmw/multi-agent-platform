@@ -177,6 +177,13 @@ func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.
 func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strategy string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
 
+	// Phase 7-C: "pipeline" 通过 OutputTo 链式转发实现，底层复用 parallel 调度。
+	if strategy == "pipeline" {
+		for i := 0; i < len(specs)-1; i++ {
+			specs[i].OutputTo = append(specs[i].OutputTo, specs[i+1].AgentID)
+		}
+		strategy = "parallel"
+	}
 	if strategy == "sequential" {
 		// Sequential pipeline: agents run one after another. Each agent's output
 		// is forwarded to the next agent via the AgentBus before it starts. This
@@ -515,6 +522,12 @@ type AgentBus struct {
 	handlers map[string]func(AgentMessage) // agentID → message handler
 	queue    []AgentMessage                 // pending messages for agents not yet registered
 	maxQueue int                            // max pending messages
+
+	// persistFn is an optional hook invoked asynchronously for every message
+	// that flows through the bus (delivered or queued). It lets the
+	// orchestrator persist AgentBus traffic to SQLite without coupling the
+	// runtime AgentBus package to the db package.
+	persistFn func(AgentMessage) error
 }
 
 // NewAgentBus creates a new AgentBus with a default queue size of 100.
@@ -523,6 +536,18 @@ func NewAgentBus() *AgentBus {
 		handlers: make(map[string]func(AgentMessage)),
 		maxQueue: 100,
 	}
+}
+
+// SetPersistFn installs a callback that receives every AgentMessage after
+// SendMessage assigns Timestamp. It runs in its own goroutine so a slow
+// persistence write never blocks message delivery.
+//
+// Pass nil to disable persistence (the default). Used by main.go to wire
+// db.InsertAgentMessage into the bus.
+func (b *AgentBus) SetPersistFn(fn func(AgentMessage) error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.persistFn = fn
 }
 
 // RegisterHandler registers a message handler for a specific agent.
@@ -553,8 +578,25 @@ func (b *AgentBus) UnregisterHandler(agentID string) {
 // SendMessage sends a message from one agent to another.
 // If the target agent has a registered handler, the handler is called immediately.
 // Otherwise, the message is queued for later delivery.
+//
+// When a persistence callback has been installed via SetPersistFn, every
+// message — delivered or queued — is also handed to that callback in a
+// goroutine so message routing is never blocked on storage I/O.
 func (b *AgentBus) SendMessage(msg AgentMessage) {
 	msg.Timestamp = time.Now()
+
+	// Fire the persistence hook asynchronously. Snapshot the function under
+	// the lock to avoid a race with SetPersistFn; a nil hook is a no-op.
+	b.mu.RLock()
+	persist := b.persistFn
+	b.mu.RUnlock()
+	if persist != nil {
+		go func(m AgentMessage) {
+			if err := persist(m); err != nil {
+				log.Printf("[AgentBus] persist message failed: %v", err)
+			}
+		}(msg)
+	}
 
 	b.mu.RLock()
 	handler, ok := b.handlers[msg.ToAgentID]
@@ -601,7 +643,7 @@ type DecomposeResult struct {
 // Decompose splits a user request into agent specs based on the case type.
 // For now, the decomposition is based on the preset case definition.
 // In Phase 5+, this will use an LLM-based decomposition.
-func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeResult {
+func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeResult, error) {
 	switch caseType {
 	case "multi_agent":
 		// Multi-agent case: split into researcher + writer + reviewer
@@ -630,7 +672,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					ParentAgentID: "agent_researcher",
 				},
 			},
-		}
+		}, nil
 
 	case "code_gen":
 		// Code generation: single agent with code-gen tools
@@ -646,7 +688,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					AllowedTools: []string{"write_file", "read_file", "run_shell"},
 				},
 			},
-		}
+		}, nil
 
 	default:
 		// Default: single agent
@@ -661,7 +703,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) *DecomposeRes
 					Input: input,
 				},
 			},
-		}
+		}, nil
 	}
 }
 

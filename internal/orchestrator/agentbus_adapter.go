@@ -32,7 +32,10 @@ import (
 // mapping runtime.AgentMessage to orchestrator.AgentMessage and vice versa.
 //
 // The Timestamp field is set by the orchestrator's SendMessage method,
-// so it is not carried in the runtime.AgentMessage type.
+// so it is not carried in the runtime.AgentMessage type. Metadata (notably
+// Metadata["task_id"], set by Engine.sendAgentMessage) is forwarded so the
+// persistence hook installed via AgentBus.SetPersistFn can route each
+// message to the correct agent_messages row.
 type AgentBusAdapter struct {
 	bus *AgentBus
 }
@@ -48,14 +51,15 @@ func NewAgentBusAdapter(bus *AgentBus) *AgentBusAdapter {
 // to a runtime.AgentMessage before calling the handler.
 func (a *AgentBusAdapter) RegisterHandler(agentID string, handler func(runtime.AgentMessage)) {
 	// Wrap the runtime handler to convert from orchestrator.AgentMessage to
-	// runtime.AgentMessage. The Timestamp and Metadata are dropped because
-	// runtime.AgentMessage doesn't have them.
+	// runtime.AgentMessage. The Timestamp is dropped because
+	// runtime.AgentMessage doesn't have it; Metadata is forwarded.
 	a.bus.RegisterHandler(agentID, func(msg AgentMessage) {
 		handler(runtime.AgentMessage{
 			FromAgentID: msg.FromAgentID,
 			ToAgentID:   msg.ToAgentID,
 			Type:        msg.Type,
 			Content:     msg.Content,
+			Metadata:    msg.Metadata,
 		})
 	})
 }
@@ -67,12 +71,14 @@ func (a *AgentBusAdapter) UnregisterHandler(agentID string) {
 
 // SendMessage sends a message from one agent to another. The adapter converts
 // the runtime.AgentMessage to an orchestrator.AgentMessage before sending.
-// The Timestamp is set by the orchestrator's SendMessage method.
+// The Timestamp is set by the orchestrator's SendMessage method, and
+// Metadata is forwarded so downstream persistence can route by task_id.
 func (a *AgentBusAdapter) SendMessage(msg runtime.AgentMessage) {
 	a.bus.SendMessage(AgentMessage{
 		FromAgentID: msg.FromAgentID,
 		ToAgentID:   msg.ToAgentID,
 		Type:        msg.Type,
 		Content:     msg.Content,
+		Metadata:    msg.Metadata,
 	})
 }

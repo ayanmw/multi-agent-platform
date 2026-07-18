@@ -14,6 +14,14 @@ type Persistence interface {
 	// helper used by orchestration layers that only hold a root task ID and
 	// need to propagate the session ID to child tasks.
 	QueryTaskSessionID(taskID string) string
+	// SaveAgentMessage persists a single inter-agent message routed through
+	// the AgentBus. The TaskID is required so the message can later be
+	// retrieved by GET /api/tasks/:id/agent-messages.
+	SaveAgentMessage(msg AgentBusMessage) error
+	// LoadAgentMessages returns every AgentBus message for a task, ordered
+	// oldest first. Returns an empty slice (not nil) if the task has no
+	// messages.
+	LoadAgentMessages(taskID string) ([]AgentBusMessage, error)
 }
 
 // StepRecord is a step to be persisted
@@ -50,4 +58,21 @@ type SessionMessageRecord struct {
 	ToolCallID string // the tool call ID (for tool role messages)
 	ToolCalls  string // JSON-serialized tool calls (for assistant messages)
 	TokenCount int    // token count for this message (assistant messages only)
+}
+
+// AgentBusMessage is the persistence-layer representation of an AgentBus
+// inter-agent message. It is intentionally distinct from AgentMessage (the
+// runtime/in-memory type) so that persistence storage details (timestamp,
+// metadata serialisation, future schema columns) don't leak into the
+// engine's API surface.
+//
+// TaskID is mandatory: persistence uses it as the primary lookup key when
+// the frontend requests GET /api/tasks/:id/agent-messages.
+type AgentBusMessage struct {
+	TaskID      string
+	FromAgentID string
+	ToAgentID   string
+	Type        string
+	Content     string
+	Metadata    map[string]string
 }

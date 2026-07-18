@@ -523,6 +523,24 @@ func main() {
 	agentBus := orchestrator.NewAgentBus()
 	agentBusAdapter := orchestrator.NewAgentBusAdapter(agentBus)
 
+	// Phase 7-B: persist every AgentBus message to SQLite so the frontend
+	// can fetch the full message history via GET /api/tasks/:id/agent-messages.
+	// The persistFn fires asynchronously inside SendMessage, so message
+	// routing is never blocked on storage I/O.
+	if persist != nil {
+		agentBus.SetPersistFn(func(msg orchestrator.AgentMessage) error {
+			return db.InsertAgentMessage(db.AgentBusMessage{
+				TaskID:      msg.Metadata["task_id"],
+				FromAgentID: msg.FromAgentID,
+				ToAgentID:   msg.ToAgentID,
+				Type:        msg.Type,
+				Content:     msg.Content,
+				Metadata:    msg.Metadata,
+			})
+		})
+		log.Println("AgentBus: persistence enabled (agent_messages table)")
+	}
+
 	// Phase 5: CheckpointManager for task recovery after crashes.
 	// Checkpoints are saved at the end of each ReAct loop iteration.
 	checkpointMgr := runtime.NewCheckpointManager("data/checkpoints")
@@ -561,6 +579,17 @@ func main() {
 			}
 			id := strings.TrimSuffix(path, "/context_window")
 			handleGetTaskContextWindow(w, r, id)
+			return
+		}
+
+		// Phase 7-B: GET /api/tasks/:id/agent-messages — AgentBus history for a task.
+		if strings.HasSuffix(path, "/agent-messages") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET only", http.StatusMethodNotAllowed)
+				return
+			}
+			id := strings.TrimSuffix(path, "/agent-messages")
+			handleGetAgentMessages(w, r, id)
 			return
 		}
 
@@ -628,8 +657,17 @@ func main() {
 			specs := req.Agents
 			strategy := "parallel"
 			if len(specs) == 0 {
-				decomposer := &orchestrator.TaskDecomposer{}
-				result := decomposer.Decompose(req.Input, req.CaseType)
+				var decomposer orchestrator.Decomposer
+				if cfg.LLMUseMock {
+					decomposer = orchestrator.NewTaskDecomposer()
+				} else {
+					decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
+				}
+				result, err := decomposer.Decompose(req.Input, req.CaseType)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 				specs = result.Agents
 				strategy = result.Strategy
 			}
@@ -1081,8 +1119,17 @@ func main() {
 		if len(req.Agents) > 0 {
 			specs = req.Agents
 		} else {
-			decomposer := &orchestrator.TaskDecomposer{}
-			result := decomposer.Decompose(req.Input, req.CaseType)
+			var decomposer orchestrator.Decomposer
+			if cfg.LLMUseMock {
+				decomposer = orchestrator.NewTaskDecomposer()
+			} else {
+				decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
+			}
+			result, err := decomposer.Decompose(req.Input, req.CaseType)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 			specs = result.Agents
 			strategy = result.Strategy
 		}

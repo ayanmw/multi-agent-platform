@@ -43,6 +43,14 @@ const props = defineProps<{
   /** External control: when true, all steps should be expanded; when false, collapse all.
    *  The component may still auto-expand the latest running step independently. */
   expandAll?: boolean
+  /** Whether to show per-agent control buttons (cancel/pause/resume) */
+  showControls?: boolean
+}>()
+
+const emit = defineEmits<{
+  cancel: [agentId: string]
+  pause: [agentId: string]
+  resume: [agentId: string]
 }>()
 
 /** Track which steps are expanded (by index) */
@@ -307,6 +315,11 @@ watch(
         >
           {{ formatDuration(agentDuration) }}
         </span>
+        <div v-if="showControls && isRunning" class="agent-controls">
+          <button class="agent-control-btn" @click.stop="emit('pause', agent.id)">Pause</button>
+          <button class="agent-control-btn" @click.stop="emit('resume', agent.id)">Resume</button>
+          <button class="agent-control-btn cancel" @click.stop="emit('cancel', agent.id)">Cancel</button>
+        </div>
       </div>
     </div>
 
@@ -540,6 +553,34 @@ watch(
   background: #2a2a2a;
   padding: 2px 8px;
   border-radius: 10px;
+}
+
+.agent-controls {
+  display: flex;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.agent-control-btn {
+  background: #333;
+  border: 1px solid #444;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.agent-control-btn:hover {
+  background: #4a9eff;
+  color: #fff;
+  border-color: #4a9eff;
+}
+
+.agent-control-btn.cancel:hover {
+  background: #ff6b6b;
+  border-color: #ff6b6b;
 }
 
 /* Step list */

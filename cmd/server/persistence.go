@@ -94,6 +94,43 @@ func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
 	return t.SessionID
 }
 
+// SaveAgentMessage persists an inter-agent message routed through the
+// AgentBus. The runtime.AgentBusMessage is a lightweight DTO that already
+// carries everything the agent_messages table needs (TaskID, FromAgentID,
+// Type, Content, Metadata); the persistence layer just forwards to the
+// db.InsertAgentMessage helper.
+func (p *DBPersistence) SaveAgentMessage(msg runtime.AgentBusMessage) error {
+	return db.InsertAgentMessage(db.AgentBusMessage{
+		TaskID:      msg.TaskID,
+		FromAgentID: msg.FromAgentID,
+		ToAgentID:   msg.ToAgentID,
+		Type:        msg.Type,
+		Content:     msg.Content,
+		Metadata:    msg.Metadata,
+	})
+}
+
+// LoadAgentMessages returns the full AgentBus message history for a task,
+// ordered oldest first. Empty slice when the task has no messages.
+func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMessage, error) {
+	rows, err := db.QueryAgentMessages(taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]runtime.AgentBusMessage, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, runtime.AgentBusMessage{
+			TaskID:      r.TaskID,
+			FromAgentID: r.FromAgentID,
+			ToAgentID:   r.ToAgentID,
+			Type:        r.Type,
+			Content:     r.Content,
+			Metadata:    r.Metadata,
+		})
+	}
+	return out, nil
+}
+
 // resolveSession either uses an existing session ID or creates a new empty session.
 // It then creates a new root task bound to that session.
 // Returns (sessionID, taskID, error).

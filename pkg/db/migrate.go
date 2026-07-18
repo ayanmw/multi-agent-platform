@@ -285,6 +285,30 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		);
 		CREATE INDEX IF NOT EXISTS idx_eval_task ON case_evaluations(task_id);`,
 	},
+
+	// v18: Create agent_messages table for the AgentBus persistence feature.
+	//
+	// Every inter-agent message routed through the AgentBus is persisted here so
+	// the frontend can fetch the full message history for a task via
+	// GET /api/tasks/:id/agent-messages. The task_id column is indexed because
+	// the primary query path is "all messages for a given task, oldest first".
+	// Metadata is stored as JSON text — keeping it opaque avoids schema churn
+	// when new metadata keys are added.
+	{
+		Version:     18,
+		Description: "Create agent_messages table for AgentBus persistence",
+		SQL: `CREATE TABLE IF NOT EXISTS agent_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			from_agent_id TEXT NOT NULL,
+			to_agent_id TEXT NOT NULL,
+			msg_type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			metadata TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_messages_task_id ON agent_messages(task_id);`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

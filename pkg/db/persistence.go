@@ -959,3 +959,76 @@ func SeedDefaultProject() error {
 	}
 	return nil
 }
+
+// AgentBusMessage mirrors the agent_messages table.
+//
+// Every message routed through the AgentBus (internal/orchestrator.AgentBus)
+// is persisted here so the frontend can render a full timeline of interagent
+// communication for a task via GET /api/tasks/:id/agent-messages.
+//
+// Metadata is stored as a JSON-encoded TEXT column — keeping it opaque avoids
+// schema churn when new metadata keys are added (e.g. correlation ID,
+// timestamps from the sender, trace context).
+type AgentBusMessage struct {
+	ID          int               `json:"id"`
+	TaskID      string            `json:"task_id"`
+	FromAgentID string            `json:"from_agent_id"`
+	ToAgentID   string            `json:"to_agent_id"`
+	Type        string            `json:"type"`
+	Content     string            `json:"content"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// InsertAgentMessage persists a single AgentBus message.
+//
+// Errors from JSON-marshalling Metadata are intentionally swallowed: an empty
+// metadata blob is still a valid row, and we'd rather lose a metadata key than
+// drop the entire message because of a serialisation glitch.
+func InsertAgentMessage(m AgentBusMessage) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	metadataJSON, _ := json.Marshal(m.Metadata)
+	_, err := DB.Exec(
+		`INSERT INTO agent_messages (task_id, from_agent_id, to_agent_id, msg_type, content, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		m.TaskID, m.FromAgentID, m.ToAgentID, m.Type, m.Content, string(metadataJSON),
+	)
+	return err
+}
+
+// QueryAgentMessages returns all AgentBus messages for a task ordered by
+// created_at ASC, id ASC (id is the tie-breaker for messages written in the
+// same SQLite CURRENT_TIMESTAMP second).
+//
+// If the task has no messages, returns an empty slice (not nil) so caller can
+// JSON-encode it directly without a null check.
+func QueryAgentMessages(taskID string) ([]AgentBusMessage, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, task_id, from_agent_id, to_agent_id, msg_type, content, COALESCE(metadata,''), created_at
+		 FROM agent_messages WHERE task_id=? ORDER BY created_at ASC, id ASC`, taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	msgs := []AgentBusMessage{}
+	for rows.Next() {
+		var m AgentBusMessage
+		var metadataJSON string
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.FromAgentID, &m.ToAgentID, &m.Type, &m.Content, &metadataJSON, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		// Metadata may be NULL/empty for legacy rows; tolerate unmarshal failure.
+		if metadataJSON != "" {
+			_ = json.Unmarshal([]byte(metadataJSON), &m.Metadata)
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}

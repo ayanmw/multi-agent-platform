@@ -38,6 +38,8 @@ import RAGPreviewPanel from './components/RAGPreviewPanel.vue'
 import MemoryEventsTimeline from './components/MemoryEventsTimeline.vue'
 import ContextWindowPanel from './components/ContextWindowPanel.vue'
 import CaseCard from './components/CaseCard.vue'
+import MultiAgentWorkflowEditor from './components/MultiAgentWorkflowEditor.vue'
+import { type WorkflowConfig } from './types/agent'
 import CaseFilter from './components/CaseFilter.vue'
 import CaseForm from './components/CaseForm.vue'
 import CaseDetailModal from './components/CaseDetailModal.vue'
@@ -151,6 +153,29 @@ const autoApprovePolicy = ref(false)
 
 // Project config view toggle
 const showProjectConfig = ref(false)
+
+// Multi-agent mode toggle
+const useMultiAgent = ref(false)
+
+// Multi-agent workflow editor
+const showWorkflowEditor = ref(false)
+const workflowConfig = ref<WorkflowConfig>({
+  strategy: 'parallel',
+  agents: [],
+})
+
+function handleOpenWorkflowEditor() {
+  showWorkflowEditor.value = true
+}
+
+function handleCloseWorkflowEditor() {
+  showWorkflowEditor.value = false
+}
+
+function handleSaveWorkflow(config: WorkflowConfig) {
+  workflowConfig.value = config
+  showWorkflowEditor.value = false
+}
 
 /** Singleton context window snapshot listener */
 const {
@@ -569,6 +594,27 @@ onMounted(() => {
 async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
   try {
     const session = activeSession.value
+    if (useMultiAgent.value) {
+      const targetSession = session || await createSession(undefined, text, activeProjectId.value)
+      if (!session) {
+        setActiveSession(targetSession.id)
+      }
+      const agents = workflowConfig.value.agents.length > 0 ? workflowConfig.value.agents.map(a => ({
+        agent_id: a.agentId,
+        name: a.name,
+        system_prompt: a.systemPrompt,
+        input: a.input || text,
+        allowed_tools: a.allowedTools || [],
+        output_to: a.outputTo || [],
+        model: a.model,
+      })) : undefined
+      await startMultiAgentTask(text, {
+        sessionId: targetSession.id,
+        timeoutSeconds: options.timeoutSeconds,
+        agents,
+      })
+      return
+    }
     if (!session) {
       // No active session — create a new one in the current project
       const newSession = await createSession(undefined, text, activeProjectId.value)
@@ -1227,6 +1273,10 @@ function formatShortTime(ts: number): string {
           v-if="currentTask && !isTaskIdle"
           :turns="sessionTurns"
           :expand-all="expandAll ?? undefined"
+          :show-agent-controls="isAgentRunning"
+          @cancel-agent="(id: string) => cancelTask(id)"
+          @pause-agent="(id: string) => pauseTask(id)"
+          @resume-agent="(id: string) => resumeTask(id)"
         />
 
         <!-- Idle state — task exists in DB but hasn't executed (status='idle').
@@ -1249,11 +1299,14 @@ function formatShortTime(ts: number): string {
           :disabled="isAgentRunning"
           :is-running="isAgentRunning"
           :is-pending="isTaskPending"
+          :enable-multi-agent="useMultiAgent"
           @send="handleSend"
           @pause="pauseTask"
           @resume="resumeTask"
           @cancel="cancelTask"
           @toggle-context-window="toggleContextWindow"
+          @update:enable-multi-agent="(v: boolean) => useMultiAgent = v"
+          @open-workflow-editor="handleOpenWorkflowEditor"
         />
 
         <!-- Case library cards — shown when active session has no task / task is empty -->
@@ -1369,9 +1422,15 @@ function formatShortTime(ts: number): string {
         @close="showTips = false"
       />
 
+      <!-- Multi-agent workflow editor -->
+      <MultiAgentWorkflowEditor
+        v-if="showWorkflowEditor"
+        v-model="workflowConfig"
+        @save="handleSaveWorkflow"
+        @cancel="handleCloseWorkflowEditor"
+      />
+
       <!-- Approval dialog for policy-blocked tool calls -->
-      <ApprovalDialog
-        :approval-id="pendingApproval?.approvalId ?? ''"
         :tool="pendingApproval?.tool ?? ''"
         :reason="pendingApproval?.reason ?? ''"
         :input="pendingApproval?.input ?? {}"
