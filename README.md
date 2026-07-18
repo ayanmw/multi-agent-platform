@@ -55,7 +55,7 @@ curl -X DELETE http://localhost:8080/api/mcp/servers/local-time
 
 #### 方式三：从内置市场安装
 
-启动后会自动注册 `default` static market，包含 `local-time` 和 `local-calc` 两个示例：
+启动后会自动注册 `default` static market，包含 `local-time` 和 `local-calc` 两个示例。市场 catalog 通过 `go:embed` 内嵌在二进制中，无需外部 `markets/default.json` 文件：
 
 ```bash
 # 列出已注册市场
