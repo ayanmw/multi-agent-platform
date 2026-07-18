@@ -584,7 +584,5 @@ const activeTaskId = ref<string | null>(null)
 | v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
 | v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
 <<<<<<< HEAD
-| v0.7.1 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program + mcp/web_search 占位 |
-=======
 | v0.7.1 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 |
->>>>>>> 952d2e4 (Phase 6-G+: MCP support — stdio client, Manager lifecycle, DB persistence, REST API, examples)
+| v0.7.2 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program、core/web_search (Exa/Parallel) + approval 元数据 + sandbox runner 预览 |
