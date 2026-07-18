@@ -668,7 +668,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	agentMsgCh := make(chan AgentMessage, 10)
 	agentBusDone := make(chan struct{})
 	if e.agentBus != nil {
-		e.agentBus.RegisterHandler(e.cfg.AgentID, func(msg AgentMessage) {
+		agentBusHandler := func(msg AgentMessage) {
 			select {
 			case agentMsgCh <- msg:
 			default:
@@ -676,19 +676,43 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// This is a safety measure; in practice, the channel should be
 				// large enough to handle bursts.
 			}
-		})
+		}
+		// Phase 7-J: leader 必须使用按 SubTaskID 注册，才能收到子 agent 发给
+		// (leader, rootTaskID) 的消息。子 agent 保持 agentID-only 兼容旧行为。
+		if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+			e.agentBus.RegisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID, agentBusHandler)
+		} else {
+			e.agentBus.RegisterHandler(e.cfg.AgentID, agentBusHandler)
+		}
 		go func() {
 			defer close(agentBusDone)
 			for {
 				select {
 				case <-ctx.Done():
 					// Context cancelled — stop listening.
-					e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+						e.agentBus.UnregisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID)
+					} else {
+						e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					}
 					return
 				case msg, ok := <-agentMsgCh:
 					if !ok {
 						return
 					}
+					// Phase 7-J: 把 AgentBus 输入当作一个独立 step，让前端时间线
+					// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
+					// 最后发射 step_complete 并持久化该 step。
+					e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"type":              "agent_message_input",
+						"from_agent":        msg.FromAgentID,
+						"from_sub_task_id":  msg.SubTaskID, // 对旧消息可能为空
+						"to_agent":          e.cfg.AgentID,
+						"to_sub_task_id":    e.cfg.SubTaskID,
+						"msg_type":          msg.Type,
+						"content":           msg.Content,
+					}))
+
 					// Append the incoming message to the conversation as a user
 					// message. The LLM will see it as a new input from another agent.
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
@@ -698,6 +722,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 					// Emit a system_info event so the frontend can show the
 					// inter-agent communication in the UI.
+					// Phase 7-J 注：保留此事件以兼容旧前端监听器，但 step 事件才是
+					// 推荐的白盒展示方式（system_info 已标记为 deprecated）。
 					e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"type":       "agent_message_received",
 						"from_agent": msg.FromAgentID,
@@ -705,6 +731,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						"msg_type":   msg.Type,
 						"content":    msg.Content,
 					}))
+
+					e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"type": "agent_message_input",
+					}))
+					e.saveStep(StepRecord{
+						TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
+						Type: "agent_message_input", Status: "completed", Content: formatted,
+					})
 				}
 			}
 		}()
@@ -2073,19 +2107,21 @@ func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
 	if e.agentBus == nil {
 		return
 	}
-	msg := AgentMessage{
-		FromAgentID: e.cfg.AgentID,
-		ToAgentID:   e.cfg.AgentID,
-		SubTaskID:   toSubTaskID,
-		Type:        msgType,
-		Content:     content,
-		Metadata: map[string]string{
-			"task_id":       e.taskID,
-			"from_agent_id": e.cfg.AgentID,
-		},
-	}
 	if toSubTaskID == "" {
-		msg.SubTaskID = e.cfg.SubTaskID
+		toSubTaskID = e.cfg.SubTaskID
+	}
+	msg := AgentMessage{
+		FromAgentID:   e.cfg.AgentID,
+		FromSubTaskID: e.cfg.SubTaskID,
+		ToAgentID:     e.cfg.AgentID,
+		SubTaskID:     toSubTaskID,
+		Type:          msgType,
+		Content:       content,
+		Metadata: map[string]string{
+			"task_id":          e.taskID,
+			"from_agent_id":    e.cfg.AgentID,
+			"from_sub_task_id": e.cfg.SubTaskID,
+		},
 	}
 	e.agentBus.SendMessage(msg)
 }
@@ -2099,14 +2135,16 @@ func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content strin
 	}
 
 	msg := AgentMessage{
-		FromAgentID: e.cfg.AgentID,
-		ToAgentID:   "",
-		SubTaskID:   toSubTaskID,
-		Type:        msgType,
-		Content:     content,
+		FromAgentID:   e.cfg.AgentID,
+		FromSubTaskID: e.cfg.SubTaskID,
+		ToAgentID:     "",
+		SubTaskID:     toSubTaskID,
+		Type:          msgType,
+		Content:       content,
 		Metadata: map[string]string{
-			"task_id":       e.taskID,
-			"from_agent_id": e.cfg.AgentID,
+			"task_id":          e.taskID,
+			"from_agent_id":    e.cfg.AgentID,
+			"from_sub_task_id": e.cfg.SubTaskID,
 		},
 	}
 
@@ -2114,12 +2152,12 @@ func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content strin
 
 	// Emit a system_info event so the frontend can show the message in the UI.
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-		"type":       "agent_message_sent",
-		"from_agent": e.cfg.AgentID,
-		"to_agent":   "",
+		"type":           "agent_message_sent",
+		"from_agent":     e.cfg.AgentID,
+		"to_agent":       "",
 		"to_sub_task_id": toSubTaskID,
-		"msg_type":   msgType,
-		"content":    content,
+		"msg_type":       msgType,
+		"content":        content,
 	}))
 }
 

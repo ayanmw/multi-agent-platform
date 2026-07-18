@@ -37,7 +37,8 @@
 package runtime
 
 // AgentMessage is a message sent between agents via the AgentBus.
-// It carries the sender's identity, the message content, and optional metadata.
+// It carries the sender's identity, the receiver identity, optional sub-task
+// routing fields, the message content, and optional metadata.
 type AgentMessage struct {
 	// FromAgentID is the agent that sent the message.
 	FromAgentID string `json:"from_agent_id"`
@@ -49,6 +50,10 @@ type AgentMessage struct {
 	// an exact (ToAgentID, SubTaskID) handler before falling back to a
 	// ToAgentID-only handler. Added in Phase 7-I.
 	SubTaskID string `json:"sub_task_id,omitempty"`
+
+	// FromSubTaskID is the sender's sub-task. Added in Phase 7-J so the
+	// persistence layer can record both ends of inter-agent communication.
+	FromSubTaskID string `json:"from_sub_task_id,omitempty"`
 
 	// Type describes the message type: "request", "response", "observation", "error"
 	Type string `json:"type"`

@@ -211,10 +211,12 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
 				next := specs[i+1]
 				o.agentBus.SendMessage(runtime.AgentMessage{
-					FromAgentID: spec.AgentID,
-					ToAgentID:   next.AgentID,
-					Type:        "observation",
-					Content:     results[i].Result,
+					FromAgentID:   spec.AgentID,
+					FromSubTaskID: rootTaskID + "_" + spec.AgentID,
+					ToAgentID:     next.AgentID,
+					SubTaskID:     rootTaskID + "_" + next.AgentID,
+					Type:          "observation",
+					Content:       results[i].Result,
 				})
 			}
 		}
@@ -231,11 +233,19 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 				// not registered its handler yet.
 				if results[idx].Status == "completed" && o.agentBus != nil {
 					for _, targetID := range s.OutputTo {
+						toSubTaskID := rootTaskID + "_" + targetID
+						// Phase 7-J: 如果目标是 leader，使用 rootTaskID 作为其 SubTaskID，
+						// 因为 leader Engine 按 (leader, rootTaskID) 注册 handler。
+						if targetID == "leader" {
+							toSubTaskID = rootTaskID
+						}
 						o.agentBus.SendMessage(runtime.AgentMessage{
-							FromAgentID: s.AgentID,
-							ToAgentID:   targetID,
-							Type:        "observation",
-							Content:     results[idx].Result,
+							FromAgentID:   s.AgentID,
+							FromSubTaskID: rootTaskID + "_" + s.AgentID,
+							ToAgentID:     targetID,
+							SubTaskID:     toSubTaskID,
+							Type:          "observation",
+							Content:       results[idx].Result,
 						})
 					}
 				}
@@ -519,7 +529,8 @@ func (a *hubAdapter) SendEvent(evt event.Event) {
 // ============================================================================
 
 // AgentMessage is a message sent from one agent to another.
-// It carries the sender's identity, the message content, and optional metadata.
+// It carries the sender's identity, the receiver identity, an optional
+// sub-task target for precise routing, the message content, and optional metadata.
 type AgentMessage struct {
 	// FromAgentID is the agent that sent the message.
 	FromAgentID string `json:"from_agent_id"`
@@ -529,7 +540,14 @@ type AgentMessage struct {
 
 	// SubTaskID is the target sub-task ID. Phase 7-I: when set, the message is
 	// routed to the handler registered for the exact (ToAgentID, SubTaskID) pair.
+	// Phase 7-J: leader 注册时使用 rootTaskID，因此子 agent 需要把给 leader 的
+	// 消息 ToAgentID 设为 "leader"、SubTaskID 设为 rootTaskID。
 	SubTaskID string `json:"sub_task_id,omitempty"`
+
+	// FromSubTaskID is the sender's sub-task ID. Phase 7-J: used by persistence
+	// to record which sub-task sent the message, so the frontend timeline can
+	// draw accurate inter-agent arrows.
+	FromSubTaskID string `json:"from_sub_task_id,omitempty"`
 
 	// Type describes the message type: "request", "response", "observation", "error"
 	Type string `json:"type"`
@@ -657,6 +675,8 @@ func (b *AgentBus) deliverPendingLocked(agentID, subTaskID string, handler func(
 }
 
 // matchesTarget 判断 msg 是否匹配给定的 (agentID, subTaskID)。
+// 当 subTaskID 非空时要求完全一致；当 subTaskID 为空时只匹配未指定
+// SubTaskID 的消息，避免精确消息被 agentID-only handler 误收。Phase 7-J。
 func matchesTarget(msg AgentMessage, agentID, subTaskID string) bool {
 	if msg.ToAgentID != agentID {
 		return false
@@ -675,6 +695,9 @@ func matchesTarget(msg AgentMessage, agentID, subTaskID string) bool {
 // Phase 7-I: SendMessage first looks for an exact (ToAgentID, SubTaskID) handler,
 // then falls back to a ToAgentID-only handler, so sub-task specific routing takes
 // precedence. An empty SubTaskID only matches ToAgentID-only handlers.
+//
+// Phase 7-J: 队列中的消息也按同样的匹配规则重新投递，确保 message.SubTaskID
+// 改变后不会错误地进入旧的 agentID-only handler。
 //
 // When a persistence callback has been installed via SetPersistFn, every
 // message — delivered or queued — is also handed to that callback in a

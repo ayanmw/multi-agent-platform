@@ -571,12 +571,14 @@ func main() {
 	if persist != nil {
 		agentBus.SetPersistFn(func(msg orchestrator.AgentMessage) error {
 			return db.InsertAgentMessage(db.AgentBusMessage{
-				TaskID:      msg.Metadata["task_id"],
-				FromAgentID: msg.FromAgentID,
-				ToAgentID:   msg.ToAgentID,
-				Type:        msg.Type,
-				Content:     msg.Content,
-				Metadata:    msg.Metadata,
+				TaskID:        msg.Metadata["task_id"],
+				SubTaskID:     msg.SubTaskID,
+				FromSubTaskID: msg.FromSubTaskID,
+				FromAgentID:   msg.FromAgentID,
+				ToAgentID:     msg.ToAgentID,
+				Type:          msg.Type,
+				Content:       msg.Content,
+				Metadata:      msg.Metadata,
 			})
 		})
 		log.Println("AgentBus: persistence enabled (agent_messages table)")

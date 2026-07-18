@@ -101,15 +101,17 @@ func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
 // db.InsertAgentMessage helper.
 //
 // Phase 7-I: 同时转发 SubTaskID，使 agent_messages 表能记录精确路由目标。
+// Phase 7-J: 同时转发 FromSubTaskID，记录发送方子任务。
 func (p *DBPersistence) SaveAgentMessage(msg runtime.AgentBusMessage) error {
 	return db.InsertAgentMessage(db.AgentBusMessage{
-		TaskID:      msg.TaskID,
-		SubTaskID:   msg.SubTaskID,
-		FromAgentID: msg.FromAgentID,
-		ToAgentID:   msg.ToAgentID,
-		Type:        msg.Type,
-		Content:     msg.Content,
-		Metadata:    msg.Metadata,
+		TaskID:        msg.TaskID,
+		SubTaskID:     msg.SubTaskID,
+		FromSubTaskID: msg.FromSubTaskID,
+		FromAgentID:   msg.FromAgentID,
+		ToAgentID:     msg.ToAgentID,
+		Type:          msg.Type,
+		Content:       msg.Content,
+		Metadata:      msg.Metadata,
 	})
 }
 
@@ -123,13 +125,14 @@ func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMess
 	out := make([]runtime.AgentBusMessage, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, runtime.AgentBusMessage{
-			TaskID:      r.TaskID,
-			SubTaskID:   r.SubTaskID,
-			FromAgentID: r.FromAgentID,
-			ToAgentID:   r.ToAgentID,
-			Type:        r.Type,
-			Content:     r.Content,
-			Metadata:    r.Metadata,
+			TaskID:        r.TaskID,
+			SubTaskID:     r.SubTaskID,
+			FromSubTaskID: r.FromSubTaskID,
+			FromAgentID:   r.FromAgentID,
+			ToAgentID:     r.ToAgentID,
+			Type:          r.Type,
+			Content:       r.Content,
+			Metadata:      r.Metadata,
 		})
 	}
 	return out, nil

@@ -336,6 +336,19 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_approvals_task_id ON approvals(task_id);
 		CREATE INDEX IF NOT EXISTS idx_approvals_sub_task_id ON approvals(sub_task_id);`,
 	},
+
+	// v20: 补全 agent_messages 表的子任务路由字段。
+	//
+	// Phase 7-I 起 AgentBus 消息支持按 (agentID, subTaskID) 精确路由，持久化层
+	// 需要记录 sub_task_id（目标子任务）和 from_sub_task_id（发送方子任务）。
+	// 使用 ALTER TABLE ADD COLUMN 保证旧数据库平滑升级；新库在 v18 创建表样例
+	// 后由本迁移补齐列（RunMigrations 对重复列错误静默跳过）。
+	{
+		Version:     20,
+		Description: "Add sub_task_id and from_sub_task_id to agent_messages",
+		SQL: `ALTER TABLE agent_messages ADD COLUMN sub_task_id TEXT DEFAULT '';
+		ALTER TABLE agent_messages ADD COLUMN from_sub_task_id TEXT DEFAULT '';`,
+	},
 }
 
 // createMigrationsTable ensures the schema_migrations tracking table exists.

@@ -55,12 +55,13 @@ func (a *AgentBusAdapter) RegisterHandler(agentID string, handler func(runtime.A
 	// runtime.AgentMessage doesn't have it; Metadata is forwarded.
 	a.bus.RegisterHandler(agentID, func(msg AgentMessage) {
 		handler(runtime.AgentMessage{
-			FromAgentID: msg.FromAgentID,
-			ToAgentID:   msg.ToAgentID,
-			SubTaskID:   msg.SubTaskID,
-			Type:        msg.Type,
-			Content:     msg.Content,
-			Metadata:    msg.Metadata,
+			FromAgentID:   msg.FromAgentID,
+			FromSubTaskID: msg.FromSubTaskID,
+			ToAgentID:     msg.ToAgentID,
+			SubTaskID:     msg.SubTaskID,
+			Type:          msg.Type,
+			Content:       msg.Content,
+			Metadata:      msg.Metadata,
 		})
 	})
 }
@@ -74,12 +75,13 @@ func (a *AgentBusAdapter) RegisterHandlerBySubTask(agentID, subTaskID string, ha
 	}
 	a.bus.RegisterHandlerBySubTask(agentID, subTaskID, func(msg AgentMessage) {
 		handler(runtime.AgentMessage{
-			FromAgentID: msg.FromAgentID,
-			ToAgentID:   msg.ToAgentID,
-			SubTaskID:   msg.SubTaskID,
-			Type:        msg.Type,
-			Content:     msg.Content,
-			Metadata:    msg.Metadata,
+			FromAgentID:   msg.FromAgentID,
+			FromSubTaskID: msg.FromSubTaskID,
+			ToAgentID:     msg.ToAgentID,
+			SubTaskID:     msg.SubTaskID,
+			Type:          msg.Type,
+			Content:       msg.Content,
+			Metadata:      msg.Metadata,
 		})
 	})
 }
@@ -101,11 +103,12 @@ func (a *AgentBusAdapter) UnregisterHandlerBySubTask(agentID, subTaskID string) 
 // Metadata is forwarded so downstream persistence can route by task_id.
 func (a *AgentBusAdapter) SendMessage(msg runtime.AgentMessage) {
 	a.bus.SendMessage(AgentMessage{
-		FromAgentID: msg.FromAgentID,
-		ToAgentID:   msg.ToAgentID,
-		SubTaskID:   msg.SubTaskID,
-		Type:        msg.Type,
-		Content:     msg.Content,
-		Metadata:    msg.Metadata,
+		FromAgentID:   msg.FromAgentID,
+		FromSubTaskID: msg.FromSubTaskID,
+		ToAgentID:     msg.ToAgentID,
+		SubTaskID:     msg.SubTaskID,
+		Type:          msg.Type,
+		Content:       msg.Content,
+		Metadata:      msg.Metadata,
 	})
 }
