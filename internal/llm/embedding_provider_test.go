@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestOpenAIEmbeddingProviderDimensionValidation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"data": []map[string]any{
+				{"index": 0, "embedding": []float32{0.1, 0.2}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewOpenAIEmbeddingProvider(server.URL, "key", "text-embedding-3-small", 3)
+	_, err := p.Embed("text")
+	if err == nil {
+		t.Fatal("expected dimension mismatch error")
+	}
+}
+
 func TestCohereEmbeddingProviderEmbed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/embed" {

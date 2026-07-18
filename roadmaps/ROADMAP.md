@@ -530,11 +530,11 @@ const activeTaskId = ref<string | null>(null)
 - [ ] RBAC 细化: 角色权限下沉到 Tool / 端点级
 
 ### 7-B 外部向量与 Embedding 集成
-- [ ] `EmbeddingProvider` 远程实现: OpenAI text-embedding-3 / Cohere（复用现有接口，无侵入）
-- [ ] `VectorStore` 持久化后端: pgvector（推荐，配合 SQLite→Postgres 迁移）或 ChromaDB
-- [ ] 混合检索: 向量召回 + BM25 关键词 + 重排（替换当前 `blendVectorScores` 的线性混合）
-- [ ] 增量索引: memory 写入时实时 upsert，替代启动全量 `BuildVectorIndex`
-- [ ] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
+- [x] `EmbeddingProvider` 远程实现: OpenAI text-embedding-3 / Cohere（复用现有接口，无侵入）
+- [ ] `VectorStore` 持久化后端: pgvector（保留 SQLite 兜底，Phase 7-E 再做迁移）
+- [x] 混合检索: 向量召回 + BM25 关键词 + 重排（`HybridRanker` 替换 `blendVectorScores`）
+- [x] 增量索引: `MemoryIndexer` + `PostInsertMemoryHook` 实时 upsert，替代启动全量 `BuildVectorIndex`
+- [x] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
 
 ### 7-C 深度可观测
 - [ ] OpenTelemetry trace: 跨 Agent / Tool / LLM 调用链路 span
