@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-15
-> **Current version**: v0.7.0 Alpha (Case Management 增强批次)
+> **Last updated**: 2026-07-18
+> **Current version**: v0.7.1 Alpha (Extended Tool Registry)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -77,6 +77,32 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [ ] Agent CRUD 前端页面 → Phase 4（配置页面与 Agent CRUD 合并实现）
 - [ ] `llm_delta` 批量发送 → Phase 3（随 Cases 测试时一起调优节流策略）
 - [ ] Conversation 历史回读用于多轮对话（Phase 3+ Session 管理）
+
+---
+
+## Phase 1.5: 扩展工具注册表 ✅ COMPLETED (2026-07-18)
+
+**目标**: 引入 namespace/tag 工具身份体系，补充常用 function tools，为 MCP 集成占位
+
+### 交付物
+- [x] `Tool` 接口扩展: `Namespace()` / `FullName()` / `Tags()`
+- [x] `Registry` 以 `FullName()` (`namespace/name`) 作为 key，支持 `FilterByTag`
+- [x] `BuiltinTool` 新增 `NewBuiltinTool` 构造器 + `WithTags` 链式方法
+- [x] 新增核心工具:
+  - `core/list_dir` — 目录枚举（递归/深度/Glob/隐藏文件）
+  - `core/apply_diff` — 文本替换（old_string 或 line_start/line_end）
+  - `core/delete_file` — 文件/目录删除（支持 recursive）
+  - `core/fetch_url` — HTTP GET（timeout / max_bytes / headers）
+  - `core/parse_json` — JSON 解析 + 点分路径查询
+  - `core/execute_program` — 解释器执行（python / node / bash）
+- [x] 新增占位工具:
+  - `mcp/web_search` — 返回 `not_implemented`，待 MCP provider 接入
+- [x] `internal/runtime/engine.go` 使用 `FullName()` 生成 LLM tool definitions
+- [x] 所有新工具均含单元测试与风险标签（readonly / write / destructive / exec / network / mcp）
+
+### 验证结果
+- `go test ./internal/tool ./internal/runtime ./internal/harness ./internal/llm ./pkg/db -count=1` 全部通过
+- `go build ./cmd/server` 编译通过
 
 ---
 
@@ -555,3 +581,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
 | v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
 | v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
+| v0.7.1 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program + mcp/web_search 占位 |
