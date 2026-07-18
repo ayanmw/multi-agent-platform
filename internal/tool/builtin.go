@@ -50,8 +50,9 @@ import (
 // ---------------------------------------------------------------------------
 
 // BuiltinTool is a concrete implementation of the Tool interface backed by
-// a simple executor function. It stores the tool's metadata (name, description,
-// JSON Schema parameters) and delegates execution to the provided executor.
+// a simple executor function. It stores the tool's metadata (name, namespace,
+// description, JSON Schema parameters, aliases and tags) and delegates
+// execution to the provided executor.
 //
 // BuiltinTool is used internally by the built-in tool constructors
 // (NewRunShellTool, NewWriteFileTool, NewReadFileTool). External callers
@@ -63,6 +64,7 @@ type BuiltinTool struct {
 	description string
 	parameters  map[string]any
 	tags        []string
+	aliases     []string
 	executor    func(input map[string]any) (any, error)
 }
 
@@ -94,6 +96,15 @@ func (t *BuiltinTool) Parameters() map[string]any { return t.parameters }
 // Tags returns the tool's tags. Tags are used for discovery and filtering.
 func (t *BuiltinTool) Tags() []string { return t.tags }
 
+// Aliases returns alternative names that resolve to this tool.
+func (t *BuiltinTool) Aliases() []string { return t.aliases }
+
+// WithAliases attaches aliases to a BuiltinTool and returns it for chaining.
+func (t *BuiltinTool) WithAliases(aliases ...string) *BuiltinTool {
+	t.aliases = append(t.aliases, aliases...)
+	return t
+}
+
 // Execute runs the tool with the given input map and returns the result.
 // The input map must conform to the schema returned by Parameters().
 func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
@@ -110,6 +121,7 @@ func NewBuiltinTool(name, namespace, description string, parameters map[string]a
 		parameters:  parameters,
 		executor:    executor,
 		tags:        []string{},
+		aliases:     []string{},
 	}
 }
 
@@ -607,7 +619,7 @@ func NewListDirTool() *BuiltinTool {
 			"required": []string{},
 		},
 		listDirExecutor,
-	).WithTags("filesystem", "readonly")
+	).WithTags("filesystem", "filesystem:readonly")
 }
 
 // listDirExecutor implements the list_dir tool logic.

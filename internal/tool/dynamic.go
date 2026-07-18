@@ -107,6 +107,10 @@ func (t *DynamicTool) Name() string      { return t.name }
 // the global namespace, so FullName equals Name.
 func (t *DynamicTool) FullName() string { return t.name }
 
+// Aliases returns alternative names for this dynamic tool. Dynamic tools do not
+// have aliases by default.
+func (t *DynamicTool) Aliases() []string { return nil }
+
 // Description returns a human-readable explanation of the tool's purpose.
 func (t *DynamicTool) Description() string { return t.description }
 

@@ -24,6 +24,7 @@ type mockTool struct {
 	description string
 	params      map[string]any
 	tags        []string
+	aliases     []string
 	execFn      func(input map[string]any) (any, error)
 	execCalls   int
 	lastInput   map[string]any
@@ -44,6 +45,7 @@ func (m *mockTool) FullName() string {
 func (m *mockTool) Description() string        { return m.description }
 func (m *mockTool) Parameters() map[string]any { return m.params }
 func (m *mockTool) Tags() []string             { return m.tags }
+func (m *mockTool) Aliases() []string          { return m.aliases }
 
 // Execute records the call and delegates to execFn if set, otherwise returns a
 // deterministic "mock-output:<name>" string.

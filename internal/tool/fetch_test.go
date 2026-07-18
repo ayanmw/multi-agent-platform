@@ -52,6 +52,27 @@ func TestFetchURLTruncation(t *testing.T) {
 	}
 }
 
+func TestFetchURLAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello from alias"))
+	}))
+	defer srv.Close()
+
+	r := NewRegistry()
+	RegisterBuiltins(r)
+
+	for _, name := range []string{"core/fetch_url", "core/web_fetch"} {
+		res, err := r.Execute(name, map[string]any{"url": srv.URL})
+		if err != nil {
+			t.Fatalf("Execute(%s): %v", name, err)
+		}
+		out := res.(map[string]any)
+		if !strings.Contains(out["body"].(string), "hello from alias") {
+			t.Fatalf("%s returned unexpected body: %v", name, out["body"])
+		}
+	}
+}
+
 func TestFetchURLTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)

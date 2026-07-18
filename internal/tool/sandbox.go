@@ -283,6 +283,11 @@ func (t *SandboxedShellTool) Tags() []string {
 	return t.fallback.Tags()
 }
 
+// Aliases returns alternative names for this tool, delegating to the fallback tool.
+func (t *SandboxedShellTool) Aliases() []string {
+	return t.fallback.Aliases()
+}
+
 // Execute runs the shell command. If the sandbox is available, it executes
 // inside a Docker container. Otherwise, it falls back to direct execution.
 func (t *SandboxedShellTool) Execute(input map[string]any) (any, error) {
