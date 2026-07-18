@@ -133,6 +133,29 @@ function stepSummary(step: Step): string {
   }
 }
 
+/** Resolve the display namespace from a fully-qualified tool name */
+function toolNamespace(name: string): string | undefined {
+  const idx = name.indexOf('/')
+  return idx > 0 ? name.slice(0, idx) : undefined
+}
+
+/** Resolve the short tool name without its namespace */
+function toolShortName(name: string): string {
+  const idx = name.indexOf('/')
+  return idx > 0 ? name.slice(idx + 1) : name
+}
+
+/** Check whether a tag indicates elevated risk */
+function isRiskTag(tag: string): boolean {
+  const riskTags = ['destructive', 'dangerous', 'write', 'exec', 'shell', 'network', 'mcp']
+  return riskTags.includes(tag.toLowerCase())
+}
+
+/** Format tag for display */
+function formatTag(tag: string): string {
+  return tag.toLowerCase()
+}
+
 /** Check if tool input JSON can be formatted (range check for safety) */
 function isFormattableJSON(input: Record<string, unknown>): boolean {
   try {
@@ -379,7 +402,18 @@ watch(
           <!-- Tool call step: show tool card -->
           <div v-if="step.type === 'tool_call' && step.toolCall" class="tool-card">
             <div class="tool-card-header">
-              <strong>{{ step.toolCall.name }}</strong>
+              <div class="tool-name-row">
+                <span class="tool-namespace-badge" v-if="toolNamespace(step.toolCall.name)">
+                  {{ toolNamespace(step.toolCall.name) }}
+                </span>
+                <span class="tool-short-name">{{ toolShortName(step.toolCall.name) }}</span>
+                <span
+                  v-for="tag in step.toolCall.tags"
+                  :key="tag"
+                  class="tool-tag"
+                  :class="{ 'tool-tag-risk': isRiskTag(tag) }"
+                >{{ formatTag(tag) }}</span>
+              </div>
               <span v-if="step.toolCall.duration" class="tool-duration">
                 {{ formatDuration(step.toolCall.duration) }}
               </span>
@@ -691,6 +725,43 @@ watch(
   margin-bottom: 8px;
   font-size: 13px;
   color: #d4d4d4;
+}
+
+.tool-name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-namespace-badge {
+  font-size: 10px;
+  color: #9cdcfe;
+  background: #1e3a5f;
+  border: 1px solid #264f86;
+  padding: 1px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tool-short-name {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-tag {
+  font-size: 10px;
+  color: #aaa;
+  background: #333;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tool-tag-risk {
+  color: #ff6b6b;
+  background: #3f1d1d;
+  border: 1px solid #5c2a2a;
 }
 
 .tool-duration {
