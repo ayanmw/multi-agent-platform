@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // Config holds application configuration loaded from environment and .env
@@ -41,6 +42,11 @@ type Config struct {
 	// MCPMarkets lists remote marketplace catalogs loaded from MCP_MARKETS.
 	// Each entry is fetched at startup and registered as a marketplace provider.
 	MCPMarkets []MCPMarketConfig
+
+	// MCPPreinstall lists market packages that should be installed automatically
+	// at server startup. Loaded from MCP_PREINSTALL; failures are logged but do
+	// not block startup because packages may depend on external commands.
+	MCPPreinstall []marketplace.MCPPreinstallEntry
 
 	// Sandbox configuration for execute_program (Phase 5 preview).
 	// When EnableSandbox is false (default), execute_program runs locally.
@@ -184,6 +190,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load mcp market config: %w", err)
 	}
 
+	// Load MCP preinstall configuration
+	if err := cfg.LoadMCPPreinstallConfig(); err != nil {
+		return nil, fmt.Errorf("load mcp preinstall config: %w", err)
+	}
+
 	return cfg, nil
 }
 
@@ -222,6 +233,54 @@ func (cfg *Config) LoadMCPMarketConfig() error {
 		return fmt.Errorf("parse MCP_MARKETS JSON: %w", err)
 	}
 	cfg.MCPMarkets = markets
+	return nil
+}
+
+// LoadMCPPreinstallConfig loads the list of market packages that should be
+// installed automatically at startup from MCP_PREINSTALL.
+//
+// The value is a JSON array where each element is either a shorthand string
+// "market/package" (market defaults to "default" if omitted) or an object
+// {"market":"...","package":"..."}. Parse errors are returned so the server
+// can decide whether to log and continue or fail fast.
+func (cfg *Config) LoadMCPPreinstallConfig() error {
+	jsonStr := os.Getenv("MCP_PREINSTALL")
+	if jsonStr == "" {
+		return nil
+	}
+
+	// First try the heterogeneous array: strings and objects.
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return fmt.Errorf("parse MCP_PREINSTALL JSON: %w", err)
+	}
+
+	entries := make([]marketplace.MCPPreinstallEntry, 0, len(raw))
+	for _, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			entry, err := marketplace.ParsePreinstallEntry(s)
+			if err != nil {
+				return fmt.Errorf("parse MCP_PREINSTALL entry %q: %w", s, err)
+			}
+			entries = append(entries, entry)
+			continue
+		}
+
+		var entry marketplace.MCPPreinstallEntry
+		if err := json.Unmarshal(r, &entry); err != nil {
+			return fmt.Errorf("parse MCP_PREINSTALL entry: %w", err)
+		}
+		if entry.Package == "" {
+			return fmt.Errorf("MCP_PREINSTALL entry missing package: %s", string(r))
+		}
+		if entry.Market == "" {
+			entry.Market = "default"
+		}
+		entries = append(entries, entry)
+	}
+
+	cfg.MCPPreinstall = entries
 	return nil
 }
 

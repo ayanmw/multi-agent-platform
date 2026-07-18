@@ -635,6 +635,28 @@ func main() {
 	if err := mcpManager.LoadDBServers(mcpCtx); err != nil {
 		observability.DefaultLogger.Warn("mcp", "failed to load db servers", map[string]any{"error": err.Error()})
 	}
+
+	// Phase 7: install configured marketplace packages before the startup
+	// context expires. Individual failures are logged as warnings and do not
+	// prevent the server from starting, because packages may depend on external
+	// commands that are not available in every environment.
+	for _, entry := range cfg.MCPPreinstall {
+		_, installed, err := mcpManager.InstallFromMarketIfMissing(mcpCtx, entry.Market, entry.Package)
+		if err != nil {
+			observability.DefaultLogger.Warn("mcp", "preinstall failed", map[string]any{
+				"market":  entry.Market,
+				"package": entry.Package,
+				"error":   err.Error(),
+			})
+			continue
+		}
+		if installed {
+			log.Printf("MCP preinstall: installed %s", entry.String())
+		} else {
+			log.Printf("MCP preinstall: %s already present, skipped", entry.String())
+		}
+	}
+
 	log.Printf("MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
 	defer mcpManager.Close()
 

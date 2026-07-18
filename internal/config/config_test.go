@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // TestShouldMockPriority verifies the three-layer mock switch priority using
@@ -367,6 +369,67 @@ func TestLoadEnvParsing(t *testing.T) {
 				t.Fatalf("ProviderDefault: got %q", cfg.ProviderDefault)
 			}
 		})
+	})
+}
+
+func TestLoadMCPPreinstallConfig(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	for _, k := range []string{"MCP_PREINSTALL", "MCP_SERVERS", "MCP_MARKETS"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+
+	t.Run("unset_returns_nil", func(t *testing.T) {
+		cfg := &Config{}
+		if err := cfg.LoadMCPPreinstallConfig(); err != nil {
+			t.Fatalf("LoadMCPPreinstallConfig: %v", err)
+		}
+		if cfg.MCPPreinstall != nil {
+			t.Fatalf("expected nil, got %v", cfg.MCPPreinstall)
+		}
+	})
+
+	t.Run("mixed_string_and_object_entries", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("MCP_PREINSTALL", `["default/time-server", {"market":"opencode","package":"github"}]`)
+		if err := cfg.LoadMCPPreinstallConfig(); err != nil {
+			t.Fatalf("LoadMCPPreinstallConfig: %v", err)
+		}
+		want := []marketplace.MCPPreinstallEntry{
+			{Market: "default", Package: "time-server"},
+			{Market: "opencode", Package: "github"},
+		}
+		if !reflect.DeepEqual(cfg.MCPPreinstall, want) {
+			t.Fatalf("MCPPreinstall: got %+v, want %+v", cfg.MCPPreinstall, want)
+		}
+	})
+
+	t.Run("bare_package_defaults_market", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("MCP_PREINSTALL", `["github"]`)
+		if err := cfg.LoadMCPPreinstallConfig(); err != nil {
+			t.Fatalf("LoadMCPPreinstallConfig: %v", err)
+		}
+		if len(cfg.MCPPreinstall) != 1 || cfg.MCPPreinstall[0].Market != "default" || cfg.MCPPreinstall[0].Package != "github" {
+			t.Fatalf("MCPPreinstall: got %+v", cfg.MCPPreinstall)
+		}
+	})
+
+	t.Run("object_missing_package_returns_error", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("MCP_PREINSTALL", `[{"market":"default"}]`)
+		if err := cfg.LoadMCPPreinstallConfig(); err == nil {
+			t.Fatal("expected error for missing package")
+		}
+	})
+
+	t.Run("invalid_JSON_returns_error", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("MCP_PREINSTALL", `{not-json`)
+		if err := cfg.LoadMCPPreinstallConfig(); err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
 	})
 }
 

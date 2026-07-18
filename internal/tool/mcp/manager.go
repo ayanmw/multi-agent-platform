@@ -170,6 +170,40 @@ func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID strin
 	return m.GetServer(pkgID)
 }
 
+// InstallFromMarketIfMissing installs a market package only when no enabled
+// server with the same ID is currently loaded or persisted. It avoids repeated
+// installations and re-connections on every process restart.
+//
+// The check first consults the in-memory server list, then the repository (if
+// configured). A disabled but persisted server is treated as "existing" and is
+// not reinstalled; operators can enable it through the API instead.
+func (m *Manager) InstallFromMarketIfMissing(ctx context.Context, marketName, pkgID string) (ManagedServer, bool, error) {
+	// Fast path: already loaded in memory.
+	if existing, err := m.GetServer(pkgID); err == nil && existing.Enabled {
+		return existing, false, nil
+	}
+
+	// Persistence-aware check: include disabled servers so we don't recreate
+	// records that the operator intentionally disabled.
+	if m.repo != nil {
+		all, err := m.repo.ListAll(ctx)
+		if err != nil {
+			return ManagedServer{}, false, fmt.Errorf("list existing servers: %w", err)
+		}
+		for _, ms := range all {
+			if ms.ID == pkgID {
+				return ms, false, nil
+			}
+		}
+	}
+
+	ms, err := m.InstallFromMarket(ctx, marketName, pkgID)
+	if err != nil {
+		return ManagedServer{}, false, err
+	}
+	return ms, true, nil
+}
+
 // SetChangeNotifier registers a callback invoked after any server load/unload.
 // It is typically called once by cmd/server after the WebSocket hub is ready.
 func (m *Manager) SetChangeNotifier(fn ChangeNotifier) {

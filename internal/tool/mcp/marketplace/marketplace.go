@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"strings"
 )
 
 //go:embed default.json
@@ -229,4 +230,40 @@ func (s *StaticProvider) ResolveConfig(ctx context.Context, id string) (InstallC
 		}
 	}
 	return InstallConfig{}, fmt.Errorf("market package not found: %s/%s", s.Name(), id)
+}
+
+// MCPPreinstallEntry describes one preinstall market/package pair.
+type MCPPreinstallEntry struct {
+	Market  string `json:"market"`
+	Package string `json:"package"`
+}
+
+// String returns the shorthand "market/package" representation.
+func (e MCPPreinstallEntry) String() string { return e.Market + "/" + e.Package }
+
+// ParsePreinstallEntry parses a shorthand string into an MCPPreinstallEntry.
+//
+// Supported formats:
+//   - "market/package" (e.g. "default/time-server")
+//   - "package" (defaults market to "default")
+//
+// Empty input or entries without a package name return an error.
+func ParsePreinstallEntry(s string) (MCPPreinstallEntry, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return MCPPreinstallEntry{}, fmt.Errorf("empty preinstall entry")
+	}
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) == 1 {
+		return MCPPreinstallEntry{Market: "default", Package: strings.TrimSpace(parts[0])}, nil
+	}
+	market := strings.TrimSpace(parts[0])
+	pkg := strings.TrimSpace(parts[1])
+	if pkg == "" {
+		return MCPPreinstallEntry{}, fmt.Errorf("missing package in preinstall entry: %q", s)
+	}
+	if market == "" {
+		market = "default"
+	}
+	return MCPPreinstallEntry{Market: market, Package: pkg}, nil
 }
