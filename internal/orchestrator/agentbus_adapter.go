@@ -1,22 +1,21 @@
-// Package orchestrator — AgentBus adapter for runtime interface.
+// Package orchestrator — AgentBus adapter，用于适配 runtime 接口。
 //
-// # Design Rationale
+// # Design Rationale(设计理由)
 //
-// The orchestrator package defines its own AgentMessage type (with a Timestamp
-// field) and AgentBus struct. The runtime package defines an AgentBus interface
-// with its own AgentMessage type (without Timestamp). This adapter bridges the
-// two, allowing the orchestrator's AgentBus to satisfy the runtime.AgentBus
-// interface.
+// orchestrator 包定义了自己的 AgentMessage 类型（带 Timestamp 字段）和
+// AgentBus 结构体。runtime 包定义了一个 AgentBus interface 以及它自己的
+// AgentMessage 类型（不带 Timestamp）。本 adapter 桥接两者，让
+// orchestrator 的 AgentBus 能够满足 runtime.AgentBus interface。
 //
-// This avoids circular imports: orchestrator imports runtime, so runtime
-// cannot import orchestrator. The runtime interface is minimal and the adapter
-// converts between the two message types.
+// 这样可以避免循环引用：orchestrator 引用了 runtime，因此 runtime 不能
+// 反过来引用 orchestrator。runtime 侧的 interface 非常精简，由 adapter
+// 在两种 message 类型之间做转换。
 //
-// # Usage
+// # Usage(用法)
 //
 //	bus := orchestrator.NewAgentBus()
 //	adapter := orchestrator.NewAgentBusAdapter(bus)
-//	// adapter implements runtime.AgentBus
+//	// adapter 实现了 runtime.AgentBus
 //	engine := runtime.NewEngine(runtime.EngineConfig{
 //	    AgentBus: adapter,
 //	    // ...
@@ -27,32 +26,32 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 )
 
-// AgentBusAdapter wraps the orchestrator's AgentBus to implement the
-// runtime.AgentBus interface. It converts between the two message types,
-// mapping runtime.AgentMessage to orchestrator.AgentMessage and vice versa.
+// AgentBusAdapter 包装 orchestrator 的 AgentBus，用于实现 runtime.AgentBus
+// interface。它在两种 message 类型之间做转换：把 runtime.AgentMessage 映射到
+// orchestrator.AgentMessage，反之亦然。
 //
-// The Timestamp field is set by the orchestrator's SendMessage method,
-// so it is not carried in the runtime.AgentMessage type. Metadata (notably
-// Metadata["task_id"], set by Engine.sendAgentMessage) is forwarded so the
-// persistence hook installed via AgentBus.SetPersistFn can route each
-// message to the correct agent_messages row.
+// Timestamp 字段由 orchestrator 的 SendMessage 方法负责设置，因此
+// runtime.AgentMessage 类型不携带该字段。Metadata（尤其是
+// Metadata["task_id"]，由 Engine.sendAgentMessage 写入）会被透传，这样通过
+// AgentBus.SetPersistFn 安装的持久化 hook 就能把每条消息路由到正确的
+// agent_messages 行。
 type AgentBusAdapter struct {
 	bus *AgentBus
 }
 
-// NewAgentBusAdapter creates a new adapter that wraps the given orchestrator AgentBus.
-// The adapter implements runtime.AgentBus, so it can be passed to EngineConfig.AgentBus.
+// NewAgentBusAdapter 创建一个新的 adapter，包装传入的 orchestrator AgentBus。
+// 该 adapter 实现了 runtime.AgentBus，因此可以传给 EngineConfig.AgentBus。
 func NewAgentBusAdapter(bus *AgentBus) *AgentBusAdapter {
 	return &AgentBusAdapter{bus: bus}
 }
 
-// RegisterHandler registers a message handler for a specific agent using the
-// runtime.AgentMessage type. The adapter converts the orchestrator.AgentMessage
-// to a runtime.AgentMessage before calling the handler.
+// RegisterHandler 为指定 agent 注册一个使用 runtime.AgentMessage 类型的
+// message handler。adapter 会先把 orchestrator.AgentMessage 转换为
+// runtime.AgentMessage，然后再调用 handler。
 func (a *AgentBusAdapter) RegisterHandler(agentID string, handler func(runtime.AgentMessage)) {
-	// Wrap the runtime handler to convert from orchestrator.AgentMessage to
-	// runtime.AgentMessage. The Timestamp is dropped because
-	// runtime.AgentMessage doesn't have it; Metadata is forwarded.
+	// 包装 runtime handler，把 orchestrator.AgentMessage 转换为
+	// runtime.AgentMessage。Timestamp 被丢弃，因为 runtime.AgentMessage
+	// 没有该字段；Metadata 会被透传。
 	a.bus.RegisterHandler(agentID, func(msg AgentMessage) {
 		handler(runtime.AgentMessage{
 			FromAgentID:   msg.FromAgentID,
@@ -86,7 +85,7 @@ func (a *AgentBusAdapter) RegisterHandlerBySubTask(agentID, subTaskID string, ha
 	})
 }
 
-// UnregisterHandler removes the message handler for a specific agent.
+// UnregisterHandler 移除指定 agent 的 message handler。
 func (a *AgentBusAdapter) UnregisterHandler(agentID string) {
 	a.bus.UnregisterHandler(agentID)
 }
@@ -97,10 +96,10 @@ func (a *AgentBusAdapter) UnregisterHandlerBySubTask(agentID, subTaskID string) 
 	a.bus.UnregisterHandlerBySubTask(agentID, subTaskID)
 }
 
-// SendMessage sends a message from one agent to another. The adapter converts
-// the runtime.AgentMessage to an orchestrator.AgentMessage before sending.
-// The Timestamp is set by the orchestrator's SendMessage method, and
-// Metadata is forwarded so downstream persistence can route by task_id.
+// SendMessage 从一个 agent 向另一个 agent 发送消息。adapter 会先把
+// runtime.AgentMessage 转换为 orchestrator.AgentMessage 再发送。
+// Timestamp 由 orchestrator 的 SendMessage 方法负责设置，Metadata 会被
+// 透传，这样下游的持久化逻辑可以按 task_id 路由。
 func (a *AgentBusAdapter) SendMessage(msg runtime.AgentMessage) {
 	a.bus.SendMessage(AgentMessage{
 		FromAgentID:   msg.FromAgentID,

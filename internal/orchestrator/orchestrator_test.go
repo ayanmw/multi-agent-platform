@@ -1,9 +1,9 @@
-// orchestrator_test.go — unit tests for the AgentBus persistence hook.
+// orchestrator_test.go —— AgentBus 持久化 hook 的单元测试。
 //
-// These tests are intentionally lightweight: they exercise the AgentBus
-// plumbing (RegisterHandler / SendMessage / SetPersistFn) without spinning
-// up the full Engine or SQLite. Persistence behaviour with the real db
-// package is covered in pkg/db/persistence_test.go and via the migration tests.
+// 这些测试有意保持轻量：它们只验证 AgentBus 的管道行为
+// （RegisterHandler / SendMessage / SetPersistFn），而不启动完整的
+// Engine 或 SQLite。涉及真实 db 包的持久化行为由
+// pkg/db/persistence_test.go 以及 migration 测试覆盖。
 
 package orchestrator
 
@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// TestAgentBus_DeliversToRegisteredHandler verifies SendMessage invokes the
-// handler registered for the target agent synchronously.
+// TestAgentBus_DeliversToRegisteredHandler 验证 SendMessage 会同步调用
+// 为目标 agent 注册的 handler。
 func TestAgentBus_DeliversToRegisteredHandler(t *testing.T) {
 	bus := NewAgentBus()
 
@@ -51,8 +51,8 @@ func TestAgentBus_DeliversToRegisteredHandler(t *testing.T) {
 	}
 }
 
-// TestAgentBus_PersistFnHookFired confirms SetPersistFn installs a hook that
-// fires for every SendMessage (delivered or queued).
+// TestAgentBus_PersistFnHookFired 确认 SetPersistFn 安装的 hook 会对
+// 每次 SendMessage（无论已投递还是入队）都触发。
 func TestAgentBus_PersistFnHookFired(t *testing.T) {
 	bus := NewAgentBus()
 
@@ -65,9 +65,8 @@ func TestAgentBus_PersistFnHookFired(t *testing.T) {
 		return nil
 	})
 
-	// Register a handler so the second send is delivered immediately, and
-	// the first send to a non-registered target is queued. Both should
-	// still fire the persistence hook.
+	// 注册一个 handler，使第二次发送能立即投递；第一次发送的目标未注册，
+	// 会被入队。两次发送都应触发持久化 hook。
 	bus.RegisterHandler("agent_b", func(AgentMessage) {})
 
 	bus.SendMessage(AgentMessage{
@@ -83,9 +82,8 @@ func TestAgentBus_PersistFnHookFired(t *testing.T) {
 		Content:     "delivered",
 	})
 
-	// The persist hook runs in a goroutine; poll briefly until both
-	// messages have been recorded. Order is non-deterministic, so we
-	// check set membership rather than position.
+	// 持久化 hook 在 goroutine 中运行；短暂轮询直到两条消息都被记录。
+	// 顺序不确定，因此按集合成员判断而不是按位置。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -114,8 +112,8 @@ func TestAgentBus_PersistFnHookFired(t *testing.T) {
 	}
 }
 
-// TestAgentBus_NoPersistWhenHookNil documents that the default (nil) hook
-// is a no-op and SendMessage continues to work.
+// TestAgentBus_NoPersistWhenHookNil 用于说明：默认（nil）hook 是 no-op，
+// SendMessage 仍能正常工作。
 func TestAgentBus_NoPersistWhenHookNil(t *testing.T) {
 	bus := NewAgentBus()
 	bus.SendMessage(AgentMessage{
@@ -123,12 +121,12 @@ func TestAgentBus_NoPersistWhenHookNil(t *testing.T) {
 		ToAgentID:   "b",
 		Content:     "x",
 	})
-	// Just assert no panic — passing means nil hook is handled correctly.
+	// 只断言没有 panic —— 通过即说明 nil hook 被正确处理。
 }
 
-// TestAgentBus_RoutesBySubTask verifies that an exact (agentID, subTaskID)
-// handler receives the message while an agentID-only handler does not when
-// the message carries a different subTaskID. Phase 7-J.
+// TestAgentBus_RoutesBySubTask 验证当消息携带不同的 subTaskID 时，
+// 精确 (agentID, subTaskID) handler 能收到消息，而 agentID-only
+// handler 不会收到。Phase 7-J。
 func TestAgentBus_RoutesBySubTask(t *testing.T) {
 	bus := NewAgentBus()
 
@@ -163,13 +161,13 @@ func TestAgentBus_RoutesBySubTask(t *testing.T) {
 	case <-fallbackCalled:
 		t.Fatal("agentID-only fallback should not receive a sub-task specific message")
 	case <-time.After(100 * time.Millisecond):
-		// Expected: fallback not invoked.
+		// 预期：fallback 未被调用。
 	}
 }
 
-// TestAgentBus_FallsBackToAgentIDOnly verifies that a message with an empty
-// SubTaskID is delivered to the agentID-only handler when an exact handler
-// also exists for a different subTaskID.
+// TestAgentBus_FallsBackToAgentIDOnly 验证当存在针对其它 subTaskID 的
+// 精确 handler 时，携带空 SubTaskID 的消息会被投递给 agentID-only
+// handler。
 func TestAgentBus_FallsBackToAgentIDOnly(t *testing.T) {
 	bus := NewAgentBus()
 
@@ -203,6 +201,6 @@ func TestAgentBus_FallsBackToAgentIDOnly(t *testing.T) {
 	case <-exactCalled:
 		t.Fatal("exact handler should not receive a message without SubTaskID")
 	case <-time.After(100 * time.Millisecond):
-		// Expected: exact handler not invoked.
+		// 预期：exact handler 未被调用。
 	}
 }

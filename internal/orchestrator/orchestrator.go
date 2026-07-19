@@ -1,40 +1,36 @@
-// Package orchestrator implements the multi-agent orchestration layer.
+// Package orchestrator 实现多 agent 的编排层(orchestration layer)。
 //
-// # Architecture
+// # Architecture(架构)
 //
-// The orchestrator sits above the Engine and coordinates multiple agents running
-// concurrently. It is responsible for:
-//  1. Task decomposition — splitting a user request into sub-tasks for different agents
-//  2. Agent lifecycle — starting, monitoring, and stopping agent goroutines
-//  3. Event routing — ensuring each agent's events are correctly tagged with agent_id
-//  4. Progress aggregation — combining progress from multiple agents into a unified view
-//  5. Agent communication — one agent can call another agent via the AgentBus
+// orchestrator 位于 Engine 之上，负责协调多个并发运行的 agent。它的职责包括：
+//  1. Task decomposition(任务分解) — 把用户请求拆分为不同 agent 的子任务
+//  2. Agent lifecycle(agent 生命周期) — 启动、监控、停止 agent goroutine
+//  3. Event routing(事件路由) — 确保每个 agent 的事件都正确打上 agent_id 标签
+//  4. Progress aggregation(进度聚合) — 把多个 agent 的进度合并为统一视图
+//  5. Agent communication(agent 间通信) — agent 之间通过 AgentBus 互相调用
 //
-// # Design Philosophy
+// # Design Philosophy(设计哲学)
 //
-// The orchestrator is NOT a "black box" scheduler. It emits events for every
-// lifecycle transition (agent_started, agent_completed, agent_failed) so the
-// frontend can render the multi-agent execution in real time. Each agent
-// runs as an independent goroutine with its own Engine, sharing the WebSocket
-// Hub for event broadcasting.
+// orchestrator 不是"黑盒"调度器。它在每一次生命周期状态切换
+// （agent_started、agent_completed、agent_failed）时都发出事件，让前端能够
+// 实时渲染多 agent 的执行过程。每个 agent 作为独立的 goroutine 运行，拥有
+// 自己的 Engine，并通过共享的 WebSocket Hub 广播事件。
 //
-// # Agent Communication
+// # Agent Communication(agent 间通信)
 //
-// Agents can communicate with each other via the AgentBus — a thin message
-// passing layer. Agent A sends a message to Agent B, the orchestrator routes
-// it, and Agent B's Engine processes it as a "user" message in its ReAct loop.
-// This enables patterns like:
-//   - Code Review: Agent A writes code → Agent B reviews it → Agent A fixes issues
-//   - Research Dispatcher: Orchestrator fans out sub-questions to research agents
-//   - Supervisor: Orchestrator monitors agent outputs and intervenes if needed
+// agent 之间通过 AgentBus —— 一个轻量的消息传递层 —— 进行通信。Agent A 向
+// Agent B 发送消息，orchestrator 负责路由，Agent B 的 Engine 把它作为
+// ReAct loop 中的一条"user"消息处理。这样可以支持如下模式：
+//   - Code Review(代码评审)：Agent A 写代码 → Agent B 评审 → Agent A 修复问题
+//   - Research Dispatcher(研究派发)：orchestrator 把子问题 fan-out 给多个研究 agent
+//   - Supervisor(监督者)：orchestrator 监控 agent 输出并在需要时介入
 //
-// # Concurrency Model
+// # Concurrency Model(并发模型)
 //
-// Each agent runs in its own goroutine. The orchestrator uses a WaitGroup to
-// track completion. Agents share the WebSocket Hub (which is goroutine-safe)
-// for event broadcasting. The orchestrator does NOT share state between agents
-// — each agent has its own Engine, conversation history, and tool registry.
-// Communication is explicit via the AgentBus.
+// 每个 agent 在自己的 goroutine 中运行。orchestrator 用 WaitGroup 追踪所有
+// agent 的完成情况。agent 共享同一个 WebSocket Hub（goroutine-safe）来广播
+// 事件。orchestrator 不在 agent 之间共享状态 —— 每个 agent 有自己的 Engine、
+// 自己的对话历史和自己的 tool registry。通信完全通过 AgentBus 显式进行。
 package orchestrator
 
 import (
@@ -53,74 +49,72 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
-// AgentSpec defines a single agent to be launched by the orchestrator.
-// Each agent has its own configuration, system prompt, and task.
+// AgentSpec 定义由 orchestrator 启动的单个 agent。
+// 每个 agent 有自己的配置、system prompt 和任务。
 type AgentSpec struct {
-	// AgentID is a unique identifier for this agent (e.g., "code_writer", "reviewer").
+	// AgentID 是该 agent 的唯一标识（例如 "code_writer"、"reviewer"）。
 	AgentID string `json:"agent_id"`
 
-	// Name is the human-readable display name (e.g., "Code Writer", "Code Reviewer").
+	// Name 是人类可读的显示名（例如 "Code Writer"、"Code Reviewer"）。
 	Name string `json:"name"`
 
-	// SystemPrompt defines the agent's personality, capabilities, and constraints.
-	// Each agent type (writer, reviewer, researcher) has a different system prompt.
+	// SystemPrompt 定义该 agent 的人格、能力和约束。
+	// 每个 agent 类型（writer、reviewer、researcher）都有不同的 system prompt。
 	SystemPrompt string `json:"system_prompt"`
 
-	// Input is the task description for this specific agent.
+	// Input 是该 agent 自己的任务描述。
 	Input string `json:"input"`
 
-	// Model is the LLM model for this agent. If empty, the orchestrator default is used.
+	// Model 是该 agent 使用的 LLM model。为空时使用 orchestrator 的默认 model。
 	Model string `json:"model,omitempty"`
 
-	// Contract is the TaskContract for this agent. Defines scope, budget, tools, etc.
-	// If nil, DefaultContract(Input) is used.
+	// Contract 是该 agent 的 TaskContract，定义范围、预算、可用 tool 等。
+	// 为 nil 时使用 DefaultContract(Input)。
 	Contract *harness.TaskContract `json:"contract,omitempty"`
 
-	// AllowedTools is the list of tool names this agent is allowed to use.
-	// If empty, all registered tools are available.
+	// AllowedTools 是该 agent 允许使用的 tool 名称列表。
+	// 为空时表示所有已注册的 tool 都可用。
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 
-	// ParentAgentID is the agent that spawned this agent (for agent-to-agent communication).
-	// Empty for root-level agents.
+	// ParentAgentID 是派生该 agent 的父 agent（用于 agent 间通信）。
+	// 顶层 agent 此字段为空。
 	ParentAgentID string `json:"parent_agent_id,omitempty"`
 
-	// OutputTo is the list of agent IDs that should receive this agent's final
-	// result via the AgentBus when it completes. This decouples the data flow
-	// from the execution strategy (parallel vs sequential): an agent can forward
-	// its output to other agents regardless of whether they are running at the
-	// same time. If parallel, messages are queued and delivered when the target
-	// registers its handler.
+	// OutputTo 是该 agent 完成时通过 AgentBus 接收其最终结果的 agent ID 列表。
+	// 这把数据流与执行策略（parallel vs sequential）解耦：一个 agent 可以
+	// 把输出转发给其它 agent，无论它们是否同时运行。如果目标 agent 在
+	// parallel 下尚未运行，消息会被入队，等目标 agent 注册 handler 后再投递。
 	OutputTo []string `json:"output_to,omitempty"`
 
-	// WorkingMemory is optional context from prior tasks, injected into the
-	// system prompt before the agent starts. Built by MemoryRecall before
-	// orchestration. When set, it is prepended to the system prompt.
+	// WorkingMemory 是来自先前任务的可选上下文，在 agent 启动前注入到
+	// system prompt 中。由 MemoryRecall 在 orchestration 之前构建。设置后
+	// 会被前置到 system prompt 中。
 	WorkingMemory string `json:"working_memory,omitempty"`
 }
 
-// AgentResult holds the result of a single agent's execution.
+// AgentResult 保存单个 agent 执行的结果。
 type AgentResult struct {
 	AgentID     string `json:"agent_id"`
 	Name        string `json:"name"`
-	Status      string `json:"status"` // "completed", "failed", "cancelled"
+	Status      string `json:"status"` // "completed"、"failed"、"cancelled"
 	Result      string `json:"result"`
 	TotalTokens int    `json:"total_tokens"`
 	Error       string `json:"error,omitempty"`
 	Duration    int64  `json:"duration_ms"`
 }
 
-// Orchestrator manages multiple agents running concurrently.
+// Orchestrator 负责管理多个并发运行的 agent。
 //
-// # Lifecycle
+// # Lifecycle(生命周期)
 //
-//  1. Create orchestrator with New()
-//  2. Call Run() with a list of AgentSpecs
-//  3. Orchestrator launches each agent in its own goroutine
-//  4. Each agent emits events through the shared Hub
-//  5. Orchestrator waits for all agents to complete
-//  6. Returns aggregated results
+//  1. 用 New() 创建 orchestrator
+//  2. 用一组 AgentSpec 调用 Run()
+//  3. orchestrator 在各自的 goroutine 中启动每个 agent
+//  4. 每个 agent 通过共享的 Hub 发出事件
+//  5. orchestrator 等待所有 agent 完成
+//  6. 返回聚合后的结果
 //
-// # Usage
+// # Usage(用法)
 //
 //	orch := orchestrator.New(hub, cfg, tools, persist, agentBus, checkpointMgr)
 //	results := orch.RunBlocking(ctx, specs)
@@ -128,28 +122,28 @@ type AgentResult struct {
 //	    fmt.Printf("%s: %s (%d tokens)\n", r.Name, r.Status, r.TotalTokens)
 //	}
 type Orchestrator struct {
-	// hub references
+	// hub 相关引用
 	hub           *ws.Hub
 	cfg           *config.Config
 	tools         *tool.Registry
 	persist       runtime.Persistence
-	agentBus      *AgentBusAdapter           // Phase 5: inter-agent communication
-	checkpointMgr *runtime.CheckpointManager // Phase 5: crash recovery
+	agentBus      *AgentBusAdapter           // Phase 5: agent 间通信
+	checkpointMgr *runtime.CheckpointManager // Phase 5: 崩溃恢复
 
-	// Phase 6 Router: optional model router + provider lookup shared by all
-	// child agents. When non-nil, each agent's Engine classifies intent and
-	// selects a model tier before every LLM call (engine.go:1115). When nil,
-	// agents fall back to cfg.LLMModel directly (legacy behavior).
+	// Phase 6 Router：可选的 model router 及 provider lookup，由所有子 agent
+	// 共享。非 nil 时，每个 agent 的 Engine 在每次 LLM 调用前都会做意图分类
+	// 并选择 model tier（见 engine.go:1115）。为 nil 时，agent 退回到
+	// cfg.LLMModel 的直接路径（legacy 行为）。
 	modelRouter     *llm.Router
 	routerRegistry  *llm.ModelRegistry
 	routerProviders map[string]llm.Provider
 }
 
-// New creates a new Orchestrator.
-// agentBus and checkpointMgr may be nil — multi-agent communication and
-// checkpointing are disabled when nil.
-// modelRouter/routerRegistry/routerProviders are optional Phase 6 Router deps;
-// pass nil for all three to keep the legacy single-model behavior in child agents.
+// New 创建一个新的 Orchestrator。
+// agentBus 和 checkpointMgr 可以为 nil —— 为 nil 时禁用多 agent 通信和
+// checkpoint 功能。
+// modelRouter/routerRegistry/routerProviders 是可选的 Phase 6 Router 依赖；
+// 三个都传 nil 时，子 agent 保留 legacy 的单 model 行为。
 func New(hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, agentBus *AgentBusAdapter, checkpointMgr *runtime.CheckpointManager, modelRouter *llm.Router, routerRegistry *llm.ModelRegistry, routerProviders map[string]llm.Provider) *Orchestrator {
 	return &Orchestrator{
 		hub:             hub,
@@ -180,17 +174,16 @@ func (o *Orchestrator) SetPersistence(persist runtime.Persistence) {
 	o.persist = persist
 }
 
-// RunBlocking launches all agents and blocks until they all complete.
-// Returns a slice of results, one per agent. The order matches the input specs.
+// RunBlocking 启动所有 agent 并阻塞直到全部完成。
+// 返回每个 agent 一个结果的 slice，顺序与输入 specs 一致。
 //
-// When strategy is "sequential", agents run one after another: the result of
-// agent i is sent via the AgentBus to agent i+1 before it starts. This enables
-// researcher → writer pipelines where writer needs the research output.
-// For any other strategy (including empty), agents run concurrently as before.
+// 当 strategy 为 "sequential" 时，agent 依次执行：agent i 的结果会通过
+// AgentBus 在 agent i+1 启动前发送给它。这样可以支持 researcher → writer
+// 这种 writer 需要研究输出的流水线。
+// 其它任何 strategy（包括空字符串）都按原来的并发方式运行。
 //
-// The rootTaskID is passed through to each agent so child tasks can set their
-// parent_task_id to the root task. This is the hook used by the persistence
-// layer to build the child_tasks tree.
+// rootTaskID 会被透传给每个 agent，使子任务可以把自己的 parent_task_id
+// 设为根任务。这是持久化层用来构建 child_tasks 树的 hook。
 func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strategy string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
 
@@ -202,10 +195,10 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 		strategy = "parallel"
 	}
 	if strategy == "sequential" {
-		// Sequential pipeline: agents run one after another. Each agent's output
-		// is forwarded to the next agent via the AgentBus before it starts. This
-		// creates a chain like researcher -> writer where writer sees researcher
-		// output as a user message in its conversation history.
+		// Sequential pipeline(顺序流水线)：agent 依次执行。每个 agent 的输出
+		// 在下一个 agent 启动前通过 AgentBus 转发，形成 researcher -> writer
+		// 这样的链路，writer 会把 researcher 的输出作为 user message 看到并
+		// 进入自己的对话历史。
 		for i, spec := range specs {
 			results[i] = o.runAgent(ctx, rootTaskID, spec)
 			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
@@ -228,9 +221,8 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			go func(idx int, s AgentSpec) {
 				defer wg.Done()
 				results[idx] = o.runAgent(ctx, rootTaskID, s)
-				// Forward result to any target agents declared in OutputTo, even when
-				// running in parallel. The AgentBus queues messages if the target has
-				// not registered its handler yet.
+				// 把结果转发给 OutputTo 中声明的目标 agent，即使在
+				// parallel 下也一样。AgentBus 会在目标尚未注册 handler 时把消息入队。
 				if results[idx].Status == "completed" && o.agentBus != nil {
 					for _, targetID := range s.OutputTo {
 						toSubTaskID := rootTaskID + "_" + targetID
@@ -255,10 +247,9 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 		wg.Wait()
 	}
 
-	// Once all child agents finish, derive and persist the root task terminal
-	// status. The root task itself has no engine loop; its status reflects the
-	// overall outcome of the orchestration so /api/tasks?id=root stops showing
-	// "running" and can be polled to completion.
+	// 所有子 agent 完成后，推导并持久化根任务的终态。根任务本身没有
+	// engine loop，它的状态反映整次 orchestration 的总体结果，这样
+	// /api/tasks?id=root 就不会再停留在 "running"，可以被轮询到完成。
 	rootStatus := "completed"
 	var rootResult string
 	var rootTokens int
@@ -293,12 +284,11 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 	return results
 }
 
-// RunWithCallback launches agents concurrently and calls onResult for each agent
-// as it completes. This allows the caller to process results as they arrive
-// without waiting for all agents to finish.
+// RunWithCallback 并发启动 agent，并在每个 agent 完成时调用 onResult。
+// 这样调用方可以在结果到达时立即处理，而不必等待所有 agent 全部完成。
 //
-// The rootTaskID is passed through to each agent so child tasks can set their
-// parent_task_id to the root task.
+// rootTaskID 会被透传给每个 agent，使子任务可以把自己的 parent_task_id
+// 设为根任务。
 func (o *Orchestrator) RunWithCallback(ctx context.Context, rootTaskID string, specs []AgentSpec, onResult func(AgentResult)) {
 	var wg sync.WaitGroup
 
@@ -314,17 +304,17 @@ func (o *Orchestrator) RunWithCallback(ctx context.Context, rootTaskID string, s
 	wg.Wait()
 }
 
-// runAgent launches a single agent and returns its result.
-// This is the core method that creates and runs an Engine for a single agent spec.
+// runAgent 启动单个 agent 并返回其结果。
+// 这是为单个 agent spec 创建并运行 Engine 的核心方法。
 //
-// rootTaskID is the parent/root task under which this agent is running. The agent's
-// own sub-task ID is derived as rootTaskID + "_" + spec.AgentID. We persist both the
-// task row and its meta row so parent_task_id points back to the root task, making
-// it discoverable via QueryChildTasks(rootTaskID).
+// rootTaskID 是该 agent 所属的父/根任务。agent 自己的 sub-task ID 由
+// rootTaskID + "_" + spec.AgentID 推导得到。我们会同时持久化任务行及其
+// meta 行，使 parent_task_id 指回根任务，从而能通过
+// QueryChildTasks(rootTaskID) 查到。
 func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec AgentSpec) AgentResult {
 	start := time.Now()
 
-	// Build the agent's contract
+	// 构建该 agent 的 contract
 	contract := harness.DefaultContract(spec.Input)
 	if spec.Contract != nil {
 		contract = *spec.Contract
@@ -334,7 +324,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		contract.AllowedTools = spec.AllowedTools
 	}
 
-	// Build PolicyGate with the full rule chain (mirrors main.go:886-896)
+	// 构建完整的规则链 PolicyGate（与 main.go:886-896 保持一致）
 	tokenBudgetRule := &harness.TokenBudgetRule{}
 	costBudgetRule := harness.NewCostBudgetRule()
 	policyChain := harness.NewPolicyChain(
@@ -347,37 +337,36 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	)
 	policyGate := harness.NewPolicyGate(policyChain, contract)
 
-	// Progress tracking
+	// 进度跟踪
 	progressManager := harness.NewProgressManager()
 
-	// Use the agent's model if specified, otherwise use the default
+	// 若 agent 指定了 model 则使用之，否则使用默认 model
 	model := spec.Model
 	if model == "" {
 		model = o.cfg.LLMModel
 	}
 
-	// Resolve the LLM Provider from mock/global configuration. The provider is
-	// created once per agent and passed to the Engine so that the mock switch
-	// (LLM_USE_MOCK / LLMRealCases / LLMMockEndpoints) is honored.
-	// Errors are logged and fall back to nil; the Engine will create a default
-	// OpenAIProvider from Endpoint/APIKey/Model.
+	// 根据 mock/全局配置解析 LLM Provider。provider 每个 agent 创建一次，
+	// 然后传给 Engine，使 mock 开关（LLM_USE_MOCK / LLMRealCases /
+	// LLMMockEndpoints）都能被正确遵守。
+	// 出错时记日志并退回 nil；Engine 会用 Endpoint/APIKey/Model 创建一个
+	// 默认的 OpenAIProvider。
 	provider, err := llm.CreateProviderFromConfig(o.cfg, model, "")
 	if err != nil {
 		log.Printf("[Orchestrator] Failed to create provider for agent=%s (falling back to default): %v", spec.AgentID, err)
 		provider = nil
 	}
 
-	// Derive the sub-task ID for this agent and look up the session ID so we
-	// can persist the parent relationship. The session ID is required by
-	// SaveTaskMeta; we read it from the root task record via QueryTaskByID.
+	// 推导该 agent 的 sub-task ID，并查询 session ID，以便持久化父子关系。
+	// SaveTaskMeta 需要 session ID；我们通过 QueryTaskByID 从根任务记录里读取。
 	subTaskID := rootTaskID + "_" + spec.AgentID
 	var sessionID string
 	if o.persist != nil {
 		sessionID = o.persist.QueryTaskSessionID(rootTaskID)
 	}
 
-	// Resolve the session workspace_dir so that tools like run_shell execute
-	// with the correct CWD without the LLM having to pass it every time.
+	// 解析 session 的 workspace_dir，这样 run_shell 之类的 tool 就能在
+	// 正确的 CWD 下执行，而无需 LLM 每次都显式传入。
 	workspaceDir := ""
 	if sessionID != "" {
 		if sess, err := db.QuerySessionByID(sessionID); err == nil && sess.WorkspaceDir != "" {
@@ -385,12 +374,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		}
 	}
 
-	// OnLLMUsage feeds accumulated cost into costBudgetRule so the PolicyChain
-	// can block further tool calls when the USD budget is exceeded. Mirrors
-	// main.go:888-895 (handleMultiAgent) and main.go:1173-1181 (handleRecoverCheckpoint).
-	// Pricing estimate: deepseek-v4-flash ~ $0.05 / 1M input tokens, ~$0.10 / 1M output.
+	// OnLLMUsage 把累计 cost 喂给 costBudgetRule，这样当 USD 预算超限时
+	// PolicyChain 可以阻止后续 tool 调用。与 main.go:888-895
+	// （handleMultiAgent）和 main.go:1173-1181（handleRecoverCheckpoint）对齐。
+	// 价格估算：deepseek-v4-flash 约 $0.05 / 1M input tokens、$0.10 / 1M output。
 	onUsage := func(model string, _ *llm.ModelProfile, usage llm.Usage) {
-		// Simple cost estimate; for precise billing, pass a *ModelRegistry.
+		// 简单的成本估算；如需精确计费，请传入 *ModelRegistry。
 		cost := (float64(usage.PromptTokens)*0.05 + float64(usage.CompletionTokens)*0.10) / 1_000_000
 		costBudgetRule.SetCost(cost)
 	}
@@ -401,8 +390,8 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		Model:             model,
 		Endpoint:          o.cfg.LLMEndpoint,
 		APIKey:            o.cfg.LLMAPIKey,
-		Provider:          provider, // mock or real provider resolved above
-		CaseID:            "",       // orchestrator specs do not carry case IDs yet
+		Provider:          provider, // 上面解析出的 mock 或真实 provider
+		CaseID:            "",       // orchestrator 的 specs 暂不携带 case ID
 		Temperature:       0.7,
 		MaxTokens:         4096,
 		MaxSteps:          contract.MaxSteps,
@@ -415,14 +404,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		CheckpointManager: o.checkpointMgr,    // Phase 5: 崩溃恢复
 		WorkspaceDir:      workspaceDir,       // Session-level workspace directory
 		OnLLMUsage:        onUsage,
-		// Phase 6 Router: forward the shared Router/Registry/Providers so child
-		// agents participate in dynamic model selection. When modelRouter is nil
-		// the Engine falls back to the single-model path (legacy behavior).
+		// Phase 6 Router: 透传共享的 Router/Registry/Providers，使子 agent
+		// 参与动态 model 选择。modelRouter 为 nil 时 Engine 退回到单 model
+		// 路径（legacy 行为）。
 		Router:    o.modelRouter,
 		Registry:  o.routerRegistry,
 		Providers: o.routerProviders,
-		// 7-G: child agents have their own SubTaskID so events and snapshots are
-		// isolated per agent execution instance.
+		// 7-G: 子 agent 拥有各自的 SubTaskID，这样事件和 snapshot 会按
+		// 每个 agent 执行实例相互隔离。
 		SubTaskID: subTaskID,
 		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
 		Role:                 runtime.AgentRoleWorker,
@@ -432,12 +421,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		ApproverMode:         "leader",
 	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
 
-	// Phase 7-A: Note — per-agent Engine/cancel registration is intentionally kept
-	// at the cmd/server layer (the caller creates the context and owns the registry
-	// tables). Orchestrator stays decoupled from those global sync.Map registries so
-	// it can be unit-tested without main.go package-level state.
+	// Phase 7-A: 注意 —— 每个 agent 的 Engine/cancel 注册被刻意保留在
+	// cmd/server 层（由调用方创建 context 并持有 registry 表）。Orchestrator
+	// 与那些全局 sync.Map registry 保持解耦，这样在无需 main.go 包级状态的
+	// 情况下也能做单元测试。
 
-	// Emit agent_started event for the orchestrator to track
+	// 发出 agent_started 事件，便于 orchestrator 追踪
 	o.hub.SendEvent(event.NewEvent("agent_ready", subTaskID, spec.AgentID, 0, map[string]any{
 		"agent_name":    spec.Name,
 		"model":         model,
@@ -446,9 +435,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		"allowed_tools": spec.AllowedTools,
 	}))
 
-	// Persist task creation for this agent: create the child task row first,
-	// then set its meta so parent_task_id points back to the root task. This is
-	// what makes QueryChildTasks(rootTaskID) return the child task.
+	// 为该 agent 持久化任务创建：先创建子任务行，再写 meta，使
+	// parent_task_id 指回根任务。这是让 QueryChildTasks(rootTaskID) 能
+	// 返回该子任务的关键。
 	if o.persist != nil {
 		if err := o.persist.SaveTask(subTaskID, spec.Input, []string{spec.AgentID}); err != nil {
 			log.Printf("[Orchestrator] Failed to save child task %s: %v", subTaskID, err)
@@ -457,7 +446,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		}
 	}
 
-	// Run the engine
+	// 运行 engine
 	result, totalTokens, err := engine.Run(ctx, spec.Input)
 
 	duration := time.Since(start).Milliseconds()
@@ -489,8 +478,8 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	log.Printf("[Orchestrator] Agent %s (%s) completed: %d tokens, %dms",
 		spec.AgentID, spec.Name, totalTokens, duration)
 
-	// Persist the child task terminal status so QueryTaskByID on subTaskID
-	// reflects completed/failed for playback and debugging.
+	// 持久化子任务的终态，这样对 subTaskID 调 QueryTaskByID 时能正确反映
+	// completed/failed，便于回放和调试。
 	if o.persist != nil {
 		if err := o.persist.UpdateTask(subTaskID, "completed", result, totalTokens); err != nil {
 			log.Printf("[Orchestrator] Failed to update child task %s status: %v", subTaskID, err)
@@ -514,8 +503,8 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	}
 }
 
-// hubAdapter adapts ws.Hub to the runtime.EventBus interface.
-// This is shared across all agents — the Hub is goroutine-safe.
+// hubAdapter 把 ws.Hub 适配为 runtime.EventBus interface。
+// 所有 agent 共享同一个 adapter —— Hub 本身是 goroutine-safe。
 type hubAdapter struct {
 	hub *ws.Hub
 }
@@ -525,63 +514,61 @@ func (a *hubAdapter) SendEvent(evt event.Event) {
 }
 
 // ============================================================================
-// AgentBus — inter-agent communication
+// AgentBus — agent 间通信
 // ============================================================================
 
-// AgentMessage is a message sent from one agent to another.
-// It carries the sender's identity, the receiver identity, an optional
-// sub-task target for precise routing, the message content, and optional metadata.
+// AgentMessage 是从一个 agent 发往另一个 agent 的消息。
+// 它携带发送方身份、接收方身份、可选的 sub-task 目标（用于精确路由）、
+// 消息内容以及可选的 metadata。
 type AgentMessage struct {
-	// FromAgentID is the agent that sent the message.
+	// FromAgentID 是发送该消息的 agent。
 	FromAgentID string `json:"from_agent_id"`
 
-	// ToAgentID is the target agent. If empty, the message is broadcast to all agents.
+	// ToAgentID 是目标 agent。为空时表示广播给所有 agent。
 	ToAgentID string `json:"to_agent_id"`
 
-	// SubTaskID is the target sub-task ID. Phase 7-I: when set, the message is
-	// routed to the handler registered for the exact (ToAgentID, SubTaskID) pair.
-	// Phase 7-J: leader 注册时使用 rootTaskID，因此子 agent 需要把给 leader 的
-	// 消息 ToAgentID 设为 "leader"、SubTaskID 设为 rootTaskID。
+	// SubTaskID 是目标 sub-task ID。Phase 7-I：设置后，消息会被路由到
+	// 为精确 (ToAgentID, SubTaskID) 配对注册的 handler。
+	// Phase 7-J：leader 注册时使用 rootTaskID，因此子 agent 给 leader 发
+	// 消息时要把 ToAgentID 设为 "leader"、SubTaskID 设为 rootTaskID。
 	SubTaskID string `json:"sub_task_id,omitempty"`
 
-	// FromSubTaskID is the sender's sub-task ID. Phase 7-J: used by persistence
-	// to record which sub-task sent the message, so the frontend timeline can
-	// draw accurate inter-agent arrows.
+	// FromSubTaskID 是发送方的 sub-task ID。Phase 7-J：持久化用它记录
+	// 是哪个 sub-task 发出的消息，这样前端时间线能画出准确的 agent 间箭头。
 	FromSubTaskID string `json:"from_sub_task_id,omitempty"`
 
-	// Type describes the message type: "request", "response", "observation", "error"
+	// Type 描述消息类型："request"、"response"、"observation"、"error"
 	Type string `json:"type"`
 
-	// Content is the message body.
+	// Content 是消息体。
 	Content string `json:"content"`
 
-	// Metadata carries arbitrary key-value pairs for context.
+	// Metadata 携带任意 key-value 上下文。
 	Metadata map[string]string `json:"metadata,omitempty"`
 
-	// Timestamp is when the message was sent.
+	// Timestamp 是消息发送时间。
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// AgentBus is the inter-agent communication channel.
-// It allows agents to send messages to each other during execution.
-// The bus is goroutine-safe and can be shared across all agents.
+// AgentBus 是 agent 间通信通道。
+// agent 在执行过程中可以通过它互相发送消息。
+// 该 bus 是 goroutine-safe 的，可在所有 agent 间共享。
 type AgentBus struct {
 	mu       sync.RWMutex
 	handlers map[string]func(AgentMessage) // agentID → message handler
-	// subTaskHandlers maps "agentID\x1fsubTaskID" to a handler.
-	// Phase 7-I: 支持按 (agentID, subTaskID) 精确路由；空 subTaskID 等价于 RegisterHandler。
+	// subTaskHandlers 把 "agentID\x1fsubTaskID" 映射到 handler。
+	// Phase 7-I：支持按 (agentID, subTaskID) 精确路由；空 subTaskID 等价于 RegisterHandler。
 	subTaskHandlers map[string]func(AgentMessage)
-	queue           []AgentMessage // pending messages for agents not yet registered
-	maxQueue        int            // max pending messages
+	queue           []AgentMessage // 尚未注册 handler 的 agent 的待处理消息
+	maxQueue        int            // 最大待处理消息数
 
-	// persistFn is an optional hook invoked asynchronously for every message
-	// that flows through the bus (delivered or queued). It lets the
-	// orchestrator persist AgentBus traffic to SQLite without coupling the
-	// runtime AgentBus package to the db package.
+	// persistFn 是一个可选 hook，对每条流经 bus 的消息（无论已投递还是
+	// 入队）都会异步调用。它让 orchestrator 可以把 AgentBus 流量持久化到
+	// SQLite，而又不会让 runtime AgentBus 包耦合到 db 包。
 	persistFn func(AgentMessage) error
 }
 
-// NewAgentBus creates a new AgentBus with a default queue size of 100.
+// NewAgentBus 创建一个新的 AgentBus，默认队列大小为 100。
 func NewAgentBus() *AgentBus {
 	return &AgentBus{
 		handlers:        make(map[string]func(AgentMessage)),
@@ -590,27 +577,27 @@ func NewAgentBus() *AgentBus {
 	}
 }
 
-// SetPersistFn installs a callback that receives every AgentMessage after
-// SendMessage assigns Timestamp. It runs in its own goroutine so a slow
-// persistence write never blocks message delivery.
+// SetPersistFn 安装一个回调，在 SendMessage 给消息赋上 Timestamp 之后
+// 调用。回调在独立的 goroutine 中运行，这样慢的持久化写入不会阻塞
+// 消息投递。
 //
-// Pass nil to disable persistence (the default). Used by main.go to wire
-// db.InsertAgentMessage into the bus.
+// 传 nil 可禁用持久化（默认行为）。main.go 用它把 db.InsertAgentMessage
+// 接入 bus。
 func (b *AgentBus) SetPersistFn(fn func(AgentMessage) error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.persistFn = fn
 }
 
-// RegisterHandler registers a message handler for a specific agent.
-// When a message arrives addressed to this agent, the handler is called.
+// RegisterHandler 为指定 agent 注册一个 message handler。
+// 当消息地址指向该 agent 时，会调用此 handler。
 func (b *AgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.handlers[agentID] = handler
 
-	// Deliver any pending messages for this agent
+	// 投递该 agent 之前积压的待处理消息
 	b.deliverPendingLocked(agentID, "", handler)
 }
 
@@ -634,7 +621,7 @@ func (b *AgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler f
 	}
 }
 
-// UnregisterHandler removes a message handler for a specific agent.
+// UnregisterHandler 移除指定 agent 的 message handler。
 func (b *AgentBus) UnregisterHandler(agentID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -682,31 +669,31 @@ func matchesTarget(msg AgentMessage, agentID, subTaskID string) bool {
 		return false
 	}
 	if subTaskID == "" {
-		// agentID-only fallback: match if message has no specific subTaskID.
+		// agentID-only fallback：仅匹配没有指定 subTaskID 的消息。
 		return msg.SubTaskID == ""
 	}
 	return msg.SubTaskID == subTaskID
 }
 
-// SendMessage sends a message from one agent to another.
-// If the target agent has a registered handler, the handler is called immediately.
-// Otherwise, the message is queued for later delivery.
+// SendMessage 从一个 agent 向另一个 agent 发送消息。
+// 如果目标 agent 已注册 handler，则立即调用该 handler。
+// 否则消息会被入队，留待后续投递。
 //
-// Phase 7-I: SendMessage first looks for an exact (ToAgentID, SubTaskID) handler,
-// then falls back to a ToAgentID-only handler, so sub-task specific routing takes
-// precedence. An empty SubTaskID only matches ToAgentID-only handlers.
+// Phase 7-I：SendMessage 先查找精确的 (ToAgentID, SubTaskID) handler，
+// 再退回到 ToAgentID-only handler，因此 sub-task 专属路由优先级更高。
+// SubTaskID 为空时只匹配 ToAgentID-only handler。
 //
-// Phase 7-J: 队列中的消息也按同样的匹配规则重新投递，确保 message.SubTaskID
-// 改变后不会错误地进入旧的 agentID-only handler。
+// Phase 7-J：队列中的消息也按同样的匹配规则重新投递，确保
+// message.SubTaskID 改变后不会错误地进入旧的 agentID-only handler。
 //
-// When a persistence callback has been installed via SetPersistFn, every
-// message — delivered or queued — is also handed to that callback in a
-// goroutine so message routing is never blocked on storage I/O.
+// 当通过 SetPersistFn 安装了持久化回调时，每条消息 —— 无论已投递还是
+// 入队 —— 都会在单独的 goroutine 中交给该回调，使消息路由不会被
+// 存储 I/O 阻塞。
 func (b *AgentBus) SendMessage(msg AgentMessage) {
 	msg.Timestamp = time.Now()
 
-	// Fire the persistence hook asynchronously. Snapshot the function under
-	// the lock to avoid a race with SetPersistFn; a nil hook is a no-op.
+	// 异步触发持久化 hook。在锁下 snapshot 函数引用，避免与
+	// SetPersistFn 竞争；hook 为 nil 时是 no-op。
 	b.mu.RLock()
 	persist := b.persistFn
 	b.mu.RUnlock()
@@ -729,50 +716,49 @@ func (b *AgentBus) SendMessage(msg AgentMessage) {
 	b.mu.RUnlock()
 
 	if handler != nil {
-		// Deliver immediately
+		// 立即投递
 		handler(msg)
 		return
 	}
 
-	// Queue for later delivery
+	// 入队等待后续投递
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if len(b.queue) >= b.maxQueue {
-		// Drop oldest message to prevent unbounded growth
+		// 丢弃最旧的消息，防止队列无限增长
 		b.queue = b.queue[1:]
 	}
 	b.queue = append(b.queue, msg)
 }
 
 // ============================================================================
-// TaskDecomposer — splits a user request into sub-tasks
+// TaskDecomposer — 把用户请求拆分为子任务
 // ============================================================================
 
-// TaskDecomposer splits a complex user request into sub-tasks for multiple agents.
-// This is a simple rule-based approach — future versions may use an LLM to
-// decompose tasks dynamically.
+// TaskDecomposer 把复杂的用户请求拆分为多个 agent 的子任务。
+// 这是一个简单的基于规则的实现 —— 未来版本可能使用 LLM 动态分解任务。
 type TaskDecomposer struct{}
 
-// DecomposeResult holds the decomposed task specification.
+// DecomposeResult 保存分解后的任务规范。
 type DecomposeResult struct {
-	// Agents is the list of agent specs to run.
+	// Agents 是要运行的 agent spec 列表。
 	Agents []AgentSpec
 
-	// Strategy describes how the agents should be coordinated:
-	//   "parallel" — all agents run independently
-	//   "sequential" — agents run in order, each seeing the previous agent's output
-	//   "pipeline" — agents pass data through a chain (A → B → C)
+	// Strategy 描述 agent 之间的协调方式：
+	//   "parallel" —— 所有 agent 独立运行
+	//   "sequential" —— agent 依次运行，每个能看到上一个 agent 的输出
+	//   "pipeline" —— agent 通过链式传递数据（A → B → C）
 	Strategy string
 }
 
-// Decompose splits a user request into agent specs based on the case type.
-// For now, the decomposition is based on the preset case definition.
-// In Phase 5+, this will use an LLM-based decomposition.
+// Decompose 按 case 类型把用户请求拆分为 agent specs。
+// 目前分解基于预设 case 定义。
+// Phase 5+ 将改用基于 LLM 的分解。
 func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeResult, error) {
 	switch caseType {
 	case "multi_agent":
-		// Multi-agent case: split into researcher + writer + reviewer
+		// 多 agent case：拆分为 researcher + writer + reviewer
 		return &DecomposeResult{
 			Strategy: "sequential",
 			Agents: []AgentSpec{
@@ -801,7 +787,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeRe
 		}, nil
 
 	case "code_gen":
-		// Code generation: single agent with code-gen tools
+		// 代码生成：单 agent + code-gen tool
 		return &DecomposeResult{
 			Strategy: "parallel",
 			Agents: []AgentSpec{
@@ -817,7 +803,7 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeRe
 		}, nil
 
 	default:
-		// Default: single agent
+		// 默认：单 agent
 		return &DecomposeResult{
 			Strategy: "parallel",
 			Agents: []AgentSpec{
@@ -834,11 +820,11 @@ func (td *TaskDecomposer) Decompose(input string, caseType string) (*DecomposeRe
 }
 
 // ============================================================================
-// Multi-Agent Preset Cases
+// 多 agent 预设 case
 // ============================================================================
 
-// MultiAgentSpecs returns predefined multi-agent task specifications.
-// These are used by the /api/cases endpoint and the frontend case cards.
+// MultiAgentSpecs 返回预定义的多 agent 任务规范。
+// /api/cases endpoint 和前端的 case 卡片会用到它们。
 func MultiAgentSpecs() []AgentSpec {
 	return []AgentSpec{
 		{
@@ -865,8 +851,8 @@ func MultiAgentSpecs() []AgentSpec {
 	}
 }
 
-// AgentColors maps agent roles to display colors for the frontend.
-// Colors are used to distinguish agents in the multi-tree view.
+// AgentColors 把 agent 角色映射到前端展示颜色。
+// 这些颜色用于在多树视图中区分不同 agent。
 var AgentColors = map[string]string{
 	"agent_default":    "#4a9eff", // blue
 	"agent_researcher": "#51cf66", // green
@@ -875,7 +861,7 @@ var AgentColors = map[string]string{
 	"agent_reviewer":   "#e74c3c", // red
 }
 
-// AgentColor returns the display color for an agent, or a default gray.
+// AgentColor 返回某个 agent 的展示颜色，找不到时返回默认灰色。
 func AgentColor(agentID string) string {
 	if c, ok := AgentColors[agentID]; ok {
 		return c
