@@ -1,0 +1,144 @@
+/**
+ * Observable Control Room — responsive/mobile utilities.
+ *
+ * Import this file in main.ts after global.css so these media-query helpers
+ * can override or extend the design tokens where needed.
+ */
+
+/* ---------- Responsive display helpers ---------- */
+.hidden-mobile {
+  display: inherit;
+}
+
+.hidden-tablet {
+  display: inherit;
+}
+
+.hidden-desktop {
+  display: none;
+}
+
+/* Mobile-only helpers */
+@media (max-width: 767px) {
+  .hidden-mobile {
+    display: none !important;
+  }
+}
+
+/* Tablet-only helpers */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .hidden-tablet {
+    display: none !important;
+  }
+}
+
+/* Desktop-only helpers */
+@media (min-width: 1024px) {
+  .hidden-desktop {
+    display: none !important;
+  }
+}
+
+/* ---------- App shell / main-stage mobile polish ---------- */
+
+@media (max-width: 767px) {
+  :root {
+    /* IncreaseCommandBar height for larger touch targets */
+    --commandbar-height: 74px;
+    --mobile-nav-height: 56px;
+    --dock-header-height: 40px;
+  }
+
+  .app-shell {
+    /* Fallback for env() is handled per declaration; keep layout compact. */
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* The main stage on mobile should not horizontally scroll; content scrolls inside. */
+  .main-stage {
+    padding: var(--space-sm);
+    padding-bottom: calc(var(--commandbar-height) + var(--mobile-nav-height) + var(--space-sm));
+  }
+
+  /* Mobile tab views fill the available space within the single-column layout. */
+  .mobile-tab-view {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .mobile-tab-view .dock-panel {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    background: var(--bg-panel, #11141a);
+    z-index: 20;
+  }
+
+  /* Ensure mobile overlays do not exceed viewport width. */
+  .dock-panel,
+  .command-bar,
+  .mobile-nav {
+    max-width: 100vw;
+  }
+}
+
+/* ---------- Tablet polish ---------- */
+@media (min-width: 768px) and (max-width: 1023px) {
+  :root {
+    --commandbar-height: 68px;
+  }
+
+  .layout-tablet .main-stage {
+    padding: var(--space-md);
+  }
+}
+
+/* ---------- Safe-area insets ---------- */
+
+/* Ensure fixed elements account for device notches / home indicators. */
+.topbar {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.mobile-nav {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.command-bar {
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ---------- Touch-friendly min sizes ---------- */
+
+@media (max-width: 767px) {
+  /* Larger hit targets for thumb taps on small screens. */
+  button,
+  [role='button'],
+  .tab-button,
+  .mobile-tab {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  textarea.command-input {
+    min-height: 48px;
+  }
+}
+
+/* ---------- Reduced-motion accessibility ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

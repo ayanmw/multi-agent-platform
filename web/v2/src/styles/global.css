@@ -1,0 +1,366 @@
+/**
+ * Observable Control Room — global design system.
+ *
+ * This single CSS file defines all tokens, resets, utilities, and keyframe
+ * animations used by UI v2. It intentionally avoids scoped-component bloat
+ * so the control-room aesthetic stays consistent across the new layout.
+ */
+
+:root {
+  /* 舱壁黑 — canvas / panel / elevated / hover surfaces */
+  --bg-canvas: #0b0d10;
+  --bg-panel: #11141a;
+  --bg-elevated: #181c24;
+  --bg-hover: #202632;
+
+  /* 边框 — subtle, default, active glow */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-active: rgba(0, 229, 255, 0.4);
+
+  /* 文字 — primary / secondary / muted */
+  --text-primary: #e8ebf0;
+  --text-secondary: #9aa3b2;
+  --text-muted: #5c6675;
+
+  /* 状态荧光 — running / success / warning / danger / tool / skill */
+  --accent-running: #00e5ff;
+  --accent-success: #39ff14;
+  --accent-warning: #ffb800;
+  --accent-danger: #ff4d4d;
+  --accent-tool: #a855f7;
+  --accent-skill: #ff6b35;
+
+  /* 代码/数据高亮 */
+  --accent-info: #60a5fa;
+  --accent-token: #f472b6;
+
+  /* accent 背景上的对比文字（Run/Save 等主行动按钮）。
+     cyan 背景较亮，用近黑保证对比度，与舱壁主题一致。 */
+  --text-on-accent: #07090c;
+
+  /* 字体 — display + mono with fallbacks */
+  --font-display: 'Chakra Petch', 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+
+  /* 间距 / 尺寸 token */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --topbar-height: 48px;
+  --commandbar-height: 64px;
+  --dock-width: 260px;
+  --inspector-width: 360px;
+
+  /* 动画 */
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+/* ---------- Reset ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: var(--accent-running);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+pre,
+code {
+  font-family: var(--font-mono);
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-hover) transparent;
+}
+
+/* ---------- Selection ---------- */
+::selection {
+  background: rgba(0, 229, 255, 0.25);
+  color: var(--text-primary);
+}
+
+/* ---------- Utility classes ---------- */
+
+/* Typography */
+.mono {
+  font-family: var(--font-mono);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Status badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.badge--running {
+  color: var(--accent-running);
+  background: rgba(0, 229, 255, 0.1);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+}
+
+.badge--running::before {
+  background: var(--accent-running);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
+.badge--success {
+  color: var(--accent-success);
+  background: rgba(57, 255, 20, 0.1);
+  border: 1px solid rgba(57, 255, 20, 0.25);
+}
+
+.badge--success::before {
+  background: var(--accent-success);
+}
+
+.badge--warning {
+  color: var(--accent-warning);
+  background: rgba(255, 184, 0, 0.1);
+  border: 1px solid rgba(255, 184, 0, 0.25);
+}
+
+.badge--warning::before {
+  background: var(--accent-warning);
+  animation: status-blink 1.2s ease-in-out infinite;
+}
+
+.badge--danger {
+  color: var(--accent-danger);
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.25);
+}
+
+.badge--danger::before {
+  background: var(--accent-danger);
+  box-shadow: 0 0 6px var(--accent-danger);
+}
+
+.badge--idle {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+}
+
+.badge--idle::before {
+  background: var(--text-muted);
+}
+
+/* Panel containers */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.panel--elevated {
+  background: var(--bg-elevated);
+}
+
+/* Focus glow for interactive elements */
+.focus-glow:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--border-active);
+}
+
+/* ---------- Keyframe animations ---------- */
+
+/* Running status indicator: soft breathing pulse */
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.15);
+    box-shadow: 0 0 8px 2px rgba(0, 229, 255, 0.2);
+  }
+}
+
+/* Paused/warning status indicator: slow amber blink */
+@keyframes status-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* New step card slide-in with fade (staggered via animation-delay on element) */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 240ms ease both;
+}
+
+/* Subtle fade for inspector tab content swaps */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 200ms ease both;
+}
+
+/* Command bar focus glow animation */
+@keyframes glow-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px var(--border-active);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(0, 229, 255, 0.25);
+  }
+}
+
+.focus-glow-animated:focus-within {
+  animation: glow-pulse 2.4s ease-in-out infinite;
+}
+
+/* ---------- Accessibility: reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -39,9 +39,13 @@ project/
 # Node
 node_modules/
 web/dist/
+web/v2/dist/
 web/node_modules/
+web/v2/node_modules/
 web/.vite/
+web/v2/.vite/
 web/tsconfig.tsbuildinfo
+web/v2/tsconfig.tsbuildinfo
 
 # Environment
 .env

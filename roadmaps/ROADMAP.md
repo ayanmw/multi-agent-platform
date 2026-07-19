@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ (Skeleton)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase UI-v2 🚧 (Skeleton)
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)
 ```
 
@@ -539,6 +539,31 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase UI-v2: Observable Control Room 前端重设计 🚧 IN PROGRESS (2026-07-19)
+
+**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
+
+### 交付物
+- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` 按 `UI_VERSION=v2` 选择静态资源。
+- [x] 设计系统：`global.css` deep-space dark + industrial 主题，CSS tokens；`responsive.css` 桌面/平板/移动适配。
+- [x] 布局组件：`TopBar` / `DockPanel` / `SessionDock` / `CommandBar` / `MobileNav` / `TimelineTrack` / `AgentLane` / `StepCard` / `InspectorTabs` / `InspectorContent`。
+- [x] Store composables 全量迁移适配（Task / Session / Agent / Project / Case / Memory / ContextWindow / Trace / Toast / RecentMods / ModelPrices / MCP / Keyboard / Layout / Skills）。
+- [x] 后端 API 连线：WebSocket 事件、Skill 真实 API + `/skill-id ` 前缀解析、multi-agent、`startTaskWithCase`、会话/任务历史、审批对话框。
+- [x] Inspector 全 tab 接入真实组件；Cases tab 接 `CaseDetailModal` + `CaseForm`（新建/编辑）。
+- [x] 颜色 token 统一：Case 系列组件 + 布局组件 v1 硬编码颜色/hex fallback 全部迁移到 v2 CSS variables（新增 `--text-on-accent`）。
+- [x] 构建验证：`web/` 与 `web/v2/` 均构建通过，`go build ./cmd/server` 通过。
+
+### 待验证 / 待办
+- [ ] 端到端冒烟：`UI_VERSION=v2` 启动后跑通 chat / case / skill / multi-agent，桌面与移动端均正常。
+- [ ] Traces tab 升级为可折叠树。
+- [ ] 用户验收满意后合并 `ui-v2-control-room` → `main`。
+
+### 已知注意
+- 工作分支 `ui-v2-control-room` 位于隔离 worktree，未合并 main 前不影响生产部署。
+- 子 agent 并行失控教训已记录至 `memory/lead-subagent-parallel-control.md`，后续收尾改用单 agent 串行。
+
+---
+
 ## Phase 7: 生产化与深度集成 🔜 PLANNING (暂不实施)
 
 ### 候选特性
@@ -625,3 +650,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.5 Alpha | 2026-07-18 | DuckDuckGo fallback: core/web_search 无 API key 时自动降级到 DuckDuckGo HTML/lite 搜索 |
 | v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |
 | v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
+| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
