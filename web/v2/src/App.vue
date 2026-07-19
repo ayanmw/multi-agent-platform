@@ -23,6 +23,7 @@ import { useToast } from './composables/useToast'
 import { useRecentMods } from './composables/useRecentMods'
 import { useContextWindow } from './composables/useContextWindow'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
+import { useSkills } from './composables/useSkills'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
@@ -56,6 +57,8 @@ const {
   disconnect,
   startTask,
   startTurn,
+  startTaskWithCase,
+  startMultiAgentTask,
   clearActiveTask,
   setActiveTaskId,
   loadSessionTurns,
@@ -81,7 +84,16 @@ const {
 const { agents, loadAgents } = useAgentStore()
 const { projects, activeProjectId, loadProjects, setActiveProject } = useProjectStore()
 const { toasts, showError, showInfo, dismissToast } = useToast()
+const { loadSkills, enableSkill } = useSkills()
 const caseStore = useCaseStore()
+
+// === Skill / Multi-Agent 状态 ===
+const multiAgentEnabled = ref(false)
+const prefilledCommand = ref('')
+
+function onMultiAgentChange(v: boolean) {
+  multiAgentEnabled.value = v
+}
 
 // === 行内重命名状态 ===
 const renamingSessionId = ref<string | null>(null)
@@ -233,6 +245,12 @@ onMounted(async () => {
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to load cases')
   }
+  try {
+    await loadSkills()
+  } catch (err) {
+    // Skill 列表加载失败不阻塞主流程，useSkills 内部已回退到静态列表
+    console.warn('[App] Failed to load skills:', err)
+  }
 
   // 最近修改弹窗自动提示
   if (recentMods.value.length > 0) {
@@ -260,28 +278,70 @@ onUnmounted(() => {
 
 // === 发送消息 ===
 async function handleSend(text: string, options: { maxSteps: number; timeoutSeconds: number }) {
+  // Skill 前缀解析：/skill-id <rest> 或 /skill-id
+  const skillMatch = text.match(/^\/([a-zA-Z0-9_-]+)\s+(.*)$/) || text.match(/^\/([a-zA-Z0-9_-]+)$/)
+  if (skillMatch) {
+    const skillId = skillMatch[1]
+    const remaining = skillMatch[2] || ''
+    try {
+      await enableSkill(skillId)
+    } catch (err) {
+      if (err instanceof Error && err.message === 'forbidden') {
+        showError(`Skill ${skillId} cannot be enabled.`)
+        return
+      }
+      showError(err instanceof Error ? err.message : `Failed to enable skill ${skillId}`)
+      return
+    }
+    text = remaining
+  }
+
   try {
     const session = activeSession.value
     if (!session) {
       const newSession = await createSession(undefined, text, activeProjectId.value)
       setActiveSession(newSession.id)
-      await startTask(text, {
-        sessionId: newSession.id,
-        maxSteps: options.maxSteps,
-        timeoutSeconds: options.timeoutSeconds,
-      })
+      if (multiAgentEnabled.value && !text.startsWith('/')) {
+        await startMultiAgentTask(text, {
+          sessionId: newSession.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      } else {
+        await startTask(text, {
+          sessionId: newSession.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      }
     } else if (!session.rootTaskId) {
-      await startTask(text, {
-        sessionId: session.id,
-        maxSteps: options.maxSteps,
-        timeoutSeconds: options.timeoutSeconds,
-      })
+      if (multiAgentEnabled.value && !text.startsWith('/')) {
+        await startMultiAgentTask(text, {
+          sessionId: session.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      } else {
+        await startTask(text, {
+          sessionId: session.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      }
     } else {
-      await startTurn(text, {
-        sessionId: session.id,
-        maxSteps: options.maxSteps,
-        timeoutSeconds: options.timeoutSeconds,
-      })
+      if (multiAgentEnabled.value && !text.startsWith('/')) {
+        await startMultiAgentTask(text, {
+          sessionId: session.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      } else {
+        await startTurn(text, {
+          sessionId: session.id,
+          maxSteps: options.maxSteps,
+          timeoutSeconds: options.timeoutSeconds,
+        })
+      }
     }
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
@@ -452,9 +512,7 @@ async function handleRunCase(caseId: string) {
       session = await createSession(undefined, `Case: ${caseId}`, activeProjectId.value)
       setActiveSession(session.id)
     }
-    // TODO: Phase 8 — useTaskStore.startTaskWithCase 迁移完成后启用下面的真实调用
-    // await startTaskWithCase(caseId, { sessionId: session.id })
-    showInfo(`Running case ${caseId} (TODO: wire startTaskWithCase)`)
+    await startTaskWithCase(caseId, { sessionId: session.id })
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to run case')
   }
@@ -462,8 +520,10 @@ async function handleRunCase(caseId: string) {
 
 // === Skill 触发 ===
 async function handleTriggerSkill(command: string) {
-  // TODO: Phase 8 — 完整 skill 解析 /enable 路径，当前仅把命令填入输入提示
-  showInfo(`Skill triggered: ${command}`)
+  const match = command.match(/^\/([a-zA-Z0-9_-]+)(?:\s+.*)?$/)
+  if (match) {
+    prefilledCommand.value = '/' + match[1] + ' '
+  }
 }
 
 // === TopBar 状态文字 ===
@@ -685,10 +745,14 @@ const showInspectorToggle = computed(() => !isMobile.value)
       :disabled="isAgentRunning"
       :is-running="isAgentRunning"
       :is-pending="isTaskPending"
+      :prefill="prefilledCommand"
       @send="handleSend"
       @pause="pauseTask"
       @resume="resumeTask"
       @cancel="cancelTask"
+      @update:prefill="prefilledCommand = ''"
+      @update:multiAgent="onMultiAgentChange"
+      @multiAgentChange="onMultiAgentChange"
     />
 
     <MobileNav v-if="isMobile" />

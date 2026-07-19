@@ -9,22 +9,27 @@ import { useLayout } from '../composables/useLayout'
  *   - disabled: 输入框是否禁用
  *   - isRunning: 任务是否运行中，控制 Pause/Resume/Cancel 与进度条
  *   - isPending: 任务是否在启动Pending
+ *   - prefill: 外部注入的预填充文本（例如 `/skill-id `）
  *
  * emits:
  *   - send(text, {maxSteps, timeoutSeconds}): 提交输入
  *   - pause / resume / cancel: 运行控制
  *   - toggleOptions: 切换 options drawer 显隐状态（可选）
+ *   - update:multiAgent / multiAgentChange: multi-agent 开关变化
+ *   - update:prefill: 预填充消费后重置
  */
 const props = withDefaults(
   defineProps<{
     disabled?: boolean
     isRunning?: boolean
     isPending?: boolean
+    prefill?: string
   }>(),
   {
     disabled: false,
     isRunning: false,
     isPending: false,
+    prefill: '',
   },
 )
 
@@ -36,6 +41,9 @@ const emit = defineEmits<{
   (e: 'resume'): void
   (e: 'cancel'): void
   (e: 'toggleOptions', open: boolean): void
+  (e: 'update:multiAgent', value: boolean): void
+  (e: 'multiAgentChange', value: boolean): void
+  (e: 'update:prefill', value: string): void
 }>()
 
 const text = ref('')
@@ -85,6 +93,24 @@ watch(
   () => props.isRunning,
   (running) => {
     if (!running) optionsOpen.value = false
+  },
+)
+
+// multi-agent 开关同步到父组件（同时支持 v-model 和事件）
+watch(multiAgent, (value) => {
+  emit('update:multiAgent', value)
+  emit('multiAgentChange', value)
+})
+
+// 外部预填充文本：非空且与当前内容不同时写入输入框，并通知父组件已消费
+watch(
+  () => props.prefill,
+  (value) => {
+    if (value && value !== text.value) {
+      text.value = value
+      emit('update:prefill', '')
+      nextTick(() => textareaRef.value?.focus())
+    }
   },
 )
 </script>
