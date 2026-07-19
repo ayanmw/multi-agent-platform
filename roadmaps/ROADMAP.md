@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-18
-> **Current version**: v0.7.4 Alpha (MCP SSE transport + remote marketplace)
+> **Last updated**: 2026-07-19
+> **Current version**: v0.8.0 Alpha (Skill system + MCP SSE transport + remote marketplace)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ (Skeleton)
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)
 ```
 
 ---
@@ -507,6 +507,38 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase skill: 可复用 Skill 系统 ✅ COMPLETED (2026-07-18)
+
+**目标**: 为 Agent 提供可复用的 prompt + 任务知识包，让同一 Agent 在不切换配置时按启用 Skill 切换专长。
+
+### 交付物
+- [x] `internal/skill/` 核心模型：`SkillSource` / `SkillState` / `Skill` 及其 `Template` / `Parameter` / `Triggers`
+- [x] 内存注册表 `Registry`：`List / Get / Set / Exists / Delete / Filter`
+- [x] SQLite 持久化 `Store` 与 `Loader`：`built_in` 种子 + `local_db` 加载
+- [x] `Renderer`：`{{ variable }}` 模板渲染与变量自动提取
+- [x] 内置 Skill：`builtin-code-helper`、`builtin-error-diagnosis`，默认启用
+- [x] Agent Skill 管理 Tools：`skill/create_local`、`skill/delete_local`、`skill/list`
+- [x] Engine system prompt 注入：`system_prompt` / `task_prompt` 模板追加到 `## Skill Instructions`
+- [x] Skill 相关事件常量：`skill_enabled`、`skill_disabled`、`skill_created`、`skill_deleted`
+- [x] REST API：`GET /api/skills`、`GET /api/skills/search`、`POST /api/skills`、`PUT /api/skills/:id`、`DELETE /api/skills/:id`、`enable` / `disable`
+- [x] 前端 SkillPicker：`TaskInput` 中输入 `/` 触发搜索，↑/↓ 选择、Enter 确认、Esc 取消
+- [x] 前端启用流程：`App.vue` 解析 `/skill-id ` 前缀，调用 `POST /api/skills/{id}/enable` 后再发送真实输入
+- [x] 单元测试：`internal/skill/*_test.go`、`internal/runtime/engine_skill_test.go`
+- [x] API 端到端测试：`cmd/server/api_skill_test.go`
+- [x] E2E 测试：`cmd/server/skill_e2e_test.go` 验证启用 skill 后 system prompt 正确注入
+
+### 验证标准
+- `go test ./internal/skill ./internal/runtime ./cmd/server -count=1` 通过
+- `vue-tsc --noEmit` + `vite build` 通过
+- Skill 启用/禁用前后，system prompt 长度与内容变化符合预期（E2E 覆盖）
+
+### 已知限制 / 后续规划
+- [ ] Skill 变量目前由调用方通过 `SkillVariables` 传入；未来可从 Project / Session 上下文自动推导
+- [ ] 自动触发器（Triggers）已建模但未接入 Router / 调度器
+- [ ] `local_file` 与 `mcp` 来源当前未实现完整加载器，留作 Phase 7 扩展
+
+---
+
 ## Phase 7: 生产化与深度集成 🔜 PLANNING (暂不实施)
 
 ### 候选特性
@@ -588,3 +620,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.2 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 + MCP 市场 Provider（default static market）+ 前端市场安装入口 |
 | v0.7.3 Alpha | 2026-07-18 | MCP SSE transport: `internal/tool/mcp/sse_transport.go` + endpoint handshake + JSON-RPC over SSE + Manager/REST/前端 create dialog 已支持 `sse` transport |
 | v0.7.4 Alpha | 2026-07-18 | MCP 远程 marketplace: 新增 `URLProvider` 从 HTTP URL 拉取 JSON catalog + `MCP_MARKETS` 环境变量注册 + Manager 自动加载远程市场 + 示例与测试 |
+| v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
