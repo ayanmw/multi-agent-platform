@@ -1,30 +1,26 @@
-// memory_embedding.go — persistent storage for vector embeddings.
+// memory_embedding.go —— 向量 embedding 的持久化存储。
 //
-// # Design Rationale
+// # 设计理由
 //
-// Embeddings live in a separate `memory_embeddings` table (added in the v16
-// migration) rather than as a column on `memories`. The decoupling is intentional:
+// embedding 存放在独立的 `memory_embeddings` 表（v16 migration 新增）中，
+// 而不是作为 `memories` 表上的一个列。这种解耦是有意为之：
 //
-//  1. Batch vector I/O — we can SELECT only the (memory_id, embedding) columns
-//     when warming the in-memory index at startup, without paying for the
-//     other columns of the memories row.
-//  2. Model rotation — when the embedding model changes, only rows matching
-//     the old `model` need to be recomputed; the rest stay valid.
-//  3. Schema isolation — adding vector columns later (e.g. quantization) does
-//     not require touching the wide memories table.
-//  4. ON DELETE CASCADE keeps the table consistent when a memory is removed.
+//  1. 批量向量 I/O —— 启动时为内存索引预热，只需 SELECT 出
+//     (memory_id, embedding) 两列，无需为 memories 行的其它列付出代价。
+//  2. 模型轮换 —— embedding model 变更时，只需重新计算匹配旧 `model` 的行，
+//     其余行保持有效。
+//  3. Schema 隔离 —— 日后新增向量列（例如量化）时无需改动宽表 memories。
+//  4. ON DELETE CASCADE 在 memory 被删除时保持本表一致。
 //
-// # BLOB Encoding
+// # BLOB 编码
 //
-// The `embedding` column stores a little-endian []float32 serialization of
-// length `dims * 4` bytes. Little-endian matches the native byte order of
-// every modern CPU the platform targets (x86_64, arm64, riscv64). Encoding
-// and decoding use encoding/binary.LittleEndian via the encodeEmbedding /
-// decodeEmbedding helpers below — never hand-roll byte manipulation.
+// `embedding` 列存储长度为 `dims * 4` 字节的小端 []float32 序列化结果。
+// 小端序与平台目标的所有现代 CPU（x86_64、arm64、riscv64）的原生字节序一致。
+// 编码与解码通过下方 encodeEmbedding / decodeEmbedding 辅助函数使用
+// encoding/binary.LittleEndian 完成——禁止手工拼字节。
 //
-// A row also carries the embedding model name (e.g. "local-fnv") and the
-// dimensionality so the table is self-describing and model rotation can be
-// detected without external metadata.
+// 一行还携带 embedding 的 model 名（例如 "local-fnv"）与维度 dims，因此本表
+// 是自描述的，无需外部元数据即可检测 model 轮换。
 package db
 
 import (
@@ -34,9 +30,8 @@ import (
 	"math"
 )
 
-// MemoryEmbeddingRow is the in-memory representation of one row from the
-// memory_embeddings table. Embedding is decoded back to []float32 for
-// callers (cosine similarity etc.).
+// MemoryEmbeddingRow 是 memory_embeddings 表一行的内存表示。
+// Embedding 会被解码回 []float32 供调用方使用（cosine 相似度等）。
 type MemoryEmbeddingRow struct {
 	MemoryID  string
 	Embedding []float32
@@ -44,10 +39,9 @@ type MemoryEmbeddingRow struct {
 	Dims      int
 }
 
-// encodeEmbedding serializes a []float32 into a little-endian byte slice.
+// encodeEmbedding 将 []float32 序列化为小端字节切片。
 //
-// The length of the returned slice is 4 * len(vec). Each float32 is laid out
-// as its IEEE-754 binary representation in little-endian byte order.
+// 返回切片长度为 4 * len(vec)。每个 float32 以其 IEEE-754 小端字节序的二进制表示存放。
 func encodeEmbedding(vec []float32) ([]byte, error) {
 	if len(vec) == 0 {
 		return nil, fmt.Errorf("encodeEmbedding: vector is empty")
@@ -60,11 +54,11 @@ func encodeEmbedding(vec []float32) ([]byte, error) {
 	return buf, nil
 }
 
-// decodeEmbedding reverses encodeEmbedding: takes a BLOB of length 4*dims
-// and returns the corresponding []float32.
+// decodeEmbedding 是 encodeEmbedding 的逆操作：接收长度为 4*dims 的 BLOB，
+// 返回对应的 []float32。
 //
-// We trust the stored dims column (set at insertion time) rather than
-// inferring from len(blob)/4 so callers always know what to expect.
+// 我们信任存储中的 dims 列（在插入时设定），而不是依据 len(blob)/4 推断，
+// 这样调用方始终知道预期维度。
 func decodeEmbedding(blob []byte, dims int) ([]float32, error) {
 	if dims <= 0 {
 		return nil, fmt.Errorf("decodeEmbedding: dims must be positive, got %d", dims)
@@ -81,12 +75,11 @@ func decodeEmbedding(blob []byte, dims int) ([]float32, error) {
 	return out, nil
 }
 
-// InsertOrReplaceMemoryEmbedding writes a single embedding row, replacing any
-// existing row with the same memory_id (upsert). The caller is responsible
-// for encoding the embedding via encodeEmbedding before calling.
+// InsertOrReplaceMemoryEmbedding 写入单条 embedding 行，若该 memory_id 已存在则替换（upsert）。
+// 调用方需在调用前通过 encodeEmbedding 完成 embedding 的编码。
 //
-// Uses an UPSERT (INSERT ... ON CONFLICT) so we don't depend on UNIQUE
-// triggers or pre-delete-then-insert races.
+// 使用 UPSERT（INSERT ... ON CONFLICT），这样既不依赖 UNIQUE 触发器，
+// 也不存在"先删后插"带来的竞态。
 func InsertOrReplaceMemoryEmbedding(db *sql.DB, memoryID string, emb []byte, model string, dims int) error {
 	if db == nil {
 		return fmt.Errorf("InsertOrReplaceMemoryEmbedding: db is nil")
@@ -123,11 +116,10 @@ func InsertOrReplaceMemoryEmbedding(db *sql.DB, memoryID string, emb []byte, mod
 	return nil
 }
 
-// LoadAllMemoryEmbeddings returns every row in memory_embeddings, with the
-// BLOB decoded back into []float32. Used at startup to warm the in-memory
-// vector index of SqliteVectorStore.
+// LoadAllMemoryEmbeddings 返回 memory_embeddings 中的全部行，BLOB 被解码回
+// []float32。启动时用于为 SqliteVectorStore 的内存向量索引预热。
 //
-// Results are not ordered — callers that need a stable order should sort.
+// 结果不保证顺序——需要稳定顺序的调用方应自行排序。
 func LoadAllMemoryEmbeddings(db *sql.DB) ([]MemoryEmbeddingRow, error) {
 	if db == nil {
 		return nil, fmt.Errorf("LoadAllMemoryEmbeddings: db is nil")
@@ -153,9 +145,8 @@ func LoadAllMemoryEmbeddings(db *sql.DB) ([]MemoryEmbeddingRow, error) {
 		}
 		vec, err := decodeEmbedding(blob, dims)
 		if err != nil {
-			// Skip corrupt rows rather than aborting the whole load — a
-			// mismatched dims/blob is a soft error at startup and the caller
-			// (SqliteVectorStore.Reload) can still serve the surviving rows.
+			// 跳过损坏行而不是中止整个加载——dims/blob 不匹配在启动阶段
+			// 属于软错误，调用方（SqliteVectorStore.Reload）仍可服务幸存行。
 			continue
 		}
 		out = append(out, MemoryEmbeddingRow{
@@ -171,12 +162,10 @@ func LoadAllMemoryEmbeddings(db *sql.DB) ([]MemoryEmbeddingRow, error) {
 	return out, nil
 }
 
-// LoadMemoryEmbeddingsByModel returns rows whose `model` column matches the
-// given provider name. Useful for "find all embeddings that were produced by
-// the old model" workflows when rotating the embedding provider.
+// LoadMemoryEmbeddingsByModel 返回 `model` 列匹配指定 provider 名称的行。
+// 在轮换 embedding provider 时用于"找出所有由旧 model 产出的 embedding"这类流程。
 //
-// An empty model returns zero rows (no row has an empty model — enforced by
-// InsertOrReplaceMemoryEmbedding).
+// model 为空时返回零行（任何行的 model 都不为空，由 InsertOrReplaceMemoryEmbedding 保证）。
 func LoadMemoryEmbeddingsByModel(db *sql.DB, model string) ([]MemoryEmbeddingRow, error) {
 	if db == nil {
 		return nil, fmt.Errorf("LoadMemoryEmbeddingsByModel: db is nil")
@@ -221,13 +210,12 @@ func LoadMemoryEmbeddingsByModel(db *sql.DB, model string) ([]MemoryEmbeddingRow
 	return out, nil
 }
 
-// DeleteMemoryEmbedding removes the embedding row for the given memory ID.
-// The ON DELETE CASCADE foreign key would also clear the row if the parent
-// memory row were deleted; this helper exists for callers that want to drop
-// just the embedding (e.g. before recomputing with a new model) without
-// touching the memory itself.
+// DeleteMemoryEmbedding 删除指定 memory ID 对应的 embedding 行。
+// 如果父 memory 行被删除，ON DELETE CASCADE 外键也会自动清理本行；
+// 本辅助函数存在的意义是：调用方只想删除 embedding（例如用新 model 重新计算前）
+// 而不想动 memory 本身时使用。
 //
-// No-op if the row does not exist (DELETE does not error on missing rows).
+// 行不存在时为 no-op（DELETE 对缺失行不会报错）。
 func DeleteMemoryEmbedding(db *sql.DB, memoryID string) error {
 	if db == nil {
 		return fmt.Errorf("DeleteMemoryEmbedding: db is nil")

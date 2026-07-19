@@ -13,7 +13,7 @@ import (
 var DB *sql.DB
 
 func Init(dataPath string) error {
-	// Ensure parent directory exists
+	// 确保父目录存在
 	dir := filepath.Dir(dataPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -50,7 +50,7 @@ func Init(dataPath string) error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	// Run automatic schema migrations for existing databases
+	// 为已存在的数据库运行自动 schema migration
 	if err := RunMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
@@ -149,9 +149,9 @@ func createTables() error {
 			workspace_dir TEXT DEFAULT '',
 			workspace_auto BOOLEAN DEFAULT 1
 		)`,
-		// Phase 5-A: Project management and multi-turn conversation tables
-		//   projects — top-level organizational unit for grouping sessions
-		//   session_messages — per-turn message history for multi-turn conversations
+		// Phase 5-A：项目管理和多轮对话相关表
+		//   projects — 顶层组织单元，用于分组 session
+		//   session_messages — 多轮对话的按轮次消息历史
 		`CREATE TABLE IF NOT EXISTS projects (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -175,9 +175,9 @@ func createTables() error {
 			FOREIGN KEY (session_id) REFERENCES sessions(id),
 			FOREIGN KEY (task_id) REFERENCES tasks(id)
 		)`,
-		// Phase 6: Memory infrastructure tables
-		//   memories — consolidated episodic summaries and semantic/policy rules
-		//   memory_links — relationships between memory records
+		// Phase 6：Memory 基础设施相关表
+		//   memories — 合并后的 episodic 摘要以及 semantic/policy 规则
+		//   memory_links — memory 记录之间的关系
 		`CREATE TABLE IF NOT EXISTS memories (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL DEFAULT 'default',
@@ -215,7 +215,7 @@ func createTables() error {
 		}
 	}
 
-	// Phase 5-A: Session messages indexes for multi-turn conversation queries
+	// Phase 5-A：用于多轮对话查询的 session_messages 索引
 		phase5AIndexes := []string{
 			`CREATE INDEX IF NOT EXISTS idx_session_messages_session_id ON session_messages(session_id)`,
 			`CREATE INDEX IF NOT EXISTS idx_session_messages_task_id ON session_messages(task_id)`,
@@ -228,7 +228,7 @@ func createTables() error {
 			}
 		}
 
-		// Phase 5: indexes for session and task hierarchy queries
+		// Phase 5：用于 session 和 task 层级查询的索引
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)`,
@@ -242,7 +242,7 @@ func createTables() error {
 		}
 	}
 
-	// Phase 6: Memory infrastructure indexes
+	// Phase 6：Memory 基础设施索引
 	memoryIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_memories_project_id ON memories(project_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier)`,
@@ -257,7 +257,7 @@ func createTables() error {
 		}
 	}
 
-	// MCP servers: dynamic + marketplace server configuration persistence
+	// MCP servers：动态 + marketplace server 配置的持久化
 	mcpSchemas := []string{
 		`CREATE TABLE IF NOT EXISTS mcp_servers (
 			id TEXT PRIMARY KEY,

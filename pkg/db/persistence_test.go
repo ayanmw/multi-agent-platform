@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-// TestAgentBusMessageSubTaskIDRoundTrip verifies that AgentBusMessage with
-// SubTaskID and FromSubTaskID round-trips through InsertAgentMessage and
-// QueryAgentMessages. Phase 7-J.
+// TestAgentBusMessageSubTaskIDRoundTrip 验证 AgentBusMessage 的 SubTaskID
+// 与 FromSubTaskID 经 InsertAgentMessage / QueryAgentMessages 往返后保持不变。
+// Phase 7-J。
 func TestAgentBusMessageSubTaskIDRoundTrip(t *testing.T) {
 	freshDB(t)
 

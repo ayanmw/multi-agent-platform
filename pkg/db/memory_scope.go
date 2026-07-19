@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// QueryMemoriesByScope returns all active memory records for a given project and scope.
-// scope values: "session", "project", "global"
+// QueryMemoriesByScope 返回某个 project 中、指定 scope 下的全部 active memory 记录。
+// scope 取值："session"、"project"、"global"
 func QueryMemoriesByScope(projectID, scope string) ([]MemoryRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -35,7 +35,7 @@ func QueryMemoriesByScope(projectID, scope string) ([]MemoryRecord, error) {
 	return records, nil
 }
 
-// QueryMemoriesByScopeAndTier returns memory records filtered by project, scope, and tier.
+// QueryMemoriesByScopeAndTier 返回按 project、scope、tier 过滤的 memory 记录。
 func QueryMemoriesByScopeAndTier(projectID, scope, tier string) ([]MemoryRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -62,8 +62,8 @@ func QueryMemoriesByScopeAndTier(projectID, scope, tier string) ([]MemoryRecord,
 	return records, nil
 }
 
-// QueryMemoriesByScopeAndSession returns session-scoped memories filtered by session ID.
-// Session-scoped memories have scope='session' and session_id matching the given session.
+// QueryMemoriesByScopeAndSession 返回按 session ID 过滤的 session 作用域 memory。
+// session 作用域的 memory 满足 scope='session' 且 session_id 匹配给定 session。
 func QueryMemoriesByScopeAndSession(projectID, sessionID, scope string) ([]MemoryRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -92,9 +92,8 @@ func QueryMemoriesByScopeAndSession(projectID, sessionID, scope string) ([]Memor
 	return records, nil
 }
 
-// scanMemoryRecords is a shared helper that scans sql.Rows into a slice of
-// MemoryRecord. It is used by scope-aware query functions to avoid duplicating
-// the column list and unmarshaling logic.
+// scanMemoryRecords 是一个共享辅助函数，用于把 sql.Rows 扫描为 MemoryRecord 切片。
+// scope 感知的查询函数通过它避免重复列清单和反序列化逻辑。
 func scanMemoryRecords(rows *sql.Rows) ([]MemoryRecord, error) {
 	var records []MemoryRecord
 	for rows.Next() {
@@ -123,7 +122,7 @@ func scanMemoryRecords(rows *sql.Rows) ([]MemoryRecord, error) {
 	return records, rows.Err()
 }
 
-// UpdateMemoryScope changes the scope of a memory record (session | project | global).
+// UpdateMemoryScope 修改 memory 记录的 scope（session | project | global）。
 func UpdateMemoryScope(id, scope, sessionID string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")

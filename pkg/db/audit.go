@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// AuditRecord mirrors observability.AuditRecord.
+// AuditRecord 对应 observability.AuditRecord。
 type AuditRecord struct {
 	ID        string         `json:"id"`
 	Timestamp time.Time      `json:"timestamp"`
@@ -19,7 +19,7 @@ type AuditRecord struct {
 	IP        string         `json:"ip"`
 }
 
-// InsertAuditRecord persists an audit record.
+// InsertAuditRecord 持久化一条 audit 记录。
 func InsertAuditRecord(rec AuditRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -34,7 +34,7 @@ func InsertAuditRecord(rec AuditRecord) error {
 	return err
 }
 
-// ListAuditRecords returns recent audit records ordered by timestamp desc.
+// ListAuditRecords 返回最近的 audit 记录，按 timestamp 倒序排列。
 func ListAuditRecords(limit int) ([]AuditRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")

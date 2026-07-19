@@ -1,9 +1,8 @@
-// database_test.go — white-box tests for the db package's initialization,
-// migration idempotency, and core CRUD round-trips.
+// database_test.go —— db 包初始化、migration 幂等性以及核心 CRUD 往返的白盒测试。
 //
-// All tests use a temporary SQLite file under t.TempDir() via the pure-Go
-// modernc.org/sqlite driver (no CGO). The global DB handle is reset between
-// tests via t.Cleanup so each subtest sees a fresh database.
+// 所有测试都通过纯 Go 的 modernc.org/sqlite 驱动（无 CGO）在 t.TempDir() 下的
+// 临时 SQLite 文件中运行。全局 DB 句柄通过 t.Cleanup 在测试间重置，使每个
+// 子测试都能看到一个全新的数据库。
 package db
 
 import (
@@ -16,11 +15,10 @@ import (
 	"time"
 )
 
-// freshDB initializes a brand-new database at a temp path, runs createTables
-// and migrations, registers a cleanup that closes the DB and resets the
-// package-level global, and returns the path plus the live *sql.DB.
+// freshDB 在临时路径初始化一个全新数据库，执行 createTables 与 migration，
+// 注册关闭 DB 并重置包级全局的 cleanup，并返回路径与活跃的 *sql.DB。
 //
-// Tests must call this rather than reusing a shared global to stay isolated.
+// 测试必须调用它而非复用共享全局，以保持隔离。
 func freshDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
@@ -38,8 +36,7 @@ func freshDB(t *testing.T) (string, *sql.DB) {
 	return path, db
 }
 
-// tableExists queries sqlite_master to confirm a table (or index) by name
-// exists in the current database.
+// tableExists 查询 sqlite_master，确认当前数据库中存在指定名称的表（或索引）。
 func tableExists(t *testing.T, name string) bool {
 	t.Helper()
 	if DB == nil {
@@ -59,10 +56,10 @@ func tableExists(t *testing.T, name string) bool {
 	return false
 }
 
-// --- Initialization & Migration -------------------------------------------
+// --- 初始化与 Migration -------------------------------------------
 
-// TestInitCreatesDatabase verifies Init produces a pingable *sql.DB and
-// wires the package global.
+// TestInitCreatesDatabase 验证 Init 能产生一个可 Ping 的 *sql.DB，
+// 并正确接上包级全局。
 func TestInitCreatesDatabase(t *testing.T) {
 	_, db := freshDB(t)
 	if err := db.Ping(); err != nil {
@@ -70,9 +67,8 @@ func TestInitCreatesDatabase(t *testing.T) {
 	}
 }
 
-// TestInitIdempotentMigrations runs RunMigrations twice against the same
-// database and confirms the second invocation is a no-op (no error, no
-// duplicate rows in schema_migrations).
+// TestInitIdempotentMigrations 对同一数据库连续运行两次 RunMigrations，
+// 确认第二次调用是 no-op（无错误，schema_migrations 中不产生重复行）。
 func TestInitIdempotentMigrations(t *testing.T) {
 	freshDB(t)
 
@@ -92,12 +88,11 @@ func TestInitIdempotentMigrations(t *testing.T) {
 	}
 }
 
-// TestInitTwiceSameFile confirms re-Init on an existing file is safe — the
-// tables already exist (CREATE TABLE IF NOT EXISTS) and migrations recorded
-// in schema_migrations are skipped.
+// TestInitTwiceSameFile 确认对已有文件重新 Init 是安全的——表已存在
+// （CREATE TABLE IF NOT EXISTS），schema_migrations 中已记录的 migration 会被跳过。
 func TestInitTwiceSameFile(t *testing.T) {
 	path, _ := freshDB(t)
-	// Close the first DB so the second Init can re-open the same file.
+	// 关闭首个 DB，以便第二次 Init 能重新打开同一文件。
 	_ = Close()
 	DB = nil
 
@@ -118,10 +113,10 @@ func TestInitTwiceSameFile(t *testing.T) {
 	}
 }
 
-// --- Table existence -------------------------------------------------------
+// --- 表存在性 -------------------------------------------------------
 
-// TestExpectedTablesExist asserts every table declared by createTables and
-// the v5/v6/v10/v12/v13/v17 migrations is present after Init.
+// TestExpectedTablesExist 断言 createTables 以及 v5/v6/v10/v12/v13/v17 migration
+// 声明的所有表在 Init 后都存在。
 func TestExpectedTablesExist(t *testing.T) {
 	freshDB(t)
 	wantTables := []string{
@@ -136,7 +131,7 @@ func TestExpectedTablesExist(t *testing.T) {
 		"session_messages",
 		"memories",
 		"memory_links",
-		// migration-only tables
+		// 仅由 migration 创建的表
 		"schema_migrations",
 		"cost_records",
 		"users",
@@ -153,8 +148,8 @@ func TestExpectedTablesExist(t *testing.T) {
 	}
 }
 
-// TestCostRecordsHasCostCentsColumn verifies the v11 migration added the
-// integer cost_cents column alongside the REAL cost_usd column.
+// TestCostRecordsHasCostCentsColumn 验证 v11 migration 在 REAL 的 cost_usd 列
+// 之外新增了整数型 cost_cents 列。
 func TestCostRecordsHasCostCentsColumn(t *testing.T) {
 	freshDB(t)
 	rows, err := DB.Query(`PRAGMA table_info(cost_records)`)
@@ -184,8 +179,8 @@ func TestCostRecordsHasCostCentsColumn(t *testing.T) {
 	}
 }
 
-// TestDefaultProjectSeededByMigration verifies the v5 migration seeds the
-// 'default' project row, which sessions fall back to.
+// TestDefaultProjectSeededByMigration 验证 v5 migration 会播种 'default' project
+// 行，session 在缺失时会回退到它。
 func TestDefaultProjectSeededByMigration(t *testing.T) {
 	freshDB(t)
 	var count int
@@ -198,10 +193,9 @@ func TestDefaultProjectSeededByMigration(t *testing.T) {
 	}
 }
 
-// --- Session CRUD round-trip -----------------------------------------------
+// --- Session CRUD 往返 -----------------------------------------------
 
-// newSessionRecord builds a SessionRecord populated with sane defaults for
-// use across CRUD tests.
+// newSessionRecord 构造一个带有合理默认值的 SessionRecord，供 CRUD 测试复用。
 func newSessionRecord(id, name string) SessionRecord {
 	now := time.Now().UTC().Truncate(time.Second)
 	return SessionRecord{
@@ -219,8 +213,8 @@ func newSessionRecord(id, name string) SessionRecord {
 	}
 }
 
-// TestSessionCRUDRoundTrip exercises Insert -> QueryByID -> Update -> Query
-// -> Delete, asserting fields survive the round-trip.
+// TestSessionCRUDRoundTrip 走一遍 Insert -> QueryByID -> Update -> Query
+// -> Delete 流程，断言字段在往返过程中保持不变。
 func TestSessionCRUDRoundTrip(t *testing.T) {
 	freshDB(t)
 
@@ -240,7 +234,7 @@ func TestSessionCRUDRoundTrip(t *testing.T) {
 		t.Errorf("round-trip mismatch:\n got  = %+v\n want = %+v", got, orig)
 	}
 
-	// Update root task + status + user input.
+	// 更新 root task + status + user input。
 	if err := UpdateSession("sess_1", "task_root", "completed", "updated input"); err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
@@ -258,7 +252,7 @@ func TestSessionCRUDRoundTrip(t *testing.T) {
 		t.Errorf("UserInput = %q, want %q", got.UserInput, "updated input")
 	}
 
-	// Delete should remove it.
+	// 删除应当移除该行。
 	if err := DeleteSession("sess_1"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
@@ -267,8 +261,8 @@ func TestSessionCRUDRoundTrip(t *testing.T) {
 	}
 }
 
-// TestInsertSessionDefaultsProjectID verifies that an empty ProjectID is
-// normalized to "default" by InsertSession.
+// TestInsertSessionDefaultsProjectID 验证 InsertSession 会把空的 ProjectID
+// 归一化为 "default"。
 func TestInsertSessionDefaultsProjectID(t *testing.T) {
 	freshDB(t)
 	s := newSessionRecord("sess_default_proj", "n")
@@ -285,12 +279,12 @@ func TestInsertSessionDefaultsProjectID(t *testing.T) {
 	}
 }
 
-// TestQuerySessionsListsAndFilters verifies QuerySessions returns inserted
-// sessions ordered by updated_at DESC and honours the projectID filter.
+// TestQuerySessionsListsAndFilters 验证 QuerySessions 返回的 session 按
+// updated_at 倒序排列，并遵守 projectID 过滤条件。
 func TestQuerySessionsListsAndFilters(t *testing.T) {
 	freshDB(t)
 
-	// Insert three sessions across two projects with distinct update times.
+	// 跨两个 project 插入三条 session，各自带有不同的更新时间。
 	s1 := newSessionRecord("sess_a", "a")
 	s1.ProjectID = "default"
 	s1.UpdatedAt = time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
@@ -309,7 +303,7 @@ func TestQuerySessionsListsAndFilters(t *testing.T) {
 		}
 	}
 
-	// No filter: all three, newest first (s3, s2, s1).
+	// 不过滤：三条全部返回，最新优先（s3, s2, s1）。
 	all, err := QuerySessions(10, "")
 	if err != nil {
 		t.Fatalf("QuerySessions: %v", err)
@@ -321,7 +315,7 @@ func TestQuerySessionsListsAndFilters(t *testing.T) {
 		t.Errorf("order = %s,%s,%s; want sess_c,sess_b,sess_a", all[0].ID, all[1].ID, all[2].ID)
 	}
 
-	// Filter by project: only default sessions (s3, s1).
+	// 按 project 过滤：仅返回 default 的 session（s3, s1）。
 	def, err := QuerySessions(10, "default")
 	if err != nil {
 		t.Fatalf("QuerySessions(default): %v", err)
@@ -334,8 +328,8 @@ func TestQuerySessionsListsAndFilters(t *testing.T) {
 	}
 }
 
-// TestDeleteSessionMissingReturnsError verifies DeleteSession surfaces a
-// not-found error rather than silently succeeding for an unknown ID.
+// TestDeleteSessionMissingReturnsError 验证 DeleteSession 对未知 ID 会返回
+// not-found 错误，而不是静默成功。
 func TestDeleteSessionMissingReturnsError(t *testing.T) {
 	freshDB(t)
 	if err := DeleteSession("does_not_exist"); err == nil {
@@ -343,16 +337,15 @@ func TestDeleteSessionMissingReturnsError(t *testing.T) {
 	}
 }
 
-// --- Task persistence ------------------------------------------------------
+// --- Task 持久化 ------------------------------------------------------
 
-// TestTaskPersistAndQueryBySession covers InsertTask, UpdateTaskSession,
-// QueryTaskByID, and QueryTasksBySession — verifying session/parent/is_root
-// bindings are stored and retrieved correctly.
+// TestTaskPersistAndQueryBySession 覆盖 InsertTask、UpdateTaskSession、
+// QueryTaskByID、QueryTasksBySession——验证 session/parent/is_root 绑定能被
+// 正确存储与读取。
 func TestTaskPersistAndQueryBySession(t *testing.T) {
 	freshDB(t)
 
-	// Parent session must exist for FK semantics (and for QueryTasksBySession
-	// to be meaningful).
+	// 父 session 必须存在以满足 FK 语义（也让 QueryTasksBySession 有意义）。
 	if err := InsertSession(newSessionRecord("sess_t", "task-host")); err != nil {
 		t.Fatalf("InsertSession: %v", err)
 	}
@@ -385,7 +378,7 @@ func TestTaskPersistAndQueryBySession(t *testing.T) {
 		t.Fatalf("InsertTask(child): %v", err)
 	}
 
-	// QueryTaskByID should reconstruct the agentIDs slice and bindings.
+	// QueryTaskByID 应能还原 agentIDs 切片与各绑定字段。
 	got, err := QueryTaskByID("task_root")
 	if err != nil {
 		t.Fatalf("QueryTaskByID: %v", err)
@@ -397,7 +390,7 @@ func TestTaskPersistAndQueryBySession(t *testing.T) {
 		t.Errorf("root AgentIDs = %v, want [agent_a agent_b]", got.AgentIDs)
 	}
 
-	// QueryTasksBySession returns root first (is_root DESC) then child.
+	// QueryTasksBySession 先返回 root（is_root DESC），再返回 child。
 	tasks, err := QueryTasksBySession("sess_t")
 	if err != nil {
 		t.Fatalf("QueryTasksBySession: %v", err)
@@ -412,7 +405,7 @@ func TestTaskPersistAndQueryBySession(t *testing.T) {
 		t.Errorf("child ParentTaskID = %q, want task_root", tasks[1].ParentTaskID)
 	}
 
-	// UpdateTask mutates status / final_result / total_tokens.
+	// UpdateTask 会修改 status / final_result / total_tokens。
 	if err := UpdateTask("task_root", "completed", "all done", 100); err != nil {
 		t.Fatalf("UpdateTask: %v", err)
 	}
@@ -427,7 +420,7 @@ func TestTaskPersistAndQueryBySession(t *testing.T) {
 		t.Error("CompletedAt nil after UpdateTask, want set")
 	}
 
-	// AggregateSessionTokens should sum task totals.
+	// AggregateSessionTokens 应汇总 task 的 token 总数。
 	tot, err := AggregateSessionTokens("sess_t")
 	if err != nil {
 		t.Fatalf("AggregateSessionTokens: %v", err)
@@ -437,7 +430,7 @@ func TestTaskPersistAndQueryBySession(t *testing.T) {
 	}
 }
 
-// TestQueryChildTasks verifies the parent->children lookup.
+// TestQueryChildTasks 验证 parent -> children 查找。
 func TestQueryChildTasks(t *testing.T) {
 	freshDB(t)
 	if err := InsertSession(newSessionRecord("sess_c", "c")); err != nil {
@@ -473,21 +466,19 @@ func TestQueryChildTasks(t *testing.T) {
 	}
 }
 
-// --- Foreign-key behaviour -------------------------------------------------
+// --- 外键行为 -------------------------------------------------
 
-// TestInsertTaskOrphanSessionID documents the foreign-key behaviour of the
-// pure-Go modernc.org/sqlite driver. By default SQLite does NOT enforce
-// foreign keys unless `PRAGMA foreign_keys=ON` is issued; Init does not
-// issue it. We assert the actual behaviour: inserting a task with a
-// non-existent session_id succeeds (no FK enforcement).
+// TestInsertTaskOrphanSessionID 记录纯 Go modernc.org/sqlite 驱动的外键行为。
+// 默认情况下 SQLite 不会强制外键，除非显式执行 `PRAGMA foreign_keys=ON`；
+// Init 不会执行该 PRAGMA。我们在此断言实际行为：以不存在的 session_id 插入
+// task 会成功（FK 未强制）。
 //
-// If a future change turns FK enforcement on, this test will fail and
-// should be updated to assert the error — that is a schema-level decision,
-// not a bug in this test.
+// 如果未来改动开启了 FK 强制，本测试会失败并应改为断言错误——那属于 schema
+// 层面的决策，并非本测试的 bug。
 func TestInsertTaskOrphanSessionID(t *testing.T) {
 	freshDB(t)
 
-	// Enable FK explicitly so the behaviour we assert is unambiguous.
+	// 显式开启 FK，使我们断言的行为不致歧义。
 	if _, err := DB.Exec(`PRAGMA foreign_keys=ON`); err != nil {
 		t.Fatalf("PRAGMA foreign_keys=ON: %v", err)
 	}
@@ -500,14 +491,14 @@ func TestInsertTaskOrphanSessionID(t *testing.T) {
 	if err == nil {
 		t.Skip("modernc.org/sqlite does not enforce FK on tasks.session_id even with PRAGMA foreign_keys=ON; documented behaviour, not a bug")
 	}
-	// If we got an error, that's a valid outcome too — just log it.
+	// 如果返回错误，也是合法结果——只记录日志。
 	t.Logf("InsertTask with orphan session_id returned error (FK enforced): %v", err)
 }
 
-// --- cases / case_evaluations tables ---------------------------------------
+// --- cases / case_evaluations 表 ---------------------------------------
 
-// TestCasesMigrationRegistered verifies the v17 cases and case_evaluations
-// migration is recorded in schema_migrations after Init.
+// TestCasesMigrationRegistered 验证 v17 cases 和 case_evaluations migration
+// 在 Init 后已被记录到 schema_migrations 中。
 func TestCasesMigrationRegistered(t *testing.T) {
 	freshDB(t)
 
@@ -523,8 +514,8 @@ func TestCasesMigrationRegistered(t *testing.T) {
 	}
 }
 
-// TestCasesAndEvaluationsTablesExist verifies the v17 migration created the
-// cases and case_evaluations tables with their supporting indexes.
+// TestCasesAndEvaluationsTablesExist 验证 v17 migration 创建了 cases 和
+// case_evaluations 表及其配套索引。
 func TestCasesAndEvaluationsTablesExist(t *testing.T) {
 	freshDB(t)
 	for _, name := range []string{"cases", "case_evaluations"} {
@@ -534,8 +525,8 @@ func TestCasesAndEvaluationsTablesExist(t *testing.T) {
 	}
 }
 
-// TestCasesTablesUsable exercises a basic INSERT/SELECT round-trip to prove
-// the schema matches the intended types and constraints.
+// TestCasesTablesUsable 走一遍基本的 INSERT/SELECT 往返，证明 schema 与预期的
+// 类型和约束一致。
 func TestCasesTablesUsable(t *testing.T) {
 	freshDB(t)
 
@@ -570,12 +561,11 @@ func TestCasesTablesUsable(t *testing.T) {
 	}
 }
 
-// --- mock_scripts table ----------------------------------------------------
+// --- mock_scripts 表 ----------------------------------------------------
 
-// TestMockScriptsTableUsable verifies the v13 migration created the
-// mock_scripts table and that a basic Insert/Select round-trip works.
-// There is no CRUD helper in pkg/db for mock_scripts (the mock store lives
-// in internal/llm), so we use raw SQL to prove the table is usable.
+// TestMockScriptsTableUsable 验证 v13 migration 创建了 mock_scripts 表，
+// 并且基本的 Insert/Select 往返可用。pkg/db 中没有 mock_scripts 的 CRUD
+// 辅助（mock store 位于 internal/llm），因此这里用裸 SQL 证明表可用。
 func TestMockScriptsTableUsable(t *testing.T) {
 	freshDB(t)
 	if !tableExists(t, "mock_scripts") {
@@ -598,11 +588,11 @@ func TestMockScriptsTableUsable(t *testing.T) {
 	}
 }
 
-// --- cost_records table ----------------------------------------------------
+// --- cost_records 表 ----------------------------------------------------
 
-// TestCostRecordsTableUsable verifies the cost_records table is writable
-// and the v11 migration's cost_cents column round-trips an integer value.
-// Like mock_scripts, no CRUD helper lives in pkg/db, so we use raw SQL.
+// TestCostRecordsTableUsable 验证 cost_records 表可写入，且 v11 migration 的
+// cost_cents 列能往返一个整数值。和 mock_scripts 一样，pkg/db 中没有对应
+// CRUD 辅助，因此使用裸 SQL。
 func TestCostRecordsTableUsable(t *testing.T) {
 	freshDB(t)
 	if !tableExists(t, "cost_records") {
@@ -633,10 +623,10 @@ func TestCostRecordsTableUsable(t *testing.T) {
 	}
 }
 
-// --- splitSQL helper (internal to migrate.go) ------------------------------
+// --- splitSQL 辅助函数（migrate.go 内部） ------------------------------
 
-// TestSplitSQL covers the lightweight statement splitter used by RunMigrations
-// because SQLite's Exec only handles one statement at a time.
+// TestSplitSQL 覆盖 RunMigrations 使用的轻量级语句拆分器，
+// 因为 SQLite 的 Exec 一次只能处理一条语句。
 func TestSplitSQL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -667,7 +657,7 @@ func TestSplitSQL(t *testing.T) {
 	}
 }
 
-// TestTrimSpace covers the ASCII trimmer used by splitSQL.
+// TestTrimSpace 覆盖 splitSQL 使用的 ASCII trimmer。
 func TestTrimSpace(t *testing.T) {
 	tests := []struct {
 		in, want string
@@ -677,7 +667,7 @@ func TestTrimSpace(t *testing.T) {
 		{"  abc  ", "abc"},
 		{"\t\nabc\r\n", "abc"},
 		{"   ", ""},
-		{"a b", "a b"}, // internal whitespace preserved
+		{"a b", "a b"}, // 内部空白保留
 	}
 	for _, tt := range tests {
 		if got := trimSpace(tt.in); got != tt.want {
@@ -686,21 +676,18 @@ func TestTrimSpace(t *testing.T) {
 	}
 }
 
-// --- Concurrency (light) ---------------------------------------------------
+// --- 并发（轻量） ---------------------------------------------------
 
-// TestConcurrentInsertSession opens 5 goroutines that each insert a distinct
-// session into the shared *sql.DB. modernc.org/sqlite serializes writers with
-// a database-level lock; by default each pooled connection has its own
-// busy_timeout so cross-connection waits can fail with SQLITE_BUSY. We pin
-// the pool to a single connection (the recommended SQLite pattern) so the
-// PRAGMA busy_timeout applies uniformly, then assert no panic and the correct
-// row count. If this still flakes on some platforms, skip it.
+// TestConcurrentInsertSession 开 5 个 goroutine 各向共享 *sql.DB 插入一个
+// 不同 session。modernc.org/sqlite 通过数据库级锁串行化写者；默认情况下每个
+// pooled connection 各自带 busy_timeout，因此跨连接等待可能以 SQLITE_BUSY 失败。
+// 我们把池固定为单连接（推荐的 SQLite 模式），使 PRAGMA busy_timeout 统一生效，
+// 然后断言不 panic 且行数正确。若在某些平台仍抖动，则跳过。
 func TestConcurrentInsertSession(t *testing.T) {
 	freshDB(t)
 
-	// SQLite is a single-writer database. Pin the pool to one connection so
-	// the busy_timeout pragma (set below) governs all access and writers queue
-	// rather than hitting SQLITE_BUSY across connections.
+	// SQLite 是单写者数据库。把池固定为单连接，使 busy_timeout PRAGMA
+	// （下方设置）统一约束所有访问，写者排队而非跨连接撞上 SQLITE_BUSY。
 	DB.SetMaxOpenConns(1)
 	if _, err := DB.Exec(`PRAGMA busy_timeout=5000`); err != nil {
 		t.Fatalf("set busy_timeout: %v", err)

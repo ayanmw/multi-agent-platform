@@ -1,4 +1,4 @@
-// skill_test.go — tests for skills table CRUD.
+// skill_test.go —— skills 表 CRUD 的测试。
 package db
 
 import (
@@ -8,8 +8,8 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 )
 
-// TestSkillCRUD verifies the full lifecycle of a Skill record:
-// create, save, get, list, filter, delete.
+// TestSkillCRUD 验证 Skill 记录的完整生命周期：
+// 创建、保存、读取、列表、过滤、删除。
 func TestSkillCRUD(t *testing.T) {
 	freshDB(t)
 
@@ -54,12 +54,12 @@ func TestSkillCRUD(t *testing.T) {
 		UpdatedAt:     1700000000,
 	}
 
-	// Save
+	// 保存
 	if err := SaveSkill(s); err != nil {
 		t.Fatalf("SaveSkill: %v", err)
 	}
 
-	// Get
+	// 读取
 	got, err := GetSkill(s.ID)
 	if err != nil {
 		t.Fatalf("GetSkill: %v", err)
@@ -92,7 +92,7 @@ func TestSkillCRUD(t *testing.T) {
 		t.Errorf("GetSkill UpdatedAt should be refreshed on save, got %d", got.UpdatedAt)
 	}
 
-	// List all
+	// 列出全部
 	all, err := ListSkills("", "")
 	if err != nil {
 		t.Fatalf("ListSkills: %v", err)
@@ -108,7 +108,7 @@ func TestSkillCRUD(t *testing.T) {
 		t.Errorf("ListSkills did not contain %q", s.ID)
 	}
 
-	// Filter by source
+	// 按 source 过滤
 	bySource, err := ListSkills(string(skill.SkillSourceLocalDB), "")
 	if err != nil {
 		t.Fatalf("ListSkills by source: %v", err)
@@ -117,7 +117,7 @@ func TestSkillCRUD(t *testing.T) {
 		t.Error("ListSkills by source returned no results")
 	}
 
-	// Filter by state
+	// 按 state 过滤
 	byState, err := ListSkills("", string(skill.SkillStateEnabled))
 	if err != nil {
 		t.Fatalf("ListSkills by state: %v", err)
@@ -126,7 +126,7 @@ func TestSkillCRUD(t *testing.T) {
 		t.Error("ListSkills by state returned no results")
 	}
 
-	// Delete
+	// 删除
 	if err := DeleteSkill(s.ID); err != nil {
 		t.Fatalf("DeleteSkill: %v", err)
 	}

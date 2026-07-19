@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Memory lifecycle events broadcast over WebSocket. These are produced by the
-// Memory CRUD API handlers so the frontend can keep its cache in sync.
+// Memory 生命周期事件，通过 WebSocket 广播。由 Memory CRUD API handler 产生，
+// 前端据此保持自身缓存同步。
 const (
 	EventMemoryCreated         = "memory_created"
 	EventMemoryUpdated         = "memory_updated"
@@ -17,22 +17,19 @@ const (
 	EventHeartbeatBeat         = "heartbeat_beat"
 	EventContextWindowSnapshot = "context_window_snapshot"
 
-	// EventTaskEvaluated is emitted after a task completes when the engine has
-	// run the AcceptanceEvaluator against the case contract. It carries passed,
-	// score, reason, and the full evaluation report.
+	// EventTaskEvaluated 在任务完成、引擎对 case contract 执行 AcceptanceEvaluator 后发出。
+	// 携带 passed、score、reason 以及完整的评估报告。
 	EventTaskEvaluated = "task_evaluated"
 
-	// EventMcpToolsChanged is broadcast whenever the set of MCP proxy tools in the
-	// registry changes (server loaded/unloaded/enabled/disabled). Frontend should
-	// refresh its tool list / available tool definitions when receiving it.
+	// EventMcpToolsChanged 在 registry 中 MCP proxy 工具集合发生变化
+	// （server 加载/卸载/启用/禁用）时广播。前端收到后应刷新其工具列表/可用工具定义。
 	EventMcpToolsChanged = "mcp_tools_changed"
 
-	// EventTraceSpan is emitted when a trace span finishes so the frontend can
-	// render the call tree in real time.
+	// EventTraceSpan 在一个 trace span 结束时发出，前端据此实时渲染调用树。
 	EventTraceSpan = "trace_span"
 )
 
-// Event represents a structured event sent over WebSocket
+// Event 表示通过 WebSocket 发送的结构化事件
 type Event struct {
 	EventID    string         `json:"event_id"`
 	TaskID     string         `json:"task_id"`
@@ -44,14 +41,14 @@ type Event struct {
 	Data       map[string]any `json:"data"`
 }
 
-// NewEvent creates a new event with auto-generated ID and timestamp
+// NewEvent 创建一个新事件，自动生成 ID 和时间戳
 func NewEvent(eventType, taskID, agentID string, stepIndex int, data map[string]any) Event {
 	return NewEventWithSubTask(eventType, taskID, "", agentID, stepIndex, data)
 }
 
-// NewEventWithSubTask creates a new event that carries explicit sub-task identity.
-// taskID is the root task; subTaskID identifies the concrete agent execution instance.
-// For the leader agent, subTaskID equals taskID; child agents have their own subTaskID.
+// NewEventWithSubTask 创建一个携带显式 sub-task 身份的新事件。
+// taskID 为根任务；subTaskID 标识具体的 agent 执行实例。
+// 对于 leader agent，subTaskID 等于 taskID；子 agent 有各自的 subTaskID。
 func NewEventWithSubTask(eventType, taskID, subTaskID, agentID string, stepIndex int, data map[string]any) Event {
 	if data == nil {
 		data = make(map[string]any)

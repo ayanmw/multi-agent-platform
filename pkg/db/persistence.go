@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// SessionRecord mirrors the sessions table.
-// It tracks the high-level state of a multi-turn conversation session,
-// including turn count and token/context-size statistics used for compression decisions.
+// SessionRecord 对应 sessions 表。
+// 它追踪多轮对话 session 的高层状态，包括轮次计数和 token/context 大小
+// 统计，用于压缩决策。
 type SessionRecord struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
@@ -26,7 +26,7 @@ type SessionRecord struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// TaskRecord mirrors the tasks table
+// TaskRecord 对应 tasks 表
 type TaskRecord struct {
 	ID           string     `json:"id"`
 	UserInput    string     `json:"user_input"`
@@ -42,7 +42,7 @@ type TaskRecord struct {
 	IsRoot       bool       `json:"is_root"`
 }
 
-// StepRecord mirrors the steps table
+// StepRecord 对应 steps 表
 type StepRecord struct {
 	ID         string         `json:"id"`
 	TaskID     string         `json:"task_id"`
@@ -58,7 +58,7 @@ type StepRecord struct {
 	TokenUsed  int            `json:"token_used"`
 }
 
-// AgentRecord mirrors the agents table
+// AgentRecord 对应 agents 表
 type AgentRecord struct {
 	ID           string         `json:"id"`
 	Name         string         `json:"name"`
@@ -76,19 +76,18 @@ type AgentRecord struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
-// InsertTask persists a task record. If a task with the same ID already exists,
-// it updates the mutable fields (agent_ids, user_input, status, started_at) so
-// that callers can safely re-save a root task after its real agent list is known.
-// This is intentionally idempotent: it keeps the existing row and only mutates
-// the fields passed in the record.
+// InsertTask 持久化一条 task 记录。如果相同 ID 的 task 已存在，
+// 会更新其中的可变字段（agent_ids、user_input、status、started_at），
+// 这样调用方在 root task 的真实 agent 列表确定后可以安全地重新保存。
+// 该操作是幂等的：保留已有行，仅修改 record 中传入的字段。
 func InsertTask(t TaskRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	agentIDsJSON, _ := json.Marshal(t.AgentIDs)
 
-	// Try to update an existing row first. This avoids DELETE+INSERT side effects
-	// (rowid churn, foreign-key ON DELETE behavior) that INSERT OR REPLACE has.
+	// 先尝试更新已有行。这样可以避免 INSERT OR REPLACE 带来的
+	// DELETE+INSERT 副作用（rowid 抖动、外键 ON DELETE 行为）。
 	res, err := DB.Exec(
 		`UPDATE tasks SET agent_ids=?, user_input=?, status=?, started_at=? WHERE id=?`,
 		string(agentIDsJSON), t.UserInput, t.Status, t.StartedAt, t.ID,
@@ -99,7 +98,7 @@ func InsertTask(t TaskRecord) error {
 		}
 	}
 
-	// No existing row: create a new one.
+	// 没有已有行：新建一条。
 	_, err = DB.Exec(
 		`INSERT INTO tasks (id, user_input, status, agent_ids, started_at, session_id, parent_task_id, is_root)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -108,7 +107,7 @@ func InsertTask(t TaskRecord) error {
 	return err
 }
 
-// UpdateTask updates a task's status and result
+// UpdateTask 更新 task 的状态与结果
 func UpdateTask(id string, status string, finalResult string, totalTokens int) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -121,7 +120,7 @@ func UpdateTask(id string, status string, finalResult string, totalTokens int) e
 	return err
 }
 
-// UpdateTaskDuration updates a task's elapsed time.
+// UpdateTaskDuration 更新 task 的耗时。
 func UpdateTaskDuration(id string, durationMs int) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -133,7 +132,7 @@ func UpdateTaskDuration(id string, durationMs int) error {
 	return err
 }
 
-// UpdateTaskSession updates a task's session and parent relationships
+// UpdateTaskSession 更新 task 的 session 和父子关系
 func UpdateTaskSession(id, sessionID, parentTaskID string, isRoot bool) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -145,7 +144,7 @@ func UpdateTaskSession(id, sessionID, parentTaskID string, isRoot bool) error {
 	return err
 }
 
-// InsertSession creates a new session record.
+// InsertSession 创建一条新的 session 记录。
 func InsertSession(s SessionRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -162,7 +161,7 @@ func InsertSession(s SessionRecord) error {
 	return err
 }
 
-// UpdateSession updates a session's root task and status
+// UpdateSession 更新 session 的 root task 和状态
 func UpdateSession(id, rootTaskID, status, userInput string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -174,7 +173,7 @@ func UpdateSession(id, rootTaskID, status, userInput string) error {
 	return err
 }
 
-// UpdateSessionStatus updates a session's status and timestamp
+// UpdateSessionStatus 更新 session 的状态与时间戳
 func UpdateSessionStatus(id, status string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -186,7 +185,7 @@ func UpdateSessionStatus(id, status string) error {
 	return err
 }
 
-// UpdateSessionName updates a session's display name
+// UpdateSessionName 更新 session 的显示名称
 func UpdateSessionName(id, name string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -198,35 +197,35 @@ func UpdateSessionName(id, name string) error {
 	return err
 }
 
-// DeleteSession deletes a session and all its associated data.
-// It cleans up in order: conversations → steps → files → tasks → session.
-// This manual cascade is needed because SQLite foreign keys may not be enforced.
+// DeleteSession 删除一个 session 及其全部关联数据。
+// 清理顺序为：conversations → steps → files → tasks → session。
+// 之所以手动 cascade，是因为 SQLite 的外键可能未被强制启用。
 func DeleteSession(id string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 
-	// Verify session exists before attempting deletion
+	// 删除前先确认 session 存在
 	_, err := QuerySessionByID(id)
 	if err != nil {
 		return fmt.Errorf("session not found: %w", err)
 	}
 
-	// Delete all data associated with tasks in this session, in dependency order:
-	// 1. Delete conversations for tasks in this session
+	// 按依赖顺序删除该 session 下 task 的所有关联数据：
+	// 1. 删除该 session 下 task 的 conversations
 	_, _ = DB.Exec(`DELETE FROM conversations WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
-	// 2. Delete steps for tasks in this session
+	// 2. 删除该 session 下 task 的 steps
 	_, _ = DB.Exec(`DELETE FROM steps WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
-	// 3. Delete files for tasks in this session
+	// 3. 删除该 session 下 task 的 files
 	_, _ = DB.Exec(`DELETE FROM files WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
-	// 4. Delete child tasks (those whose parent is in this session) first
+	// 4. 先删除 parent 在该 session 中的子 task
 	_, _ = DB.Exec(`DELETE FROM tasks WHERE parent_task_id IN (SELECT id FROM tasks WHERE session_id=?)`, id)
-	// 5. Delete all tasks in this session
+	// 5. 删除该 session 下的全部 task
 	_, err = DB.Exec(`DELETE FROM tasks WHERE session_id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete tasks: %w", err)
 	}
-	// 6. Delete the session itself
+	// 6. 删除 session 自身
 	_, err = DB.Exec(`DELETE FROM sessions WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
@@ -234,8 +233,8 @@ func DeleteSession(id string) error {
 	return nil
 }
 
-// QuerySessions returns recent sessions ordered by updated_at DESC.
-// If projectID is non-empty, filters by project_id.
+// QuerySessions 返回按 updated_at 倒序排列的近期 session。
+// projectID 非空时按 project_id 过滤。
 func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -269,7 +268,7 @@ func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	return sessions, rows.Err()
 }
 
-// QuerySessionByID returns a single session by ID.
+// QuerySessionByID 按 ID 返回单个 session。
 func QuerySessionByID(id string) (*SessionRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -285,8 +284,8 @@ func QuerySessionByID(id string) (*SessionRecord, error) {
 	return &s, nil
 }
 
-// QueryTasksBySession returns all tasks belonging to a session (root + children),
-// ordered by is_root DESC then created_at ASC.
+// QueryTasksBySession 返回某个 session 下的全部 task（root + 子 task），
+// 按 is_root 倒序、然后 created_at 升序排列。
 func QueryTasksBySession(sessionID string) ([]TaskRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -315,7 +314,7 @@ func QueryTasksBySession(sessionID string) ([]TaskRecord, error) {
 	return tasks, rows.Err()
 }
 
-// QueryChildTasks returns all child tasks for a parent task
+// QueryChildTasks 返回某个父 task 的全部子 task
 func QueryChildTasks(parentTaskID string) ([]TaskRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -344,7 +343,7 @@ func QueryChildTasks(parentTaskID string) ([]TaskRecord, error) {
 	return tasks, rows.Err()
 }
 
-// AggregateSessionTokens sums total tokens across all tasks in a session
+// AggregateSessionTokens 汇总某个 session 下所有 task 的 total_tokens 总和
 func AggregateSessionTokens(sessionID string) (int, error) {
 	if DB == nil {
 		return 0, fmt.Errorf("db not initialized")
@@ -356,7 +355,7 @@ func AggregateSessionTokens(sessionID string) (int, error) {
 	return total, err
 }
 
-// AggregateSessionDuration sums task durations across all tasks in a session.
+// AggregateSessionDuration 汇总某个 session 下所有 task 的 duration_ms 总和。
 func AggregateSessionDuration(sessionID string) (int, error) {
 	if DB == nil {
 		return 0, fmt.Errorf("db not initialized")
@@ -368,7 +367,7 @@ func AggregateSessionDuration(sessionID string) (int, error) {
 	return total, err
 }
 
-// InsertStep creates a new step record
+// InsertStep 创建一条新的 step 记录
 func InsertStep(s StepRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -383,7 +382,7 @@ func InsertStep(s StepRecord) error {
 	return err
 }
 
-// InsertConversation adds a message to the conversation history
+// InsertConversation 向对话历史追加一条消息
 func InsertConversation(id, taskID, role, content string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -395,7 +394,7 @@ func InsertConversation(id, taskID, role, content string) error {
 	return err
 }
 
-// QueryTasks lists recent tasks (newest first), limited
+// QueryTasks 列出近期的 task（最新优先），按 limit 截断
 func QueryTasks(limit int) ([]TaskRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -424,7 +423,7 @@ func QueryTasks(limit int) ([]TaskRecord, error) {
 	return tasks, rows.Err()
 }
 
-// QueryTaskByID returns a single task by ID
+// QueryTaskByID 按 ID 返回单个 task
 func QueryTaskByID(id string) (*TaskRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -444,7 +443,7 @@ func QueryTaskByID(id string) (*TaskRecord, error) {
 	return &t, nil
 }
 
-// QueryStepsByTask returns all steps for a task, ordered by creation time
+// QueryStepsByTask 返回某个 task 的全部 step，按创建时间排序
 func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -471,7 +470,7 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 	return steps, rows.Err()
 }
 
-// InsertAgent creates a new agent record
+// InsertAgent 创建一条新的 agent 记录
 func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string, isDefault bool) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -485,7 +484,7 @@ func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey st
 	return err
 }
 
-// QueryAgents returns all agents ordered by creation time
+// QueryAgents 返回所有 agent，按创建时间排序
 func QueryAgents() ([]AgentRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -517,7 +516,7 @@ func QueryAgents() ([]AgentRecord, error) {
 	return agents, rows.Err()
 }
 
-// QueryAgentByID returns a single agent by ID
+// QueryAgentByID 按 ID 返回单个 agent
 func QueryAgentByID(id string) (*AgentRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -540,7 +539,7 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	return &a, nil
 }
 
-// UpdateAgent updates an existing agent record
+// UpdateAgent 更新一条已有 agent 记录
 func UpdateAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -555,7 +554,7 @@ func UpdateAgent(id, name, description, systemPrompt, model, endpoint, apiKey st
 	return err
 }
 
-// DeleteAgent removes an agent by ID
+// DeleteAgent 按 ID 删除一个 agent
 func DeleteAgent(id string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -564,25 +563,25 @@ func DeleteAgent(id string) error {
 	return err
 }
 
-// SeedDefaultAgent ensures a default agent exists in the database.
-// If no agent with is_default=true exists, it creates one.
-// This is called at startup so the system always has a usable agent.
+// SeedDefaultAgent 确保数据库中存在一个 default agent。
+// 如果不存在 is_default=true 的 agent，则创建一个。
+// 启动时调用，使系统始终有可用 agent。
 func SeedDefaultAgent() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 
-	// Check if a default agent already exists
+	// 检查是否已存在 default agent
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM agents WHERE is_default=1").Scan(&count)
 	if err != nil {
 		return fmt.Errorf("check default agent: %w", err)
 	}
 	if count > 0 {
-		return nil // Default agent already exists
+		return nil // default agent 已存在
 	}
 
-	// Create the default agent
+	// 创建 default agent
 	toolsJSON := `["run_shell","write_file","read_file"]`
 	_, err = DB.Exec(
 		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
@@ -597,7 +596,7 @@ func SeedDefaultAgent() error {
 	return nil
 }
 
-// ToolRecord mirrors the tools table for dynamic tool registration.
+// ToolRecord 对应 tools 表，用于动态 tool 注册。
 type ToolRecord struct {
 	Name        string
 	Description string
@@ -606,7 +605,7 @@ type ToolRecord struct {
 	CreatedAt   time.Time
 }
 
-// InsertTool persists a new dynamic tool into the tools table.
+// InsertTool 向 tools 表持久化一个新的动态 tool。
 func InsertTool(name, description string, schema map[string]any, enabled bool) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -619,7 +618,7 @@ func InsertTool(name, description string, schema map[string]any, enabled bool) e
 	return err
 }
 
-// DeleteTool removes a dynamic tool from the tools table by name.
+// DeleteTool 按 name 从 tools 表删除一个动态 tool。
 func DeleteTool(name string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -628,7 +627,7 @@ func DeleteTool(name string) error {
 	return err
 }
 
-// QueryTools returns all tools from the tools table, ordered by creation time.
+// QueryTools 返回 tools 表中的全部 tool，按创建时间排序。
 func QueryTools() ([]ToolRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -655,8 +654,8 @@ func QueryTools() ([]ToolRecord, error) {
 	return tools, rows.Err()
 }
 
-// ProjectRecord mirrors the projects table.
-// Projects are the top-level organizational unit — each session belongs to a project.
+// ProjectRecord 对应 projects 表。
+// project 是顶层组织单元——每个 session 都隶属于某个 project。
 type ProjectRecord struct {
 	ID               string         `json:"id"`
 	Name             string         `json:"name"`
@@ -667,7 +666,7 @@ type ProjectRecord struct {
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
-// InsertProject creates a new project record.
+// InsertProject 创建一条新的 project 记录。
 func InsertProject(p ProjectRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -681,7 +680,7 @@ func InsertProject(p ProjectRecord) error {
 	return err
 }
 
-// QueryProjects returns all projects ordered by updated_at DESC.
+// QueryProjects 返回所有 project，按 updated_at 倒序排列。
 func QueryProjects() ([]ProjectRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -708,7 +707,7 @@ func QueryProjects() ([]ProjectRecord, error) {
 	return projects, rows.Err()
 }
 
-// QueryProjectByID returns a single project by ID.
+// QueryProjectByID 按 ID 返回单个 project。
 func QueryProjectByID(id string) (*ProjectRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -726,7 +725,7 @@ func QueryProjectByID(id string) (*ProjectRecord, error) {
 	return &p, nil
 }
 
-// UpdateProject updates an existing project's metadata.
+// UpdateProject 更新已有 project 的元数据。
 func UpdateProject(id, name, description, workingDirectory string, config map[string]any) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -740,38 +739,38 @@ func UpdateProject(id, name, description, workingDirectory string, config map[st
 	return err
 }
 
-// DeleteProject deletes a project and all associated data.
-// Cascade order: session_messages → conversations → steps → files → tasks
-//   → sessions → memories (scope=project with matching project_id) → project.
-// This manual cascade is needed because SQLite foreign keys may not be enforced.
+// DeleteProject 删除一个 project 及其全部关联数据。
+// cascade 顺序：session_messages → conversations → steps → files → tasks
+//   → sessions → memories（scope=project 且 project_id 匹配）→ project。
+// 之所以手动 cascade，是因为 SQLite 的外键可能未被强制启用。
 func DeleteProject(id string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 
-	// Verify project exists before attempting deletion
+	// 删除前先确认 project 存在
 	_, err := QueryProjectByID(id)
 	if err != nil {
 		return fmt.Errorf("project not found: %w", err)
 	}
 
-	// Delete session_messages for sessions in this project
+	// 删除该 project 下 session 的 session_messages
 	_, _ = DB.Exec(`DELETE FROM session_messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id=?)`, id)
-	// Delete conversations for tasks in sessions in this project
+	// 删除该 project 下 session 中 task 的 conversations
 	_, _ = DB.Exec(`DELETE FROM conversations WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
-	// Delete steps for tasks in sessions in this project
+	// 删除该 project 下 session 中 task 的 steps
 	_, _ = DB.Exec(`DELETE FROM steps WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
-	// Delete files for tasks in sessions in this project
+	// 删除该 project 下 session 中 task 的 files
 	_, _ = DB.Exec(`DELETE FROM files WHERE task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
-	// Delete child tasks first (those whose parent is in sessions in this project)
+	// 先删除 parent 在该 project session 中的子 task
 	_, _ = DB.Exec(`DELETE FROM tasks WHERE parent_task_id IN (SELECT t.id FROM tasks t JOIN sessions s ON t.session_id=s.id WHERE s.project_id=?)`, id)
-	// Delete all tasks in sessions in this project
+	// 删除该 project 下 session 中的全部 task
 	_, _ = DB.Exec(`DELETE FROM tasks WHERE session_id IN (SELECT id FROM sessions WHERE project_id=?)`, id)
-	// Delete all sessions in this project
+	// 删除该 project 下的全部 session
 	_, _ = DB.Exec(`DELETE FROM sessions WHERE project_id=?`, id)
-	// Delete project-scoped memories for this project
+	// 删除该 project 的 project 作用域 memory
 	_, _ = DB.Exec(`DELETE FROM memories WHERE scope='project' AND project_id=?`, id)
-	// Delete the project itself
+	// 删除 project 自身
 	_, err = DB.Exec(`DELETE FROM projects WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete project: %w", err)
@@ -779,8 +778,8 @@ func DeleteProject(id string) error {
 	return nil
 }
 
-// SessionMessageRecord mirrors the session_messages table.
-// Each row represents one message in a multi-turn conversation within a session.
+// SessionMessageRecord 对应 session_messages 表。
+// 每行表示 session 内多轮对话中的一条消息。
 type SessionMessageRecord struct {
 	ID         string    `json:"id"`
 	SessionID  string    `json:"session_id"`
@@ -794,7 +793,7 @@ type SessionMessageRecord struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// InsertSessionMessage creates a new session message record.
+// InsertSessionMessage 创建一条新的 session message 记录。
 func InsertSessionMessage(m SessionMessageRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -807,7 +806,7 @@ func InsertSessionMessage(m SessionMessageRecord) error {
 	return err
 }
 
-// QuerySessionMessages returns all messages for a session, ordered by turn_index ASC, created_at ASC.
+// QuerySessionMessages 返回某个 session 的全部消息，按 turn_index 升序、created_at 升序排列。
 func QuerySessionMessages(sessionID string) ([]SessionMessageRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -832,9 +831,8 @@ func QuerySessionMessages(sessionID string) ([]SessionMessageRecord, error) {
 	return msgs, rows.Err()
 }
 
-// QuerySessionMessagesByTask returns all messages for a specific task,
-// ordered by turn_index ASC, created_at ASC. This is the primary source for
-// reconstructing the LLM context window of a persisted task.
+// QuerySessionMessagesByTask 返回某个 task 的全部消息，按 turn_index 升序、
+// created_at 升序排列。这是重建某个已持久化 task 的 LLM context window 的主数据源。
 func QuerySessionMessagesByTask(taskID string) ([]SessionMessageRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -859,7 +857,7 @@ func QuerySessionMessagesByTask(taskID string) ([]SessionMessageRecord, error) {
 	return msgs, rows.Err()
 }
 
-// DeleteSessionMessages deletes all messages for a session.
+// DeleteSessionMessages 删除某个 session 的全部消息。
 func DeleteSessionMessages(sessionID string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -868,8 +866,8 @@ func DeleteSessionMessages(sessionID string) error {
 	return err
 }
 
-// DeleteSessionMessagesBeforeTurn deletes all messages with turn_index < the given value.
-// Used after compression to remove old messages that have been summarized.
+// DeleteSessionMessagesBeforeTurn 删除 turn_index 小于给定值的全部消息。
+// 压缩完成后用于移除已被摘要的旧消息。
 func DeleteSessionMessagesBeforeTurn(sessionID string, turnIndex int) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -881,7 +879,7 @@ func DeleteSessionMessagesBeforeTurn(sessionID string, turnIndex int) error {
 	return err
 }
 
-// UpdateSessionTurnCount increments the turn_count for a session.
+// UpdateSessionTurnCount 将 session 的 turn_count 加 1。
 func UpdateSessionTurnCount(sessionID string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -893,7 +891,7 @@ func UpdateSessionTurnCount(sessionID string) error {
 	return err
 }
 
-// UpdateSessionContextSize updates context_size and total_tokens for a session.
+// UpdateSessionContextSize 更新 session 的 context_size 和 total_tokens。
 func UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -905,7 +903,7 @@ func UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int
 	return err
 }
 
-// QuerySessionsByProject returns sessions filtered by project_id, ordered by updated_at DESC.
+// QuerySessionsByProject 返回按 project_id 过滤的 session，按 updated_at 倒序排列。
 func QuerySessionsByProject(projectID string, limit int) ([]SessionRecord, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -930,25 +928,25 @@ func QuerySessionsByProject(projectID string, limit int) ([]SessionRecord, error
 	return sessions, rows.Err()
 }
 
-// SeedDefaultProject ensures a default project exists in the database.
-// If no project with id='default' exists, it creates one.
-// This is called at startup so the system always has a usable project.
+// SeedDefaultProject 确保数据库中存在 default project。
+// 如果不存在 id='default' 的 project，则创建一个。
+// 启动时调用，使系统始终有可用 project。
 func SeedDefaultProject() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 
-	// Check if the default project already exists
+	// 检查 default project 是否已存在
 	var count int
 	err := DB.QueryRow("SELECT COUNT(*) FROM projects WHERE id='default'").Scan(&count)
 	if err != nil {
 		return fmt.Errorf("check default project: %w", err)
 	}
 	if count > 0 {
-		return nil // Default project already exists
+		return nil // default project 已存在
 	}
 
-	// Create the default project
+	// 创建 default project
 	_, err = DB.Exec(
 		`INSERT INTO projects (id, name, description, working_directory, config)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -960,15 +958,14 @@ func SeedDefaultProject() error {
 	return nil
 }
 
-// AgentBusMessage mirrors the agent_messages table.
+// AgentBusMessage 对应 agent_messages 表。
 //
-// Every message routed through the AgentBus (internal/orchestrator.AgentBus)
-// is persisted here so the frontend can render a full timeline of interagent
-// communication for a task via GET /api/tasks/:id/agent-messages.
+// 每条经由 AgentBus（internal/orchestrator.AgentBus）路由的消息都会被
+// 持久化到这里，前端可通过 GET /api/tasks/:id/agent-messages 渲染某个 task
+// 的完整 inter-agent 通信时间线。
 //
-// Metadata is stored as a JSON-encoded TEXT column — keeping it opaque avoids
-// schema churn when new metadata keys are added (e.g. correlation ID,
-// timestamps from the sender, trace context).
+// Metadata 以 JSON 编码的 TEXT 列存储——保持 opaque 可在新增 metadata key
+// （如 correlation ID、发送方时间戳、trace context）时避免 schema 频繁变动。
 //
 // SubTaskID 是目标子任务（接收方）；FromSubTaskID 是发送方子任务。两者均
 // 由 Phase 7-J 数据库迁移加入，用于前端按子任务时间线精确展示消息流向。
@@ -985,7 +982,7 @@ type AgentBusMessage struct {
 	CreatedAt     time.Time         `json:"created_at"`
 }
 
-// ApprovalRecord mirrors the approvals table (Phase 7-I).
+// ApprovalRecord 对应 approvals 表（Phase 7-I）。
 // 记录每个高风险工具调用的审批请求及其最终决议（包括委托给 leader 的情况）。
 type ApprovalRecord struct {
 	ID                   string         `json:"id"`
@@ -1003,8 +1000,8 @@ type ApprovalRecord struct {
 	DecidedAt            *time.Time     `json:"decided_at"`
 }
 
-// InsertApproval persists a new approval request record.
-// The Approved field is nil until a decision is recorded.
+// InsertApproval 持久化一条新的审批请求记录。
+// Approved 字段在记录决议前为 nil。
 func InsertApproval(r ApprovalRecord) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -1019,7 +1016,7 @@ func InsertApproval(r ApprovalRecord) error {
 	return err
 }
 
-// UpdateApprovalLeaderDecision updates the leader decision fields for an approval.
+// UpdateApprovalLeaderDecision 更新某次审批的 leader 决策字段。
 func UpdateApprovalLeaderDecision(approvalID string, approved bool, reason string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -1032,11 +1029,10 @@ func UpdateApprovalLeaderDecision(approvalID string, approved bool, reason strin
 	return err
 }
 
-// InsertAgentMessage persists a single AgentBus message.
+// InsertAgentMessage 持久化单条 AgentBus 消息。
 //
-// Errors from JSON-marshalling Metadata are intentionally swallowed: an empty
-// metadata blob is still a valid row, and we'd rather lose a metadata key than
-// drop the entire message because of a serialisation glitch.
+// Metadata JSON 序列化失败的错误被有意吞掉：空的 metadata blob 仍是有效行，
+// 我们宁可丢一个 metadata key，也不愿因为序列化小故障而丢掉整条消息。
 func InsertAgentMessage(m AgentBusMessage) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -1050,12 +1046,10 @@ func InsertAgentMessage(m AgentBusMessage) error {
 	return err
 }
 
-// QueryAgentMessages returns all AgentBus messages for a task ordered by
-// created_at ASC, id ASC (id is the tie-breaker for messages written in the
-// same SQLite CURRENT_TIMESTAMP second).
+// QueryAgentMessages 返回某个 task 的全部 AgentBus 消息，按 created_at 升序、
+// id 升序排列（id 用于同一 SQLite CURRENT_TIMESTAMP 秒内写入的消息作为并列排序的 tie-breaker）。
 //
-// If the task has no messages, returns an empty slice (not nil) so caller can
-// JSON-encode it directly without a null check.
+// 若 task 没有消息，返回空切片（非 nil），便于调用方直接 JSON 编码而无需 null 判断。
 func QueryAgentMessages(taskID string) ([]AgentBusMessage, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -1076,7 +1070,7 @@ func QueryAgentMessages(taskID string) ([]AgentBusMessage, error) {
 		if err := rows.Scan(&m.ID, &m.TaskID, &m.SubTaskID, &m.FromSubTaskID, &m.FromAgentID, &m.ToAgentID, &m.Type, &m.Content, &metadataJSON, &m.CreatedAt); err != nil {
 			return nil, err
 		}
-		// Metadata may be NULL/empty for legacy rows; tolerate unmarshal failure.
+		// 老行的 Metadata 可能为 NULL 或空字符串；容忍反序列化失败。
 		if metadataJSON != "" {
 			_ = json.Unmarshal([]byte(metadataJSON), &m.Metadata)
 		}

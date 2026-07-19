@@ -1,13 +1,13 @@
-// migrate.go — automatic database schema migration
+// migrate.go — 自动数据库 schema migration
 //
-// SQLite's CREATE TABLE IF NOT EXISTS is idempotent but doesn't add new columns
-// to existing tables. We implement a lightweight migration system that:
-//  1. Tracks applied migrations in a `schema_migrations` table
-//  2. Runs pending migrations in order on startup
-//  3. Migrations are defined as a list of {version, description, sql} entries
+// SQLite 的 CREATE TABLE IF NOT EXISTS 是幂等的，但无法为已存在的表新增列。
+// 我们实现了一套轻量级 migration 系统：
+//  1. 在 `schema_migrations` 表中记录已应用的 migration
+//  2. 启动时按顺序执行待应用的 migration
+//  3. migration 以 {version, description, sql} 列表形式定义
 //
-// This mimics GORM's AutoMigrate behavior — add a column to an existing table
-// by adding a new migration entry. No manual DDL needed.
+// 这模仿了 GORM 的 AutoMigrate 行为——为既有表新增列只需追加一条 migration
+// 条目，无需手写 DDL。
 package db
 
 import (
@@ -16,33 +16,33 @@ import (
 	"strings"
 )
 
-// Migration represents a single schema change.
+// Migration 表示一次单一的 schema 变更。
 type Migration struct {
-	Version     int    // monotonically increasing version number
-	Description string // human-readable description
-	SQL         string // the DDL statement to execute
+	Version     int    // 单调递增的版本号
+	Description string // 人类可读的描述
+	SQL         string // 待执行的 DDL 语句
 }
 
-// All migrations in chronological order.
-// Add new migrations at the END of the list. Never reorder or delete existing entries.
+// 所有 migration，按时间顺序排列。
+// 新的 migration 必须追加到列表末尾，禁止重排或删除已有条目。
 var migrations = []Migration{
-	// v1: Initial schema — all tables as defined in database.go createTables()
-	// This migration is a no-op because createTables() handles the initial creation.
-	// We just seed the schema_migrations table so future migrations can run.
+	// v1：初始 schema —— 即 database.go createTables() 中定义的所有表。
+	// 本 migration 是 no-op，因为 createTables() 已负责初始建表。
+	// 仅用于给 schema_migrations 表播种，以便后续 migration 能正常执行。
 	{
 		Version:     1,
 		Description: "Initial schema (createTables handles table creation)",
 		SQL:         `SELECT 1`, // no-op, createTables() already ran
 	},
 
-	// v2: Add is_default column to agents table
+	// v2：为 agents 表新增 is_default 列
 	{
 		Version:     2,
 		Description: "Add is_default BOOLEAN column to agents table",
 		SQL:         `ALTER TABLE agents ADD COLUMN is_default BOOLEAN DEFAULT 0`,
 	},
 
-	// v3: Add session_id, parent_task_id, is_root columns to tasks table
+	// v3：为 tasks 表新增 session_id、parent_task_id、is_root 列
 	{
 		Version:     3,
 		Description: "Add session_id, parent_task_id, is_root columns to tasks table",
@@ -51,15 +51,15 @@ ALTER TABLE tasks ADD COLUMN parent_task_id TEXT;
 ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	},
 
-	// v4: Backfill root_task_id for existing sessions that have root tasks
+	// v4：为已有 session 中存在 root task 的行回填 root_task_id
 	{
 		Version:     4,
 		Description: "Backfill root_task_id for existing sessions from their root tasks",
 		SQL:         `UPDATE sessions SET root_task_id = (SELECT id FROM tasks WHERE tasks.session_id = sessions.id AND tasks.is_root = 1 LIMIT 1) WHERE (root_task_id = '' OR root_task_id IS NULL)`,
 	},
 
-	// v5: Create projects table and seed default project.
-	// Projects serve as the top-level organizational unit for grouping sessions.
+	// v5：创建 projects 表并播种 default project。
+	// projects 作为顶层组织单元，用于对 session 进行分组。
 	{
 		Version:     5,
 		Description: "Create projects table and seed default project",
@@ -75,7 +75,7 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		INSERT OR IGNORE INTO projects (id, name, description) VALUES ('default', 'Default Project', 'Default project created during migration')`,
 	},
 
-	// v6: Create session_messages table for multi-turn conversation tracking.
+	// v6：创建 session_messages 表，用于多轮对话追踪。
 	{
 		Version:     6,
 		Description: "Create session_messages table for multi-turn conversations",
@@ -95,8 +95,8 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		)`,
 	},
 
-	// v7: Extend sessions, tasks, and memories tables with new columns
-	// for project association, turn tracking, and memory scoping.
+	// v7：扩展 sessions、tasks、memories 表，新增用于项目关联、
+	// 轮次追踪以及 memory 作用域的列。
 	{
 		Version:     7,
 		Description: "Add project_id, turn_count, total_tokens, context_size to sessions; turn_index to tasks; scope to memories",
@@ -108,23 +108,23 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'project'`,
 	},
 
-	// v8: Placeholder migration (no-op) — v8 reserved for future schema change
+	// v8：占位 migration（no-op）—— v8 保留给未来的 schema 变更
 	{
 		Version:     8,
 		Description: "Placeholder migration (no-op) — v8 reserved for future schema change",
 		SQL:         `SELECT 1`,
 	},
 
-	// v9: Add session_id column to memories table for session-scoped memories
+	// v9：为 memories 表新增 session_id 列，用于 session 作用域的 memory
 	{
 		Version:     9,
 		Description: "Add session_id column to memories table for session-scoped memories",
 		SQL:         `ALTER TABLE memories ADD COLUMN session_id TEXT DEFAULT ''`,
 	},
 
-	// v10: Create cost_records table for LLM cost tracking.
-	// Tracks every LLM call's token consumption and USD cost, indexed by
-	// task, session, and project for multi-dimensional cost reporting.
+	// v10：创建 cost_records 表，用于 LLM 成本追踪。
+	// 记录每次 LLM 调用的 token 消耗与 USD 成本，按 task、session、project
+	// 建立索引以支持多维成本报表。
 	{
 		Version:     10,
 		Description: "Create cost_records table for LLM call cost tracking",
@@ -149,13 +149,12 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_cost_records_project ON cost_records(project_id);`,
 	},
 
-	// v11: Add integer cost_cents column to cost_records for precise accounting.
+	// v11：为 cost_records 新增整数型 cost_cents 列，用于精确记账。
 	//
-	// Existing rows are backfilled from cost_usd*100 so the CostRepository can
-	// read all rows with a non-null cost_cents value. SQLite does not have ALTER
-	// ADD COLUMN IF NOT EXISTS, so failures because the column already exists
-	// are silently ignored by RunMigrations (only non-"duplicate column name"
-	// errors are logged, to avoid noise on every startup).
+	// 旧行会从 cost_usd*100 回填，以便 CostRepository 读取所有行时
+	// cost_cents 都不为空。SQLite 没有 ALTER ADD COLUMN IF NOT EXISTS，
+	// 因此当列已存在时失败会被 RunMigrations 静默忽略（只有非
+	// "duplicate column name" 的错误才会被打印，避免每次启动刷屏）。
 	{
 		Version:     11,
 		Description: "Add cost_cents column to cost_records for integer precision",
@@ -163,9 +162,9 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		UPDATE cost_records SET cost_cents = CAST(ROUND(cost_usd * 100) AS INTEGER) WHERE cost_cents = 0 AND cost_usd <> 0;`,
 	},
 
-	// v12: Create users and api_keys tables for API key authentication.
-	// users stores user identity and role; api_keys stores bcrypt-hashed keys
-	// with prefix for fast lookup during verification.
+	// v12：创建 users 和 api_keys 表，用于 API key 鉴权。
+	// users 存储用户身份与角色；api_keys 存储经 bcrypt 哈希的 key，
+	// 并保留 prefix 以便校验时快速查找。
 	{
 		Version:     12,
 		Description: "Create users and api_keys tables for API key auth",
@@ -190,9 +189,9 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);`,
 	},
 
-	// v13: Create mock_scripts table for deterministic LLM mock responses.
-	// Mock scripts store case-specific response sequences and optional input
-	// keyword matching rules for LLM testing without calling real providers.
+	// v13：创建 mock_scripts 表，用于确定性的 LLM mock 响应。
+	// mock scripts 存储 case 专属的响应序列，以及可选的输入关键词匹配规则，
+	// 便于在不调用真实 provider 的情况下测试 LLM。
 	{
 		Version:     13,
 		Description: "Create mock_scripts table for LLM mock response sequences",
@@ -208,31 +207,29 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_mock_scripts_case_id ON mock_scripts(case_id);`,
 	},
 
-	// v14: Add duration_ms column to tasks table for task-level elapsed time tracking.
+	// v14：为 tasks 表新增 duration_ms 列，用于任务级耗时追踪。
 	{
 		Version:     14,
 		Description: "Add duration_ms column to tasks table",
 		SQL:         `ALTER TABLE tasks ADD COLUMN duration_ms INTEGER DEFAULT 0`,
 	},
 
-	// v15: Add workspace_dir and workspace_auto columns to sessions table.
+	// v15：为 sessions 表新增 workspace_dir 和 workspace_auto 列。
 	{
 		Version:     15,
 		Description: "Add workspace_dir and workspace_auto columns to sessions table",
 		SQL:         `ALTER TABLE sessions ADD COLUMN workspace_dir TEXT DEFAULT ''; ALTER TABLE sessions ADD COLUMN workspace_auto BOOLEAN DEFAULT 1`,
 	},
 
-	// v16: Create memory_embeddings table for the SqliteVectorStore (Phase 6-F).
+	// v16：为 SqliteVectorStore 创建 memory_embeddings 表（Phase 6-F）。
 	//
-	// Decouples vector storage from the memories table itself: embedding rows
-	// live in their own keyed table so that (a) vector I/O can be batched
-	// without scanning the full memories row, (b) swapping the embedding model
-	// only invalidates a subset (filtered by the model column), and (c) the
-	// ON DELETE CASCADE keeps the table consistent when a memory is removed.
+	// 将向量存储与 memories 表本身解耦：embedding 行存放在独立的、按 key 访问
+	// 的表中，这样 (a) 向量 I/O 可以批量执行而无需扫描完整的 memories 行；
+	// (b) 更换 embedding model 时只需让子集失效（按 model 列过滤）；
+	// (c) ON DELETE CASCADE 在 memory 被删除时保持表一致性。
 	//
-	// The embedding BLOB is a little-endian float32 serialization (length =
-	// dims * 4 bytes). See pkg/db/memory_embedding.go for the encode/decode
-	// helpers and the design rationale.
+	// embedding BLOB 采用小端 float32 序列化（长度 = dims * 4 字节）。
+	// 详见 pkg/db/memory_embedding.go 中的 encode/decode 辅助函数与设计理由。
 	{
 		Version:     16,
 		Description: "Create memory_embeddings table for SqliteVectorStore persistence",
@@ -247,13 +244,12 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);`,
 	},
 
-	// v17: Create cases and case_evaluations tables for the Case management feature.
+	// v17：为 Case 管理功能创建 cases 和 case_evaluations 表。
 	//
-	// cases store built-in or user-defined test cases (contract, prompts, tags,
-	// category). case_evaluations store the result of executing a case against
-	// a task, supporting pass/fail tracking and optional scoring. Both tables
-	// are created idempotently and indexed on the query paths used by the
-	// repository layer in subsequent tasks.
+	// cases 存储内置或用户自定义的测试 case（contract、prompts、tags、
+	// category）；case_evaluations 存储将某个 case 在某个 task 上执行的结果，
+	// 支持 pass/fail 追踪与可选的打分。两张表均以幂等方式创建，并在后续
+	// 任务中 repository 层使用的查询路径上建立索引。
 	{
 		Version:     17,
 		Description: "Create cases and case_evaluations tables",
@@ -286,14 +282,13 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_eval_task ON case_evaluations(task_id);`,
 	},
 
-	// v18: Create agent_messages table for the AgentBus persistence feature.
+	// v18：为 AgentBus 持久化功能创建 agent_messages 表。
 	//
-	// Every inter-agent message routed through the AgentBus is persisted here so
-	// the frontend can fetch the full message history for a task via
-	// GET /api/tasks/:id/agent-messages. The task_id column is indexed because
-	// the primary query path is "all messages for a given task, oldest first".
-	// Metadata is stored as JSON text — keeping it opaque avoids schema churn
-	// when new metadata keys are added.
+	// 每条经由 AgentBus 路由的 inter-agent 消息都会被持久化到这里，前端可通过
+	// GET /api/tasks/:id/agent-messages 拉取某个 task 的完整消息历史。task_id
+	// 列建立了索引，因为主要查询路径是"给定 task 的全部消息，按时间升序"。
+	// metadata 以 JSON 文本存储——保持 opaque 可以在新增 metadata key 时
+	// 避免 schema 频繁变动。
 	{
 		Version:     18,
 		Description: "Create agent_messages table for AgentBus persistence",
@@ -310,11 +305,10 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_agent_messages_task_id ON agent_messages(task_id);`,
 	},
 
-	// v19: Create approvals table for leader delegation of approval decisions.
+	// v19：创建 approvals 表，用于 leader 代理审批决策。
 	//
-	// Each row records a high-risk tool call that required approval, including
-	// whether the request was delegated to the leader and the leader's final
-	// decision. This supports auditability, replay, and frontend dashboards.
+	// 每行记录一个需要审批的高风险 tool call，包括该请求是否被委托给 leader
+	// 以及 leader 的最终决策。用于支持可审计性、回放以及前端 dashboard。
 	{
 		Version:     19,
 		Description: "Create approvals table for leader delegated approvals",
@@ -350,7 +344,7 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		ALTER TABLE agent_messages ADD COLUMN from_sub_task_id TEXT DEFAULT '';`,
 	},
 
-	// v21: audit_records table for compliance and forensics (Phase 7-C).
+	// v21：audit_records 表，用于合规与取证（Phase 7-C）。
 	{
 		Version:     21,
 		Description: "Create audit_records table",
@@ -371,7 +365,7 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 	},
 }
 
-// createMigrationsTable ensures the schema_migrations tracking table exists.
+// createMigrationsTable 确保 schema_migrations 追踪表存在。
 func createMigrationsTable() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -384,7 +378,7 @@ func createMigrationsTable() error {
 	return err
 }
 
-// getAppliedMigrations returns the set of migration versions already applied.
+// getAppliedMigrations 返回已应用的 migration 版本集合。
 func getAppliedMigrations() (map[int]bool, error) {
 	rows, err := DB.Query("SELECT version FROM schema_migrations ORDER BY version")
 	if err != nil {
@@ -403,8 +397,8 @@ func getAppliedMigrations() (map[int]bool, error) {
 	return applied, rows.Err()
 }
 
-// RunMigrations executes all pending migrations.
-// Called after createTables() in Init() so that tables already exist.
+// RunMigrations 执行所有待应用的 migration。
+// 在 Init() 中于 createTables() 之后调用，此时表已存在。
 func RunMigrations() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
@@ -421,15 +415,15 @@ func RunMigrations() error {
 
 	for _, m := range migrations {
 		if applied[m.Version] {
-			continue // already applied
+			continue // 已应用
 		}
 
 		log.Printf("[Migration] v%d: %s", m.Version, m.Description)
 
-		// SQLite doesn't support multiple statements in one Exec call,
-		// so we split on semicolons and execute each statement separately.
-		// Note: this simple split works for our DDL use cases. If we ever
-		// need multi-statement with semicolons inside strings, we'd need a parser.
+		// SQLite 在单次 Exec 调用中不支持多条语句，
+		// 因此按分号拆分后逐条执行。
+		// 注意：这种简单拆分对我们的 DDL 场景足够。如果未来需要在字符串
+		// 字面量内包含分号的多语句，则需要改用真正的 SQL parser。
 		statements := splitSQL(m.SQL)
 
 		for _, stmt := range statements {
@@ -455,7 +449,7 @@ func RunMigrations() error {
 			}
 		}
 
-		// Record the migration as applied
+		// 将该 migration 标记为已应用
 		_, err := DB.Exec(
 			"INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
 			m.Version, m.Description,
@@ -470,8 +464,8 @@ func RunMigrations() error {
 	return nil
 }
 
-// splitSQL splits a SQL string by semicolons, trimming whitespace.
-// Used because SQLite's Exec() handles one statement at a time.
+// splitSQL 按分号拆分 SQL 字符串并去除空白。
+// 之所以需要它，是因为 SQLite 的 Exec() 一次只能处理一条语句。
 func splitSQL(s string) []string {
 	var result []string
 	var current []byte
@@ -486,7 +480,7 @@ func splitSQL(s string) []string {
 			current = append(current, s[i])
 		}
 	}
-	// Don't forget the last statement (no trailing semicolon)
+	// 别忘了最后一条语句（没有结尾分号）
 	stmt := trimSpace(string(current))
 	if stmt != "" {
 		result = append(result, stmt)
