@@ -2,7 +2,7 @@ package agent
 
 import "time"
 
-// Status represents agent execution status
+// Status 表示 agent 执行状态
 type Status string
 
 const (
@@ -22,7 +22,7 @@ const (
 	AgentRoleWorker AgentRole = "worker"
 )
 
-// Agent represents an agent configuration
+// Agent 表示一个 agent 配置
 type Agent struct {
 	ID           string
 	Name         string
@@ -32,13 +32,13 @@ type Agent struct {
 	APIKey       string
 	Temperature  float32
 	MaxTokens    int
-	Tools        []string // allowed tool names
+	Tools        []string // 允许使用的 tool 名称
 	Role         AgentRole
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
 
-// StepType represents the type of a step in the agent loop
+// StepType 表示 agent 循环中一个 step 的类型
 type StepType string
 
 const (
@@ -47,7 +47,7 @@ const (
 	StepTypeObservation StepType = "observation"
 )
 
-// Step represents a single step in the agent execution
+// Step 表示 agent 执行过程中的单个 step
 type Step struct {
 	Index      int
 	Type       StepType

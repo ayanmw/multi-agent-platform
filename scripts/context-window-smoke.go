@@ -1,8 +1,8 @@
 //go:build cwsmoke
 
-// context-window-smoke.go — WebSocket client for context_window_snapshot smoke.
+// context-window-smoke.go —— 用于 context_window_snapshot smoke 的 WebSocket 客户端。
 //
-// Run via: go run -tags cwsmoke scripts/context-window-smoke.go <wsURL> <output.json> [deadlineSeconds]
+// 运行方式：go run -tags cwsmoke scripts/context-window-smoke.go <wsURL> <output.json> [deadlineSeconds]
 //
 // 设计要点（稳定性）：
 //   - 每收到一个 context_window_snapshot 事件就立即把当前结果 flush 到 outFile，
@@ -38,7 +38,7 @@ func main() {
 	wsURL := os.Args[1]
 	outFile := os.Args[2]
 
-	// Gorilla requires ws:// or wss:// scheme
+	// Gorilla 要求使用 ws:// 或 wss:// scheme
 	if strings.HasPrefix(wsURL, "http://") {
 		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
 	}

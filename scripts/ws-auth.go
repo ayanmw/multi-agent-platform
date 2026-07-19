@@ -112,7 +112,7 @@ func main() {
 }
 
 // testWSAuth 尝试用指定 header 连接 WS，并读取一段时间内的消息。
-// 返回：是否按预期、详细说明、收到的事件列表。
+// 返回：是否符合预期、详细说明、收到的事件列表。
 func testWSAuth(wsURL string, headers http.Header) (bool, string, []Event) {
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 5 * time.Second

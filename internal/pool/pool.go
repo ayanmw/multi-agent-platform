@@ -1,19 +1,17 @@
-// Package pool implements a centralized Worker Pool for controlling concurrent
-// Agent execution with priority queuing and rate limiting.
+// Package pool 实现一个集中式 Worker Pool，用于通过优先级队列和限流控制并发 Agent 执行。
 //
-// # Architecture
+// # 架构
 //
-// The WorkerPool sits between the HTTP handler layer and the runtime Engine layer.
-// It is the single entry point for all Agent task submission, providing:
+// WorkerPool 位于 HTTP handler 层与 runtime Engine 层之间。
+// 它是所有 Agent 任务提交的唯一入口，提供：
 //
-//  1. Priority queuing — high-priority tasks (e.g., user-initiated) jump ahead of
-//     low-priority tasks (e.g., background batch processing).
-//  2. Concurrency limiting — a semaphore controls the maximum number of Agents
-//     running simultaneously.
-//  3. Task cancellation — each running task can be individually stopped via context.
+//  1. 优先级排队 —— 高优先级任务（如用户主动发起）会排到低优先级任务
+//     （如后台批量处理）之前。
+//  2. 并发限制 —— 通过 semaphore 控制同时运行的最大 Agent 数量。
+//  3. 任务取消 —— 每个运行中的任务都可以通过 context 单独停止。
 //
-// Phase 6-B: This is a minimal viable implementation. Full integration with
-// Engine execution hookup happens alongside the CostTracker integration.
+// Phase 6-B：这是一个最小可用实现。与 Engine 执行挂接的完整集成
+// 会与 CostTracker 集成一同进行。
 package pool
 
 import (
@@ -26,17 +24,17 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 )
 
-// PoolTask represents a single task submitted to the Worker Pool.
+// PoolTask 表示提交到 Worker Pool 的单个任务。
 type PoolTask struct {
 	ID        string
 	AgentID   string
 	UserInput string
-	Priority  int // 0 = highest, 9 = lowest
+	Priority  int // 0 = 最高优先级，9 = 最低优先级
 	Timeout   time.Duration
 	CreatedAt time.Time
 }
 
-// PoolResult holds the execution result.
+// PoolResult 保存执行结果。
 type PoolResult struct {
 	TaskID   string
 	AgentID  string
@@ -46,15 +44,15 @@ type PoolResult struct {
 	Error    error
 }
 
-// taskItem wraps PoolTask with priority for the heap.
+// taskItem 用优先级包装 PoolTask 以供 heap 使用。
 type taskItem struct {
 	task      PoolTask
 	priority  int
-	index     int // heap.Interface requirement
+	index     int // heap.Interface 的要求
 	createdAt time.Time
 }
 
-// priorityQueue implements heap.Interface for min-heap ordering.
+// priorityQueue 实现 heap.Interface，按 min-heap 顺序排列。
 type priorityQueue []*taskItem
 
 func (pq priorityQueue) Len() int { return len(pq) }
@@ -84,7 +82,7 @@ func (pq *priorityQueue) Pop() any {
 	return item
 }
 
-// WorkerPool manages concurrent Agent execution.
+// WorkerPool 管理并发 Agent 执行。
 type WorkerPool struct {
 	workers   int
 	taskQueue *priorityQueue
@@ -94,7 +92,7 @@ type WorkerPool struct {
 	started   bool
 }
 
-// NewWorkerPool creates a new WorkerPool with the given max concurrency.
+// NewWorkerPool 创建一个具有给定最大并发数的 WorkerPool。
 func NewWorkerPool(workers int) *WorkerPool {
 	return &WorkerPool{
 		workers:   workers,
@@ -103,7 +101,7 @@ func NewWorkerPool(workers int) *WorkerPool {
 	}
 }
 
-// Start begins the worker goroutines. idempotent.
+// Start 启动 worker goroutine。幂等。
 func (p *WorkerPool) Start() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -112,10 +110,10 @@ func (p *WorkerPool) Start() {
 	}
 	p.started = true
 	log.Printf("[Pool] Starting %d workers", p.workers)
-	// Workers will be launched per-submit in this simplified implementation.
+	// 在本简化实现中，worker 会在每次 Submit 时单独启动。
 }
 
-// Submit enqueues a task. Blocks if semaphore is full (all workers busy).
+// Submit 将任务入队。当 semaphore 已满（所有 worker 都在忙）时会阻塞。
 func (p *WorkerPool) Submit(task PoolTask) error {
 	p.mu.Lock()
 	if !p.started {
@@ -132,7 +130,7 @@ func (p *WorkerPool) Submit(task PoolTask) error {
 		item.createdAt = time.Now()
 	}
 
-	// Enqueue the task under lock to protect the heap from concurrent mutation.
+	// 在锁保护下将任务入队，以保护 heap 免受并发修改。
 	p.mu.Lock()
 	heap.Push(p.taskQueue, item)
 	p.mu.Unlock()
@@ -141,9 +139,9 @@ func (p *WorkerPool) Submit(task PoolTask) error {
 	return nil
 }
 
-// dispatch runs in a goroutine and processes the next task.
+// dispatch 运行于 goroutine 中，处理下一个任务。
 func (p *WorkerPool) dispatch() {
-	// Acquire semaphore (blocks if all workers busy)
+	// 获取 semaphore（所有 worker 都忙时阻塞）
 	p.semaphore <- struct{}{}
 
 	p.mu.Lock()
@@ -163,7 +161,7 @@ func (p *WorkerPool) dispatch() {
 	p.running.Store(task.ID, cancel)
 	log.Printf("[Pool] Task %s started (priority=%d)", task.ID, task.Priority)
 
-	// Execute task (placeholder — full Engine integration happens in later phase)
+	// 执行任务（占位实现 —— 完整的 Engine 集成将在后续 phase 完成）
 	_ = ctx
 	_ = cancel
 	p.running.Delete(task.ID)
@@ -171,7 +169,7 @@ func (p *WorkerPool) dispatch() {
 	<-p.semaphore
 }
 
-// Stats returns current pool statistics.
+// Stats 返回当前 pool 的统计信息。
 func (p *WorkerPool) Stats() map[string]int {
 	p.mu.Lock()
 	queueLen := p.taskQueue.Len()

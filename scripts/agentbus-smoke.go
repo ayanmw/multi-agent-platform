@@ -1,27 +1,27 @@
-// AgentBus smoke test — verifies inter-agent message passing end-to-end.
+// AgentBus smoke test —— 端到端验证 agent 之间的消息传递。
 //
-// Strategy:
-//   1. Start server on an isolated port + temp DB in mock mode.
-//   2. Inject two mock scripts:
-//      - agent-a: a single text response that says "AGENT_A_RESULT_MARK"
-//      - agent-b: expects a user input that contains "AGENT_A_RESULT_MARK"
-//   3. POST /api/multi-agent with two AgentSpecs where agent_a has OutputTo=["agent_b"].
-//   4. Poll until root task completed.
-//   5. Assert agent_b's final result or steps contain AGENT_A_RESULT_MARK.
+// 策略：
+//   1. 在隔离端口 + 临时 DB 上以 mock 模式启动 server。
+//   2. 注入两个 mock 脚本：
+//      - agent-a：单条文本响应，内容为 "AGENT_A_RESULT_MARK"
+//      - agent-b：期望收到的 user input 中包含 "AGENT_A_RESULT_MARK"
+//   3. POST /api/multi-agent，带两个 AgentSpec，其中 agent_a 的 OutputTo=["agent_b"]。
+//   4. 轮询直到 root task 完成。
+//   5. 断言 agent_b 的最终结果或 steps 中包含 AGENT_A_RESULT_MARK。
 //
-// Run: go run scripts/agentbus-smoke.go
+// 运行：go run scripts/agentbus-smoke.go
 //go:build abusmoke || ignore
 
-// AgentBus smoke test — verifies inter-agent message passing end-to-end.
+// AgentBus smoke test —— 端到端验证 agent 之间的消息传递。
 //
-// Strategy:
-//   1. Start server on an isolated port + temp DB in mock mode.
-//   2. Inject two mock scripts:
-//      - agent-a: a single text response that says "AGENT_A_RESULT_MARK"
-//      - agent-b: expects a user input that contains "AGENT_A_RESULT_MARK"
-//   3. POST /api/multi-agent with two AgentSpecs where agent_a has OutputTo=["agent_b"].
-//   4. Poll until root task completed.
-//   5. Assert agent_b's final result or steps contain AGENT_A_RESULT_MARK.
+// 策略：
+//   1. 在隔离端口 + 临时 DB 上以 mock 模式启动 server。
+//   2. 注入两个 mock 脚本：
+//      - agent-a：单条文本响应，内容为 "AGENT_A_RESULT_MARK"
+//      - agent-b：期望收到的 user input 中包含 "AGENT_A_RESULT_MARK"
+//   3. POST /api/multi-agent，带两个 AgentSpec，其中 agent_a 的 OutputTo=["agent_b"]。
+//   4. 轮询直到 root task 完成。
+//   5. 断言 agent_b 的最终结果或 steps 中包含 AGENT_A_RESULT_MARK。
 //
 // 本文件使用 `//go:build abusmoke || ignore` 构建约束隔离，避免与同目录其它
 // package main 文件在默认 `go test ./...` 构建时因 main 重复声明而冲突。
