@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Session } from '@/composables/useSessionStore'
 import type { Project } from '@/composables/useProjectStore'
 
@@ -65,7 +65,8 @@ const projectGroups = computed(() => {
   for (const p of props.projects) {
     seen.add(p.id)
     const list = sessionMap.get(p.id) || []
-    list.sort((a, b) => b.updatedAt - a.updatedAt)
+    // 按 createdAt 降序：新建在最上。顺序不随点击/更新变化，避免列表反复跳动。
+    list.sort((a, b) => b.createdAt - a.createdAt)
     const isActive = p.id === props.activeProjectId
     groups.push({
       project: p,
@@ -77,7 +78,7 @@ const projectGroups = computed(() => {
   // 包含未注册到 projects 的项目会话（兜底）
   for (const [pid, list] of sessionMap) {
     if (!seen.has(pid)) {
-      list.sort((a, b) => b.updatedAt - a.updatedAt)
+      list.sort((a, b) => b.createdAt - a.createdAt)
       groups.push({
         project: { id: pid, name: pid === 'default' ? 'Default' : pid, description: '', working_directory: '', created_at: '', updated_at: '' },
         sessions: list,
@@ -95,6 +96,21 @@ function toggleCollapse(projectId: string) {
   else next.add(projectId)
   collapsedProjectIds.value = next
 }
+
+// 选中某项目时自动展开该项目分组，避免用户点了项目却还要再点一次箭头才看到
+// 该项目下的 session——这是"查找下面一组 session 比较麻烦"的根因之一。
+watch(
+  () => props.activeProjectId,
+  (pid) => {
+    if (!pid) return
+    if (collapsedProjectIds.value.has(pid)) {
+      const next = new Set(collapsedProjectIds.value)
+      next.delete(pid)
+      collapsedProjectIds.value = next
+    }
+  },
+  { immediate: true },
+)
 
 function statusClass(status: Session['status']): string {
   switch (status) {
@@ -194,7 +210,7 @@ function formatTime(ts: number): string {
               <span v-if="session.totalTokens > 0" class="session-tokens">
                 {{ session.totalTokens }}t
               </span>
-              <span class="session-time">{{ formatTime(session.updatedAt) }}</span>
+              <span class="session-time">{{ formatTime(session.createdAt) }}</span>
             </div>
 
             <div class="session-actions">

@@ -4,6 +4,9 @@ import TopBar from './components/TopBar.vue'
 import DockPanel from './components/DockPanel.vue'
 import SessionDock from './components/SessionDock.vue'
 import InspectorContent from './components/InspectorContent.vue'
+import InspectorFlyout from './components/InspectorFlyout.vue'
+import SessionFiles from './components/SessionFiles.vue'
+import ColumnResizer from './components/ColumnResizer.vue'
 import CommandBar from './components/CommandBar.vue'
 import MobileNav from './components/MobileNav.vue'
 import TimelineTrack from './components/TimelineTrack.vue'
@@ -24,26 +27,38 @@ import { useRecentMods } from './composables/useRecentMods'
 import { useContextWindow } from './composables/useContextWindow'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useSkills } from './composables/useSkills'
+import { useSessionFiles } from './composables/useSessionFiles'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
 /**
  * App.vue — v2 Observable Control Room 根布局
  *
- * 布局策略：
- * 桌面端（>=1024px）：TopBar + 左 Dock（Sessions）+ 主舞台 + 右 Dock（Inspector）+ 底部 CommandBar。
- * 平板端（768–1023px）：Inspector 默认隐藏，可通过 TopBar 切换；Sessions Dock 可折叠。
+ * 布局策略（v2 三栏可调 + 右栏改为文件浏览器 + Inspector 浮窗）：
+ * 桌面端（>=1024px）：
+ *   TopBar + 左 Dock（Sessions，可调宽/隐藏）+ 主舞台 + 右 Dock（Files，可调宽/隐藏）+ 底部 CommandBar。
+ *   Inspector 不再常驻右栏，改为浮在主舞台右上角的迷你卡片（InspectorFlyout），
+ *   点击展开成 90vw 大 Dialog 显示 Memory/RAG/Context/Cases/Agents/Project/Skills/Traces 等重面板。
+ * 平板端（768–1023px）：左 Dock 可折叠；右 Files 栏可折叠；Inspector 仍走浮窗+Dialog。
  * 移动端（<768px）：单一内容区，通过底部 MobileNav 切换 stage/sessions/inspector。
+ *
+ * 三栏宽度与开合状态均持久化到 localStorage，方便用户自由调整。
  */
 const {
   isMobile,
   isTablet,
   isDesktop,
   leftDockOpen,
-  rightInspectorOpen,
+  rightFilesOpen,
   activeMobileTab,
+  leftDockWidth,
+  rightFilesWidth,
+  setLeftDockWidth,
+  setRightFilesWidth,
+  commitWidths,
+  resetWidths,
   toggleLeftDock,
-  toggleRightInspector,
+  toggleRightFiles,
 } = useLayout()
 
 const {
@@ -86,6 +101,7 @@ const { projects, activeProjectId, loadProjects, setActiveProject } = useProject
 const { toasts, showError, showInfo, dismissToast } = useToast()
 const { loadSkills, enableSkill } = useSkills()
 const caseStore = useCaseStore()
+const { setActiveSession: setFilesSession, refreshDir: refreshFilesRoot } = useSessionFiles()
 
 // === Skill / Multi-Agent 状态 ===
 const multiAgentEnabled = ref(false)
@@ -120,6 +136,27 @@ const { setActiveTaskId: setContextWindowTaskId, clear: clearContextWindow } = u
 watch(activeTaskId, (taskId) => {
   setContextWindowTaskId(taskId || '')
 })
+
+// 右栏文件浏览器跟随当前 session：切换 session 时通知 useSessionFiles 重置缓存。
+watch(activeSessionId, (sid) => {
+  if (sid) setFilesSession(sid)
+}, { immediate: true })
+
+// === Inspector 浮窗 / 大 Dialog ===
+const inspectorFlyoutOpen = ref(true)
+const inspectorDialogOpen = ref(false)
+const inspectorInitialTab = ref<string>('sessions')
+
+function toggleInspectorFlyout() {
+  inspectorFlyoutOpen.value = !inspectorFlyoutOpen.value
+}
+function openInspectorDialog(tab?: string) {
+  if (tab) inspectorInitialTab.value = tab
+  inspectorDialogOpen.value = true
+}
+function closeInspectorDialog() {
+  inspectorDialogOpen.value = false
+}
 
 // === 当前任务/会话派生状态 ===
 const currentTask = computed(() => {
@@ -188,13 +225,18 @@ watch(
 )
 
 // === 自动滚动 ===
+// v2 之前只在 sessionTurns.length 变化时滚动，但 step/agent_status/llm_delta 等事件
+// 会让现有 turn 内部内容长高而不增加 turn 数，于是滚动失效。
+// 现在改为：用 task 版本号指纹（status + steps 长度 + totalTokens + 各 agent 步数和）
+// 触发滚动；若用户主动向上离开底部则暂停，直到回到底部或点回底部。
 const mainRef = ref<HTMLElement | null>(null)
 const autoScrollPaused = ref(false)
+const BOTTOM_THRESHOLD = 80
 
 function checkNearBottom(): boolean {
   const el = mainRef.value
   if (!el) return true
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 50
+  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 }
 
 function scrollToBottom() {
@@ -213,6 +255,18 @@ function handleMainScroll() {
   }
 }
 
+/** 任务内容指纹：任何让主舞台内容长高的事件都会改变它。 */
+const taskFingerprint = computed(() => {
+  const t = currentTask.value
+  if (!t) return ''
+  let steps = 0
+  for (const a of Object.values(t.agents || {})) {
+    steps += a.steps?.length || 0
+  }
+  return `${t.status}|${steps}|${t.totalTokens || 0}|${t.durationMs || 0}|${sessionTurns.value.length}`
+})
+
+// turn 数变化（新 turn 出现）→ 滚动到底
 watch(
   () => sessionTurns.value.length,
   () => {
@@ -221,6 +275,22 @@ watch(
     }
   },
 )
+
+// 任务指纹变化（现有 turn 内部内容长高）→ 滚动到底
+watch(
+  taskFingerprint,
+  () => {
+    if (!autoScrollPaused.value) {
+      nextTick(scrollToBottom)
+    }
+  },
+)
+
+// 切换 session/task 时重置暂停状态并尝试滚动到底
+watch(activeTaskId, () => {
+  autoScrollPaused.value = false
+  nextTick(scrollToBottom)
+})
 
 // === 页面加载：连接 WS，加载项目/会话/Agent/Case ===
 onMounted(async () => {
@@ -554,6 +624,19 @@ const connectionStatus = computed<'idle' | 'running' | 'paused' | 'completed' | 
   return 'idle'
 })
 
+// === 文件浏览器：write_file 后刷新当前 session 根目录 ===
+// recentMods 是 write_file 成功的全局日志，每当它新增一项，说明有文件落盘，
+// 顺手刷新当前 session 的根目录列表，让新文件立刻可见。
+watch(
+  () => recentMods.value.length,
+  () => {
+    const sid = activeSessionId.value
+    if (!sid) return
+    // 仅刷新根目录，避免打扰用户已展开的深层目录。
+    refreshFilesRoot(sid, '')
+  },
+)
+
 const showInspectorToggle = computed(() => !isMobile.value)
 </script>
 
@@ -564,8 +647,8 @@ const showInspectorToggle = computed(() => !isMobile.value)
       :status-label="statusLabel"
       :task-status-label="taskStatusLabel"
       :show-inspector-toggle="showInspectorToggle"
-      :inspector-open="rightInspectorOpen"
-      @toggle-inspector="toggleRightInspector"
+      :inspector-open="inspectorFlyoutOpen"
+      @toggle-inspector="toggleInspectorFlyout"
       @toggle-left-dock="toggleLeftDock"
       @toggle-recent-mods="showRecentMods"
       @toggle-model-prices="modelPricesVisible = true"
@@ -573,8 +656,8 @@ const showInspectorToggle = computed(() => !isMobile.value)
       @toggle-keyboard-tips="showTips = true"
     />
 
-    <!-- 桌面三栏布局 -->
-    <div v-if="isDesktop" class="layout-desktop">
+    <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽 -->
+    <div v-if="isDesktop" class="layout-desktop" :style="{ '--left-w': leftDockWidth + 'px', '--right-w': rightFilesWidth + 'px' }">
       <DockPanel side="left" title="Sessions" :open="leftDockOpen" @close="toggleLeftDock">
         <SessionDock
           :projects="projects"
@@ -593,6 +676,14 @@ const showInspectorToggle = computed(() => !isMobile.value)
           @rename-cancel="cancelRenameSession"
         />
       </DockPanel>
+
+      <ColumnResizer
+        v-if="leftDockOpen"
+        side="left"
+        :width="leftDockWidth"
+        @resize="setLeftDockWidth"
+        @resize-end="commitWidths"
+      />
 
       <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
         <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
@@ -620,12 +711,28 @@ const showInspectorToggle = computed(() => !isMobile.value)
         />
       </main>
 
-      <DockPanel side="right" title="Inspector" :open="rightInspectorOpen" @close="toggleRightInspector">
-        <InspectorContent
-          @run-case="handleRunCase"
-          @trigger-skill="handleTriggerSkill"
-        />
+      <ColumnResizer
+        v-if="rightFilesOpen"
+        side="right"
+        :width="rightFilesWidth"
+        @resize="setRightFilesWidth"
+        @resize-end="commitWidths"
+      />
+
+      <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles">
+        <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
+
+      <!-- Inspector 浮窗：浮在主舞台右上角，点击展开成大 Dialog -->
+      <InspectorFlyout
+        v-if="inspectorFlyoutOpen"
+        :task="currentTask"
+        :session-total-tokens="sessionTotalTokens"
+        :session-total-duration="sessionTotalDuration"
+        :ws-status="wsStatus"
+        :agents="agents"
+        @open-dialog="openInspectorDialog"
+      />
     </div>
 
     <!-- 平板双栏布局 -->
@@ -676,17 +783,24 @@ const showInspectorToggle = computed(() => !isMobile.value)
       </main>
 
       <DockPanel
-        v-if="rightInspectorOpen"
+        v-if="rightFilesOpen"
         side="right"
-        title="Inspector"
+        title="Files"
         :open="true"
-        @close="toggleRightInspector"
+        @close="toggleRightFiles"
       >
-        <InspectorContent
-          @run-case="handleRunCase"
-          @trigger-skill="handleTriggerSkill"
-        />
+        <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
+
+      <InspectorFlyout
+        v-if="inspectorFlyoutOpen"
+        :task="currentTask"
+        :session-total-tokens="sessionTotalTokens"
+        :session-total-duration="sessionTotalDuration"
+        :ws-status="wsStatus"
+        :agents="agents"
+        @open-dialog="openInspectorDialog"
+      />
     </div>
 
     <!-- 移动端单视图 -->
@@ -731,11 +845,8 @@ const showInspectorToggle = computed(() => !isMobile.value)
         </DockPanel>
       </div>
       <div v-else-if="activeMobileTab === 'inspector'" class="mobile-tab-view">
-        <DockPanel side="right" title="Inspector" :open="true" @close="activeMobileTab = 'stage'">
-          <InspectorContent
-            @run-case="handleRunCase"
-            @trigger-skill="handleTriggerSkill"
-          />
+        <DockPanel side="right" title="Files" :open="true" @close="activeMobileTab = 'stage'">
+          <SessionFiles :session-id="activeSessionId || ''" />
         </DockPanel>
       </div>
     </div>
@@ -756,6 +867,30 @@ const showInspectorToggle = computed(() => !isMobile.value)
     />
 
     <MobileNav v-if="isMobile" />
+
+    <!-- Inspector 大 Dialog（90vw）：承载 Memory/RAG/Context/Cases/Agents/Project/Skills/Traces 重面板 -->
+    <Teleport to="body">
+      <Transition name="inspector-dialog">
+        <div v-if="inspectorDialogOpen" class="inspector-dialog-overlay" @click.self="closeInspectorDialog">
+          <div class="inspector-dialog-panel">
+            <div class="inspector-dialog-header">
+              <span class="inspector-dialog-title">🧭 Inspector</span>
+              <div class="inspector-dialog-actions">
+                <button class="inspector-dialog-reset" title="Reset column widths" @click="resetWidths">↺ Reset Layout</button>
+                <button class="inspector-dialog-close" @click="closeInspectorDialog" title="Close">×</button>
+              </div>
+            </div>
+            <div class="inspector-dialog-body">
+              <InspectorContent
+                :initial-tab="inspectorInitialTab"
+                @run-case="handleRunCase"
+                @trigger-skill="handleTriggerSkill"
+              />
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- Toast / Dialogs -->
     <Toast :toasts="toasts" @dismiss="dismissToast" />
@@ -832,6 +967,7 @@ const showInspectorToggle = computed(() => !isMobile.value)
   overflow-y: auto;
   padding: var(--space-md);
   background: var(--bg-canvas, #0b0d10);
+  position: relative;
 }
 
 .mobile-tab-view {
@@ -882,6 +1018,91 @@ const showInspectorToggle = computed(() => !isMobile.value)
   cursor: pointer;
 }
 
+/* === Inspector 大 Dialog：90vw 弹窗承载重面板 === */
+.inspector-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.inspector-dialog-panel {
+  width: 90vw;
+  max-width: 1600px;
+  height: 90vh;
+  background: var(--bg-canvas, #0b0d10);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+}
+
+.inspector-dialog-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background: var(--bg-elevated, #181c24);
+}
+
+.inspector-dialog-title {
+  font-family: var(--font-display, 'Chakra Petch', sans-serif);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-primary, #e8ebf0);
+  text-transform: uppercase;
+}
+
+.inspector-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspector-dialog-reset,
+.inspector-dialog-close {
+  background: var(--bg-panel, #11141a);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  color: var(--text-secondary, #9aa3b2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.inspector-dialog-reset:hover,
+.inspector-dialog-close:hover {
+  background: var(--bg-hover, #202632);
+  color: var(--text-primary, #e8ebf0);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.inspector-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inspector-dialog-enter-active,
+.inspector-dialog-leave-active {
+  transition: opacity 0.2s ease;
+}
+.inspector-dialog-enter-from,
+.inspector-dialog-leave-to {
+  opacity: 0;
+}
+
 @media (max-width: 767px) {
   .main-stage {
     padding: var(--space-sm);
@@ -898,6 +1119,13 @@ const showInspectorToggle = computed(() => !isMobile.value)
     border-radius: 0;
     background: var(--bg-panel, #11141a);
     z-index: 10;
+  }
+
+  .inspector-dialog-panel {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    border-radius: 0;
   }
 }
 

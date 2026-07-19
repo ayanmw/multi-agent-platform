@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import InspectorTabs from './InspectorTabs.vue'
 import SkillPanel from './SkillPanel.vue'
 import CaseFilter from './CaseFilter.vue'
@@ -37,7 +37,20 @@ const emit = defineEmits<{
 }>()
 
 /** 当前激活的 Inspector tab */
-const activeTab = ref('sessions')
+const props = defineProps<{
+  /** 大 Dialog 打开时希望直接定位的 tab（一次性消费）。 */
+  initialTab?: string
+}>()
+
+const activeTab = ref(props.initialTab || 'sessions')
+
+// 父级每次打开 Dialog 可能传入新的 initialTab，同步过去。
+watch(
+  () => props.initialTab,
+  (t) => {
+    if (t) activeTab.value = t
+  },
+)
 
 const caseStore = useCaseStore()
 const { showError, showInfo } = useToast()

@@ -85,6 +85,8 @@ export function useSessionStore() {
     // This prevents stale localStorage entries from surviving after
     // a session is deleted on the server.
     // Map backend snake_case fields to frontend camelCase fields.
+    // 排序规则：按创建时间降序（新建在最上）。不按 updatedAt 排序，避免点击/更新
+    // session 时它被"挪到顶部"导致列表顺序反复跳动——这是用户明确反馈的痛点。
     sessions.value = raw
       .map((s): Session => ({
         id: s.id,
@@ -101,7 +103,7 @@ export function useSessionStore() {
         workspaceDir: s.workspace_dir || '',
         workspaceAuto: s.workspace_auto !== false,
       }))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort((a, b) => b.createdAt - a.createdAt)
     saveToStorage()
   }
 

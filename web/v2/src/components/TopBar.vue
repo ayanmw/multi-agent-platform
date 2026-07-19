@@ -9,10 +9,10 @@ import StatusIndicator from './StatusIndicator.vue'
  *   - statusLabel: 连接状态文字
  *   - taskStatusLabel: 当前任务状态文字（可选）
  *   - showInspectorToggle: 是否显式提供右侧 Inspector 切换按钮（平板端使用）
- *   - inspectorOpen: 当前 Inspector 是否打开，用于高亮切换按钮
+ *   - inspectorOpen: 当前 Inspector 浮窗是否打开，用于高亮切换按钮
  *
  * emits:
- *   - toggle-inspector: 请求切换右侧 Inspector 面板
+ *   - toggle-inspector: 请求切换 Inspector 浮窗显隐
  *   - toggle-left-dock: 请求切换左侧 Session Dock（平板端/紧凑模式）
  *   - toggle-recent-mods: 请求打开最近修改弹窗
  *   - toggle-model-prices: 请求打开模型价格管理弹窗
@@ -71,7 +71,7 @@ const emit = defineEmits<{
         v-if="showInspectorToggle"
         class="icon-btn inspector-toggle"
         :class="{ active: inspectorOpen }"
-        title="Toggle Inspector"
+        title="Toggle Inspector flyout"
         @click="emit('toggle-inspector')"
       >
         🧭

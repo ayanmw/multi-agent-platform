@@ -6,6 +6,8 @@
  *   - side: 'left' | 'right' — 面板位置，决定边框与展开方向视觉
  *   - title: 面板标题
  *   - open: 显式状态，桌面端决定是否渲染
+ *   - width: 可选显式宽度（px）。App.vue 通过 --left-w / --right-w 注入 CSS 变量，
+ *     这里仅作 fallback。优先级：width prop > CSS 变量 > 默认 --dock-width。
  *
  * slots:
  *   - default: 滚动主体内容
@@ -15,10 +17,12 @@ withDefaults(
     side?: 'left' | 'right'
     title: string
     open?: boolean
+    width?: number
   }>(),
   {
     side: 'left',
     open: true,
+    width: 0,
   },
 )
 
@@ -31,6 +35,7 @@ const emit = defineEmits<{
   <aside
     class="dock-panel"
     :class="['dock-' + side, { 'dock-open': open }]"
+    :style="width ? { width: width + 'px', minWidth: width + 'px' } : undefined"
     :aria-hidden="!open"
   >
     <div class="dock-header">
@@ -107,13 +112,19 @@ const emit = defineEmits<{
 .dock-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: 0;
 }
 
+/* 桌面端：宽度由 App.vue 注入的 --left-w / --right-w 决定；未注入时回退到 --dock-width。
+   注意 width prop 会通过 inline style 覆盖此处，优先级最高。 */
 @media (min-width: 1024px) {
-  .dock-panel {
-    width: var(--dock-width, 280px);
-    min-width: var(--dock-width, 280px);
+  .dock-left {
+    width: var(--left-w, var(--dock-width, 280px));
+    min-width: var(--left-w, var(--dock-width, 280px));
+  }
+  .dock-right {
+    width: var(--right-w, var(--inspector-width, 320px));
+    min-width: var(--right-w, var(--inspector-width, 320px));
   }
 }
 
