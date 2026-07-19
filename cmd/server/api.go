@@ -33,14 +33,13 @@ import (
 
 // handleGetTaskContextWindow returns the current context-window snapshot for a
 // task or a specific sub-task (GET /api/tasks/:id/context_window[?sub_task_id=xxx]).
-// The URL path id is the root task ID. If sub_task_id is provided as a query
-// parameter, the snapshot for that specific agent execution instance is returned;
-// otherwise the root task (leader agent) snapshot is returned.
+// URL path 中的 id 是 root task ID。如果提供了 query 参数 sub_task_id，
+// 则返回该具体 agent 执行实例的 snapshot；否则返回 root task（leader agent）
+// 的 snapshot。
 //
-// For live tasks the snapshot is read from the in-memory runtime store written by
-// Engine.think(). For persisted/idle tasks the snapshot is reconstructed from the
-// task's own session_messages plus the agent's system prompt. Returns 404 if the
-// task does not exist.
+// 对于 live task，snapshot 读取自 Engine.think() 写入的内存 runtime store。
+// 对于已持久化/idle 的 task，snapshot 由该 task 自身的 session_messages
+// 加上 agent 的 system prompt 重建。task 不存在时返回 404。
 func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -131,9 +130,9 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 	log.Printf("[ContextWindow] task=%s loaded session_messages count=%d", queryID, len(msgs))
 
 	if len(msgs) > 0 {
-		// The first persisted message is normally the system prompt. If the DB
-		// already contains a system message, prepend with our recovered prompt
-		// only when it differs, otherwise avoid duplicate system messages.
+		// 第一条持久化 message 通常是 system prompt。如果 DB 已包含
+		// system message，仅在恢复出的 prompt 与之不同时才前置，避免
+		// 出现重复的 system message。
 		hasSystem := false
 		for _, m := range msgs {
 			if m.Role == "system" {

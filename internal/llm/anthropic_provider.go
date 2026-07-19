@@ -45,15 +45,15 @@ type anthropicMessage struct {
 type anthropicContent struct {
 	Type string `json:"type"` // "text" 或 "tool_use"
 
-	// For text blocks:
+	// text block 字段：
 	Text string `json:"text,omitempty"`
 
-	// For tool_use blocks:
+	// tool_use block 字段：
 	ID        string                 `json:"id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	InputJSON map[string]interface{} `json:"input,omitempty"`
 
-	// For tool_use outcome blocks (tool-result sent to Anthropic):
+	// tool_use 结果 block 字段（发往 Anthropic 的 tool-result）：
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 }

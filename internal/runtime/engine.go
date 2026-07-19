@@ -330,22 +330,22 @@ type EngineConfig struct {
 	// 由 cmd/server 在创建 root agent 或 orchestrator 在创建子 agent 时设置。
 	// 工具层可通过该字段判断当前 agent 是否有权调用 leader 专用工具（如
 	// dispatch_sub_agent）。
-	// Added in Phase 7-H.
+	// Phase 7-H 引入。
 	Role AgentRole
 
 	// CanDispatchSubAgents 标记当前 agent 是否可以调用 dispatch_sub_agent。
 	// 仅在 Role 为 leader 时允许置 true。
-	// Added in Phase 7-H.
+	// Phase 7-H 引入。
 	CanDispatchSubAgents bool
 
 	// CanDefineWorkflow 标记当前 agent 是否允许自定义工作流。
 	// leader 可以定义；worker 由父级 orchestrator 决定。
-	// Added in Phase 7-H.
+	// Phase 7-H 引入。
 	CanDefineWorkflow bool
 
 	// SupervisorSubTaskID 是当前 agent 的父级/监督 agent 的子任务 ID。
 	// worker 由 orchestrator 指向 root task；leader 留空。
-	// Added in Phase 7-H.
+	// Phase 7-H 引入。
 	SupervisorSubTaskID string
 
 	// ApproverMode 决定高风险审批由谁处理："user" 或 "leader"。
@@ -356,7 +356,7 @@ type EngineConfig struct {
 	// 审批请求委托给 supervisor leader 的回调。实现者由 cmd/server 注入，
 	// 负责查找 supervisor Engine 并等待其通过 approve/reject_sub_agent_action
 	// 工具做出决定。
-	// Added in Phase 7-I.
+	// Phase 7-I 引入。
 	SupervisorDecisionHandler ApprovalDelegationHandler
 
 	// Tracer 为每个 think/tool/llm step 生成无依赖的 trace span。
