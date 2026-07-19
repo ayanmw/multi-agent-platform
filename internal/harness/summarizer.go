@@ -1,23 +1,20 @@
-// Package harness — Summarizer: LLM-based memory summarization with keyword fallback.
+// Package harness —— Summarizer：基于 LLM 的 memory 摘要，带关键词回退。
 //
-// ContextCompressor (session turn summary) and Heartbeat (episode summary) both
-// previously produced keyword-based summaries. Phase 6-F upgrades them to call
-// the LLM via a Provider, while preserving the existing keyword implementation
-// as a fallback when the LLM call fails (timeout, network error, empty response).
+// ContextCompressor（session turn summary）与 Heartbeat（episode summary）此前都生成
+// 基于关键词的 summary。Phase 6-F 将它们升级为通过 Provider 调用 LLM，并在 LLM 调用
+// 失败（超时、网络错误、空响应）时保留现有关键词实现作为回退。
 //
-// # Architecture
+// # 架构
 //
-//   - KeywordSummarizer — interface for the legacy keyword extractors, retained
-//     so LLMSummarizer can degrade gracefully.
-//   - LLMSummarizer     — public interface used by CompressIfNeeded / Beat.
-//   - LLMSummarizerImpl — default implementation. Calls provider.Chat with a
-//     compact prompt, times out via context, and falls back on failure.
+//   - KeywordSummarizer —— 旧关键词提取器的接口，保留以便 LLMSummarizer 优雅降级。
+//   - LLMSummarizer     —— CompressIfNeeded / Beat 使用的公开接口。
+//   - LLMSummarizerImpl —— 默认实现。用紧凑 prompt 调用 provider.Chat，通过 context 超时，
+//     失败时回退。
 //
-// # Event Visibility
+// # 事件可见性
 //
-// Each call emits a memory_summarize_{started,completed,failed} event so the
-// frontend can observe summarization latency and fallback usage. Events are
-// best-effort: emitter==nil suppresses emission entirely.
+// 每次调用都会发射 memory_summarize_{started,completed,failed} 事件，使前端可观察
+// summarization 延迟与回退使用情况。事件是 best-effort 的：emitter==nil 时完全不发射。
 package harness
 
 import (
@@ -30,49 +27,42 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// KeywordSummarizer is the legacy keyword-based summarization interface. It
-// is preserved as a fallback target for LLMSummarizerImpl — when the LLM
-// call fails, the keyword path runs and its output is returned.
+// KeywordSummarizer 是旧的关键词摘要接口。保留为 LLMSummarizerImpl 的回退目标 ——
+// 当 LLM 调用失败时，关键词路径运行并返回其输出。
 type KeywordSummarizer interface {
 	SummarizeTurn(ctx context.Context, turnIndex int, messages []db.SessionMessageRecord) (string, error)
 	SummarizeEpisode(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error)
 }
 
-// LLMSummarizer is the primary summarization interface used by
-// ContextCompressor and Heartbeat. Implementations should attempt LLM-based
-// summarization and fall back to keyword extraction on failure (returning
-// nil error in that case so the caller always gets a usable summary).
+// LLMSummarizer 是 ContextCompressor 与 Heartbeat 使用的主要摘要接口。实现应尝试基于
+// LLM 的摘要，失败时回退到关键词提取（此时返回 nil error，使调用者总能获得可用 summary）。
 type LLMSummarizer interface {
 	SummarizeTurn(ctx context.Context, turnIndex int, messages []db.SessionMessageRecord) (string, error)
 	SummarizeEpisode(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error)
 }
 
-// EventEmitter is the minimal interface LLMSummarizerImpl uses to publish
-// summarization events. Passing nil disables event emission entirely. The
-// harness package depends only on this interface so the package does not
-// pull in ws.Hub or runtime.EventBus directly.
+// EventEmitter 是 LLMSummarizerImpl 发布摘要事件所需的最小接口。传 nil 会完全禁用事件
+// 发射。harness package 仅依赖此接口，因此该 package 不会直接引入 ws.Hub 或
+// runtime.EventBus。
 type EventEmitter interface {
 	Emit(eventType string, data map[string]any)
 }
 
-// Event type constants for summarization telemetry. They follow the
-// snake_case naming used by other memory events in pkg/event.
+// Event type 常量用于摘要遥测。它们遵循 pkg/event 中其他 memory 事件使用的
+// snake_case 命名。
 const (
 	EventMemorySummarizeStarted   = "memory_summarize_started"
 	EventMemorySummarizeCompleted = "memory_summarize_completed"
 	EventMemorySummarizeFailed    = "memory_summarize_failed"
 )
 
-// defaultSummaryTimeout caps each summarization call. Compression must remain
-// synchronous (called inside CompressIfNeeded / Beat); 8s gives the LLM
-// enough budget for short summaries without blocking long sessions.
+// defaultSummaryTimeout 限制每次摘要调用。压缩必须保持同步（在 CompressIfNeeded /
+// Beat 内调用）；8s 给 LLM 足够预算生成短 summary，又不会长时间阻塞长会话。
 const defaultSummaryTimeout = 8 * time.Second
 
-// turnSummaryPromptTemplate is the prompt used for per-turn summarization.
-// The placeholder is replaced with a compact rendering of the turn's
-// messages (user / assistant / tool blocks). The model is asked to reply
-// with a short factual paragraph (no preamble) so the result can be dropped
-// straight into the session summary.
+// turnSummaryPromptTemplate 是用于每轮摘要的 prompt。占位符会被该轮 message（user /
+// assistant / tool 块）的紧凑渲染替换。要求模型回复一段简短的事实性段落（无前言），
+// 以便结果可直接放入 session summary。
 const turnSummaryPromptTemplate = `You are summarizing a single conversation turn for memory consolidation.
 
 Produce a compact paragraph (max 80 words) capturing:
@@ -86,10 +76,8 @@ Be factual and concise. Do NOT include meta language like "This turn" or "The us
 %s
 --- END TURN ---`
 
-// episodeSummaryPromptTemplate is the prompt used for full episode
-// summarization. It receives a flattened view of the task's conversations +
-// key steps so the model can produce a paragraph suitable for the
-// consolidated memory tier.
+// episodeSummaryPromptTemplate 是用于完整 episode 摘要的 prompt。它接收任务对话 +
+// 关键 step 的扁平视图，使模型可生成适合 consolidated memory tier 的段落。
 const episodeSummaryPromptTemplate = `You are summarizing a completed agent task for long-term memory storage.
 
 Produce a structured summary (3-5 sentences) covering:
@@ -106,9 +94,8 @@ Be factual. No preamble, no "This task". Return only the summary text.
 %s
 --- END TASK ---`
 
-// LLMSummarizerImpl is the default LLMSummarizer. It calls provider.Chat with
-// a short, focused prompt and falls back to a keyword summarizer on failure.
-// Event emission is best-effort; nil emitter disables it.
+// LLMSummarizerImpl 是默认的 LLMSummarizer。它用简短、聚焦的 prompt 调用 provider.Chat，
+// 失败时回退到关键词 summarizer。事件发射是 best-effort 的；nil emitter 会禁用。
 type LLMSummarizerImpl struct {
 	provider llm.Provider
 	model    string
@@ -117,9 +104,8 @@ type LLMSummarizerImpl struct {
 	timeout  time.Duration
 }
 
-// NewLLMSummarizerImpl wires the LLM summarizer. fallback may be nil for tests
-// that only exercise the LLM path; in that case failures propagate as errors.
-// emitter may be nil to disable event publishing.
+// NewLLMSummarizerImpl 装配 LLM summarizer。fallback 在只测试 LLM 路径的测试中可为
+// nil；此时失败会作为 error 传播。emitter 可为 nil 以禁用事件发布。
 func NewLLMSummarizerImpl(provider llm.Provider, model string, fallback KeywordSummarizer, emitter EventEmitter) *LLMSummarizerImpl {
 	return &LLMSummarizerImpl{
 		provider: provider,
@@ -130,14 +116,13 @@ func NewLLMSummarizerImpl(provider llm.Provider, model string, fallback KeywordS
 	}
 }
 
-// SummarizeTurn produces a per-turn summary, preferring the LLM. On any
-// failure (timeout, network, parse, empty) it falls back to the keyword
-// implementation if available; otherwise it returns the underlying error.
+// SummarizeTurn 生成单轮 summary，优先使用 LLM。任何失败（超时、网络、解析、空）时，
+// 若有关键词实现则回退；否则返回底层 error。
 //
-// Events:
+// 事件：
 //   - memory_summarize_started   (kind=turn, model, turn_index)
 //   - memory_summarize_completed (kind=turn, fallback_used, duration_ms)
-//   - memory_summarize_failed    (only if fallback also fails)
+//   - memory_summarize_failed    (仅当回退也失败时)
 func (s *LLMSummarizerImpl) SummarizeTurn(ctx context.Context, turnIndex int, messages []db.SessionMessageRecord) (string, error) {
 	start := time.Now()
 	s.emit(EventMemorySummarizeStarted, map[string]any{
@@ -158,7 +143,7 @@ func (s *LLMSummarizerImpl) SummarizeTurn(ctx context.Context, turnIndex int, me
 		})
 		return out, nil
 	}
-	// LLM failed or returned empty — fall back.
+	// LLM 失败或返回空 —— 回退。
 	if s.fallback == nil {
 		s.emit(EventMemorySummarizeFailed, map[string]any{
 			"kind":        "turn",
@@ -189,9 +174,8 @@ func (s *LLMSummarizerImpl) SummarizeTurn(ctx context.Context, turnIndex int, me
 	return out, nil
 }
 
-// SummarizeEpisode produces a task-level summary, preferring the LLM. Same
-// fallback semantics as SummarizeTurn. taskID is used both for the prompt
-// and for telemetry events.
+// SummarizeEpisode 生成任务级 summary，优先使用 LLM。回退语义与 SummarizeTurn 相同。
+// taskID 既用于 prompt，也用于遥测事件。
 func (s *LLMSummarizerImpl) SummarizeEpisode(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error) {
 	start := time.Now()
 	s.emit(EventMemorySummarizeStarted, map[string]any{
@@ -242,9 +226,8 @@ func (s *LLMSummarizerImpl) SummarizeEpisode(ctx context.Context, taskID string,
 	return out, nil
 }
 
-// callLLM performs the provider.Chat call. It returns the assistant content
-// trimmed of leading/trailing whitespace. Empty responses are treated as a
-// soft failure so the fallback path runs.
+// callLLM 执行 provider.Chat 调用。返回去除首尾空白的 assistant content。空响应视为
+// 软失败，以便走回退路径。
 func (s *LLMSummarizerImpl) callLLM(ctx context.Context, prompt string) (string, error) {
 	if s.provider == nil {
 		return "", fmt.Errorf("llm provider is nil")
@@ -268,7 +251,7 @@ func (s *LLMSummarizerImpl) callLLM(ctx context.Context, prompt string) (string,
 	return content, nil
 }
 
-// emit is a safe event publish helper; nil emitter is a no-op.
+// emit 是安全的事件发布辅助；nil emitter 为 no-op。
 func (s *LLMSummarizerImpl) emit(eventType string, data map[string]any) {
 	if s.emitter == nil {
 		return
@@ -276,7 +259,7 @@ func (s *LLMSummarizerImpl) emit(eventType string, data map[string]any) {
 	s.emitter.Emit(eventType, data)
 }
 
-// errString safely extracts an error message for telemetry.
+// errString 安全提取 error 信息用于遥测。
 func errString(err error) string {
 	if err == nil {
 		return ""
@@ -284,9 +267,8 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// buildTurnPrompt renders the turn's messages into a compact text block for
-// the LLM prompt. Each message is prefixed by its role so the model can
-// distinguish user input from assistant output and tool results.
+// buildTurnPrompt 将该轮 message 渲染为 LLM prompt 的紧凑文本块。每条 message 前加
+// 其 role，使模型可区分 user 输入、assistant 输出与 tool 结果。
 func buildTurnPrompt(turnIndex int, messages []db.SessionMessageRecord) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Turn %d (%d messages):\n", turnIndex+1, len(messages)))
@@ -305,9 +287,8 @@ func buildTurnPrompt(turnIndex int, messages []db.SessionMessageRecord) string {
 	return fmt.Sprintf(turnSummaryPromptTemplate, sb.String())
 }
 
-// buildEpisodePrompt flattens the task's conversation history + key steps
-// into a single text block. Tool-call and observation steps are surfaced
-// because they often carry the most important outcome information.
+// buildEpisodePrompt 将任务对话历史 + 关键 step 扁平化为单个文本块。tool_call 与
+// observation step 会被呈现，因为它们通常携带最重要的结果信息。
 func buildEpisodePrompt(taskID string, convs []db.ConversationRecord, steps []db.StepRecord) string {
 	var sbConv strings.Builder
 	for _, c := range convs {
@@ -327,31 +308,29 @@ func buildEpisodePrompt(taskID string, convs []db.ConversationRecord, steps []db
 	return fmt.Sprintf(episodeSummaryPromptTemplate, taskID, sbConv.String(), sbSteps.String())
 }
 
-// HubSender is the minimal hub surface needed by HubEmitter.
+// HubSender 是 HubEmitter 所需的最小 hub 表面。
 type HubSender interface {
 	SendEvent(evt interface{})
 }
 
-// HubEmitter forwards memory events through the WebSocket hub's broadcast
-// channel. We use interface{} so summarizer.go does not need to import pkg/event
-// directly — callers wrap events as needed.
+// HubEmitter 通过 WebSocket hub 的广播 channel 转发 memory 事件。我们使用 interface{}
+// 以便 summarizer.go 无需直接 import pkg/event —— 调用者按需包装事件。
 type HubEmitter struct {
 	Hub HubSender
 }
 
-// Emit satisfies EventEmitter.
+// Emit 满足 EventEmitter。
 func (h *HubEmitter) Emit(eventType string, data map[string]any) {
 	if h == nil || h.Hub == nil {
 		return
 	}
-	// We push a raw event payload; the hub is responsible for serialization.
-	// Consumers typically wrap data in pkg/event.NewEvent before calling SendEvent.
+	// 我们推送原始事件载荷；hub 负责序列化。
+	// 调用者通常在调用 SendEvent 前用 pkg/event.NewEvent 包装 data。
 	h.Hub.SendEvent(map[string]any{"type": eventType, "data": data})
 }
 
-// keywordAdapter exposes existing receiver methods through the KeywordSummarizer
-// interface so LLMSummarizerImpl can fall back to keyword extraction without
-// coupling to ContextCompressor/Heartbeat internals.
+// keywordAdapter 通过 KeywordSummarizer 接口暴露已有的 receiver 方法，使
+// LLMSummarizerImpl 可回退到关键词提取，而不耦合 ContextCompressor/Heartbeat 内部。
 type keywordAdapter struct {
 	turnFn    func(ctx context.Context, turnIndex int, messages []db.SessionMessageRecord) (string, error)
 	episodeFn func(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error)
@@ -371,8 +350,8 @@ func (k *keywordAdapter) SummarizeEpisode(ctx context.Context, taskID string, co
 	return k.episodeFn(ctx, taskID, convs, steps)
 }
 
-// NewKeywordAdapter builds a KeywordSummarizer from existing receiver methods.
-// Pass nil for either fn to disable that path.
+// NewKeywordAdapter 用已有 receiver 方法构建 KeywordSummarizer。任一 fn 传 nil 可禁用
+// 该路径。
 func NewKeywordAdapter(
 	turnFn func(ctx context.Context, turnIndex int, messages []db.SessionMessageRecord) (string, error),
 	episodeFn func(ctx context.Context, taskID string, convs []db.ConversationRecord, steps []db.StepRecord) (string, error),
@@ -380,9 +359,8 @@ func NewKeywordAdapter(
 	return &keywordAdapter{turnFn: turnFn, episodeFn: episodeFn}
 }
 
-// BuildKeywordEpisodeSummary is the keyword-based episode summary path retained
-// for fallback. It queries the MemoryDB directly so it stays decoupled from the
-// Heartbeat struct (and can be used as the keyword adapter fn from main.go).
+// BuildKeywordEpisodeSummary 是保留用于回退的关键词 episode summary 路径。它直接查询
+// MemoryDB，从而与 Heartbeat 结构解耦（可从 main.go 用作 keyword adapter fn）。
 func BuildKeywordEpisodeSummary(db MemoryDB, taskID string) (string, error) {
 	convs, err := db.QueryConversationsByTask(taskID)
 	if err != nil {
@@ -392,7 +370,7 @@ func BuildKeywordEpisodeSummary(db MemoryDB, taskID string) (string, error) {
 	return renderKeywordEpisode(taskID, convs, steps), nil
 }
 
-// renderKeywordEpisode produces a structured keyword-only summary.
+// renderKeywordEpisode 生成仅基于关键词的结构化 summary。
 func renderKeywordEpisode(taskID string, convs []db.ConversationRecord, steps []db.StepRecord) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Task: %s\n", taskID))
@@ -428,8 +406,8 @@ func renderKeywordEpisode(taskID string, convs []db.ConversationRecord, steps []
 	return sb.String()
 }
 
-// truncateAtKB is a local helper to avoid name collisions with compressor.go's
-// truncateSummary and heartbeat.go's truncateContent.
+// truncateAtKB 是本地辅助函数，以避免与 compressor.go 的 truncateSummary 和
+// heartbeat.go 的 truncateContent 重名冲突。
 func truncateAtKB(s string, max int) string {
 	if len(s) <= max {
 		return s

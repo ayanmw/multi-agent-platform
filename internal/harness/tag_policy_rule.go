@@ -1,22 +1,20 @@
-// Package harness — TagPolicyRule: fine-grained permission enforcement by tool tags.
+// Package harness —— TagPolicyRule：按 tool tag 细粒度权限强制执行。
 //
-// This file implements a PolicyRule that inspects a tool's tags before execution.
-// It bridges the TaskContract permission model (AllowNetwork, AllowFileDelete,
-// AllowFileWrite, AllowShell, AllowShellDangerous) with the tool registry's
-// metadata tags. By centralizing tag-to-permission mapping here, individual tool
-// authors only need to declare tags; permission enforcement stays in the Harness.
+// 本文件实现一个 PolicyRule，在 tool 执行前检查 tool 的 tag。它在 TaskContract 权限模型
+// （AllowNetwork、AllowFileDelete、AllowFileWrite、AllowShell、AllowShellDangerous）与
+// tool registry 的 metadata tag 之间架起桥梁。将 tag 到权限的映射集中在此处，单个 tool
+// 作者只需声明 tag；权限强制执行留在 Harness 中。
 //
-// # Supported tag-to-permission mappings
+// # 支持的 tag 到权限映射
 //
-//   - network               → Requires TaskPermissions.AllowNetwork
-//   - filesystem:write      → Requires TaskPermissions.AllowFileWrite
-//   - filesystem:destructive, filesystem:delete → Requires TaskPermissions.AllowFileDelete
-//   - exec                  → Requires TaskPermissions.AllowShell
-//   - exec:dangerous        → Requires TaskPermissions.AllowShellDangerous
-//   - mcp                   → Treated as network-equivalent (AllowNetwork)
+//   - network               → 需要 TaskPermissions.AllowNetwork
+//   - filesystem:write      → 需要 TaskPermissions.AllowFileWrite
+//   - filesystem:destructive, filesystem:delete → 需要 TaskPermissions.AllowFileDelete
+//   - exec                  → 需要 TaskPermissions.AllowShell
+//   - exec:dangerous        → 需要 TaskPermissions.AllowShellDangerous
+//   - mcp                   → 视为 network 等价（AllowNetwork）
 //
-// A tool may carry multiple tags. Only one blocking reason is returned, but all
-// tags are checked so the most restrictive applies.
+// 一个 tool 可携带多个 tag。只返回一个拦截原因，但会检查所有 tag，使最严格的规则生效。
 package harness
 
 import (
@@ -24,46 +22,39 @@ import (
 	"strings"
 )
 
-// TagPolicyRule enforces TaskContract permissions based on tool tags.
+// TagPolicyRule 根据 tool tag 强制执行 TaskContract 权限。
 //
-// The rule requires access to the ToolRegistry so it can look up the tags of
-// the tool being called. The registry is passed at construction time and must
-// be the same Registry instance used by the ReAct Engine.
+// 该 rule 需要访问 ToolRegistry 以查找被调用 tool 的 tag。registry 在构造时传入，且必须
+// 与 ReAct Engine 使用的 Registry 实例相同。
 //
-// TagPolicyRule should be placed early in the PolicyChain (after path/scope
-// checks and dangerous-command checks are fine, but before budget rules) so
-// that permission violations are caught before any expensive work is done.
+// TagPolicyRule 应放在 PolicyChain 早期（在 path/scope 检查与危险命令检查之后、预算规则
+// 之前均可），以便在任何昂贵工作前先捕获权限违规。
 //
-// Design note: we intentionally do NOT embed tool tag knowledge in
-// DangerousCommandRule or ApprovalRule. Tags are a layer-2 (tool metadata)
-// concern; those rules are layer-1 (command string / path) concerns. Keeping
-// them separate makes each rule testable in isolation and lets future tools
-// opt into risk classification simply by adding tags.
+// 设计说明：我们刻意不将 tool tag 知识嵌入 DangerousCommandRule 或 ApprovalRule。tag 是
+// layer-2（tool metadata）关注点；那些 rule 是 layer-1（命令字符串 / 路径）关注点。保持
+// 分离使每条 rule 可独立测试，并让未来 tool 仅通过添加 tag 即可加入风险分类。
 type TagPolicyRule struct {
-	// tagLookup returns the tags for a fully-qualified tool name. We use a
-	// function indirection instead of the concrete *tool.Registry to avoid an
-	// import cycle between harness and runtime/tool packages. The function is
-	// wired up in cmd/server/main.go where all packages are available.
+	// tagLookup 返回完全限定 tool 名的 tag。我们使用函数间接而非具体 *tool.Registry，
+	// 以避免 harness 与 runtime/tool package 之间的 import cycle。该函数在
+	// cmd/server/main.go 中接线，那里所有 package 都可用。
 	tagLookup func(toolName string) []string
 }
 
-// NewTagPolicyRule creates a TagPolicyRule with the given tag lookup function.
-// The lookup function receives the tool's FullName (e.g. "core/fetch_url") and
-// must return the tool's tags. If the tool is unknown, it should return nil or
-// an empty slice.
+// NewTagPolicyRule 用给定 tag 查找函数创建 TagPolicyRule。查找函数接收 tool 的
+// FullName（如 "core/fetch_url"），必须返回该 tool 的 tag。未知 tool 应返回 nil 或
+// 空 slice。
 func NewTagPolicyRule(tagLookup func(toolName string) []string) *TagPolicyRule {
 	return &TagPolicyRule{tagLookup: tagLookup}
 }
 
-// Name returns the rule name for logging and error messages.
+// Name 返回用于日志与错误信息的 rule 名称。
 func (r *TagPolicyRule) Name() string { return "TagPolicyRule" }
 
-// Check evaluates whether the tool call is permitted according to its tags and
-// the TaskContract's permissions. It never modifies the input.
+// Check 根据其 tag 与 TaskContract 权限评估 tool call 是否被允许。它从不修改 input。
 func (r *TagPolicyRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	if r.tagLookup == nil {
-		// Defensive: if no lookup is configured, tags cannot be evaluated.
-		// Fail closed only when we would otherwise have blocked; allow unknown.
+		// 防御性：未配置 lookup 时无法评估 tag。
+		// 仅当我们本应拦截时才 fail closed；未知则放行。
 		return input, nil
 	}
 
@@ -72,15 +63,13 @@ func (r *TagPolicyRule) Check(toolName string, input map[string]any, contract Ta
 		return input, nil
 	}
 
-	// AutoApprovePolicy bypasses tag-based permission checks. This is useful
-	// for trusted autonomous agents where the user has pre-approved all policy
-	// decisions. Events are still emitted by the Engine for audit.
+	// AutoApprovePolicy 绕过基于 tag 的权限检查。这对可信自治 agent 有用 —— 用户已预批准
+	// 所有策略决策。事件仍由 Engine 发射以便审计。
 	if contract.AutoApprovePolicy {
 		return input, nil
 	}
 
-	// Evaluate tags in order of most restrictive / dangerous first so the
-	// returned reason is meaningful.
+	// 按从最严格/最危险到最宽松的顺序评估 tag，使返回的原因更有意义。
 	for _, tag := range tags {
 		switch strings.ToLower(tag) {
 		case "exec:dangerous":
@@ -113,8 +102,8 @@ func (r *TagPolicyRule) Check(toolName string, input map[string]any, contract Ta
 	return input, nil
 }
 
-// newApprovalRequired creates an ErrApprovalRequired with RuleName set so
-// the frontend can show which policy rule triggered the request.
+// newApprovalRequired 创建一个 ErrApprovalRequired，设置了 RuleName，以便前端展示哪个
+// 策略 rule 触发了该请求。
 func newApprovalRequired(ruleName, toolName, reason string, input map[string]any) error {
 	return &ErrApprovalRequired{
 		ApprovalID: GenerateApprovalID(),

@@ -1,35 +1,32 @@
-// Package harness — MemoryRecall: builds Working Memory from stored memories.
+// Package harness —— MemoryRecall：从存储的 memory 构建 Working Memory。
 //
-// MemoryRecall is the recall side of the Memory infrastructure. When a new
-// task starts, the recall engine loads relevant memories from the database
-// and builds a WorkingMemory context block that is injected into the agent's
-// system prompt. This gives the agent access to past experiences and stable
-// semantic rules without requiring the user to repeat them.
+// MemoryRecall 是 Memory 基础设施的召回侧。当新任务启动时，recall 引擎从数据库加载相关
+// memory，构建一个 WorkingMemory context 块注入到 agent 的 system prompt。这让 agent 能
+// 访问过往经验与稳定的 semantic rule，而无需用户重复说明。
 //
-// # Architecture
+// # 架构
 //
-// The recall system implements the first tier of the 4-tier memory system:
+// recall 系统实现 4 层 memory 系统的第一层：
 //
-//  1. Working Memory      — per-task context (in-memory)              <-- THIS
-//  2. Raw Episodic        — conversation records (conversations table)
-//  3. Consolidated Episodic — task summaries (memories, tier=consolidated)
-//  4. Semantic/Policy     — stable rules (memories, tier=semantic)
+//  1. Working Memory      —— 任务级 context（内存中）           <-- 本文件
+//  2. Raw Episodic        —— 对话记录（conversations 表）
+//  3. Consolidated Episodic —— 任务 summary（memories，tier=consolidated）
+//  4. Semantic/Policy     —— 稳定规则（memories，tier=semantic）
 //
-// # Recall Process
+// # 召回过程
 //
-// When BuildWorkingMemory is called:
-//  1. Load session-scoped memories (highest priority, for current session)
-//  2. Load project-scoped semantic rules (stable policies)
-//  3. Load top N project-scoped consolidated episodes by keyword match
-//  4. Load global-scoped semantic rules (cross-project preferences)
-//  5. Update access_count and last_accessed for each recalled memory
-//  6. Build a WorkingMemory struct ready for system prompt injection
+// 调用 BuildWorkingMemory 时：
+//  1. 加载 session 级 memory（最高优先级，针对当前 session）
+//  2. 加载 project 级 semantic rule（稳定 policy）
+//  3. 按 keyword 匹配加载 top N project 级 consolidated episode
+//  4. 加载 global 级 semantic rule（跨 project 偏好）
+//  5. 更新每条被召回 memory 的 access_count 与 last_accessed
+//  6. 构建可直接注入 system prompt 的 WorkingMemory 结构
 //
-// # Conflict Detection
+// # 冲突检测
 //
-// The DetectConflicts method scans memory items for pairs with contradictory
-// content, using simple keyword-based detection. This helps surface stale or
-// conflicting rules that need human review.
+// DetectConflicts 方法使用简单的关键词检测扫描 memory 项中内容相互矛盾的配对，用于
+// 暴露需要人工审查的陈旧或冲突规则。
 package harness
 
 import (
@@ -42,85 +39,77 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// WorkingMemory is the context injected into the system prompt for a new task.
-// It contains layered memories from session, project, and global scopes, giving
-// the agent access to the most relevant institutional knowledge without
-// requiring the user to repeat instructions.
+// WorkingMemory 是注入到新任务 system prompt 的 context。它包含来自 session、project、
+// global 三个 scope 的分层 memory，让 agent 无需用户重复指令即可访问最相关的制度化知识。
 type WorkingMemory struct {
-	// TaskGoal is the user's task description, used for relevance scoring.
+	// TaskGoal 是用户任务描述，用于相关性打分。
 	TaskGoal string `json:"task_goal"`
 
-	// SessionMemories are session-scoped memories tied to the current session.
-	// These have the highest priority because they reflect the immediate
-	// conversational context.
+	// SessionMemories 是绑定到当前 session 的 session 级 memory。它们优先级最高，
+	// 因为反映的是即时对话 context。
 	SessionMemories []MemoryItem `json:"session_memories"`
 
-	// ProjectRules are project-scoped semantic-tier memories that represent
-	// stable policies, preferences, and rules for the current project.
+	// ProjectRules 是 project 级 semantic tier memory，代表当前项目的稳定 policy、
+	// 偏好与规则。
 	ProjectRules []MemoryItem `json:"project_rules"`
 
-	// ProjectEpisodes are project-scoped consolidated episodic memories that are
-	// most relevant to the current task goal, scored by keyword overlap.
+	// ProjectEpisodes 是与当前任务 goal 最相关的 project 级 consolidated episodic
+	// memory，按 keyword 重叠度打分。
 	ProjectEpisodes []MemoryItem `json:"project_episodes"`
 
-	// GlobalRules are global-scoped semantic-tier memories that represent
-	// cross-project preferences and stable conventions.
+	// GlobalRules 是 global 级 semantic tier memory，代表跨 project 偏好与稳定约定。
 	GlobalRules []MemoryItem `json:"global_rules"`
 
-	// BuiltAt is the timestamp when this WorkingMemory was constructed.
+	// BuiltAt 是该 WorkingMemory 构建时的时间戳。
 	BuiltAt time.Time `json:"built_at"`
 }
 
-// MemoryItem is a single memory entry prepared for injection into the system
-// prompt. It carries the essential fields needed for the agent to understand
-// and use the memory without exposing internal database details.
+// MemoryItem 是准备注入 system prompt 的单条 memory 条目。它携带 agent 理解和使用该
+// memory 所需的必要字段，而不暴露内部数据库细节。
 type MemoryItem struct {
-	// ID is the unique identifier of the memory record.
+	// ID 是该 memory 记录的唯一标识符。
 	ID string `json:"id"`
 
-	// Type describes the kind of memory: preference, rule, fact, lesson, reflection.
+	// Type 描述 memory 种类：preference、rule、fact、lesson、reflection。
 	Type string `json:"type"`
 
-	// Content is the full text of the memory.
+	// Content 是 memory 的完整文本。
 	Content string `json:"content"`
 
-	// Confidence is the reliability score of the memory (0.0--1.0).
+	// Confidence 是该 memory 的可靠性分数（0.0--1.0）。
 	Confidence float64 `json:"confidence"`
 
-	// Reason describes why this memory was recalled for the current task.
+	// Reason 描述为何为当前任务召回此 memory。
 	Reason string `json:"reason"`
 }
 
-// ConflictPair represents two memories that appear to contradict each other.
-// Detected by simple keyword analysis — opposite markers like "use" vs "avoid"
-// or "always" vs "never" in memories of the same type.
+// ConflictPair 表示两条看起来相互矛盾的 memory。通过简单关键词分析检测 —— 同类型 memory
+// 中出现对立标记（如 "use" vs "avoid"、"always" vs "never"）。
 type ConflictPair struct {
-	// MemoryA is the first memory in the conflicting pair.
+	// MemoryA 是冲突配对中的第一条 memory。
 	MemoryA MemoryItem `json:"memory_a"`
 
-	// MemoryB is the second memory in the conflicting pair.
+	// MemoryB 是冲突配对中的第二条 memory。
 	MemoryB MemoryItem `json:"memory_b"`
 
-	// Reason describes which opposite markers were detected.
+	// Reason 描述检测到的对立标记。
 	Reason string `json:"reason"`
 }
 
-// MemoryRecall builds Working Memory for a new task by recalling semantic rules
-// and relevant consolidated episodes from the memory store. It is the recall
-// side of the Memory infrastructure, complementing the Heartbeat (consolidation)
-// and PromotionGate (promotion).
+// MemoryRecall 通过从 memory 存储中召回 semantic rule 与相关 consolidated episode 来
+// 为新任务构建 Working Memory。它是 Memory 基础设施的召回侧，与 Heartbeat（固化）和
+// PromotionGate（提升）互补。
 //
-// MemoryRecall can optionally be configured with an EmbeddingProvider and
-// VectorStore to enable vector similarity search. When these are nil, it falls
-// back to keyword-based recall, preserving backward compatibility.
+// MemoryRecall 可选择配置 EmbeddingProvider 与 VectorStore 以启用向量相似度搜索。当它们
+// 为 nil 时，回退到基于关键词的召回，保留向后兼容。
 //
-// Usage:
+// 用法：
 //
 //	recall := NewMemoryRecall(memDB)
 //	wm, err := recall.BuildWorkingMemory("default", "session_abc", "write a Go test", 3)
 //	if err == nil {
 //	    prompt := recall.FormatForSystemPrompt(wm)
-//	    // prepend prompt to the agent's system prompt
+//	    // 将 prompt 前置到 agent 的 system prompt
 //	}
 type MemoryRecall struct {
 	db            MemoryDB
@@ -129,16 +118,15 @@ type MemoryRecall struct {
 	ranker        *HybridRanker
 }
 
-// NewMemoryRecall creates a new MemoryRecall backed by the given MemoryDB.
-// The database parameter implements the MemoryDB interface for all DB operations
-// needed by the recall engine (QueryMemoriesByTier). Access tracking is done
-// via the db package-level UpdateMemoryAccess function.
+// NewMemoryRecall 用给定 MemoryDB 创建 MemoryRecall。database 参数实现 recall 引擎所需
+// 的所有 DB 操作（QueryMemoriesByTier）的 MemoryDB 接口。访问跟踪通过 db package 级
+// UpdateMemoryAccess 函数完成。
 func NewMemoryRecall(database MemoryDB) *MemoryRecall {
 	return NewMemoryRecallWithVectorStore(database, nil, nil)
 }
 
-// NewMemoryRecallWithVectorStore creates a MemoryRecall with vector similarity support.
-// When embedProvider and vectorStore are nil, falls back to keyword-only recall.
+// NewMemoryRecallWithVectorStore 创建支持向量相似度的 MemoryRecall。当 embedProvider 与
+// vectorStore 为 nil 时，回退到纯关键词召回。
 func NewMemoryRecallWithVectorStore(database MemoryDB, embedProvider llm.EmbeddingProvider, vectorStore memory.VectorStore) *MemoryRecall {
 	return &MemoryRecall{
 		db:            database,
@@ -148,47 +136,45 @@ func NewMemoryRecallWithVectorStore(database MemoryDB, embedProvider llm.Embeddi
 	}
 }
 
-// BuildWorkingMemory loads layered memories for the given project, session, and
-// task goal. The result is a WorkingMemory struct ready for injection into the
-// system prompt.
+// BuildWorkingMemory 为给定 project、session 与任务 goal 加载分层 memory。结果是可直接
+// 注入 system prompt 的 WorkingMemory 结构。
 //
-// Recall priority (most specific first):
+// 召回优先级（从最具体到最宽泛）：
 //
-//  1. Session-scoped memories (scope=session, session_id=xxx)
-//  2. Project-scoped semantic rules (scope=project, tier=semantic)
-//  3. Project-scoped consolidated episodes (scope=project, tier=consolidated, keyword top N)
-//  4. Global-scoped semantic rules (scope=global, tier=semantic)
-//  5. Session history messages are injected separately by the Engine layer
+//  1. Session 级 memory（scope=session，session_id=xxx）
+//  2. Project 级 semantic rule（scope=project，tier=semantic）
+//  3. Project 级 consolidated episode（scope=project，tier=consolidated，keyword top N）
+//  4. Global 级 semantic rule（scope=global，tier=semantic）
+//  5. Session 历史 message 由 Engine 层单独注入
 //
-// Parameters:
-//   - projectID: the project to recall memories for (e.g., "default")
-//   - sessionID: the current session ID; may be empty if not in a session
-//   - taskGoal: the user's task description, used for keyword matching
-//   - maxEpisodes: maximum number of consolidated episodes to recall
+// 参数：
+//   - projectID：要召回 memory 的 project（如 "default"）
+//   - sessionID：当前 session ID；非 session 内可为空
+//   - taskGoal：用户任务描述，用于 keyword 匹配
+//   - maxEpisodes：要召回的 consolidated episode 最大数量
 //
-// Returns a WorkingMemory even if no memories are found (empty slices).
-// Errors are returned only for database failures.
+// 即使未找到 memory（空 slice）也返回 WorkingMemory。仅在数据库失败时返回 error。
 func (mr *MemoryRecall) BuildWorkingMemory(projectID, sessionID, taskGoal string, maxEpisodes int) (*WorkingMemory, error) {
-	// 1. Load session-scoped memories (highest priority).
-	//    These capture facts/rules that only apply to the current session.
+	// 1. 加载 session 级 memory（最高优先级）。
+	//    它们捕获仅适用于当前 session 的事实/规则。
 	sessionMems, err := mr.loadSessionMemories(projectID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load session memories: %w", err)
 	}
 
-	// 2. Load project-scoped semantic rules (stable policies for this project).
+	// 2. 加载 project 级 semantic rule（该 project 的稳定 policy）。
 	projectRules, err := mr.loadSemanticRules(projectID, "project")
 	if err != nil {
 		return nil, fmt.Errorf("load project semantic rules: %w", err)
 	}
 
-	// 3. Load top N project-scoped consolidated episodes by keyword match.
+	// 3. 按 keyword 匹配加载 top N project 级 consolidated episode。
 	projectEpisodes, err := mr.recallEpisodes(projectID, "project", taskGoal, maxEpisodes)
 	if err != nil {
 		return nil, fmt.Errorf("recall project episodes: %w", err)
 	}
 
-	// 4. Load global-scoped semantic rules (cross-project conventions).
+	// 4. 加载 global 级 semantic rule（跨 project 约定）。
 	globalRules, err := mr.loadSemanticRules(projectID, "global")
 	if err != nil {
 		return nil, fmt.Errorf("load global semantic rules: %w", err)
@@ -204,11 +190,10 @@ func (mr *MemoryRecall) BuildWorkingMemory(projectID, sessionID, taskGoal string
 	}, nil
 }
 
-// FormatForSystemPrompt formats a WorkingMemory as a clean text block suitable
-// for prepending to the agent's system prompt. The output uses Markdown-style
-// headings for readability in the LLM context.
+// FormatForSystemPrompt 将 WorkingMemory 格式化为干净的文本块，适合前置到 agent 的
+// system prompt。输出使用 Markdown 风格标题，便于在 LLM context 中阅读。
 //
-// Output format:
+// 输出格式：
 //
 //	## Working Memory (from previous tasks)
 //
@@ -258,9 +243,8 @@ func (mr *MemoryRecall) FormatForSystemPrompt(wm *WorkingMemory) string {
 	return sb.String()
 }
 
-// loadSessionMemories loads active session-scoped memories for the given
-// project and session. These are the highest-priority memories because they
-// reflect the immediate conversational context.
+// loadSessionMemories 加载给定 project 与 session 的活跃 session 级 memory。它们是
+// 优先级最高的 memory，因为反映的是即时对话 context。
 func (mr *MemoryRecall) loadSessionMemories(projectID, sessionID string) ([]MemoryItem, error) {
 	if sessionID == "" {
 		return nil, nil
@@ -290,10 +274,9 @@ func (mr *MemoryRecall) loadSessionMemories(projectID, sessionID string) ([]Memo
 	return items, nil
 }
 
-// loadSemanticRules loads active semantic-tier memories for the given project
-// and scope, ordered by confidence descending (most reliable first). Updates
-// access_count and last_accessed for each recalled memory to track usage
-// patterns.
+// loadSemanticRules 加载给定 project 与 scope 的活跃 semantic tier memory，按
+// confidence 降序排列（最可靠者优先）。为每条被召回 memory 更新 access_count 与
+// last_accessed 以跟踪使用模式。
 func (mr *MemoryRecall) loadSemanticRules(projectID, scope string) ([]MemoryItem, error) {
 	records, err := db.QueryMemoriesByScopeAndTier(projectID, scope, "semantic")
 	if err != nil {
@@ -302,15 +285,14 @@ func (mr *MemoryRecall) loadSemanticRules(projectID, scope string) ([]MemoryItem
 
 	var items []MemoryItem
 	for _, r := range records {
-		// Only recall active memories — obsolete or invalid ones are skipped.
+		// 只召回活跃 memory —— 过期或无效的会被跳过。
 		if r.Status != "active" {
 			continue
 		}
-		// Update access tracking for the recalled memory. This is non-fatal:
-		// if the update fails, we still include the memory in the working set
-		// but log the failure for diagnostics.
+		// 更新被召回 memory 的访问跟踪。这是非致命的：若更新失败，我们仍将该 memory
+		// 纳入工作集，但记录失败用于诊断。
 		if err := db.UpdateMemoryAccess(r.ID); err != nil {
-			// Non-fatal — the memory is still recalled, just without access tracking.
+			// 非致命 —— memory 仍被召回，只是没有访问跟踪。
 			continue
 		}
 		items = append(items, MemoryItem{
@@ -324,14 +306,13 @@ func (mr *MemoryRecall) loadSemanticRules(projectID, scope string) ([]MemoryItem
 	return items, nil
 }
 
-// BuildVectorIndex loads all consolidated and semantic memories from the database,
-// computes embeddings, and stores them in the vector store. Call this once at startup
-// and after batch memory imports.
+// BuildVectorIndex 从数据库加载所有 consolidated 与 semantic memory，计算 embedding，
+// 并存入 vector store。在启动时与批量 memory 导入后各调用一次。
 func (mr *MemoryRecall) BuildVectorIndex() error {
 	if mr.embedProvider == nil || mr.vectorStore == nil {
-		return nil // vector recall not configured
+		return nil // 未配置向量召回
 	}
-	// Load all consolidated and semantic memories
+	// 加载所有 consolidated 与 semantic memory
 	records, err := db.QueryMemoriesByScopeAndTier("default", "project", "consolidated")
 	if err != nil {
 		return fmt.Errorf("load consolidated: %w", err)
@@ -347,13 +328,13 @@ func (mr *MemoryRecall) BuildVectorIndex() error {
 			continue
 		}
 		if err := mr.indexMemory(r); err != nil {
-			continue // skip individual failures
+			continue // 跳过单条失败
 		}
 	}
 	return nil
 }
 
-// indexMemory embeds a single memory record and upserts it into the vector store.
+// indexMemory 为单条 memory 记录计算 embedding 并 upsert 到 vector store。
 func (mr *MemoryRecall) indexMemory(r db.MemoryRecord) error {
 	vec, err := mr.embedProvider.Embed(r.Content)
 	if err != nil {
@@ -367,34 +348,33 @@ func (mr *MemoryRecall) indexMemory(r db.MemoryRecord) error {
 	})
 }
 
-// RecallWithQuery performs pure vector similarity search for a natural language query.
-// This is used by the /api/memories/recall?query=... endpoint for debugging.
-// Returns MemoryItems sorted by relevance (vector similarity blended with keyword score).
+// RecallWithQuery 对自然语言查询执行纯向量相似度搜索。由 /api/memories/recall?query=...
+// 端点用于调试。返回按相关性（向量相似度与 keyword 分数混合）排序的 MemoryItems。
 func (mr *MemoryRecall) RecallWithQuery(projectID, sessionID, query string, maxN int) ([]MemoryItem, error) {
 	if mr.embedProvider == nil || mr.vectorStore == nil {
-		// Fallback to keyword-only recall
+		// 回退到纯关键词召回
 		return mr.recallEpisodes(projectID, "project", query, maxN)
 	}
 
-	// Embed the query
+	// embed 查询
 	queryVec, err := mr.embedProvider.Embed(query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	// Search vector store
-	results, err := mr.vectorStore.Search(queryVec, maxN*2) // get more candidates for blending
+	// 搜索 vector store
+	results, err := mr.vectorStore.Search(queryVec, maxN*2) // 获取更多候选以便混合
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
-	// Build MemoryItems from results
+	// 从结果构建 MemoryItem
 	var items []MemoryItem
 	for _, r := range results {
 		items = append(items, MemoryItem{
 			ID:         r.ID,
 			Type:       stringifyMeta(r.Metadata, "type"),
-			Content:    "", // will be filled from DB
+			Content:    "", // 从 DB 填充
 			Confidence: parseConfidence(r.Metadata),
 			Reason:     fmt.Sprintf("vector similarity (score: %.3f)", r.Score),
 		})
@@ -406,33 +386,29 @@ func (mr *MemoryRecall) RecallWithQuery(projectID, sessionID, query string, maxN
 	return items, nil
 }
 
-// recallEpisodes loads consolidated episodic memories filtered by scope, scores
-// each by keyword and optional vector overlap with the task goal, and returns the
-// top N most relevant. Updates access tracking for each recalled memory.
+// recallEpisodes 加载按 scope 过滤的 consolidated episodic memory，按与任务 goal 的
+// keyword 与可选向量重叠度打分，返回最相关的 top N。为每条被召回 memory 更新访问跟踪。
 //
-// When MemoryRecall is configured with an embedProvider and vectorStore, the score
-// blends keyword overlap with cosine similarity (0.3 keyword + 0.7 vector). This
-// improves semantic relevance beyond exact word matching.
+// 当 MemoryRecall 配置了 embedProvider 与 vectorStore 时，分数混合 keyword 重叠度与
+// 余弦相似度（0.3 keyword + 0.7 vector）。这超越了精确词匹配，提升语义相关性。
 //
-// The scoring algorithm uses word-frequency overlap: each word in the
-// task goal is checked against the memory content. The score is the percentage
-// of query words that appear in the content. This is intentionally lightweight
-// — Phase 6+ adds vector similarity scoring for semantic relevance.
+// 打分算法使用词频重叠：任务 goal 中的每个词都会与 memory 内容比对。分数为出现在内容中
+// 的查询词占比。这是刻意的轻量实现 —— Phase 6+ 增加向量相似度打分以支持语义相关性。
 func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN int) ([]MemoryItem, error) {
 	records, err := db.QueryMemoriesByScopeAndTier(projectID, scope, "consolidated")
 	if err != nil {
 		return nil, err
 	}
 
-	// Score each episode by blended keyword/vector overlap with taskGoal.
-	// Each episode is paired with its relevance score for sorting.
+	// 按 taskGoal 的 keyword/vector 混合重叠度为每条 episode 打分。
+	// 每条 episode 与其相关性分数配对以便排序。
 	type scored struct {
 		item  MemoryItem
 		score float64
 	}
 	var scoredList []scored
 	for _, r := range records {
-		// Only recall active memories.
+		// 只召回活跃 memory。
 		if r.Status != "active" {
 			continue
 		}
@@ -449,9 +425,8 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 		})
 	}
 
-	// Sort by score descending. Since the number of consolidated episodes is
-	// typically small (a few dozen), a simple bubble sort is sufficient.
-	// Phase 6+ will use database-level ordering with vector similarity.
+	// 按分数降序排序。由于 consolidated episode 数量通常较少（几十条），简单冒泡即可。
+	// Phase 6+ 会使用带向量相似度的数据库级排序。
 	for i := 0; i < len(scoredList); i++ {
 		for j := i + 1; j < len(scoredList); j++ {
 			if scoredList[j].score > scoredList[i].score {
@@ -460,15 +435,15 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 		}
 	}
 
-	// Take the top N most relevant episodes.
+	// 取最相关的 top N episode。
 	if maxN > len(scoredList) {
 		maxN = len(scoredList)
 	}
 	var items []MemoryItem
 	for i := 0; i < maxN; i++ {
-		// Update access tracking for recalled memory.
+		// 更新被召回 memory 的访问跟踪。
 		if err := db.UpdateMemoryAccess(scoredList[i].item.ID); err != nil {
-			// Non-fatal — continue with the next item.
+			// 非致命 —— 继续处理下一条。
 			continue
 		}
 		items = append(items, scoredList[i].item)
@@ -476,8 +451,8 @@ func (mr *MemoryRecall) recallEpisodes(projectID, scope, taskGoal string, maxN i
 	return items, nil
 }
 
-// blendVectorScores combines keyword-based and vector-based relevance scores.
-// It delegates to HybridRanker when available.
+// blendVectorScores 组合基于 keyword 与基于向量的相关性分数。当可用时委托给
+// HybridRanker。
 func (mr *MemoryRecall) blendVectorScores(content, query string) float64 {
 	if mr.ranker == nil {
 		return keywordScore(content, query)
@@ -485,10 +460,10 @@ func (mr *MemoryRecall) blendVectorScores(content, query string) float64 {
 	return mr.ranker.Score(content, query)
 }
 
-// stringify converts a float64 to a string with four decimal places.
+// stringify 将 float64 转换为四位小数的字符串。
 func stringify(v float64) string { return fmt.Sprintf("%.4f", v) }
 
-// stringifyMeta extracts a string value for the given key from metadata.
+// stringifyMeta 从 metadata 中提取给定键的字符串值。
 func stringifyMeta(meta map[string]any, key string) string {
 	if v, ok := meta[key]; ok {
 		if s, ok := v.(string); ok {
@@ -498,7 +473,7 @@ func stringifyMeta(meta map[string]any, key string) string {
 	return ""
 }
 
-// parseConfidence extracts a confidence value from vector metadata.
+// parseConfidence 从 vector metadata 提取 confidence 值。
 func parseConfidence(meta map[string]any) float64 {
 	if v, ok := meta["confidence"]; ok {
 		if s, ok := v.(string); ok {
@@ -510,13 +485,11 @@ func parseConfidence(meta map[string]any) float64 {
 	return 0.5
 }
 
-// keywordScore computes a simple word-frequency overlap score between content
-// and query. Both strings are tokenized (split by whitespace, lowercased,
-// punctuation stripped), and the score is the percentage of query words that
-// appear in the content.
+// keywordScore 计算 content 与 query 之间简单的词频重叠分数。两个字符串都进行
+// tokenize（按空白拆分、小写化、剥离标点），分数为出现在 content 中的 query 词占比。
 //
-// Returns score = (overlap_count / total_query_words) * 100.
-// Returns 0 if the query has no tokens.
+// 返回 score = (overlap_count / total_query_words) * 100。
+// 若 query 无 token，返回 0。
 func keywordScore(content, query string) float64 {
 	contentWords := tokenize(content)
 	queryWords := tokenize(query)
@@ -525,13 +498,13 @@ func keywordScore(content, query string) float64 {
 		return 0
 	}
 
-	// Build a set of content words for O(1) lookup.
+	// 构建 content 词集合以实现 O(1) 查找。
 	contentSet := make(map[string]bool, len(contentWords))
 	for _, w := range contentWords {
 		contentSet[w] = true
 	}
 
-	// Count overlapping words between query and content.
+	// 统计 query 与 content 的重叠词数。
 	overlap := 0
 	for _, w := range queryWords {
 		if contentSet[w] {
@@ -542,16 +515,15 @@ func keywordScore(content, query string) float64 {
 	return (float64(overlap) / float64(len(queryWords))) * 100
 }
 
-// tokenize splits a string into lowercase word tokens, stripping punctuation
-// and filtering out very short tokens (single characters). This is used by
-// keywordScore for word-frequency overlap computation.
+// tokenize 将字符串切分为小写词 token，剥离标点并过滤掉过短的 token（单字符）。
+// 供 keywordScore 用于词频重叠计算。
 func tokenize(s string) []string {
 	fields := strings.Fields(strings.ToLower(s))
 	var tokens []string
 	for _, f := range fields {
-		// Strip common punctuation from word boundaries.
+		// 剥离词边界的常见标点。
 		f = strings.Trim(f, ".,;:!?()[]{}'\"")
-		// Skip single-character tokens — they are rarely meaningful.
+		// 跳过单字符 token —— 它们很少有意义。
 		if len(f) >= 2 {
 			tokens = append(tokens, f)
 		}
@@ -559,21 +531,19 @@ func tokenize(s string) []string {
 	return tokens
 }
 
-// DetectConflicts checks a list of MemoryItems for pairs with contradictory
-// content. Uses simple keyword-based detection: pairs where one memory contains
-// a positive marker (e.g., "use", "always") and the other contains the opposite
-// marker (e.g., "avoid", "never") in memories of the same type.
+// DetectConflicts 检查 MemoryItem 列表中内容相互矛盾的配对。使用简单关键词检测：同一
+// 类型 memory 中一条包含正向标记（如 "use"、"always"）、另一条包含反向标记（如 "avoid"、
+// "never"）的配对。
 //
-// This is a lightweight check for surfacing stale or conflicting rules. It is
-// not exhaustive — a full semantic conflict analysis would require LLM-based
-// comparison (Phase 6+).
+// 这是用于暴露陈旧或冲突规则的轻量检查，不全面 —— 完整的语义冲突分析需要基于 LLM 的
+// 比对（Phase 6+）。
 //
-// Returns a list of conflict pairs, empty if no conflicts are detected.
+// 返回冲突配对列表；未检测到冲突时为空。
 func (mr *MemoryRecall) DetectConflicts(memories []MemoryItem) []ConflictPair {
 	var conflicts []ConflictPair
 
-	// Opposite keyword pairs that indicate potential conflicts.
-	// Each pair is [positive_marker, negative_marker].
+	// 指示潜在冲突的反向关键词对。
+	// 每对为 [正向标记, 反向标记]。
 	oppositePairs := [][2]string{
 		{"use", "avoid"},
 		{"always", "never"},
@@ -589,8 +559,8 @@ func (mr *MemoryRecall) DetectConflicts(memories []MemoryItem) []ConflictPair {
 
 	for i := 0; i < len(memories); i++ {
 		for j := i + 1; j < len(memories); j++ {
-			// Only check memories of the same type — a rule and a reflection
-			// with opposite keywords are not necessarily conflicting.
+			// 只检查同类型 memory —— 一条 rule 与一条 reflection 即使有反向关键词
+			// 也未必冲突。
 			if memories[i].Type != memories[j].Type {
 				continue
 			}
@@ -598,7 +568,7 @@ func (mr *MemoryRecall) DetectConflicts(memories []MemoryItem) []ConflictPair {
 			lowerB := strings.ToLower(memories[j].Content)
 
 			for _, pair := range oppositePairs {
-				// Check direction A: MemoryA has positive, MemoryB has negative
+				// 检查方向 A：MemoryA 含正向，MemoryB 含反向
 				if strings.Contains(lowerA, pair[0]) && strings.Contains(lowerB, pair[1]) {
 					conflicts = append(conflicts, ConflictPair{
 						MemoryA: memories[i],
@@ -607,7 +577,7 @@ func (mr *MemoryRecall) DetectConflicts(memories []MemoryItem) []ConflictPair {
 					})
 					break
 				}
-				// Check direction B: MemoryA has negative, MemoryB has positive
+				// 检查方向 B：MemoryA 含反向，MemoryB 含正向
 				if strings.Contains(lowerA, pair[1]) && strings.Contains(lowerB, pair[0]) {
 					conflicts = append(conflicts, ConflictPair{
 						MemoryA: memories[i],

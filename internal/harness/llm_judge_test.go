@@ -9,7 +9,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 )
 
-// fakeJudgeProvider implements judgeChatClient (and llm.Provider) with a scripted response.
+// fakeJudgeProvider 实现了 judgeChatClient（与 llm.Provider），返回脚本化的响应。
 type fakeJudgeProvider struct {
 	respContent string
 	respErr     error
@@ -34,8 +34,8 @@ func (f *fakeJudgeProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.Str
 	return "", llm.Usage{}, nil, errors.New("not implemented")
 }
 
-// extractJudgeRequest pulls the JudgeRequest fields out of the chat message
-// prompt so tests can verify context propagation.
+// extractJudgeRequest 从 chat message prompt 中提取 JudgeRequest 字段，便于测试验证
+// context 传递。
 func extractJudgeRequest(req llm.ChatRequest) JudgeRequest {
 	var r JudgeRequest
 	if len(req.Messages) == 0 {

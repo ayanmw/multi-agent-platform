@@ -9,39 +9,38 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/memory"
 )
 
-// HybridWeights configures the linear combination of keyword, BM25, and vector
-// scores. All weights should sum to 1.0 for a normalized [0,100] output.
+// HybridWeights 配置 keyword、BM25 与 vector 分数的线性组合。所有权重应求和为 1.0
+// 以归一化输出到 [0,100]。
 type HybridWeights struct {
 	Keyword float64
 	BM25    float64
 	Vector  float64
 }
 
-// DefaultHybridWeights is the production default: vector dominates, BM25
-// contributes lexical signal, keyword provides a cheap fallback.
+// DefaultHybridWeights 是生产默认值：vector 为主，BM25 提供词法信号，keyword 作为
+// 廉价兜底。
 var DefaultHybridWeights = HybridWeights{Keyword: 0.2, BM25: 0.3, Vector: 0.5}
 
-// HybridRanker scores a candidate document against a query using three signals.
+// HybridRanker 使用三种信号对候选文档相对查询的相关性打分。
 type HybridRanker struct {
 	provider llm.EmbeddingProvider
 	store    memory.VectorStore
 	weights  HybridWeights
 }
 
-// NewHybridRanker creates a ranker. provider or store may be nil, in which case
-// vector scoring is skipped.
+// NewHybridRanker 创建一个 ranker。provider 或 store 可为 nil，此时跳过 vector 打分。
 func NewHybridRanker(provider llm.EmbeddingProvider, store memory.VectorStore, weights HybridWeights) *HybridRanker {
 	return &HybridRanker{provider: provider, store: store, weights: weights}
 }
 
-// Score returns a combined relevance score in [0, 100].
+// Score 返回 [0, 100] 区间的组合相关性分数。
 func (r *HybridRanker) Score(content, query string) float64 {
 	kw := keywordScore(content, query) / 100.0
-	bm := bm25Score(tokenizeForRanker(content), tokenizeForRanker(query), 1.2, 0.75) // returns already normalized-ish
+	bm := bm25Score(tokenizeForRanker(content), tokenizeForRanker(query), 1.2, 0.75) // 已近似归一化
 	vec := r.vectorScore(content, query)
 
 	w := r.weights
-	// Normalize weights in case they do not sum to 1.
+	// 归一化权重，以防它们不等于 1。
 	total := w.Keyword + w.BM25 + w.Vector
 	if total == 0 {
 		total = 1
@@ -57,8 +56,8 @@ func (r *HybridRanker) vectorScore(content, query string) float64 {
 	if err != nil {
 		return 0
 	}
-	// Search the store for the candidate document vector. If content matches
-	// metadata preview, use its score; otherwise fall back to embedding content.
+	// 在 store 中搜索候选文档向量。若 content 匹配 metadata preview，使用其分数；
+	// 否则回退到对 content 进行 embedding。
 	results, err := r.store.Search(queryVec, 10)
 	if err != nil {
 		return 0
@@ -68,7 +67,7 @@ func (r *HybridRanker) vectorScore(content, query string) float64 {
 			return res.Score
 		}
 	}
-	// Fallback: embed the content directly.
+	// 回退：直接 embed content。
 	contentVec, err := r.provider.Embed(content)
 	if err != nil {
 		return 0
@@ -76,13 +75,13 @@ func (r *HybridRanker) vectorScore(content, query string) float64 {
 	return memory.CosineSimilarity(queryVec, contentVec)
 }
 
-// bm25Score computes a simplified Okapi BM25 between a document and a query.
-// Returns a score normalized by a saturation factor so it lives in [0,1].
+// bm25Score 计算文档与查询之间简化的 Okapi BM25。返回按饱和因子归一化的分数，
+// 使其落在 [0,1]。
 func bm25Score(docWords, queryWords []string, k1, b float64) float64 {
 	if len(queryWords) == 0 || len(docWords) == 0 {
 		return 0
 	}
-	avgDL := 20.0 // rough average document length heuristic; production can precompute corpus stats
+	avgDL := 20.0 // 粗略的平均文档长度启发式；生产可预计算语料统计
 	docLen := float64(len(docWords))
 	docFreq := make(map[string]int, len(docWords))
 	for _, w := range docWords {
@@ -94,17 +93,16 @@ func bm25Score(docWords, queryWords []string, k1, b float64) float64 {
 		if f == 0 {
 			continue
 		}
-		idf := math.Log(1 + (1.0 / f)) // simplified idf for single doc
+		idf := math.Log(1 + (1.0 / f)) // 单文档的简化 idf
 		denom := f + k1*(1-b+b*docLen/avgDL)
 		score += idf * (f * (k1 + 1)) / denom
 	}
-	// Saturate: a generous ceiling so output stays in [0,1].
+	// 饱和：一个宽松的上界，使输出保持在 [0,1]。
 	return math.Min(score, 5.0) / 5.0
 }
 
-// tokenizeForRanker splits text into lower-case words, stripping punctuation.
-// This is a package-local duplicate to avoid exporting a new symbol and to keep
-// the ranker self-contained.
+// tokenizeForRanker 将文本切分为小写单词，剥离标点。这是 package 内部的副本，以避免
+// 导出新符号并保持 ranker 自包含。
 func tokenizeForRanker(s string) []string {
 	fields := strings.Fields(strings.ToLower(s))
 	out := make([]string, 0, len(fields))

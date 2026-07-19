@@ -1,8 +1,7 @@
-// Package harness provides policy rules for the PolicyGate.
+// Package harness 提供 PolicyGate 的策略规则。
 //
-// CostBudgetRule is a PolicyRule that blocks tool calls when the cumulative
-// cost exceeds the TaskContract's cost budget. It implements the PolicyRule
-// interface and integrates with the PolicyChain.
+// CostBudgetRule 是一个 PolicyRule，当累计成本超过 TaskContract 的成本预算时拦截
+// tool call。它实现 PolicyRule 接口，并与 PolicyChain 集成。
 package harness
 
 import (
@@ -10,51 +9,46 @@ import (
 	"sync"
 )
 
-// ErrBlockedByCostBudget is returned when a tool call would exceed the cost budget.
-// (ErrBlockedByPolicy already exists in this package and is used for all policy blocks.)
+// ErrBlockedByCostBudget 在 tool call 会超出成本预算时返回。
+// （本 package 中已存在 ErrBlockedByPolicy，用于所有策略拦截。）
 
-// CostBudgetRule blocks tool calls when the cumulative cost exceeds the
-// TaskContract's CostBudgetUSD threshold. It tracks cost via explicit SetCost
-// calls from the Engine, which computes per-call cost from token usage and
-// model pricing.
+// CostBudgetRule 在累计成本超过 TaskContract 的 CostBudgetUSD 阈值时拦截 tool call。
+// 它通过 Engine 显式调用 SetCost 跟踪成本 —— Engine 根据 token 使用量与模型定价计算每次
+// 调用成本。
 //
-// Design rationale: Cost is a hard economic constraint. The Engine computes
-// the actual cost (from API-returned usage × model pricing) after each LLM
-// call and reports it via SetCost. The CostBudgetRule then blocks subsequent
-// tool calls when the budget is exhausted, preventing the agent from consuming
-// more resources than allocated.
+// 设计理由：成本是硬性经济约束。Engine 在每次 LLM 调用后计算实际成本（API 返回 usage ×
+// 模型定价）并通过 SetCost 上报。CostBudgetRule 在预算耗尽时拦截后续 tool call，防止
+// agent 消耗超出分配的资源。
 //
-// When CostBudgetUSD is 0 (default), the rule never blocks (unlimited budget).
+// 当 CostBudgetUSD 为 0（默认）时，rule 永不拦截（无限制预算）。
 type CostBudgetRule struct {
-	currentCostUSD float64 // cumulative cost in USD
+	currentCostUSD float64 // 累计 USD 成本
 	mu             sync.Mutex
 }
 
-// NewCostBudgetRule creates a new CostBudgetRule with zero accumulated cost.
+// NewCostBudgetRule 创建一个累计成本为 0 的 CostBudgetRule。
 func NewCostBudgetRule() *CostBudgetRule {
 	return &CostBudgetRule{}
 }
 
-// Name returns the rule name for logging and error messages.
+// Name 返回用于日志与错误信息的 rule 名称。
 func (r *CostBudgetRule) Name() string {
 	return "CostBudgetRule"
 }
 
-// SetCost updates the cumulative cost. Called by the Engine after each LLM
-// call with the computed cost for that call (usage × model pricing).
-// The cost is additive — each call's cost is added to the running total.
+// SetCost 更新累计成本。由 Engine 在每次 LLM 调用后以该次调用计算的成本（usage × 模型定价）
+// 调用。成本是累加的 —— 每次调用成本加到运行总额上。
 func (r *CostBudgetRule) SetCost(cost float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.currentCostUSD += cost
 }
 
-// Check evaluates whether the tool call would exceed the cost budget.
-// If CostBudgetUSD > 0 and currentCostUSD >= CostBudgetUSD, the call is blocked.
-// Otherwise, the call is allowed.
+// Check 评估 tool call 是否会超出成本预算。若 CostBudgetUSD > 0 且
+// currentCostUSD >= CostBudgetUSD，则拦截此次调用。否则允许。
 func (r *CostBudgetRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	if contract.CostBudgetUSD <= 0 {
-		return input, nil // unlimited budget
+		return input, nil // 无限制预算
 	}
 
 	r.mu.Lock()
@@ -71,8 +65,7 @@ func (r *CostBudgetRule) Check(toolName string, input map[string]any, contract T
 	return input, nil
 }
 
-// Reset clears the accumulated cost, setting it back to zero.
-// This is useful for test isolation or when reusing a rule across tasks.
+// Reset 清除累计成本，将其重置为 0。用于测试隔离或在多个任务间复用 rule。
 func (r *CostBudgetRule) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

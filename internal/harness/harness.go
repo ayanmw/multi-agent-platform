@@ -1,58 +1,52 @@
-// Package harness implements the Harness Engineering layer — the deterministic
-// scaffolding that wraps the Agent's ReAct loop to enforce safety, scope, budget,
-// and progress tracking.
+// Package harness 实现 Harness Engineering 层 —— 包裹 Agent 的 ReAct loop 的确定性
+// 脚手架，用于强制执行安全、范围、预算与进度跟踪。
 //
-// # Harness Engineering Philosophy
+// # Harness Engineering 设计哲学
 //
-// The Harness is the structured control layer surrounding the Agent. While the
-// Agent's LLM is non-deterministic and prompt-driven, the Harness is deterministic
-// Go code that enforces hard constraints. The Harness does NOT rely on the LLM
-// to "behave" — it intercepts tool calls BEFORE execution and can reject them.
+// Harness 是围绕 Agent 的结构化控制层。Agent 的 LLM 是非确定性的、由 prompt 驱动的，
+// 而 Harness 是确定性的 Go 代码，强制执行硬性约束。Harness 不依赖 LLM "自觉" —— 它在
+// tool 执行前拦截 tool call，并可以拒绝调用。
 //
-// # Architecture (6-layer model, adapted for this project)
+// # 架构（6 层模型，已针对本项目调整）
 //
-//   L0: Model      — LLM provider (internal/llm)
-//   L1: Interface  — ReAct Loop engine (internal/runtime)
-//   L2: Tool       — Tool registry + execution (internal/tool)
-//   L3: Harness    — PolicyGate + TaskContract + Progress (THIS PACKAGE)
-//   L4: Memory     — Self-evolving memory (Phase 4+)
-//   L5: Governance — Audit + eval + cost control (Phase 6+)
+//   L0: Model      — LLM provider（internal/llm）
+//   L1: Interface  — ReAct Loop 引擎（internal/runtime）
+//   L2: Tool       — Tool 注册表与执行（internal/tool）
+//   L3: Harness    — PolicyGate + TaskContract + Progress（本 package）
+//   L4: Memory     — 自演化记忆（Phase 4+）
+//   L5: Governance — 审计 + eval + 成本控制（Phase 6+）
 //
-// # Key Concepts
+// # 关键概念
 //
-// TaskContract: A structured, machine-readable definition of what the task is,
-// what it's allowed to do, and what constitutes success. The contract is enforced
-// by the PolicyGate, not the LLM's system prompt.
+// TaskContract：一个结构化、机器可读的任务定义，描述任务是什么、允许做什么、什么算成功。
+// 该 contract 由 PolicyGate 强制执行，而非依赖 LLM 的 system prompt。
 //
-// PolicyGate: A chain of PolicyRules that intercept tool calls before execution.
-// Each rule can:
-//   - Allow: the tool call proceeds
-//   - Block:  the tool call is rejected with a reason (returned to the LLM as an error)
-//   - Modify: the tool call's arguments are transformed (e.g., path normalization)
+// PolicyGate：一条由多个 PolicyRule 组成的链，在 tool 执行前拦截 tool call。
+// 每条 rule 可以：
+//   - Allow：允许 tool call 继续执行
+//   - Block：拒绝 tool call 并附上原因（作为 error 返回给 LLM）
+//   - Modify：改写 tool call 的参数（例如路径规范化）
 //
-// TaskProgress: Externalized state tracking. The progress file is written at key
-// nodes so that:
-//   - The task can be resumed after a crash (checkpoint recovery)
-//   - The user can see where the task is without reading the full conversation
-//   - The context window is not the only source of truth about task state
+// TaskProgress：外部化状态跟踪。progress 文件在关键节点写入，以便：
+//   - 任务在崩溃后可恢复（checkpoint recovery）
+//   - 用户无需阅读完整对话即可看到任务进度
+//   - context window 不是任务状态的唯一真相来源
 //
-// # Four-Question Boundary Test (四问法)
+// # 四问法边界判定（Four-Question Boundary Test）
 //
-//   T1. Runtime Loop: Who calls the model? → Engine (internal/runtime)
-//   T2. Environmental Action: Who calls tools?  → Engine via Tool Registry
-//   T3. Task-Aware Context: Who manages scope?  → Harness (TaskContract)
-//   T4. Independent Control: Who enforces rules? → Harness (PolicyGate)
+//   T1. Runtime Loop：谁调用模型？        → Engine（internal/runtime）
+//   T2. Environmental Action：谁调用 tool？→ Engine 通过 Tool Registry
+//   T3. Task-Aware Context：谁管理范围？   → Harness（TaskContract）
+//   T4. Independent Control：谁强制执行规则？→ Harness（PolicyGate）
 //
-// # Integration with Engine
+// # 与 Engine 的集成
 //
-// The Harness wraps the Tool Registry. When the Engine calls tool.Execute(),
-// it goes through the Harness first:
+// Harness 包裹 Tool Registry。当 Engine 调用 tool.Execute() 时，会先经过 Harness：
 //
 //   Engine.ExecuteTool() → Harness.PolicyGate.Check() → Tool.Execute()
 //
-// If the PolicyGate blocks, the Engine receives an ErrBlockedByPolicy and
-// emits a tool_call_failed event. The LLM sees the error and can try a
-// different approach.
+// 如果 PolicyGate 拦截，Engine 会收到一个 ErrBlockedByPolicy 并发射 tool_call_failed
+// 事件。LLM 看到该 error 后可以尝试其他方案。
 package harness
 
 import (
@@ -66,99 +60,85 @@ import (
 )
 
 // ============================================================================
-// TaskContract — structured task definition enforced by the Harness
+// TaskContract —— 由 Harness 强制执行的结构化任务定义
 // ============================================================================
 
-// TaskContract defines the scope, constraints, and success criteria for a task.
-// It is the machine-readable contract between the user and the agent — every
-// constraint in the contract is enforced by the PolicyGate, not by prompting.
+// TaskContract 定义任务的范围、约束与成功标准。它是用户与 agent 之间机器可读的
+// contract —— contract 中的每一项约束都由 PolicyGate 强制执行，而非依赖 prompt。
 //
-// Design rationale: Without a TaskContract, the only constraints on the agent
-// are in the system prompt, which the LLM can ignore or "forget" as context
-// grows. The TaskContract is enforced by deterministic Go code — the LLM
-// cannot bypass it.
+// 设计理由：没有 TaskContract 时，对 agent 的唯一约束只存在于 system prompt 中，
+// 而 LLM 可能忽略或"忘记"这些约束（尤其当 context 增长时）。TaskContract 由确定性
+// 的 Go 代码强制执行 —— LLM 无法绕过它。
 type TaskContract struct {
-	// Goal is a human-readable description of what the task should accomplish.
-	// It is used for progress tracking and summary generation, not for enforcement.
+	// Goal 是任务应完成什么的人类可读描述。用于进度跟踪与 summary 生成，不用于强制执行。
 	Goal string `json:"goal"`
 
-	// Scope defines the working directory for file operations. All file paths
-	// are resolved relative to this directory. Paths outside this scope are
-	// rejected by FileScopeRule.
+	// Scope 定义文件操作的工作目录。所有文件路径都相对此目录解析。Scope 之外的路径
+	// 会被 FileScopeRule 拒绝。
 	Scope string `json:"scope"`
 
-	// AllowedTools is the list of tool names the agent is permitted to use.
-	// If empty, all registered tools are allowed. If set, only these tools
-	// can be called (enforced by ToolWhitelistRule — Phase 4).
+	// AllowedTools 是允许 agent 使用的 tool 名称列表。为空时允许所有已注册的 tool；
+	// 非空时只允许调用这些 tool（由 ToolWhitelistRule —— Phase 4 —— 强制执行）。
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 
-	// TokenBudget is the maximum total tokens the agent may consume across all
-	// LLM calls. When the cumulative token count exceeds this budget, the
-	// PolicyGate blocks further LLM calls. 0 means unlimited.
-	// Enforced by TokenBudgetRule (Phase 4).
+	// TokenBudget 是 agent 在所有 LLM 调用中可消耗的最大 token 总数。当累计 token
+	// 数超过此预算时，PolicyGate 拦截后续 LLM 调用。0 表示无限制。
+	// 由 TokenBudgetRule（Phase 4）强制执行。
 	TokenBudget int `json:"token_budget,omitempty"`
 
-	// MaxSteps is the maximum number of ReAct loop iterations. When exceeded,
-	// the Engine terminates with max_steps_exceeded. This is enforced by the
-	// Engine itself, not the PolicyGate.
+	// MaxSteps 是 ReAct loop 的最大迭代次数。超过时 Engine 以 max_steps_exceeded 终止。
+	// 此约束由 Engine 自身强制执行，而非 PolicyGate。
 	MaxSteps int `json:"max_steps"`
 
-	// AcceptanceCriteria defines what constitutes a successful task completion.
-	// Multiple criteria can be combined. All must pass for the task to be
-	// considered complete. If empty, any LLM final answer is accepted.
+	// AcceptanceCriteria 定义什么算任务成功完成。可组合多个标准，全部通过才视为完成。
+	// 为空时，任何 LLM final answer 都被接受。
 	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria,omitempty"`
 
-	// Permissions defines what the agent is allowed to do (e.g., network access,
-	// file deletion). These are enforced by the PolicyGate.
+	// Permissions 定义 agent 被允许做什么（例如网络访问、文件删除）。由 PolicyGate
+	// 强制执行。
 	Permissions TaskPermissions `json:"permissions"`
 
-	// AutoApprovePolicy when true, automatically approves all policy-detected
-	// dangerous commands without user interaction. The approval events are still
-	// emitted and logged for audit trail purposes.
-	// When false (default), policy blocks enter WAITING state for user approval.
+	// AutoApprovePolicy 为 true 时，自动批准所有策略检测到的危险命令，无需用户交互。
+	// 审批事件仍会发射并记录，以便审计追踪。
+	// 为 false（默认）时，策略拦截进入 WAITING 状态等待用户审批。
 	AutoApprovePolicy bool `json:"auto_approve_policy,omitempty"`
 
-	// Metadata carries arbitrary key-value pairs for the harness (e.g., case name,
-	// expected output, tags). Not used for enforcement.
+	// Metadata 携带 harness 的任意键值对（例如 case 名、期望输出、tags）。不用于强制执行。
 	Metadata map[string]string `json:"metadata,omitempty"`
 
-	// CostBudgetUSD is the maximum USD cost allowed for this task. When the
-	// cumulative cost exceeds this budget, CostBudgetRule blocks further tool calls.
-	// 0 means unlimited (no cost constraint).
+	// CostBudgetUSD 是本任务允许的最大 USD 成本。当累计成本超过此预算时，
+	// CostBudgetRule 拦截后续 tool call。0 表示无限制（无成本约束）。
 	CostBudgetUSD float64 `json:"cost_budget_usd,omitempty"`
 
-	// TimeoutSeconds is the maximum runtime for this task. When the timeout is
-	// reached, the Engine aborts with reason "task_timeout". 0 means unlimited
-	// (no timeout). This value is converted to a time.Duration by the caller
-	// before creating the execution context.
+	// TimeoutSeconds 是本任务的最大运行时间。达到超时后 Engine 以 reason "task_timeout"
+	// 中止。0 表示无限制（无超时）。调用者在创建执行 context 前将此值转换为
+	// time.Duration。
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
-// TaskPermissions defines the agent's operational permissions.
-// All fields default to false — the agent starts with no permissions
-// and must be explicitly granted each one.
+// TaskPermissions 定义 agent 的操作权限。所有字段默认为 false —— agent 初始无任何
+// 权限，每一项都必须显式授予。
 type TaskPermissions struct {
-	// AllowNetwork enables the agent to make HTTP requests (future tool).
+	// AllowNetwork 允许 agent 发起 HTTP 请求（未来 tool）。
 	AllowNetwork bool `json:"allow_network"`
 
-	// AllowFileDelete enables the agent to delete files (future tool).
+	// AllowFileDelete 允许 agent 删除文件（未来 tool）。
 	AllowFileDelete bool `json:"allow_file_delete"`
 
-	// AllowFileWrite enables the agent to write/create files.
+	// AllowFileWrite 允许 agent 写入/创建文件。
 	AllowFileWrite bool `json:"allow_file_write"`
 
-	// AllowShell enables the agent to execute shell commands.
+	// AllowShell 允许 agent 执行 shell 命令。
 	AllowShell bool `json:"allow_shell"`
 
-	// AllowShellDangerous enables dangerous shell commands (e.g., rm -rf, git push --force).
-	// Even with this enabled, DangerousCommandRule (Phase 5) may require frontend approval.
+	// AllowShellDangerous 允许危险 shell 命令（例如 rm -rf、git push --force）。
+	// 即使开启此项，DangerousCommandRule（Phase 5）仍可能要求前端审批。
 	AllowShellDangerous bool `json:"allow_shell_dangerous"`
 }
 
-// DefaultContract returns a permissive TaskContract suitable for simple tasks.
-// It allows common read/write operations but does NOT allow destructive actions,
-// network access, or shell execution by default. Callers must explicitly grant
-// those permissions when creating the contract.
+// DefaultContract 返回一个适合简单任务的宽松 TaskContract。它允许常见的读写操作，
+// 但默认不允许破坏性操作、网络访问或 shell 执行。调用者在创建 contract 时必须显式
+// 授予那些权限。
 func DefaultContract(goal string) TaskContract {
 	return TaskContract{
 		Goal:           goal,
@@ -172,83 +152,77 @@ func DefaultContract(goal string) TaskContract {
 }
 
 // ============================================================================
-// TaskProgress — externalized state tracking
+// TaskProgress —— 外部化状态跟踪
 // ============================================================================
 
-// TaskProgress tracks the task's progress at key nodes. It is written to a
-// progress file in the task's working directory, providing externalized state
-// that survives context-window resets and process crashes.
+// TaskProgress 在关键节点跟踪任务进度。它被写入任务工作目录下的 progress 文件，
+// 提供外部化状态，可穿越 context-window 重置与进程崩溃。
 //
-// Why externalize? The LLM's context window is the primary "memory" of what
-// has been done, but it's fragile — context can be truncated, the model can
-// hallucinate, and the conversation history is not verifiable. The Progress
-// file is a verifiable record of what the agent has actually accomplished.
+// 为什么要外部化？LLM 的 context window 是"已完成什么"的主要"记忆"，但它很脆弱 ——
+// context 可能被截断、模型可能幻觉、对话历史不可校验。Progress 文件是 agent 实际
+// 完成了什么的可校验记录。
 type TaskProgress struct {
-	// TaskID is the unique task identifier
+	// TaskID 是任务的唯一标识符
 	TaskID string `json:"task_id"`
 
-	// Goal is the task's objective (from TaskContract)
+	// Goal 是任务的目标（来自 TaskContract）
 	Goal string `json:"goal"`
 
-	// Status is the current task status
+	// Status 是任务当前状态
 	Status string `json:"status"` // "running", "completed", "failed"
 
-	// CurrentStep is the current ReAct loop iteration
+	// CurrentStep 是当前 ReAct loop 迭代
 	CurrentStep int `json:"current_step"`
 
-	// TotalSteps is the max allowed steps (from TaskContract)
+	// TotalSteps 是允许的最大步数（来自 TaskContract）
 	TotalSteps int `json:"total_steps"`
 
-	// TotalTokens is the cumulative token usage
+	// TotalTokens 是累计 token 使用量
 	TotalTokens int `json:"total_tokens"`
 
-	// Nodes are key milestones in the task's execution. Each node records
-	// what was accomplished at that point in the task.
+	// Nodes 是任务执行中的关键里程碑。每个 node 记录该节点完成了什么。
 	Nodes []ProgressNode `json:"nodes"`
 
-	// StartedAt is when the task began
+	// StartedAt 是任务开始时间
 	StartedAt time.Time `json:"started_at"`
 
-	// UpdatedAt is the last time the progress was written
+	// UpdatedAt 是 progress 最后写入时间
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ProgressNode represents a key milestone in the task's execution.
-// Nodes are written at significant points: tool call results, step completions,
-// error encounters, and task completion.
+// ProgressNode 表示任务执行中的一个关键里程碑。Nodes 写入于有意义的节点：
+// tool 调用结果、step 完成、遇到错误、任务完成。
 type ProgressNode struct {
-	// Step is the ReAct loop iteration when this node was recorded
+	// Step 是记录此 node 时的 ReAct loop 迭代
 	Step int `json:"step"`
 
-	// Type describes the node type: "tool_call", "observation", "milestone", "error", "complete"
+	// Type 描述 node 类型："tool_call"、"observation"、"milestone"、"error"、"complete"
 	Type string `json:"type"`
 
-	// Summary is a human-readable description of what happened at this node
+	// Summary 是此节点发生了什么的人类可读描述
 	Summary string `json:"summary"`
 
-	// Data carries type-specific data (e.g., tool name and result for tool_call)
+	// Data 携带类型相关的数据（例如 tool_call 的 tool 名称与结果）
 	Data map[string]any `json:"data,omitempty"`
 
-	// Timestamp is when this node was recorded
+	// Timestamp 是此 node 记录时间
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// ProgressManager handles writing and reading TaskProgress files.
-// It writes to a JSON file in the task's scope directory.
+// ProgressManager 负责读写 TaskProgress 文件。它将 JSON 文件写入任务的 scope 目录。
 type ProgressManager struct {
-	// ProgressPath is the path to the progress file (default: "task_progress.json")
+	// ProgressPath 是 progress 文件路径（默认："task_progress.json"）
 	ProgressPath string
 }
 
-// NewProgressManager creates a new ProgressManager with the default progress
-// file path.
+// NewProgressManager 创建使用默认 progress 文件路径的 ProgressManager。
 func NewProgressManager() *ProgressManager {
 	return &ProgressManager{
 		ProgressPath: "task_progress.json",
 	}
 }
 
-// Init creates a new TaskProgress file for the given task.
+// Init 为给定任务创建一个新的 TaskProgress 文件。
 func (pm *ProgressManager) Init(taskID string, contract TaskContract) (*TaskProgress, error) {
 	progress := &TaskProgress{
 		TaskID:     taskID,
@@ -262,7 +236,7 @@ func (pm *ProgressManager) Init(taskID string, contract TaskContract) (*TaskProg
 	return progress, pm.Write(progress)
 }
 
-// AddNode appends a progress node and writes the updated file.
+// AddNode 追加一个 progress node 并写入更新后的文件。
 func (pm *ProgressManager) AddNode(progress *TaskProgress, node ProgressNode) error {
 	node.Timestamp = time.Now()
 	progress.Nodes = append(progress.Nodes, node)
@@ -271,7 +245,7 @@ func (pm *ProgressManager) AddNode(progress *TaskProgress, node ProgressNode) er
 	return pm.Write(progress)
 }
 
-// SetStatus updates the task status and writes the file.
+// SetStatus 更新任务状态并写入文件。
 func (pm *ProgressManager) SetStatus(progress *TaskProgress, status string, totalTokens int) error {
 	progress.Status = status
 	progress.TotalTokens = totalTokens
@@ -279,14 +253,14 @@ func (pm *ProgressManager) SetStatus(progress *TaskProgress, status string, tota
 	return pm.Write(progress)
 }
 
-// Write serializes the TaskProgress to the progress file.
+// Write 将 TaskProgress 序列化到 progress 文件。
 func (pm *ProgressManager) Write(progress *TaskProgress) error {
 	progress.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(progress, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal progress: %w", err)
 	}
-	// Write to task-specific path: {scope}/task_progress.json
+	// 写入任务专用路径：{scope}/task_progress.json
 	dir := filepath.Dir(pm.ProgressPath)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -299,7 +273,7 @@ func (pm *ProgressManager) Write(progress *TaskProgress) error {
 	return nil
 }
 
-// Load reads a TaskProgress file from disk.
+// Load 从磁盘读取 TaskProgress 文件。
 func (pm *ProgressManager) Load() (*TaskProgress, error) {
 	data, err := os.ReadFile(pm.ProgressPath)
 	if err != nil {
@@ -312,138 +286,132 @@ func (pm *ProgressManager) Load() (*TaskProgress, error) {
 	return &progress, nil
 }
 
-// Exists returns true if the progress file exists on disk.
+// Exists 当 progress 文件在磁盘上存在时返回 true。
 func (pm *ProgressManager) Exists() bool {
 	_, err := os.Stat(pm.ProgressPath)
 	return err == nil
 }
 
 // ============================================================================
-// AcceptanceCriteria — defining what "success" means
+// AcceptanceCriteria —— 定义什么算"成功"
 // ============================================================================
 
-// AcceptanceCriterionType defines the type of check to perform.
+// AcceptanceCriterionType 定义要执行的检查类型。
 type AcceptanceCriterionType string
 
 const (
-	// AcceptTestPass checks that a test command exits with code 0.
-	// E.g., "go test ./..." or "python -m pytest"
+	// AcceptTestPass 检查某条测试命令以退出码 0 退出。
+	// 例如 "go test ./..." 或 "python -m pytest"
 	AcceptTestPass AcceptanceCriterionType = "test_pass"
 
-	// AcceptFileExists checks that a file exists at the given path.
-	// E.g., "output/report.md" or "src/main.go"
+	// AcceptFileExists 检查给定路径的文件存在。
+	// 例如 "output/report.md" 或 "src/main.go"
 	AcceptFileExists AcceptanceCriterionType = "file_exists"
 
-	// AcceptShellExitZero checks that a shell command exits with code 0.
-	// More general than test_pass — can be any command.
+	// AcceptShellExitZero 检查 shell 命令以退出码 0 退出。
+	// 比 test_pass 更通用 —— 可以是任意命令。
 	AcceptShellExitZero AcceptanceCriterionType = "shell_exit_zero"
 
-	// AcceptContentContains checks that a file contains a specific string.
-	// E.g., the generated report includes "Summary" section.
+	// AcceptContentContains 检查文件包含特定字符串。
+	// 例如生成的报告包含 "Summary" 段落。
 	AcceptContentContains AcceptanceCriterionType = "content_contains"
 
-	// AcceptLLMJudge asks an LLM to evaluate the agent's final answer against a
-	// rubric. The Target field of the criterion contains the rubric / question.
+	// AcceptLLMJudge 让 LLM 按 rubric 评估 agent 的 final answer。criterion 的
+	// Target 字段包含 rubric / 问题。
 	AcceptLLMJudge AcceptanceCriterionType = "llm_judge"
 )
 
-// AcceptanceCriterion defines a single check for task completion.
-// Multiple criteria can be combined in the TaskContract — all must pass.
+// AcceptanceCriterion 定义单个任务完成检查。TaskContract 中可组合多个标准 —— 必须全部通过。
 type AcceptanceCriterion struct {
-	// Type is the kind of check to perform
+	// Type 是要执行的检查类型
 	Type AcceptanceCriterionType `json:"type"`
 
-	// Target is the subject of the check (file path, command, or search string)
+	// Target 是检查的目标（文件路径、命令或搜索字符串）
 	Target string `json:"target"`
 
-	// Expected is the expected value (for content_contains: the substring to find)
+	// Expected 是期望值（对 content_contains：要查找的子串）
 	Expected string `json:"expected,omitempty"`
 
-	// Description is a human-readable explanation of what this criterion checks
+	// Description 是此 criterion 检查什么的人类可读说明
 	Description string `json:"description"`
 }
 
 // ============================================================================
-// PolicyGate — the enforcement layer
+// PolicyGate —— 强制执行层
 // ============================================================================
 
-// PolicyRule is a single rule in the PolicyGate. Each rule can inspect a tool
-// call before execution and decide whether to allow, block, or modify it.
+// PolicyRule 是 PolicyGate 中的一条 rule。每条 rule 可在 tool 执行前检查 tool call
+// 并决定允许、拦截或改写。
 //
-// The PolicyRule interface is intentionally minimal — a single Check method.
-// Rules are composed into a PolicyChain, which is checked in order before
-// every tool execution.
+// PolicyRule 接口刻意保持最小 —— 只有一个 Check 方法。Rules 组合成 PolicyChain，
+// 在每次 tool 执行前按顺序检查。
 type PolicyRule interface {
-	// Name returns a human-readable rule name for logging and error messages.
+	// Name 返回人类可读的 rule 名称，用于日志和错误信息。
 	Name() string
 
-	// Check evaluates the tool call against this rule. Returns:
-	//   - nil if the rule allows the call (or doesn't apply to this tool)
-	//   - ErrBlockedByPolicy if the rule blocks the call
-	//   - Optionally modified input (e.g., path normalization)
+	// Check 根据此 rule 评估 tool call。返回：
+	//   - nil 表示 rule 允许此次调用（或此 rule 不适用于此 tool）
+	//   - ErrBlockedByPolicy 表示 rule 拦截此次调用
+	//   - 可选地返回改写后的 input（例如路径规范化）
 	Check(toolName string, input map[string]any, contract TaskContract) (allowedInput map[string]any, err error)
 }
 
-// TokenAwareRule extends PolicyRule for rules that need to know the current
-// token usage. TokenBudgetRule implements this to enforce token budgets.
-// The Engine calls SetTokenUsage before each tool execution to update the
-// cumulative token count.
+// TokenAwareRule 扩展 PolicyRule，适用于需要感知当前 token 使用量的 rule。
+// TokenBudgetRule 实现此接口以强制执行 token 预算。Engine 在每次 tool 执行前调用
+// SetTokenUsage 更新累计 token 数。
 type TokenAwareRule interface {
 	PolicyRule
-	// SetTokenUsage updates the rule's knowledge of cumulative token usage.
+	// SetTokenUsage 更新 rule 对累计 token 使用量的感知。
 	SetTokenUsage(totalTokens int)
 }
 
-// ErrBlockedByPolicy is returned when a PolicyRule blocks a tool call.
-// The LLM receives this error as the tool's output and can try a different
-// approach (e.g., writing to a different directory).
+// ErrBlockedByPolicy 在 PolicyRule 拦截 tool call 时返回。LLM 收到此 error 作为
+// tool 的输出，并可以尝试其他方案（例如写入其他目录）。
 type ErrBlockedByPolicy struct {
-	Rule    string // the rule that blocked the call
-	Reason  string // human-readable reason for the block
-	Tool    string // the tool that was blocked
+	Rule    string // 拦截此次调用的 rule
+	Reason  string // 拦截原因的人类可读说明
+	Tool    string // 被拦截的 tool
 }
 
-// Error implements the error interface.
+// Error 实现 error 接口。
 func (e *ErrBlockedByPolicy) Error() string {
 	return fmt.Sprintf("[POLICY BLOCK] %s blocked %s: %s", e.Rule, e.Tool, e.Reason)
 }
 
-// PolicyChain is an ordered list of PolicyRules. Rules are checked in order;
-// the first rule that blocks stops the chain. If a rule modifies the input,
-// the modified input is passed to the next rule.
+// PolicyChain 是 PolicyRule 的有序列表。Rules 按顺序检查；第一条拦截的 rule 停止链。
+// 如果某条 rule 改写了 input，改写后的 input 会传递给下一条 rule。
 type PolicyChain struct {
 	rules []PolicyRule
 }
 
-// NewPolicyChain creates a new PolicyChain with the given rules.
+// NewPolicyChain 用给定的 rules 创建 PolicyChain。
 func NewPolicyChain(rules ...PolicyRule) *PolicyChain {
 	return &PolicyChain{rules: rules}
 }
 
-// AddRule appends a rule to the chain.
+// AddRule 向链追加一条 rule。
 func (pc *PolicyChain) AddRule(rule PolicyRule) {
 	pc.rules = append(pc.rules, rule)
 }
 
-// Check runs all rules in order against the tool call. Returns the (possibly
-// modified) input and nil if all rules pass, or the original input and an
-// ErrBlockedByPolicy if any rule blocks.
+// Check 对 tool call 按顺序运行所有 rule。若所有 rule 通过，返回（可能被改写的）
+// input 和 nil；若任一 rule 拦截，返回原始 input 和 ErrBlockedByPolicy。
 func (pc *PolicyChain) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	currentInput := input
 	for _, rule := range pc.rules {
 		allowedInput, err := rule.Check(toolName, currentInput, contract)
 		if err != nil {
-			return input, err // return original input on block
+			return input, err // 拦截时返回原始 input
 		}
 		currentInput = allowedInput
 	}
 	return currentInput, nil
 }
 
-// PolicyGate wraps a tool execution with policy enforcement. It is the
-// primary integration point between the Harness and the Engine.
+// PolicyGate 用策略强制执行包裹一次 tool 执行。它是 Harness 与 Engine 之间的
+// 主要集成点。
 //
-// Usage:
+// 用法：
 //
 //	gate := harness.NewPolicyGate(chain, contract)
 //	result, err := gate.Execute(toolName, input, func(input map[string]any) (any, error) {
@@ -454,8 +422,8 @@ type PolicyGate struct {
 	contract TaskContract
 }
 
-// NewPolicyGate creates a PolicyGate with the given policy chain and contract.
-// If chain is nil, all tool calls are allowed (no policy enforcement).
+// NewPolicyGate 用给定的策略链与 contract 创建 PolicyGate。若 chain 为 nil，则
+// 所有 tool call 都被允许（无策略强制执行）。
 func NewPolicyGate(chain *PolicyChain, contract TaskContract) *PolicyGate {
 	if chain == nil {
 		chain = NewPolicyChain()
@@ -466,27 +434,26 @@ func NewPolicyGate(chain *PolicyChain, contract TaskContract) *PolicyGate {
 	}
 }
 
-// Execute runs the tool call through the policy chain, then executes the tool
-// if all rules pass. The executor callback is the actual tool execution logic
-// (typically registry.Execute).
+// Execute 在策略链上运行 tool call，若所有 rule 通过则执行 tool。executor 回调是
+// 实际的 tool 执行逻辑（通常是 registry.Execute）。
 func (g *PolicyGate) Execute(toolName string, input map[string]any, executor func(map[string]any) (any, error)) (any, error) {
-	// Check the policy chain before executing
+	// 在执行前检查策略链
 	allowedInput, err := g.chain.Check(toolName, input, g.contract)
 	if err != nil {
 		return nil, err
 	}
 
-	// Execute the tool with the (possibly modified) input
+	// 用（可能被改写的）input 执行 tool
 	return executor(allowedInput)
 }
 
-// Contract returns the current TaskContract (read-only).
+// Contract 返回当前的 TaskContract（只读）。
 func (g *PolicyGate) Contract() TaskContract {
 	return g.contract
 }
 
-// SetTokenUsage updates all TokenAwareRules in the chain with the current
-// cumulative token count. Called by the Engine before each tool execution.
+// SetTokenUsage 用当前累计 token 数更新链中所有 TokenAwareRule。由 Engine 在每次
+// tool 执行前调用。
 func (g *PolicyGate) SetTokenUsage(totalTokens int) {
 	for _, rule := range g.chain.rules {
 		if ta, ok := rule.(TokenAwareRule); ok {
@@ -496,11 +463,11 @@ func (g *PolicyGate) SetTokenUsage(totalTokens int) {
 }
 
 // ============================================================================
-// Helper: wrap tool execution result as a JSON string
+// 辅助：将 tool 执行结果包装为 JSON 字符串
 // ============================================================================
 
-// ToJSONString serializes a value to a JSON string for LLM consumption.
-// If serialization fails, returns the error message as the string.
+// ToJSONString 将一个值序列化为 JSON 字符串供 LLM 使用。若序列化失败，则将 error
+// 信息作为字符串返回。
 func ToJSONString(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -510,63 +477,55 @@ func ToJSONString(v any) string {
 }
 
 // ============================================================================
-// FileScopeRule — restricts file operations to the contract's scope
+// FileScopeRule —— 将文件操作限制在 contract 的 scope 内
 // ============================================================================
 
-// FileScopeRule ensures that all file operations (read_file, write_file) stay
-// within the TaskContract's Scope directory. Paths outside the scope are
-// rejected with ErrBlockedByPolicy.
+// FileScopeRule 确保所有文件操作（read_file、write_file）都在 TaskContract 的 Scope
+// 目录内。Scope 之外的路径会被 ErrBlockedByPolicy 拒绝。
 //
-// This rule normalizes paths relative to the scope directory, so the LLM can
-// use relative paths and the rule will resolve them correctly.
+// 此 rule 会将路径相对 scope 目录进行规范化，因此 LLM 可以使用相对路径，rule 会正确解析。
 type FileScopeRule struct{}
 
-// Name returns the rule name.
+// Name 返回 rule 名称。
 func (r *FileScopeRule) Name() string { return "FileScopeRule" }
 
-// isUnixAbsolutePath reports whether p is a Unix-style absolute path (leading '/').
-// On Windows, filepath.IsAbs only recognizes drive-rooted paths (C:\, \server\share)
-// and returns false for "/etc/passwd", which then gets treated as relative and
-// joined into the scope directory — a cross-platform security hole. By detecting
-// Unix absolute paths explicitly we ensure they are treated as absolute on every
-// platform, so the scope-prefix check below rejects them when the scope is a
-// Windows path (and accepts them only when the scope is a matching Unix path).
+// isUnixAbsolutePath 报告 p 是否为 Unix 风格绝对路径（以 '/' 开头）。
+// 在 Windows 上，filepath.IsAbs 只识别盘符根路径（C:\、\server\share），对 "/etc/passwd"
+// 返回 false，从而被当作相对路径并入 scope 目录 —— 这是一个跨平台安全漏洞。通过显式
+// 检测 Unix 绝对路径，我们确保在所有平台上都将其视为绝对路径，使下面的 scope 前缀检查
+// 在 scope 为 Windows 路径时拒绝它（仅当 scope 为匹配的 Unix 路径时才接受）。
 func isUnixAbsolutePath(p string) bool {
 	return strings.HasPrefix(p, "/")
 }
 
-// Check validates that the file path is within the contract's scope.
-// If the path is absolute (Windows or Unix style), it checks whether it's under the scope.
-// If the path is relative, it resolves it against the scope.
-// The returned input contains the normalized absolute path.
+// Check 校验文件路径是否在 contract 的 scope 内。
+// 若路径是绝对路径（Windows 或 Unix 风格），检查它是否在 scope 之下。
+// 若路径是相对路径，相对 scope 解析。
+// 返回的 input 包含规范化后的绝对路径。
 //
-// Scope resolution priority (highest first):
-//  1. contract.Scope — explicit caller-provided scope (absolute path expected)
-//  2. input["workdir"] — the session workspace_dir injected by the Engine
-//     (engine.go:1330) when the LLM did not pass an explicit workdir
-//  3. os.Getwd() — legacy fallback so the rule still has a usable root when
-//     neither scope nor workdir is set
+// Scope 解析优先级（从高到低）：
+//  1. contract.Scope —— 调用方显式提供的 scope（期望是绝对路径）
+//  2. input["workdir"] —— Engine 在 LLM 未显式传入 workdir 时注入的 session
+//     workspace_dir（engine.go:1330）
+//  3. os.Getwd() —— 兜底路径，确保 rule 在 scope 与 workdir 都未设置时仍有可用根
 //
-// Without the workdir fallback, the default contract (Scope=".") resolves to
-// the server's CWD, so a write_file with a relative path like "foo.txt" is
-// allowed to land in the server CWD rather than the session workspace — the
-// exact bug we are fixing. When the Engine injects the session workspace as
-// "workdir", we anchor the scope there instead.
+// 若没有 workdir 兜底，默认 contract（Scope="."）会解析到服务器 CWD，于是用相对路径
+// "foo.txt" 的 write_file 会落到服务器 CWD 而非 session workspace —— 这正是我们要修复
+// 的 bug。当 Engine 将 session workspace 作为 "workdir" 注入时，我们把 scope 锚定到那里。
 func (r *FileScopeRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
-	// Only apply to file-related tools
+	// 只对文件相关 tool 生效
 	if toolName != "write_file" && toolName != "read_file" {
 		return input, nil
 	}
 
 	path, ok := input["path"].(string)
 	if !ok || path == "" {
-		return input, nil // no path to check; let the tool handle the error
+		return input, nil // 无 path 可检查；让 tool 自行处理 error
 	}
 
-	// Determine the effective scope root. contract.Scope takes precedence;
-	// when it is the permissive default "." (no explicit scope set), fall back
-	// to the session workspace_dir passed in the tool input so that relative
-	// paths resolve inside the session workspace instead of the server CWD.
+	// 确定有效的 scope 根。contract.Scope 优先；当它是宽松默认值 "."（未显式设置 scope）
+	// 时，回退到 tool input 中传入的 session workspace_dir，使相对路径解析到 session
+	// workspace 内而非服务器 CWD。
 	scope := contract.Scope
 	if scope == "" || scope == "." {
 		if wd, hasWd := input["workdir"].(string); hasWd && wd != "" {
@@ -574,7 +533,7 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		}
 	}
 
-	// Resolve the scope to an absolute path
+	// 将 scope 解析为绝对路径
 	scopeAbs, err := filepath.Abs(scope)
 	if err != nil {
 		return input, &ErrBlockedByPolicy{
@@ -584,11 +543,10 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		}
 	}
 
-	// Resolve the requested path. We treat both Windows-absolute paths
-	// (filepath.IsAbs, e.g. "C:\...") and Unix-absolute paths (leading '/',
-	// e.g. "/etc/passwd") as absolute. On Windows, a Unix-absolute path can
-	// never be inside a Windows scope, so the prefix check below rejects it
-	// instead of silently joining it into the scope directory.
+	// 解析请求路径。我们将 Windows 绝对路径（filepath.IsAbs，如 "C:\..."）与 Unix 绝对
+	// 路径（以 '/' 开头，如 "/etc/passwd"）都视为绝对路径。在 Windows 上，Unix 绝对路径
+	// 不可能位于 Windows scope 之内，因此下面的前缀检查会拒绝它，而不是默默地把它并入
+	// scope 目录。
 	var targetAbs string
 	if filepath.IsAbs(path) || isUnixAbsolutePath(path) {
 		targetAbs = filepath.Clean(path)
@@ -596,8 +554,8 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		targetAbs = filepath.Join(scopeAbs, filepath.Clean(path))
 	}
 
-	// Check if the target is within the scope. We compare against
-	// scopeAbs + separator so that a scope "/foo" does not match "/foobar".
+	// 检查目标是否在 scope 内。我们用 scopeAbs + 分隔符进行比较，以避免 scope "/foo"
+	// 误匹配 "/foobar"。
 	if !strings.HasPrefix(targetAbs, scopeAbs+string(filepath.Separator)) && targetAbs != scopeAbs {
 		return input, &ErrBlockedByPolicy{
 			Rule:   r.Name(),
@@ -606,7 +564,7 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 		}
 	}
 
-	// Normalize the path in the input to the absolute path
+	// 将 input 中的路径规范化为绝对路径
 	normalizedInput := make(map[string]any, len(input))
 	for k, v := range input {
 		normalizedInput[k] = v
@@ -617,27 +575,25 @@ func (r *FileScopeRule) Check(toolName string, input map[string]any, contract Ta
 }
 
 // ============================================================================
-// PathTraversalRule — blocks ".." in paths
+// PathTraversalRule —— 拦截路径中的 ".."
 // ============================================================================
 
-// PathTraversalRule rejects file paths that contain ".." segments, which are
-// the most common form of directory traversal attack. This rule works alongside
-// FileScopeRule as a defense-in-depth measure.
+// PathTraversalRule 拒绝包含 ".." 段的文件路径 —— 这是最常见的目录穿越（directory
+// traversal）攻击形式。此 rule 与 FileScopeRule 配合，作为纵深防御措施。
 type PathTraversalRule struct{}
 
-// Name returns the rule name.
+// Name 返回 rule 名称。
 func (r *PathTraversalRule) Name() string { return "PathTraversalRule" }
 
-// Check rejects paths containing ".." segments.
-// This is a simple, fast check that catches the most obvious traversal attempts.
-// The FileScopeRule provides a more comprehensive scope check.
+// Check 拒绝包含 ".." 段的路径。这是一个简单、快速的检查，能捕获最显眼的穿越尝试。
+// FileScopeRule 提供更全面的 scope 检查。
 func (r *PathTraversalRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
-	// Only apply to file-related tools and shell commands
+	// 只对文件相关 tool 与 shell 命令生效
 	if toolName != "write_file" && toolName != "read_file" && toolName != "run_shell" {
 		return input, nil
 	}
 
-	// Check the "path" parameter for file tools
+	// 检查文件 tool 的 "path" 参数
 	if path, ok := input["path"].(string); ok && path != "" {
 		if strings.Contains(path, "..") {
 			return input, &ErrBlockedByPolicy{
@@ -648,11 +604,11 @@ func (r *PathTraversalRule) Check(toolName string, input map[string]any, contrac
 		}
 	}
 
-	// For run_shell, do a quick scan of the command string for .. patterns
-	// that look like path traversal (not exhaustive, but catches obvious cases)
+	// 对 run_shell，快速扫描命令字符串中形如路径穿越的 .. 模式
+	// （不全面，但能捕获显眼情况）
 	if toolName == "run_shell" {
 		if cmd, ok := input["command"].(string); ok && cmd != "" {
-			// Look for patterns like "../" or "..\" in the command
+			// 查找命令中 "../" 或 "..\" 模式
 			if strings.Contains(cmd, "../") || strings.Contains(cmd, `..\`) {
 				return input, &ErrBlockedByPolicy{
 					Rule:   r.Name(),
@@ -667,42 +623,40 @@ func (r *PathTraversalRule) Check(toolName string, input map[string]any, contrac
 }
 
 // ============================================================================
-// AcceptanceEvaluator — evaluates acceptance criteria
+// AcceptanceEvaluator —— 评估 acceptance criteria
 // ============================================================================
 
-// AcceptanceEvaluator checks whether a task's acceptance criteria have been met.
-// It runs each criterion's check and returns a report of which passed and which failed.
+// AcceptanceEvaluator 检查任务的 acceptance criteria 是否满足。它运行每条 criterion
+// 的检查并返回一份报告，说明哪些通过、哪些失败。
 type AcceptanceEvaluator struct {
-	scope  string     // working directory for resolving relative paths
-	judge  *LLMJudge  // optional LLM judge for semantic criteria (nil = soft pass)
+	scope  string     // 解析相对路径的工作目录
+	judge  *LLMJudge  // 可选的 LLM judge，用于语义标准（nil = soft pass）
 
-	// Evaluation context populated by SetEvaluationContext. It carries the
-	// original task goal, user input, agent final answer and recent tool
-	// outputs to the LLM judge so the prompt includes real evidence instead
-	// of empty placeholders.
+	// 由 SetEvaluationContext 填入的评估 context。它将原始任务 goal、用户输入、
+	// agent final answer 与近期 tool 输出传递给 LLM judge，使 prompt 包含真实证据
+	// 而非空占位符。
 	goal        string
 	userInput   string
 	finalAnswer string
 	toolOutputs []string
 }
 
-// NewAcceptanceEvaluator creates a new AcceptanceEvaluator with the given scope.
+// NewAcceptanceEvaluator 创建用给定 scope 的 AcceptanceEvaluator。
 func NewAcceptanceEvaluator(scope string) *AcceptanceEvaluator {
 	return &AcceptanceEvaluator{scope: scope}
 }
 
-// SetLLMJudge attaches an optional LLM judge for evaluating AcceptLLMJudge criteria.
-// Passing nil clears any previously attached judge.
+// SetLLMJudge 附加可选的 LLM judge，用于评估 AcceptLLMJudge 标准。传 nil 会清除之前
+// 附加的 judge。
 // 当未配置 LLM judge 时，AcceptLLMJudge 标准的检查会 soft pass，避免阻塞未配置评估器的
 // 旧任务或配置错误的引擎，同时仍会记录该标准因 judge 不可用而被跳过。
 func (ae *AcceptanceEvaluator) SetLLMJudge(judge *LLMJudge) {
 	ae.judge = judge
 }
 
-// SetEvaluationContext provides the AcceptanceEvaluator with the runtime
-// information needed by LLMJudge criteria. The judge prompt includes Goal,
-// UserInput, FinalAnswer and recent ToolOutputs when evaluating semantic
-// rubrics.
+// SetEvaluationContext 向 AcceptanceEvaluator 提供 LLMJudge 标准所需的运行时信息。
+// judge prompt 在评估语义 rubric 时会包含 Goal、UserInput、FinalAnswer 与近期的
+// ToolOutputs。
 func (ae *AcceptanceEvaluator) SetEvaluationContext(goal, userInput, finalAnswer string, toolOutputs []string) {
 	ae.goal = goal
 	ae.userInput = userInput
@@ -710,7 +664,7 @@ func (ae *AcceptanceEvaluator) SetEvaluationContext(goal, userInput, finalAnswer
 	ae.toolOutputs = toolOutputs
 }
 
-// EvalResult is the result of evaluating a single acceptance criterion.
+// EvalResult 是评估单个 acceptance criterion 的结果。
 type EvalResult struct {
 	Criterion AcceptanceCriterion `json:"criterion"`
 	Passed    bool                `json:"passed"`
@@ -719,14 +673,14 @@ type EvalResult struct {
 	Duration  int64               `json:"duration_ms"`
 }
 
-// EvalReport is the result of evaluating all acceptance criteria.
+// EvalReport 是评估所有 acceptance criteria 的结果。
 type EvalReport struct {
 	AllPassed bool         `json:"all_passed"`
 	Results   []EvalResult `json:"results"`
 	Summary   string       `json:"summary"`
 }
 
-// Evaluate runs all acceptance criteria and returns a report.
+// Evaluate 运行所有 acceptance criteria 并返回一份报告。
 func (ae *AcceptanceEvaluator) Evaluate(criteria []AcceptanceCriterion) (*EvalReport, error) {
 	if len(criteria) == 0 {
 		return &EvalReport{
@@ -765,7 +719,7 @@ func (ae *AcceptanceEvaluator) Evaluate(criteria []AcceptanceCriterion) (*EvalRe
 	}, nil
 }
 
-// evaluateOne runs a single acceptance criterion check.
+// evaluateOne 运行单个 acceptance criterion 检查。
 func (ae *AcceptanceEvaluator) evaluateOne(criterion AcceptanceCriterion) EvalResult {
 	start := time.Now()
 
@@ -793,7 +747,7 @@ func (ae *AcceptanceEvaluator) evaluateOne(criterion AcceptanceCriterion) EvalRe
 	}
 }
 
-// checkFileExists verifies that a file exists at the target path.
+// checkFileExists 验证目标路径存在文件。
 func (ae *AcceptanceEvaluator) checkFileExists(criterion AcceptanceCriterion, start time.Time) EvalResult {
 	target := criterion.Target
 	if !filepath.IsAbs(target) {
@@ -818,7 +772,7 @@ func (ae *AcceptanceEvaluator) checkFileExists(criterion AcceptanceCriterion, st
 	}
 }
 
-// checkContentContains verifies that a file contains the expected string.
+// checkContentContains 验证文件包含期望的字符串。
 func (ae *AcceptanceEvaluator) checkContentContains(criterion AcceptanceCriterion, start time.Time) EvalResult {
 	target := criterion.Target
 	if !filepath.IsAbs(target) {
@@ -852,26 +806,23 @@ func (ae *AcceptanceEvaluator) checkContentContains(criterion AcceptanceCriterio
 	}
 }
 
-// checkShell runs a shell command and checks the exit code.
-// NOTE: This is intentionally limited — it uses a short timeout and does not
-// allow arbitrary commands. It is designed for test runners and validation
-// commands, not general-purpose shell execution.
+// checkShell 运行 shell 命令并检查退出码。
+// 注意：此处刻意限制 —— 使用较短超时且不允许任意命令。它面向测试 runner 与校验命令，
+// 不用于通用 shell 执行。
 func (ae *AcceptanceEvaluator) checkShell(criterion AcceptanceCriterion, start time.Time) EvalResult {
-	// For safety, shell exit checks are stubbed in the initial implementation.
-	// Full implementation requires Docker sandboxing (Phase 5).
-	// For now, we return a "not implemented" result that doesn't block.
+	// 出于安全考虑，初始实现中 shell 退出检查是 stub。
+	// 完整实现需要 Docker sandbox（Phase 5）。
+	// 目前返回"未实现"结果，但不会阻塞。
 	return EvalResult{
 		Criterion: criterion,
-		Passed:    true, // soft pass — don't block on unimplemented checks
+		Passed:    true, // soft pass —— 不因未实现的检查而阻塞
 		Message:   fmt.Sprintf("Shell check skipped (not yet implemented): %s. Full implementation in Phase 5 with Docker sandbox.", criterion.Target),
 		Duration:  time.Since(start).Milliseconds(),
 	}
 }
 
-// checkLLMJudge evaluates a semantic rubric using the optional LLM judge.
-// If no judge is configured, the criterion receives a soft pass so that tasks
-// without a configured evaluator are not blocked (while still recording that
-// the judge was unavailable).
+// checkLLMJudge 使用可选的 LLM judge 评估语义 rubric。若未配置 judge，该 criterion 收到
+// soft pass，使未配置评估器的任务不被阻塞（同时仍记录 judge 不可用）。
 func (ae *AcceptanceEvaluator) checkLLMJudge(criterion AcceptanceCriterion, start time.Time) EvalResult {
 	if ae.judge == nil {
 		return EvalResult{
@@ -908,7 +859,7 @@ func (ae *AcceptanceEvaluator) checkLLMJudge(criterion AcceptanceCriterion, star
 	}
 }
 
-// truncateForDisplay truncates a string to maxLen for display purposes.
+// truncateForDisplay 将字符串截断到 maxLen 长度以便展示。
 func truncateForDisplay(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -917,41 +868,36 @@ func truncateForDisplay(s string, maxLen int) string {
 }
 
 // ============================================================================
-// TokenBudgetRule — enforces the TaskContract's token budget
+// TokenBudgetRule —— 强制执行 TaskContract 的 token 预算
 // ============================================================================
 
-// TokenBudgetRule blocks all tool calls when the cumulative token usage exceeds
-// the TaskContract's TokenBudget. It implements TokenAwareRule so the Engine can
-// update the cumulative token count before each tool execution.
+// TokenBudgetRule 在累计 token 使用量超过 TaskContract 的 TokenBudget 时拦截所有
+// tool call。它实现 TokenAwareRule，以便 Engine 在每次 tool 执行前更新累计 token 数。
 //
-// Design rationale: The token budget is a hard economic constraint — once the
-// budget is exceeded, the agent should stop consuming tokens. This rule is
-// checked BEFORE tool execution (not during LLM calls) because the Engine
-// already tracks token usage per LLM call. The rule blocks subsequent tool
-// calls to prevent the agent from making more LLM calls after the budget is
-// exceeded.
+// 设计理由：token 预算是硬性经济约束 —— 一旦预算超限，agent 应停止消耗 token。
+// 此 rule 在 tool 执行前（而非 LLM 调用期间）检查，因为 Engine 已按 LLM 调用跟踪
+// token 使用量。rule 拦截后续 tool call 以防 agent 在预算超限后继续发起 LLM 调用。
 //
-// When TokenBudget is 0, the rule never blocks (unlimited budget).
+// 当 TokenBudget 为 0 时，rule 永不拦截（无限制预算）。
 type TokenBudgetRule struct {
-	// totalTokens tracks the cumulative token usage across all LLM calls.
-	// Updated by the Engine via SetTokenUsage.
+	// totalTokens 跟踪所有 LLM 调用的累计 token 使用量。由 Engine 通过 SetTokenUsage 更新。
 	totalTokens int
 }
 
-// Name returns the rule name.
+// Name 返回 rule 名称。
 func (r *TokenBudgetRule) Name() string { return "TokenBudgetRule" }
 
-// SetTokenUsage updates the cumulative token count. Called by the Engine
-// (via PolicyGate.SetTokenUsage) before each tool execution.
+// SetTokenUsage 更新累计 token 数。由 Engine（通过 PolicyGate.SetTokenUsage）在每次
+// tool 执行前调用。
 func (r *TokenBudgetRule) SetTokenUsage(totalTokens int) {
 	r.totalTokens = totalTokens
 }
 
-// Check blocks all tool calls if the cumulative token usage exceeds the budget.
-// When TokenBudget is 0 (unlimited), this rule always allows.
+// Check 当累计 token 使用量超过预算时拦截所有 tool call。当 TokenBudget 为 0
+// （无限制）时，此 rule 总是允许。
 func (r *TokenBudgetRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	if contract.TokenBudget <= 0 {
-		return input, nil // unlimited budget
+		return input, nil // 无限制预算
 	}
 
 	if r.totalTokens >= contract.TokenBudget {
@@ -966,27 +912,25 @@ func (r *TokenBudgetRule) Check(toolName string, input map[string]any, contract 
 }
 
 // ============================================================================
-// ToolWhitelistRule — restricts which tools the agent can use
+// ToolWhitelistRule —— 限制 agent 可使用的 tool
 // ============================================================================
 
-// ToolWhitelistRule only allows tool calls to tools listed in the TaskContract's
-// AllowedTools field. If AllowedTools is empty, all tools are allowed.
+// ToolWhitelistRule 只允许调用 TaskContract AllowedTools 字段中列出的 tool。若
+// AllowedTools 为空，则允许所有 tool。
 //
-// Design rationale: The TaskContract specifies which tools the agent is allowed
-// to use. This rule enforces that restriction at the PolicyGate level, before the
-// tool is executed. The LLM may still request blocked tools in its response, but
-// the PolicyGate will intercept and return an error — the LLM can then try a
-// different approach.
+// 设计理由：TaskContract 指定 agent 被允许使用哪些 tool。此 rule 在 PolicyGate 层、
+// tool 执行前强制执行该限制。LLM 仍可在其响应中请求被拦截的 tool，但 PolicyGate 会
+// 拦截并返回 error —— LLM 随后可尝试其他方案。
 type ToolWhitelistRule struct{}
 
-// Name returns the rule name.
+// Name 返回 rule 名称。
 func (r *ToolWhitelistRule) Name() string { return "ToolWhitelistRule" }
 
-// Check blocks tool calls to tools not in the contract's AllowedTools list.
-// If AllowedTools is empty, all tools are allowed (no restriction).
+// Check 拦截调用 contract AllowedTools 列表外 tool 的 tool call。若 AllowedTools 为空，
+// 允许所有 tool（无限制）。
 func (r *ToolWhitelistRule) Check(toolName string, input map[string]any, contract TaskContract) (map[string]any, error) {
 	if len(contract.AllowedTools) == 0 {
-		return input, nil // no restrictions — all tools allowed
+		return input, nil // 无限制 —— 允许所有 tool
 	}
 
 	for _, allowed := range contract.AllowedTools {

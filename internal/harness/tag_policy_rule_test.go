@@ -4,8 +4,8 @@ import (
 	"testing"
 )
 
-// fakeTagLookup returns tags based on a tiny hard-coded map. It simulates the
-// behavior of tool.Registry.GetTags without importing the tool package.
+// fakeTagLookup 基于一个小的硬编码 map 返回 tag。它模拟 tool.Registry.GetTags 的行为，
+// 而不引入 tool package。
 func fakeTagLookup(toolName string) []string {
 	switch toolName {
 	case "core/read_file", "core/list_dir", "filesystem:readonly":
@@ -30,7 +30,7 @@ func TestTagPolicyRuleBlocksByTag(t *testing.T) {
 	const toolName = "core/fetch_url"
 	rule := NewTagPolicyRule(fakeTagLookup)
 
-	// No network permission → blocked
+	// 无网络权限 → 拦截
 	_, err := rule.Check(toolName, map[string]any{}, TaskContract{
 		Permissions: TaskPermissions{},
 	})
@@ -38,7 +38,7 @@ func TestTagPolicyRuleBlocksByTag(t *testing.T) {
 		t.Fatalf("expected block without AllowNetwork, got %v", err)
 	}
 
-	// With network permission → allowed
+	// 有网络权限 → 放行
 	_, err = rule.Check(toolName, map[string]any{}, TaskContract{
 		Permissions: TaskPermissions{AllowNetwork: true},
 	})
@@ -68,7 +68,7 @@ func TestTagPolicyRuleFileWrite(t *testing.T) {
 func TestTagPolicyRuleFileDelete(t *testing.T) {
 	rule := NewTagPolicyRule(fakeTagLookup)
 
-	// Even with file write permission, destructive operations require delete.
+	// 即使有文件写权限，破坏性操作仍需删除权限。
 	_, err := rule.Check("core/delete_file", map[string]any{}, TaskContract{
 		Permissions: TaskPermissions{AllowFileWrite: true},
 	})
@@ -87,7 +87,7 @@ func TestTagPolicyRuleFileDelete(t *testing.T) {
 func TestTagPolicyRuleExecDangerous(t *testing.T) {
 	rule := NewTagPolicyRule(fakeTagLookup)
 
-	// Basic shell permission is not enough for exec:dangerous tools.
+	// 基础 shell 权限对 exec:dangerous tool 不足。
 	_, err := rule.Check("core/execute_program", map[string]any{}, TaskContract{
 		Permissions: TaskPermissions{AllowShell: true},
 	})
@@ -106,7 +106,7 @@ func TestTagPolicyRuleExecDangerous(t *testing.T) {
 func TestTagPolicyRuleReadonly(t *testing.T) {
 	rule := NewTagPolicyRule(fakeTagLookup)
 
-	// Readonly tools do not require any permissions.
+	// 只读 tool 无需任何权限。
 	_, err := rule.Check("core/read_file", map[string]any{}, TaskContract{
 		Permissions: TaskPermissions{},
 	})

@@ -1,20 +1,18 @@
-// Package harness — ContextCompressor: synchronous context compression for long sessions.
+// Package harness —— ContextCompressor：用于长会话的同步 context 压缩。
 //
-// When a multi-turn session exceeds turn or token thresholds, the ContextCompressor
-// replaces old turns with a structured summary. This keeps the context window small
-// while preserving the key facts from earlier conversation history.
+// 当多轮会话超过 turn 或 token 阈值时，ContextCompressor 会将旧 turn 替换为结构化
+// summary。这样可在保持 context window 较小的同时保留早期对话历史的关键事实。
 //
-// Compression strategy (Phase 5-B):
-//   - Trigger: turn_count >= 20 OR total_tokens >= 100000
-//   - Keep: the most recent 5 turns intact
-//   - Summarize: all earlier turns into a single structured memory record
-//   - Persist: summary as a session-scoped consolidated memory
-//   - Replace: old session_messages are deleted; summary is injected as a system message
+// 压缩策略（Phase 5-B）：
+//   - 触发：turn_count >= 20 或 total_tokens >= 100000
+//   - 保留：最近 5 个 turn 不动
+//   - 摘要：将更早的所有 turn 摘要为单条结构化 memory 记录
+//   - 持久化：summary 作为 session 级 consolidated memory 存储
+//   - 替换：旧的 session_messages 被删除；summary 作为 system message 注入
 //
-// Phase 6-F: per-turn summarization delegates to a LLMSummarizer (which
+// Phase 6-F：每轮 summarization 委托给 LLMSummarizer（当 LLM 调用失败时回退到
 //
-//	falls back to the legacy keyword implementation when the LLM call
-//	fails).
+//	旧的关键词实现）。
 package harness
 
 import (
@@ -27,73 +25,70 @@ import (
 	"github.com/google/uuid"
 )
 
-// ContextCompressor compresses old conversation turns into structured summaries
-// when thresholds are exceeded. It keeps the most recent N turns intact and
-// summarizes older turns into memory records.
+// ContextCompressor 在阈值超限时将旧对话 turn 压缩为结构化 summary。它保留最近 N 个
+// turn 不动，将更早的 turn 摘要为 memory 记录。
 type ContextCompressor struct {
 	db         CompressorDB
 	summarizer LLMSummarizer
 }
 
-// CompressorDB is the minimal DB interface needed by the compressor.
-// It isolates the compressor from the full db package, making it easier to test.
+// CompressorDB 是 compressor 所需的最小 DB 接口。它将 compressor 与完整的 db package
+// 隔离，便于测试。
 type CompressorDB interface {
-	// QuerySessionMessages returns all messages for a session, ordered by turn_index ASC, created_at ASC.
+	// QuerySessionMessages 返回某 session 的所有 message，按 turn_index ASC, created_at ASC 排序。
 	QuerySessionMessages(sessionID string) ([]db.SessionMessageRecord, error)
-	// QuerySessionByID returns the session record for a session.
+	// QuerySessionByID 返回某 session 的 session 记录。
 	QuerySessionByID(sessionID string) (*db.SessionRecord, error)
-	// InsertMemory persists a memory record (used to store the generated summary).
+	// InsertMemory 持久化一条 memory 记录（用于存储生成的 summary）。
 	InsertMemory(record db.MemoryRecord) error
-	// DeleteSessionMessagesBeforeTurn deletes all session_messages with turn_index < the given value.
+	// DeleteSessionMessagesBeforeTurn 删除 turn_index 小于给定值的所有 session_messages。
 	DeleteSessionMessagesBeforeTurn(sessionID string, turnIndex int) error
-	// UpdateSessionContextSize updates total_tokens and context_size for a session.
+	// UpdateSessionContextSize 更新 session 的 total_tokens 与 context_size。
 	UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int) error
 }
 
-// CompressResult reports the outcome of a compression check.
+// CompressResult 报告一次压缩检查的结果。
 type CompressResult struct {
-	// Compressed is true if compression was actually performed.
+	// Compressed 为 true 表示实际执行了压缩。
 	Compressed bool `json:"compressed"`
-	// TurnsCompressed is the number of complete turns summarized.
+	// TurnsCompressed 是被摘要的完整 turn 数。
 	TurnsCompressed int `json:"turns_compressed"`
-	// SummaryContent is the generated summary text (empty if no compression).
+	// SummaryContent 是生成的 summary 文本（未压缩时为空）。
 	SummaryContent string `json:"summary_content"`
-	// MessagesKept is the number of individual messages retained after compression.
+	// MessagesKept 是压缩后保留的单条 message 数量。
 	MessagesKept int `json:"messages_kept"`
 }
 
-// NewContextCompressor creates a new ContextCompressor backed by the given DB.
-// summarizer is consulted for every per-turn summary; if nil the compressor
-// falls back to its own keyword implementation to preserve Phase 5-B behavior.
+// NewContextCompressor 用给定 DB 创建 ContextCompressor。summarizer 用于每轮 summary；
+// 若为 nil，compressor 会回退到自身的关键词实现以保留 Phase 5-B 行为。
 func NewContextCompressor(database CompressorDB, summarizer LLMSummarizer) *ContextCompressor {
 	return &ContextCompressor{db: database, summarizer: summarizer}
 }
 
 const (
-	// turnThreshold triggers compression when a session has at least this many turns.
+	// turnThreshold 当 session 至少有这么多 turn 时触发压缩。
 	turnThreshold = 20
-	// tokenThreshold triggers compression when total_tokens reaches this value.
+	// tokenThreshold 当 total_tokens 达到此值时触发压缩。
 	tokenThreshold = 100000
-	// keepTurns is the number of most recent turns to preserve unchanged.
+	// keepTurns 是要保持不变的最近 turn 数量。
 	keepTurns = 5
 )
 
-// CompressIfNeeded checks thresholds and compresses the session context if needed.
-// It is called synchronously before starting a new task in a session, ensuring the
-// context is clean before the agent loop begins.
+// CompressIfNeeded 检查阈值并在需要时压缩 session context。它在新任务开始前同步调用，
+// 确保 agent loop 开始前 context 是干净的。
 func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult, error) {
-	// Load the session record so we can check thresholds.
+	// 加载 session 记录以便检查阈值。
 	session, err := cc.db.QuerySessionByID(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("query session %s: %w", sessionID, err)
 	}
 
-	// No compression needed if neither threshold is exceeded.
+	// 两个阈值都未超过时无需压缩。
 	if session.TurnCount < turnThreshold && session.TotalTokens < tokenThreshold {
 		return &CompressResult{Compressed: false}, nil
 	}
 
-	// Load all session messages and group them by turn.
+	// 加载所有 session message 并按 turn 分组。
 	messages, err := cc.db.QuerySessionMessages(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("query session messages %s: %w", sessionID, err)
@@ -102,7 +97,7 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		return &CompressResult{Compressed: false}, nil
 	}
 
-	// Find the maximum turn index in the session.
+	// 找到 session 中最大的 turn index。
 	maxTurn := -1
 	for _, m := range messages {
 		if m.TurnIndex > maxTurn {
@@ -113,18 +108,18 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		return &CompressResult{Compressed: false}, nil
 	}
 
-	// Determine the cutoff turn: anything strictly earlier than this will be compressed.
+	// 确定截断 turn：严格早于此值的 turn 都会被压缩。
 	cutoffTurn := maxTurn - keepTurns + 1
 	if cutoffTurn <= 0 {
-		// Not enough old turns to compress; keep everything as-is.
+		// 旧 turn 不足以压缩；全部原样保留。
 		return &CompressResult{Compressed: false}, nil
 	}
 
-	// Split messages into older turns (to summarize) and recent turns (to keep).
+	// 将 message 拆分为旧 turn（待摘要）与近期 turn（保留）。
 	oldMessagesByTurn := make(map[int][]db.SessionMessageRecord)
 	var keptMessages []db.SessionMessageRecord
 	for _, m := range messages {
-		// Never compress the synthetic summary message (turn_index == -1).
+		// 绝不压缩合成的 summary message（turn_index == -1）。
 		if m.TurnIndex < 0 {
 			continue
 		}
@@ -138,9 +133,9 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		return &CompressResult{Compressed: false}, nil
 	}
 
-	// Generate a per-turn summary for each older turn.
-	// Phase 6-F: prefer LLMSummarizer (which falls back to keyword internally);
-	// if no summarizer is configured we use the legacy keyword path directly.
+	// 为每个旧 turn 生成单轮 summary。
+	// Phase 6-F：优先使用 LLMSummarizer（内部会回退到关键词）；若未配置 summarizer，
+	// 则直接走旧的关键词路径。
 	var turnSummaries []string
 	ctx := context.Background()
 	for turn := 0; turn < cutoffTurn; turn++ {
@@ -156,10 +151,10 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		}
 	}
 
-	// Build the combined structured summary text.
+	// 构建组合的结构化 summary 文本。
 	summaryText := cc.generateCompressedSummary(turnSummaries)
 
-	// Persist the summary as a session-scoped consolidated memory.
+	// 将 summary 作为 session 级 consolidated memory 持久化。
 	memoryID := "mem_summary_" + uuid.New().String()
 	now := time.Now()
 	memoryRecord := db.MemoryRecord{
@@ -186,12 +181,12 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		return nil, fmt.Errorf("insert session summary memory: %w", err)
 	}
 
-	// Delete the old session messages that have been compressed.
+	// 删除已被压缩的旧 session message。
 	if err := cc.db.DeleteSessionMessagesBeforeTurn(sessionID, cutoffTurn); err != nil {
 		return nil, fmt.Errorf("delete compressed messages before turn %d: %w", cutoffTurn, err)
 	}
 
-	// Insert the synthetic summary as a system message (turn_index = -1).
+	// 将合成 summary 作为 system message 插入（turn_index = -1）。
 	summaryMessage := db.SessionMessageRecord{
 		ID:        "msg_summary_" + uuid.New().String(),
 		SessionID: sessionID,
@@ -204,7 +199,7 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 		return nil, fmt.Errorf("insert compressed summary message: %w", err)
 	}
 
-	// Recalculate total token and context size estimates.
+	// 重新估算总 token 数与 context size。
 	totalTokens, contextSize := cc.estimateRemainingMetrics(summaryText, keptMessages)
 	if err := cc.db.UpdateSessionContextSize(sessionID, totalTokens, contextSize); err != nil {
 		return nil, fmt.Errorf("update session context size: %w", err)
@@ -218,9 +213,9 @@ func (cc *ContextCompressor) CompressIfNeeded(sessionID string) (*CompressResult
 	}, nil
 }
 
-// generateTurnSummary creates a keyword-based summary for a single turn.
-// Phase 6-F: kept as the legacy fallback path; the public entry point for
-// the keyword summarization interface is SummarizeTurn below.
+// generateTurnSummary 为单个 turn 创建基于关键词的 summary。
+// Phase 6-F：保留为旧版回退路径；关键词 summarization 接口的公开入口是下面的
+// SummarizeTurn。
 func (cc *ContextCompressor) generateTurnSummary(turnIndex int, messages []db.SessionMessageRecord) string {
 	var userInput, finalAnswer string
 	toolCount := 0
@@ -260,8 +255,8 @@ func (cc *ContextCompressor) generateTurnSummary(turnIndex int, messages []db.Se
 	return sb.String()
 }
 
-// generateCompressedSummary combines multiple per-turn summaries into one structured text
-// suitable for use as a compressed context message.
+// generateCompressedSummary 将多个单轮 summary 组合成一段结构化文本，适合用作压缩后的
+// context message。
 func (cc *ContextCompressor) generateCompressedSummary(turnSummaries []string) string {
 	var sb strings.Builder
 	sb.WriteString("[COMPRESSED CONVERSATION SUMMARY]\n")
@@ -276,7 +271,7 @@ func (cc *ContextCompressor) generateCompressedSummary(turnSummaries []string) s
 	return sb.String()
 }
 
-// extractTaskIDs returns a de-duplicated list of task IDs from the grouped messages.
+// extractTaskIDs 返回从分组 message 中去重后的 task ID 列表。
 func (cc *ContextCompressor) extractTaskIDs(msgsByTurn map[int][]db.SessionMessageRecord) []string {
 	seen := make(map[string]struct{})
 	var ids []string
@@ -294,9 +289,8 @@ func (cc *ContextCompressor) extractTaskIDs(msgsByTurn map[int][]db.SessionMessa
 	return ids
 }
 
-// estimateRemainingMetrics estimates total token count and context size after compression.
-// We approximate tokens as bytes / 4, which is reasonable for English/ASCII content.
-// This avoids importing a tokenizer dependency in Phase 5-B.
+// estimateRemainingMetrics 估算压缩后的总 token 数与 context size。我们将 token 近似为
+// 字节数 / 4，对英文/ASCII 内容较合理。这样可在 Phase 5-B 避免引入 tokenizer 依赖。
 func (cc *ContextCompressor) estimateRemainingMetrics(summaryText string, keptMessages []db.SessionMessageRecord) (totalTokens, contextSize int) {
 	contextSize = len(summaryText)
 	totalTokens = len(summaryText) / 4
@@ -310,7 +304,7 @@ func (cc *ContextCompressor) estimateRemainingMetrics(summaryText string, keptMe
 	return totalTokens, contextSize
 }
 
-// truncateSummary truncates content for summary inclusion.
+// truncateSummary 将内容截断以便纳入 summary。
 func truncateSummary(content string, maxLen int) string {
 	if len(content) <= maxLen {
 		return content

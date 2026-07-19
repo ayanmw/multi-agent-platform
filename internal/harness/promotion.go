@@ -1,32 +1,27 @@
-// Package harness — PromotionGate: promotes consolidated memories to semantic tier.
+// Package harness —— PromotionGate：将 consolidated memory 提升到 semantic tier。
 //
-// The PromotionGate evaluates candidate memories in the consolidated tier and
-// promotes them to the semantic tier when they meet promotion criteria. This
-// implements the bridge between Consolidated Episodic and Semantic/Policy memory.
+// PromotionGate 评估 consolidated tier 中的候选 memory，将满足提升条件的提升到 semantic
+// tier。它实现了 Consolidated Episodic 与 Semantic/Policy memory 之间的桥梁。
 //
-// # Three Promotion Channels
+// # 三条提升通道
 //
-// Each candidate memory is checked against three promotion channels:
+// 每条候选 memory 会针对三条提升通道进行检查：
 //
-//  1. repeated_across_sessions — the memory's source_task_ids contain at least 2
-//     distinct task IDs, meaning the same experience was observed in independent
-//     tasks. This is the strongest signal of a reliable pattern.
+//  1. repeated_across_sessions —— 该 memory 的 source_task_ids 至少包含 2 个不同的
+//     task ID，意味着同一经验在独立任务中被观察到。这是最可靠模式的最强信号。
 //
-//  2. tool_failure_evidence — the memory's source_event_ids reference an event
-//     where a tool call failed (status=failed). Explicitly documented failures
-//     are valuable lessons that should be promoted for future avoidance.
+//  2. tool_failure_evidence —— 该 memory 的 source_event_ids 引用了一个 tool 调用
+//     失败（status=failed）的事件。显式记录的失败是有价值的 lesson，应提升以便未来规避。
 //
-//  3. explicit_user_instruction — the memory's content contains a durable
-//     instruction marker (e.g., "always", "以后都", "rule:", "preference:").
-//     These are user-explicit directives that should be persisted as semantic
-//     rules.
+//  3. explicit_user_instruction —— 该 memory 的内容包含持久指令标记（如 "always"、
+//     "以后都"、"rule:"、"preference:"）。这些是用户显式指令，应作为 semantic rule 持久化。
 //
-// # Promotion Lifecycle
+// # 提升生命周期
 //
-//   - Consolidated (candidate) → Semantic (promoted) via PromotionGate.PromoteCandidates
-//   - Promotion is idempotent: already-promoted memories are skipped
-//   - Promotion reason is recorded in the memory record for auditability
-//   - The gate returns a report with counts of promoted and skipped memories
+//   - Consolidated（候选） → Semantic（已提升）通过 PromotionGate.PromoteCandidates
+//   - 提升是幂等的：已提升的 memory 会被跳过
+//   - 提升原因记录在 memory 记录中以便审计
+//   - gate 返回一份报告，包含已提升和已跳过 memory 的计数
 package harness
 
 import (
@@ -38,61 +33,58 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// PromotionGate evaluates consolidated memory candidates and promotes qualifying
-// records to the semantic tier. It is typically called periodically (e.g., after
-// the heartbeat runs) or on-demand via the /api/memories/promote endpoint.
+// PromotionGate 评估 consolidated 候选 memory 并将符合条件者提升到 semantic tier。
+// 通常周期性调用（例如在 heartbeat 运行后）或通过 /api/memories/promote 端点按需调用。
 type PromotionGate struct {
 	db MemoryDB
 }
 
-// NewPromotionGate creates a new PromotionGate backed by the given MemoryDB.
+// NewPromotionGate 用给定 MemoryDB 创建 PromotionGate。
 func NewPromotionGate(database MemoryDB) *PromotionGate {
 	return &PromotionGate{db: database}
 }
 
-// PromotionReport summarizes the results of a promotion cycle.
+// PromotionReport 汇总一次提升周期的结果。
 type PromotionReport struct {
-	// TotalCandidates is the number of consolidated memories evaluated.
+	// TotalCandidates 是被评估的 consolidated memory 数。
 	TotalCandidates int `json:"total_candidates"`
 
-	// PromotedCount is the number of memories promoted to semantic tier.
+	// PromotedCount 是被提升到 semantic tier 的 memory 数。
 	PromotedCount int `json:"promoted_count"`
 
-	// SkippedCount is the number of memories that did not meet any promotion criteria.
+	// SkippedCount 是未满足任何提升条件的 memory 数。
 	SkippedCount int `json:"skipped_count"`
 
-	// Details breaks down each promoted memory with its promotion reason.
+	// Details 列出每条被提升 memory 及其提升原因。
 	Details []PromotionDetail `json:"details"`
 
-	// Duration is the time taken for this promotion cycle.
+	// Duration 是本次提升周期耗时。
 	Duration time.Duration `json:"duration_ms"`
 }
 
-// PromotionDetail records the promotion of a single memory, including the
-// channel that triggered the promotion.
+// PromotionDetail 记录单条 memory 的提升，包含触发提升的通道。
 type PromotionDetail struct {
 	MemoryID        string `json:"memory_id"`
 	Type            string `json:"type"`
 	ContentSnippet  string `json:"content_snippet"`
 	PromotionReason string `json:"promotion_reason"`
-	// Channel is the specific promotion channel that triggered: "repeated_across_sessions",
-	// "tool_failure_evidence", or "explicit_user_instruction".
+	// Channel 是触发提升的具体提升通道："repeated_across_sessions"、
+	// "tool_failure_evidence" 或 "explicit_user_instruction"。
 	Channel string `json:"channel"`
 }
 
-// PromoteCandidates evaluates all consolidated memories for the given project
-// and promotes qualifying records to the semantic tier.
+// PromoteCandidates 评估给定 project 的所有 consolidated memory，将符合条件者提升到
+// semantic tier。
 //
-// Each candidate is checked against the three promotion channels; if any
-// channel passes, the memory is promoted. The promotion reason is recorded
-// and the memory's tier is updated to "semantic".
+// 每条候选针对三条提升通道检查；只要任一通道通过，memory 即被提升。提升原因被记录，
+// memory 的 tier 更新为 "semantic"。
 //
-// Already-promoted (tier=semantic) memories are skipped.
+// 已提升（tier=semantic）的 memory 会被跳过。
 func (pg *PromotionGate) PromoteCandidates(projectID string) (*PromotionReport, error) {
 	start := time.Now()
 	report := &PromotionReport{}
 
-	// Fetch all consolidated memories for the project
+	// 获取 project 的所有 consolidated memory
 	candidates, err := pg.db.QueryMemoriesByTier(projectID, "consolidated")
 	if err != nil {
 		return report, fmt.Errorf("query consolidated memories: %w", err)
@@ -105,14 +97,14 @@ func (pg *PromotionGate) PromoteCandidates(projectID string) (*PromotionReport, 
 	}
 
 	for _, mem := range candidates {
-		// Check each promotion channel
+		// 检查每条提升通道
 		reason, channel := pg.evaluateCandidate(mem)
 		if reason == "" {
 			report.SkippedCount++
 			continue
 		}
 
-		// Promote to semantic tier
+		// 提升到 semantic tier
 		if err := pg.db.UpdateMemoryTier(mem.ID, "semantic", reason); err != nil {
 			log.Printf("[PromotionGate] Failed to promote memory %s: %v", mem.ID, err)
 			report.SkippedCount++
@@ -135,15 +127,14 @@ func (pg *PromotionGate) PromoteCandidates(projectID string) (*PromotionReport, 
 	return report, nil
 }
 
-// evaluateCandidate checks a single memory against all three promotion channels.
-// Returns the promotion reason and channel if any channel passes, or empty strings
-// if the memory should not be promoted.
+// evaluateCandidate 针对三条提升通道检查单条 memory。若任一通道通过，返回提升原因与通道；
+// 否则返回空字符串，表示该 memory 不应被提升。
 func (pg *PromotionGate) evaluateCandidate(mem db.MemoryRecord) (reason string, channel string) {
-	// Channel 1: repeated_across_sessions
-	// Count distinct source_task_ids; if >= 2, this experience has been observed
-	// in multiple independent tasks — it is a reliable pattern.
+	// 通道 1：repeated_across_sessions
+	// 统计不同的 source_task_ids；若 >= 2，说明该经验在多个独立任务中被观察到 —— 它是
+	// 可靠的模式。
 	if len(mem.SourceTaskIDs) >= 2 {
-		// Deduplicate task IDs (in case of duplicates in the array)
+		// 去重 task ID（以防数组中有重复）
 		unique := make(map[string]bool)
 		for _, tid := range mem.SourceTaskIDs {
 			unique[tid] = true
@@ -155,18 +146,17 @@ func (pg *PromotionGate) evaluateCandidate(mem db.MemoryRecord) (reason string, 
 		}
 	}
 
-	// Channel 2: tool_failure_evidence
-	// Check if any source_event_id references a tool call that failed.
-	// This is a lightweight check based on the memory's content and metadata;
-	// full event-based verification requires querying the events table (Phase 6+).
+	// 通道 2：tool_failure_evidence
+	// 检查是否有 source_event_id 引用了失败的 tool 调用。这是基于 memory 内容与 metadata
+	// 的轻量检查；完整的基于事件的校验需要查询 events 表（Phase 6+）。
 	if pg.hasFailureEvidence(mem) {
 		reason = "tool_failure_evidence: associated tool call failed"
 		channel = "tool_failure_evidence"
 		return
 	}
 
-	// Channel 3: explicit_user_instruction
-	// Check if the content contains durable instruction markers.
+	// 通道 3：explicit_user_instruction
+	// 检查内容是否包含持久指令标记。
 	if isExplicitInstruction(mem.Content) {
 		reason = "explicit_user_instruction: content contains durable instruction marker"
 		channel = "explicit_user_instruction"
@@ -176,11 +166,10 @@ func (pg *PromotionGate) evaluateCandidate(mem db.MemoryRecord) (reason string, 
 	return "", ""
 }
 
-// hasFailureEvidence checks whether the memory's content or source data indicates
-// a tool failure. This is a lightweight check based on content analysis; Phase 6+
-// will add cross-referencing with the steps table for definitive failure detection.
+// hasFailureEvidence 检查 memory 的内容或来源数据是否表明出现了 tool 失败。这是基于
+// 内容分析的轻量检查；Phase 6+ 会增加与 steps 表的交叉引用以做确切的失败检测。
 func (pg *PromotionGate) hasFailureEvidence(mem db.MemoryRecord) bool {
-	// Check content for failure indicators
+	// 检查内容中的失败指示
 	lower := strings.ToLower(mem.Content)
 	failureMarkers := []string{
 		"failed", "error", "exception", "timeout", "rejected",
@@ -195,10 +184,9 @@ func (pg *PromotionGate) hasFailureEvidence(mem db.MemoryRecord) bool {
 	return false
 }
 
-// isExplicitInstruction checks whether the content contains markers that indicate
-// a user explicitly stated a durable instruction, preference, or rule.
+// isExplicitInstruction 检查内容是否包含表明用户显式陈述了持久指令、偏好或规则的标记。
 //
-// Markers (English and Chinese):
+// 标记（中英文）：
 //   - "always", "always do", "never", "never do"
 //   - "rule:", "preference:", "policy:", "convention:"
 //   - "以后都", "永远", "总是", "每次", "从不"
@@ -206,7 +194,7 @@ func (pg *PromotionGate) hasFailureEvidence(mem db.MemoryRecord) bool {
 func isExplicitInstruction(content string) bool {
 	lower := strings.ToLower(content)
 
-	// English markers
+	// 英文标记
 	enMarkers := []string{
 		"always", "never", "every time", "each time",
 		"rule:", "preference:", "policy:", "convention:",
@@ -219,7 +207,7 @@ func isExplicitInstruction(content string) bool {
 		}
 	}
 
-	// Chinese markers
+	// 中文标记
 	zhMarkers := []string{
 		"以后都", "永远", "总是", "每次", "从不",
 		"记住", "别忘了", "规定", "规则", "偏好",

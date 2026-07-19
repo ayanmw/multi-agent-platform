@@ -1,37 +1,32 @@
-// Package harness — Heartbeat: periodic background task for Memory consolidation.
+// Package harness —— Heartbeat：用于 Memory consolidation 的周期性后台任务。
 //
-// The Heartbeat runs on a configurable interval (default 5 minutes). On each
-// beat it scans for newly completed tasks, generates episode summaries from
-// their conversation history, and writes candidate memories into the
-// consolidated episodic tier of the memories table.
+// Heartbeat 按可配置间隔（默认 5 分钟）运行。每次 beat 会扫描新完成的任务，从其对话
+// 历史生成 episode summary，并将候选 memory 写入 memories 表的 consolidated episodic
+// tier。
 //
-// # Architecture
+// # 架构
 //
-// The Heartbeat is the bridge between Raw Episodic memory (conversations table)
-// and Consolidated Episodic memory (memories table, tier=consolidated). It
-// implements the third tier of the 4-tier memory system:
+// Heartbeat 是 Raw Episodic memory（conversations 表）与 Consolidated Episodic memory
+// （memories 表，tier=consolidated）之间的桥梁。它实现 4 层 memory 系统的第 3 层：
 //
-//  1. Working Memory      — per-task context (in-memory)
-//  2. Raw Episodic        — conversation records (conversations table)
-//  3. Consolidated Episodic — task summaries (memories table, tier=consolidated)  <-- THIS
-//  4. Semantic/Policy     — stable rules (memories table, tier=semantic)
+//  1. Working Memory      —— 任务级 context（内存中）
+//  2. Raw Episodic        —— 对话记录（conversations 表）
+//  3. Consolidated Episodic —— 任务 summary（memories 表，tier=consolidated）  <-- 本文件
+//  4. Semantic/Policy     —— 稳定规则（memories 表，tier=semantic）
 //
 // # Episode Summarization
 //
-// Phase 6-F: episode summarization delegates to an LLMSummarizer (which
-// falls back to the legacy keyword implementation when the LLM call
-// fails). The generated summaries include:
-//   - Tools used and their results
-//   - Errors encountered
-//   - Final task outcome
-//   - Key observations
+// Phase 6-F：episode summarization 委托给 LLMSummarizer（LLM 调用失败时回退到旧的关键词
+// 实现）。生成的 summary 包含：
+//   - 使用的 tool 及其结果
+//   - 遇到的错误
+//   - 任务最终结果
+//   - 关键观察
 //
-// # Adaptive Interval
+// # 自适应间隔
 //
-// The heartbeat interval adapts based on activity: more completed tasks means
-// shorter intervals (minimum 30 seconds), fewer tasks means longer intervals
-// (maximum 10 minutes). This prevents excessive polling when idle and keeps
-// memory fresh when busy.
+// heartbeat 间隔会根据活动量自适应：完成的任务越多，间隔越短（最小 30 秒）；任务越少，
+// 间隔越长（最大 10 分钟）。这样可避免空闲时过度轮询，同时繁忙时保持 memory 新鲜。
 package harness
 
 import (
@@ -47,10 +42,9 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// Heartbeat periodically scans for completed tasks, generates episode summaries,
-// and writes consolidated memory records.
+// Heartbeat 周期性扫描已完成任务、生成 episode summary 并写入 consolidated memory 记录。
 //
-// Lifecycle:
+// 生命周期：
 //
 //	hb := NewHeartbeat(db.DB)
 //	go hb.Start(context.Background())
@@ -64,50 +58,46 @@ type Heartbeat struct {
 	cancel     context.CancelFunc
 }
 
-// HeartbeatState tracks the heartbeat's progress so it can resume from the
-// last checkpoint after a restart. It is persisted as a memory record of
-// type "heartbeat_state" with tier "consolidated".
+// HeartbeatState 跟踪 heartbeat 的进度，以便重启后能从上次 checkpoint 恢复。它以
+// "heartbeat_state" 类型、tier "consolidated" 的 memory 记录持久化。
 type HeartbeatState struct {
-	// LastProcessedEventID is the ID of the last event that was processed.
-	// Currently unused — reserved for event-driven heartbeat in Phase 6+.
+	// LastProcessedEventID 是最后处理的事件 ID。当前未使用 —— 为 Phase 6+ 的事件驱动
+	// heartbeat 预留。
 	LastProcessedEventID string `json:"last_processed_event_id"`
 
-	// LastRunAt is the timestamp of the last successful heartbeat cycle.
+	// LastRunAt 是上次成功 heartbeat 周期的时间戳。
 	LastRunAt time.Time `json:"last_run_at"`
 
-	// ProcessedTaskCount is the cumulative number of tasks processed since
-	// the heartbeat was started.
+	// ProcessedTaskCount 是自 heartbeat 启动以来累计处理的任务数。
 	ProcessedTaskCount int `json:"processed_task_count"`
 
-	// NextIntervalSeconds is the interval for the next heartbeat cycle,
-	// adjusted by adaptiveInterval.
+	// NextIntervalSeconds 是下一次 heartbeat 周期的间隔，由 adaptiveInterval 调整。
 	NextIntervalSeconds int `json:"next_interval_seconds"`
 }
 
-// HeartbeatReport summarizes the results of a single heartbeat cycle.
+// HeartbeatReport 汇总单次 heartbeat 周期的结果。
 type HeartbeatReport struct {
-	// NewTasksFound is the number of completed tasks found since the last beat.
+	// NewTasksFound 是自上次 beat 以来发现已完成任务数。
 	NewTasksFound int `json:"new_tasks_found"`
 
-	// SummariesGenerated is the number of episode summaries successfully generated.
+	// SummariesGenerated 是成功生成的 episode summary 数。
 	SummariesGenerated int `json:"summaries_generated"`
 
-	// MemoriesWritten is the number of memory records written to the DB.
+	// MemoriesWritten 是写入 DB 的 memory 记录数。
 	MemoriesWritten int `json:"memories_written"`
 
-	// Errors is the number of errors encountered during this beat.
+	// Errors 是本次 beat 遇到的错误数。
 	Errors int `json:"errors"`
 
-	// Duration is the time taken for this heartbeat cycle.
+	// Duration 是本次 heartbeat 周期耗时。
 	Duration time.Duration `json:"duration_ms"`
 
-	// NextInterval is the interval for the next heartbeat cycle.
+	// NextInterval 是下一次 heartbeat 周期的间隔。
 	NextInterval time.Duration `json:"next_interval_ms"`
 }
 
-// MemoryDB is a minimal interface over the DB operations needed by the Heartbeat
-// and PromotionGate. This avoids direct coupling to the db package and makes
-// testing easier.
+// MemoryDB 是 Heartbeat 与 PromotionGate 所需 DB 操作的最小接口。避免与 db package
+// 直接耦合，便于测试。
 type MemoryDB interface {
 	QueryCompletedTaskIDs(since time.Time) ([]string, error)
 	QueryConversationsByTask(taskID string) ([]db.ConversationRecord, error)
@@ -117,65 +107,63 @@ type MemoryDB interface {
 	UpdateMemoryTier(id, tier, promotionReason string) error
 }
 
-// SqliteMemoryDB adapts db.DB (the package-level *sql.DB) to the MemoryDB interface.
-// It is the default implementation used by the Heartbeat and PromotionGate.
+// SqliteMemoryDB 将 db.DB（package 级 *sql.DB）适配到 MemoryDB 接口。它是 Heartbeat 与
+// PromotionGate 使用的默认实现。
 type SqliteMemoryDB struct{}
 
-// QueryCompletedTaskIDs delegates to db.QueryCompletedTaskIDs.
+// QueryCompletedTaskIDs 委托给 db.QueryCompletedTaskIDs。
 func (s *SqliteMemoryDB) QueryCompletedTaskIDs(since time.Time) ([]string, error) {
 	return db.QueryCompletedTaskIDs(since)
 }
 
-// QueryConversationsByTask delegates to db.QueryConversationsByTask.
+// QueryConversationsByTask 委托给 db.QueryConversationsByTask。
 func (s *SqliteMemoryDB) QueryConversationsByTask(taskID string) ([]db.ConversationRecord, error) {
 	return db.QueryConversationsByTask(taskID)
 }
 
-// QueryStepsByTaskForMemory delegates to db.QueryStepsByTaskForMemory.
+// QueryStepsByTaskForMemory 委托给 db.QueryStepsByTaskForMemory。
 func (s *SqliteMemoryDB) QueryStepsByTaskForMemory(taskID string) ([]db.StepRecord, error) {
 	return db.QueryStepsByTaskForMemory(taskID)
 }
 
-// InsertMemory delegates to db.InsertMemory.
+// InsertMemory 委托给 db.InsertMemory。
 func (s *SqliteMemoryDB) InsertMemory(record db.MemoryRecord) error {
 	return db.InsertMemory(record)
 }
 
-// QueryMemoriesByTier delegates to db.QueryMemoriesByTier.
+// QueryMemoriesByTier 委托给 db.QueryMemoriesByTier。
 func (s *SqliteMemoryDB) QueryMemoriesByTier(projectID, tier string) ([]db.MemoryRecord, error) {
 	return db.QueryMemoriesByTier(projectID, tier)
 }
 
-// UpdateMemoryTier delegates to db.UpdateMemoryTier.
+// UpdateMemoryTier 委托给 db.UpdateMemoryTier。
 func (s *SqliteMemoryDB) UpdateMemoryTier(id, tier, promotionReason string) error {
 	return db.UpdateMemoryTier(id, tier, promotionReason)
 }
 
-// QuerySessionMessages delegates to db.QuerySessionMessages.
+// QuerySessionMessages 委托给 db.QuerySessionMessages。
 func (s *SqliteMemoryDB) QuerySessionMessages(sessionID string) ([]db.SessionMessageRecord, error) {
 	return db.QuerySessionMessages(sessionID)
 }
 
-// QuerySessionByID delegates to db.QuerySessionByID.
+// QuerySessionByID 委托给 db.QuerySessionByID。
 func (s *SqliteMemoryDB) QuerySessionByID(sessionID string) (*db.SessionRecord, error) {
 	return db.QuerySessionByID(sessionID)
 }
 
-// DeleteSessionMessagesBeforeTurn delegates to db.DeleteSessionMessagesBeforeTurn.
+// DeleteSessionMessagesBeforeTurn 委托给 db.DeleteSessionMessagesBeforeTurn。
 func (s *SqliteMemoryDB) DeleteSessionMessagesBeforeTurn(sessionID string, turnIndex int) error {
 	return db.DeleteSessionMessagesBeforeTurn(sessionID, turnIndex)
 }
 
-// UpdateSessionContextSize delegates to db.UpdateSessionContextSize.
+// UpdateSessionContextSize 委托给 db.UpdateSessionContextSize。
 func (s *SqliteMemoryDB) UpdateSessionContextSize(sessionID string, totalTokens int, contextSize int) error {
 	return db.UpdateSessionContextSize(sessionID, totalTokens, contextSize)
 }
 
-// NewHeartbeat creates a new Heartbeat with the default 5-minute interval.
-// The database parameter implements the MemoryDB interface for all DB
-// operations. summarizer is consulted for each task's episode summary; if
-// nil the Heartbeat falls back to its own keyword implementation to
-// preserve Phase 5-B behavior.
+// NewHeartbeat 创建使用默认 5 分钟间隔的 Heartbeat。database 参数实现所有 DB 操作所需的
+// MemoryDB 接口。summarizer 用于每个任务的 episode summary；若为 nil，Heartbeat 会回退到
+// 自身的关键词实现以保留 Phase 5-B 行为。
 func NewHeartbeat(database MemoryDB, summarizer LLMSummarizer) *Heartbeat {
 	interval := 5 * time.Minute
 	return &Heartbeat{
@@ -189,16 +177,15 @@ func NewHeartbeat(database MemoryDB, summarizer LLMSummarizer) *Heartbeat {
 	}
 }
 
-// Start begins the heartbeat loop in a background goroutine.
-// It creates a cancellable context and runs Beat() on each tick.
-// Call Stop() to halt the heartbeat gracefully.
+// Start 在后台 goroutine 中启动 heartbeat loop。它创建可取消的 context 并在每个 tick
+// 上运行 Beat()。调用 Stop() 可优雅停止 heartbeat。
 func (hb *Heartbeat) Start(ctx context.Context) {
 	ctx, hb.cancel = context.WithCancel(ctx)
 	log.Printf("[Heartbeat] Started with interval %v", hb.interval)
 
-	// Run immediately on start, then on each tick
+	// 启动时立即运行一次，然后按 tick 运行
 	go func() {
-		// Initial beat
+		// 初始 beat
 		report, err := hb.Beat(ctx)
 		if err != nil {
 			log.Printf("[Heartbeat] Initial beat failed: %v", err)
@@ -216,7 +203,7 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 				log.Println("[Heartbeat] Stopped")
 				return
 			case <-ticker.C:
-				// Adjust ticker interval based on last report's NextInterval
+				// 根据上次 report 的 NextInterval 调整 ticker 间隔
 				if report != nil && report.NextInterval != hb.interval {
 					ticker.Reset(report.NextInterval)
 					hb.interval = report.NextInterval
@@ -234,20 +221,20 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 	}()
 }
 
-// Stop halts the heartbeat loop gracefully.
+// Stop 优雅停止 heartbeat loop。
 func (hb *Heartbeat) Stop() {
 	if hb.cancel != nil {
 		hb.cancel()
 	}
 }
 
-// Beat executes a single heartbeat cycle:
-//  1. Scan for new completed tasks since last checkpoint
-//  2. For each new task: generate an episode summary from conversations
-//  3. Write candidate memories to the memories table (tier=consolidated)
-//  4. Update the heartbeat state checkpoint
+// Beat 执行单次 heartbeat 周期：
+//  1. 扫描自上次 checkpoint 以来新完成的任务
+//  2. 为每个新任务从对话生成 episode summary
+//  3. 将候选 memory 写入 memories 表（tier=consolidated）
+//  4. 更新 heartbeat 状态 checkpoint
 //
-// Returns a HeartbeatReport summarizing the cycle's results.
+// 返回 HeartbeatReport 汇总本次周期的结果。
 func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 	start := time.Now()
 	report := &HeartbeatReport{}
@@ -256,7 +243,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 	checkpoint := hb.state.LastRunAt
 	hb.mu.Unlock()
 
-	// 1. Scan for new completed tasks since last checkpoint
+	// 1. 扫描自上次 checkpoint 以来新完成的任务
 	taskIDs, err := hb.db.QueryCompletedTaskIDs(checkpoint)
 	if err != nil {
 		return report, fmt.Errorf("scan completed tasks: %w", err)
@@ -264,7 +251,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 	report.NewTasksFound = len(taskIDs)
 
 	if len(taskIDs) == 0 {
-		// No new tasks — update state and return
+		// 无新任务 —— 更新状态并返回
 		hb.mu.Lock()
 		hb.state.LastRunAt = time.Now()
 		hb.state.NextIntervalSeconds = int(hb.adaptiveInterval(0).Seconds())
@@ -274,9 +261,9 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		return report, nil
 	}
 
-	// 2. For each new task: generate episode summary and write memory
+	// 2. 为每个新任务生成 episode summary 并写入 memory
 	for _, taskID := range taskIDs {
-		// Check context cancellation between tasks
+		// 在任务之间检查 context 取消
 		select {
 		case <-ctx.Done():
 			report.Duration = time.Since(start)
@@ -284,7 +271,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		default:
 		}
 
-		// Load conversation history and steps for this task
+		// 加载该任务的对话历史与 steps
 		convs, convErr := hb.db.QueryConversationsByTask(taskID)
 		steps, stepErr := hb.db.QueryStepsByTaskForMemory(taskID)
 		if convErr != nil {
@@ -293,8 +280,8 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		if stepErr != nil {
 			log.Printf("[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, stepErr)
 		}
-		// Phase 6-F: prefer LLMSummarizer (falls back to keyword internally);
-		// if no summarizer is configured we use the legacy keyword path directly.
+		// Phase 6-F：优先使用 LLMSummarizer（内部会回退到关键词）；若未配置 summarizer，
+		// 则直接走旧的关键词路径。
 		var summary string
 		var err error
 		if hb.summarizer != nil {
@@ -310,16 +297,16 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		}
 		report.SummariesGenerated++
 
-		// Write the summary as a consolidated memory record
+		// 将 summary 作为 consolidated memory 记录写入
 		memoryID := "mem_" + generateHexID(8)
 		now := time.Now()
 		memRecord := db.MemoryRecord{
 			ID:             memoryID,
 			ProjectID:      "default",
-			Type:           "lesson", // episode summary is a lesson learned
+			Type:           "lesson", // episode summary 是一条学到的 lesson
 			Tier:           "consolidated",
 			Content:        summary,
-			Confidence:     0.7, // auto-generated summaries have moderate confidence
+			Confidence:     0.7, // 自动生成的 summary 置信度中等
 			Status:         "active",
 			SourceTaskIDs:  []string{taskID},
 			SourceEventIDs: []string{},
@@ -336,7 +323,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		report.MemoriesWritten++
 	}
 
-	// 3. Update heartbeat state checkpoint
+	// 3. 更新 heartbeat 状态 checkpoint
 	newInterval := hb.adaptiveInterval(report.NewTasksFound)
 	hb.mu.Lock()
 	hb.state.LastRunAt = time.Now()
@@ -349,10 +336,8 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 	return report, nil
 }
 
-// adaptiveInterval adjusts the heartbeat interval based on activity level.
-// More new tasks = shorter interval (minimum 30s).
-// Fewer tasks = longer interval (maximum 10min).
-// Zero tasks = use the default interval.
+// adaptiveInterval 根据活动量调整 heartbeat 间隔。新任务越多 = 间隔越短（最小 30s）。
+// 任务越少 = 间隔越长（最大 10min）。零任务 = 使用默认间隔。
 func (hb *Heartbeat) adaptiveInterval(newEventCount int) time.Duration {
 	switch {
 	case newEventCount >= 10:
@@ -368,17 +353,16 @@ func (hb *Heartbeat) adaptiveInterval(newEventCount int) time.Duration {
 	}
 }
 
-// generateEpisodeSummary reads the conversation history for a task and produces
-// a structured summary string. This is the legacy keyword-based path retained
-// as a fallback target for the Phase 6-F LLMSummarizer. The public entry
-// point for the KeywordSummarizer interface is SummarizeEpisode below.
+// generateEpisodeSummary 读取某任务的对话历史并生成结构化 summary 字符串。这是保留为
+// Phase 6-F LLMSummarizer 回退目标的旧关键词路径。KeywordSummarizer 接口的公开入口是
+// 下面的 SummarizeEpisode。
 //
-// The summary captures:
-//   - User input / task goal
-//   - Tools called and their results
-//   - Errors encountered
-//   - Final outcome
-//   - Key observations
+// summary 捕获：
+//   - 用户输入 / 任务 goal
+//   - 调用的 tool 及其结果
+//   - 遇到的错误
+//   - 最终结果
+//   - 关键观察
 func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) (string, error) {
 	convs, err := hb.db.QueryConversationsByTask(taskID)
 	if err != nil {
@@ -387,14 +371,14 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 
 	steps, err := hb.db.QueryStepsByTaskForMemory(taskID)
 	if err != nil {
-		// Steps are optional — log and continue without them
+		// steps 是可选的 —— 记录日志并继续
 		log.Printf("[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, err)
 	}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Task: %s\n", taskID))
 
-	// Extract user input from the first user message
+	// 从第一条 user message 中提取用户输入
 	for _, c := range convs {
 		if c.Role == "user" {
 			sb.WriteString(fmt.Sprintf("Input: %s\n", truncateContent(c.Content, 200)))
@@ -402,7 +386,7 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 		}
 	}
 
-	// Extract tool calls and their results from steps
+	// 从 steps 中提取 tool 调用及其结果
 	toolCount := 0
 	errorCount := 0
 	for _, s := range steps {
@@ -419,7 +403,7 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 		}
 	}
 
-	// Extract final result from the last assistant message
+	// 从最后一条 assistant message 中提取最终结果
 	var finalResult string
 	for i := len(convs) - 1; i >= 0; i-- {
 		if convs[i].Role == "assistant" {
@@ -429,7 +413,7 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 	}
 	sb.WriteString(fmt.Sprintf("Result: %s\n", truncateContent(finalResult, 300)))
 
-	// Extract key observations from the conversation
+	// 从对话中提取关键观察
 	observations := extractObservations(convs)
 	if len(observations) > 0 {
 		sb.WriteString("Observations:\n")
@@ -438,7 +422,7 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 		}
 	}
 
-	// Summary statistics
+	// 统计汇总
 	sb.WriteString(fmt.Sprintf("Stats: %d tools, %d errors, %d messages\n",
 		toolCount, errorCount, len(convs)))
 
@@ -446,13 +430,11 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 	return sb.String(), nil
 }
 
-// extractObservations scans conversation content for lines that look like
-// observations (containing tool results, error messages, or key findings).
-// This is a simple keyword-based extraction for Phase 6; LLM-based extraction
-// will be more accurate.
+// extractObservations 扫描对话内容，找出形似观察的行（包含 tool 结果、错误信息或关键发现）。
+// 这是 Phase 6 的简单关键词提取；基于 LLM 的提取会更准确。
 func extractObservations(convs []db.ConversationRecord) []string {
 	var observations []string
-	// Keywords that suggest an observation line
+	// 暗示观察行的关键词
 	obsKeywords := []string{
 		"found", "result", "error", "failed", "success", "created",
 		"modified", "deleted", "returned", "output", "generated",
@@ -480,7 +462,7 @@ func extractObservations(convs []db.ConversationRecord) []string {
 	return observations
 }
 
-// truncateContent truncates a string to maxLen for display in summaries.
+// truncateContent 将字符串截断到 maxLen 以便在 summary 中展示。
 func truncateContent(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -488,8 +470,7 @@ func truncateContent(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// generateHexID generates a random hex string of the given byte length.
-// Used for memory IDs and other identifiers.
+// generateHexID 生成给定字节数的随机十六进制字符串。用于 memory ID 与其他标识符。
 func generateHexID(byteLen int) string {
 	bytes := make([]byte, byteLen)
 	if _, err := rand.Read(bytes); err != nil {
