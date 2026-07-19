@@ -47,8 +47,8 @@ const emit = defineEmits<{
 .dock-panel {
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel, #11141a);
-  border-color: var(--border-default, rgba(255, 255, 255, 0.1));
+  background: var(--bg-panel);
+  border-color: var(--border-default);
   border-style: solid;
   border-width: 0;
   overflow: hidden;
@@ -69,8 +69,8 @@ const emit = defineEmits<{
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-  background: var(--bg-elevated, #181c24);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-elevated);
 }
 
 .dock-title {
@@ -78,7 +78,7 @@ const emit = defineEmits<{
   font-family: var(--font-display, 'Chakra Petch', sans-serif);
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary, #9aa3b2);
+  color: var(--text-secondary);
   letter-spacing: 0.5px;
   text-transform: uppercase;
 }
@@ -86,7 +86,7 @@ const emit = defineEmits<{
 .dock-close {
   background: transparent;
   border: none;
-  color: var(--text-muted, #5c6675);
+  color: var(--text-muted);
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
@@ -100,8 +100,8 @@ const emit = defineEmits<{
 }
 
 .dock-close:hover {
-  background: var(--bg-hover, #202632);
-  color: var(--text-primary, #e8ebf0);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .dock-body {

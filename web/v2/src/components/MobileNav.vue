@@ -39,8 +39,8 @@ const tabs = [
   height: calc(var(--mobile-nav-height, 56px) + env(safe-area-inset-bottom, 0px));
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-top: var(--space-xs);
-  background: var(--bg-panel, #11141a);
-  border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-default);
   display: flex;
   align-items: stretch;
   z-index: 40;
@@ -57,7 +57,7 @@ const tabs = [
   flex: 1;
   background: transparent;
   border: none;
-  color: var(--text-muted, #5c6675);
+  color: var(--text-muted);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -69,12 +69,12 @@ const tabs = [
 }
 
 .mobile-tab:hover {
-  background: var(--bg-hover, #202632);
+  background: var(--bg-hover);
 }
 
 .mobile-tab.active {
-  color: var(--accent-running, #00e5ff);
-  background: rgba(0, 229, 255, 0.06);
+  color: var(--accent-running);
+  background: rgba(0, 229, 255, 0.06); /* accent-running 的低透明度 tint，无需单独 token */
 }
 
 .tab-icon {

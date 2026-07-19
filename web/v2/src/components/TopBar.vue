@@ -91,7 +91,7 @@ const emit = defineEmits<{
   justify-content: space-between;
   align-items: center;
   padding: 0 16px;
-  background: var(--bg-panel, #11141a);
+  background: var(--bg-panel);
   border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   z-index: 30;
 }
@@ -109,7 +109,7 @@ const emit = defineEmits<{
   display: none;
   background: transparent;
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-  color: var(--text-secondary, #9aa3b2);
+  color: var(--text-secondary);
   border-radius: 6px;
   width: 28px;
   height: 28px;
@@ -119,15 +119,15 @@ const emit = defineEmits<{
 }
 
 .dock-toggle:hover {
-  background: var(--bg-hover, #202632);
-  color: var(--text-primary, #e8ebf0);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .logo {
   font-family: var(--font-display, 'Chakra Petch', sans-serif);
   font-size: 16px;
   font-weight: 600;
-  color: var(--text-primary, #e8ebf0);
+  color: var(--text-primary);
   letter-spacing: 0.3px;
   white-space: nowrap;
 }
@@ -143,8 +143,8 @@ const emit = defineEmits<{
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 10px;
-  background: var(--bg-elevated, #181c24);
-  color: var(--text-secondary, #9aa3b2);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   white-space: nowrap;
 }
@@ -152,7 +152,7 @@ const emit = defineEmits<{
 .icon-btn {
   background: transparent;
   border: 1px solid transparent;
-  color: var(--text-secondary, #9aa3b2);
+  color: var(--text-secondary);
   border-radius: 6px;
   width: 30px;
   height: 30px;
@@ -165,13 +165,13 @@ const emit = defineEmits<{
 }
 
 .icon-btn:hover {
-  background: var(--bg-hover, #202632);
-  color: var(--text-primary, #e8ebf0);
+  background: var(--bg-hover);
+  color: var(--text-primary);
   border-color: var(--border-default, rgba(255, 255, 255, 0.1));
 }
 
 .inspector-toggle.active {
-  color: var(--accent-running, #00e5ff);
+  color: var(--accent-running);
   border-color: var(--border-active, rgba(0, 229, 255, 0.4));
 }
 
@@ -179,8 +179,8 @@ const emit = defineEmits<{
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 10px;
-  background: var(--bg-elevated, #181c24);
-  color: var(--text-muted, #5c6675);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   margin-left: 4px;
 }
