@@ -94,12 +94,12 @@ func TestNormalizeVector(t *testing.T) {
 	})
 
 	t.Run("non-unit becomes unit", func(t *testing.T) {
-		v := []float32{3, 4} // magnitude 5 → (0.6, 0.8)
+		v := []float32{3, 4} // 模长 5 → (0.6, 0.8)
 		got := NormalizeVector(v)
 		if !approxEq(float64(got[0]), 0.6) || !approxEq(float64(got[1]), 0.8) {
 			t.Errorf("expected (0.6, 0.8), got %v", got)
 		}
-		// verify magnitude is 1
+		// 校验模长为 1
 		var mag float64
 		for _, f := range got {
 			mag += float64(f) * float64(f)
@@ -127,7 +127,7 @@ func TestNormalizeVector(t *testing.T) {
 }
 
 // ============================================================================
-// InMemoryVectorStore — Upsert / Search / Delete
+// InMemoryVectorStore —— Upsert / Search / Delete
 // ============================================================================
 
 func TestInMemoryVectorStoreUpsertSearch(t *testing.T) {
@@ -154,7 +154,7 @@ func TestInMemoryVectorStoreUpsertSearch(t *testing.T) {
 	})
 
 	t.Run("Search returns topK sorted by score desc", func(t *testing.T) {
-		// query [1,0,0]: most similar is "a" (1,0,0), then "b" (0,1,0)
+		// query [1,0,0]:最相似的是 "a" (1,0,0),其次是 "b" (0,1,0)
 		results, err := store.Search([]float32{1, 0, 0}, 2)
 		if err != nil {
 			t.Fatal(err)
@@ -182,7 +182,7 @@ func TestInMemoryVectorStoreUpsertSearch(t *testing.T) {
 
 	t.Run("Search topK<=0 uses default", func(t *testing.T) {
 		results, _ := store.Search([]float32{1, 0, 0}, 0)
-		// default is 10, but store only has 2 → returns 2
+		// 默认为 10,但 store 只有 2 条 → 返回 2 条
 		if len(results) != 2 {
 			t.Errorf("expected 2 results with default topK, got %d", len(results))
 		}

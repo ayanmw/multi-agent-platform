@@ -32,7 +32,7 @@ func TestIndexerUpsertAndDeduplicate(t *testing.T) {
 	store := NewInMemoryVectorStore(&mockEmbeddingProvider{dims: 4})
 	idx := NewMemoryIndexer(store, &mockEmbeddingProvider{dims: 4}, MemoryIndexerOptions{DedupeThreshold: 1.0})
 
-	// First memory should be indexed.
+	// 第一条记忆应被索引。
 	if err := idx.OnMemoryCreated("m1", "hello world"); err != nil {
 		t.Fatalf("on created m1: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestIndexerUpsertAndDeduplicate(t *testing.T) {
 		t.Fatalf("len = %d, want 1", store.Len())
 	}
 
-	// Identical memory should be de-duplicated (cosine == 1.0 >= threshold).
+	// 完全相同的记忆应被去重(cosine == 1.0 >= 阈值)。
 	if err := idx.OnMemoryCreated("m2", "hello world"); err != nil {
 		t.Fatalf("on created m2: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestIndexerUpsertAndDeduplicate(t *testing.T) {
 		t.Fatalf("after dedup len = %d, want 1", store.Len())
 	}
 
-	// Different memory should be indexed.
+	// 不同的记忆应被索引。
 	if err := idx.OnMemoryCreated("m3", "completely different content"); err != nil {
 		t.Fatalf("on created m3: %v", err)
 	}

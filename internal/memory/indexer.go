@@ -8,21 +8,20 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 )
 
-// MemoryIndexerOptions configures the incremental indexing behavior.
+// MemoryIndexerOptions 用于配置增量索引的行为。
 type MemoryIndexerOptions struct {
-	// DedupeThreshold is the cosine similarity above which a new memory is
-	// considered a duplicate of an existing one and skipped. 1.0 means identical.
-	// Typical production values range 0.92-0.98.
+	// DedupeThreshold 是判定为新记忆重复已有记忆并跳过的 cosine similarity 阈值,
+	// 1.0 表示完全相同。生产环境典型取值范围为 0.92-0.98。
 	DedupeThreshold float64
 
-	// NormalizeBeforeStore is true by default; set false to store raw vectors.
+	// NormalizeBeforeStore 默认为 true;设为 false 则存储原始 vector。
 	NormalizeBeforeStore bool
 }
 
-// MemoryIndexer maintains the vector store incrementally: every newly created
-// memory is embedded and upserted, and near-duplicate memories are skipped.
+// MemoryIndexer 负责维护 vector store 的增量更新:每条新建记忆都会被 embed
+// 并 upsert,近似重复的记忆会被跳过。
 //
-// It replaces the previous startup-time BuildVectorIndex full scan.
+// 它取代了原先在启动阶段进行的 BuildVectorIndex 全量扫描。
 type MemoryIndexer struct {
 	store      VectorStore
 	provider   llm.EmbeddingProvider
@@ -31,7 +30,7 @@ type MemoryIndexer struct {
 	indexedIDs map[string]bool
 }
 
-// NewMemoryIndexer creates an indexer bound to the given store and provider.
+// NewMemoryIndexer 创建一个绑定到给定 store 与 provider 的 indexer。
 func NewMemoryIndexer(store VectorStore, provider llm.EmbeddingProvider, opts MemoryIndexerOptions) *MemoryIndexer {
 	if opts.DedupeThreshold <= 0 {
 		opts.DedupeThreshold = 0.95
@@ -40,7 +39,7 @@ func NewMemoryIndexer(store VectorStore, provider llm.EmbeddingProvider, opts Me
 		opts.DedupeThreshold = 1
 	}
 	if !opts.NormalizeBeforeStore {
-		// default true
+		// 默认为 true
 		opts.NormalizeBeforeStore = true
 	}
 	return &MemoryIndexer{
@@ -51,9 +50,8 @@ func NewMemoryIndexer(store VectorStore, provider llm.EmbeddingProvider, opts Me
 	}
 }
 
-// OnMemoryCreated is called after a memory record is inserted. It embeds the
-// content, runs deduplication against the existing index, and upserts the
-// vector if it is novel enough.
+// OnMemoryCreated 在一条记忆记录插入后被调用。它会 embed 内容,
+// 对已有 index 进行去重,若足够新颖则 upsert 该 vector。
 func (idx *MemoryIndexer) OnMemoryCreated(memoryID, content string) error {
 	if idx.provider == nil || idx.store == nil {
 		return nil
@@ -77,11 +75,11 @@ func (idx *MemoryIndexer) OnMemoryCreated(memoryID, content string) error {
 		vec = normalizeVector(vec)
 	}
 
-	// Dedup: search top-1 in existing store.
+	// Dedup:在已有 store 中检索 top-1。
 	if idx.opts.DedupeThreshold <= 1.0 {
 		results, err := idx.store.Search(vec, 1)
 		if err == nil && len(results) > 0 && results[0].Score >= idx.opts.DedupeThreshold {
-			// Duplicate — do not index.
+			// 重复 —— 不索引。
 			idx.indexedIDs[memoryID] = true
 			return nil
 		}
@@ -94,7 +92,7 @@ func (idx *MemoryIndexer) OnMemoryCreated(memoryID, content string) error {
 	return nil
 }
 
-// OnMemoryDeleted removes a memory vector from the index.
+// OnMemoryDeleted 从 index 中移除一条记忆的 vector。
 func (idx *MemoryIndexer) OnMemoryDeleted(memoryID string) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -105,7 +103,7 @@ func (idx *MemoryIndexer) OnMemoryDeleted(memoryID string) error {
 	return idx.store.Delete(memoryID)
 }
 
-// normalizeVector scales a vector to unit length (L2 norm = 1.0).
+// normalizeVector 将 vector 缩放为单位长度(L2 norm = 1.0)。
 func normalizeVector(v []float32) []float32 {
 	var sumSquares float64
 	for _, f := range v {
@@ -123,7 +121,7 @@ func normalizeVector(v []float32) []float32 {
 	return normalized
 }
 
-// truncate returns the first n bytes of s (simple helper for metadata preview).
+// truncate 返回 s 的前 n 个字节(用于 metadata 预览的简单 helper)。
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

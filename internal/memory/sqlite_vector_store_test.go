@@ -1,21 +1,20 @@
-// sqlite_vector_store_test.go — tests for the persistent VectorStore.
+// sqlite_vector_store_test.go —— 持久化 VectorStore 的测试。
 //
-// All tests use a fresh temp-file SQLite DB (no in-memory :memory: because
-// modernc.org/sqlite uses a separate connection model) so we exercise the
-// real persistence path end-to-end. Each subtest resets the package-level
-// db.DB via t.Cleanup.
+// 所有测试都使用全新的临时文件 SQLite DB(不使用内存 :memory:,因为
+// modernc.org/sqlite 的连接模型不同),以端到端地验证真实的持久化路径。
+// 每个子测试通过 t.Cleanup 重置包级别的 db.DB。
 //
-// Test layout (table-driven):
+// 测试布局(表驱动):
 //
-//   - TestSqliteVectorStoreUpsertSearchDelete — happy path + edge cases
-//     (empty query, topK clamp, dimension mismatch, missing id on Delete)
-//   - TestSqliteVectorStorePersistence         — Upsert -> reload (new
-//     SqliteVectorStore on the same file) -> data still queryable
-//   - TestSqliteVectorStoreDimensionValidation — Upsert rejects wrong dims
-//     when provider reports non-zero Dimensions()
-//   - TestSqliteVectorStoreLoadAllEmbeddings   — Upsert loop + LoadAll matches
-//   - TestSqliteVectorStoreReloadAndClear      — Reload after external write;
-//     Clear empties in-memory only
+//   - TestSqliteVectorStoreUpsertSearchDelete —— 正常路径 + 边界情况
+//     (空 query、topK 截断、维度不匹配、Delete 不存在的 id)
+//   - TestSqliteVectorStorePersistence         —— Upsert -> reload(在同一文件上
+//     新建 SqliteVectorStore)-> 数据仍可查询
+//   - TestSqliteVectorStoreDimensionValidation —— provider 报告非零 Dimensions()
+//     时 Upsert 拒绝错误维度
+//   - TestSqliteVectorStoreLoadAllEmbeddings   —— Upsert 循环 + LoadAll 匹配
+//   - TestSqliteVectorStoreReloadAndClear      —— 外部写入后 Reload;
+//     Clear 仅清空内存
 
 package memory
 
@@ -27,9 +26,9 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// freshSqliteDB creates a temp SQLite database, returns the live *db.DB
-// wrapper's underlying *sql handle. Tests must call this to keep state
-// isolated — the package global db.DB is reset between subtests via cleanup.
+// freshSqliteDB 创建一个临时 SQLite 数据库,返回 live 的 *db.DB wrapper 底层
+// 的 *sql 句柄。测试必须调用此函数以保持状态隔离 —— 包全局 db.DB 通过
+// cleanup 在子测试之间被重置。
 func freshSqliteDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "vec.db")
@@ -58,7 +57,7 @@ func TestSqliteVectorStoreUpsertSearchDelete(t *testing.T) {
 		t.Fatalf("NewSqliteVectorStore: %v", err)
 	}
 
-	// Upsert three vectors.
+	// Upsert 三个 vector。
 	vecs := map[string][]float32{
 		"alpha": {1, 0, 0, 0, 0, 0, 0, 0},
 		"beta":  {0, 1, 0, 0, 0, 0, 0, 0},
@@ -73,7 +72,7 @@ func TestSqliteVectorStoreUpsertSearchDelete(t *testing.T) {
 		t.Errorf("Len = %d, want 3", got)
 	}
 
-	// Search with the alpha vector — alpha should be the top hit with score 1.0.
+	// 用 alpha vector 搜索 —— alpha 应以 score 1.0 排在第一位。
 	results, err := store.Search([]float32{1, 0, 0, 0, 0, 0, 0, 0}, 3)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -87,14 +86,14 @@ func TestSqliteVectorStoreUpsertSearchDelete(t *testing.T) {
 	if !approxEq(results[0].Score, 1.0) {
 		t.Errorf("alpha score = %f, want 1.0", results[0].Score)
 	}
-	// Sorted descending by score.
+	// 按 score 降序排序。
 	for i := 1; i < len(results); i++ {
 		if results[i].Score > results[i-1].Score {
 			t.Errorf("results not sorted desc at i=%d: %f > %f", i, results[i].Score, results[i-1].Score)
 		}
 	}
 
-	// Delete alpha and verify it's gone.
+	// 删除 alpha 并验证它已消失。
 	if err := store.Delete("alpha"); err != nil {
 		t.Fatalf("Delete(alpha): %v", err)
 	}
@@ -108,7 +107,7 @@ func TestSqliteVectorStoreUpsertSearchDelete(t *testing.T) {
 		}
 	}
 
-	// Delete unknown id — no error, no panic.
+	// 删除未知 id —— 无错误,无 panic。
 	if err := store.Delete("does_not_exist"); err != nil {
 		t.Errorf("Delete(missing) returned %v, want nil", err)
 	}
@@ -127,7 +126,7 @@ func TestSqliteVectorStoreSearchEmptyQuery(t *testing.T) {
 	if _, err := store.Search([]float32{}, 1); err != ErrEmptyVector {
 		t.Errorf("empty slice query error = %v, want ErrEmptyVector", err)
 	}
-	// topK <= 0 should default to 10 — verify by hitting an empty store.
+	// topK <= 0 应默认为 10 —— 通过命中空 store 来验证。
 	if results, _ := store.Search([]float32{1, 0, 0, 0}, 0); len(results) == 0 {
 		t.Error("non-empty store returned 0 results with topK=0 (should default to 10)")
 	}
@@ -147,14 +146,14 @@ func TestSqliteVectorStoreSearchEmptyStore(t *testing.T) {
 }
 
 // ============================================================================
-// Persistence: write, drop store, rebuild from disk
+// 持久化:写入、丢弃 store、从磁盘重建
 // ============================================================================
 
 func TestSqliteVectorStorePersistence(t *testing.T) {
 	path := freshSqliteDB(t)
 	provider := llm.NewLocalEmbeddingProvider(4)
 
-	// First instance — Upsert two vectors.
+	// 第一个实例 —— Upsert 两个 vector。
 	store1, err := NewSqliteVectorStore(db.DB, provider)
 	if err != nil {
 		t.Fatalf("NewSqliteVectorStore(1): %v", err)
@@ -166,12 +165,12 @@ func TestSqliteVectorStorePersistence(t *testing.T) {
 		t.Fatalf("Upsert(p2): %v", err)
 	}
 
-	// Drop the in-memory mirror; close the DB. Reopen and rebuild.
+	// 丢弃内存镜像;关闭 DB。重新打开并重建。
 	store1.Clear()
 	if got := store1.Len(); got != 0 {
 		t.Errorf("after Clear, Len = %d, want 0", got)
 	}
-	// The SQLite rows still exist — verify directly via db helper.
+	// SQLite 行仍然存在 —— 通过 db helper 直接验证。
 	rows, err := db.LoadAllMemoryEmbeddings(db.DB)
 	if err != nil {
 		t.Fatalf("LoadAllMemoryEmbeddings: %v", err)
@@ -180,8 +179,8 @@ func TestSqliteVectorStorePersistence(t *testing.T) {
 		t.Errorf("persisted rows = %d, want 2", len(rows))
 	}
 
-	// Now construct a fresh store pointing at the same path. It should
-	// auto-load the two persisted embeddings.
+	// 现在构造一个指向同一路径的新 store。它应该自动加载两条已持久化的
+	// embedding。
 	_ = db.Close()
 	db.DB = nil
 	if err := db.Init(path); err != nil {
@@ -211,19 +210,19 @@ func TestSqliteVectorStorePersistence(t *testing.T) {
 }
 
 // ============================================================================
-// Dimension validation
+// 维度校验
 // ============================================================================
 
 func TestSqliteVectorStoreDimensionValidation(t *testing.T) {
 	freshSqliteDB(t)
-	// Provider expects 4 dims; we try to upsert a 3-dim vector.
+	// provider 期望 4 维;我们尝试 upsert 一个 3 维 vector。
 	provider := llm.NewLocalEmbeddingProvider(4)
 	store, _ := NewSqliteVectorStore(db.DB, provider)
 
 	if err := store.Upsert("a", []float32{1, 0, 0}, nil); err != ErrDimensionMismatch {
 		t.Errorf("Upsert wrong-dim = %v, want ErrDimensionMismatch", err)
 	}
-	// Correct dims should succeed.
+	// 维度正确应成功。
 	if err := store.Upsert("a", []float32{1, 0, 0, 0}, nil); err != nil {
 		t.Errorf("Upsert correct-dim: %v", err)
 	}
@@ -232,7 +231,7 @@ func TestSqliteVectorStoreDimensionValidation(t *testing.T) {
 func TestSqliteVectorStoreNoProviderSkipsValidation(t *testing.T) {
 	freshSqliteDB(t)
 	store, _ := NewSqliteVectorStore(db.DB, nil)
-	// Any length should be accepted when no provider is set.
+	// 未设置 provider 时任意长度都应被接受。
 	for _, v := range [][]float32{{1, 0}, {1, 0, 0}, {1, 0, 0, 0, 0}} {
 		if err := store.Upsert("a", v, nil); err != nil {
 			t.Errorf("Upsert(%v) with nil provider: %v", v, err)
@@ -241,7 +240,7 @@ func TestSqliteVectorStoreNoProviderSkipsValidation(t *testing.T) {
 }
 
 // ============================================================================
-// LoadAllMemoryEmbeddings interaction
+// LoadAllMemoryEmbeddings 交互
 // ============================================================================
 
 func TestSqliteVectorStoreLoadAllEmbeddingsMatches(t *testing.T) {
@@ -249,7 +248,7 @@ func TestSqliteVectorStoreLoadAllEmbeddingsMatches(t *testing.T) {
 	provider := llm.NewLocalEmbeddingProvider(4)
 	store, _ := NewSqliteVectorStore(db.DB, provider)
 
-	// Upsert a handful of vectors.
+	// Upsert 一批 vector。
 	expected := map[string][]float32{
 		"a": {1, 0, 0, 0},
 		"b": {0, 1, 0, 0},
@@ -261,7 +260,7 @@ func TestSqliteVectorStoreLoadAllEmbeddingsMatches(t *testing.T) {
 			t.Fatalf("Upsert(%q): %v", id, err)
 		}
 	}
-	// Load via the db helper — must match exactly.
+	// 通过 db helper 加载 —— 必须完全匹配。
 	rows, err := db.LoadAllMemoryEmbeddings(db.DB)
 	if err != nil {
 		t.Fatalf("LoadAllMemoryEmbeddings: %v", err)
@@ -306,12 +305,12 @@ func TestSqliteVectorStoreReloadAndClear(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	// Clear in-memory only.
+	// 仅清空内存。
 	store.Clear()
 	if got := store.Len(); got != 0 {
 		t.Errorf("Len after Clear = %d, want 0", got)
 	}
-	// SQLite rows remain.
+	// SQLite 行保留。
 	var count int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM memory_embeddings`).Scan(&count); err != nil {
 		t.Fatalf("count memory_embeddings: %v", err)
@@ -320,7 +319,7 @@ func TestSqliteVectorStoreReloadAndClear(t *testing.T) {
 		t.Errorf("memory_embeddings rows after Clear = %d, want 2 (Clear must not touch DB)", count)
 	}
 
-	// Reload rebuilds from SQLite.
+	// Reload 从 SQLite 重建。
 	if err := store.Reload(); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -334,7 +333,7 @@ func TestSqliteVectorStoreReloadAndClear(t *testing.T) {
 }
 
 // ============================================================================
-// Empty id rejection
+// 空 id 被拒绝
 // ============================================================================
 
 func TestSqliteVectorStoreEmptyIDRejected(t *testing.T) {

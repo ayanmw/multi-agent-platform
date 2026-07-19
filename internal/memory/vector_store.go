@@ -1,57 +1,55 @@
-// Package memory provides vector storage interfaces and in-memory implementation
-// for semantic search and RAG pipelines.
+// Package memory 提供 vector storage 接口与内存实现,
+// 用于语义搜索与 RAG 管线。
 //
-// # Design Rationale
+// # 设计理由
 //
-// VectorStore abstracts the storage and retrieval of embedding vectors. The
-// InMemoryVectorStore provides a zero-dependency, development-friendly backend
-// suitable for prototyping and testing. In Phase 6+ this can be swapped for
-// production backends like Qdrant, Weaviate, or pgvector.
+// VectorStore 抽象了 embedding vector 的存储与检索。InMemoryVectorStore
+// 提供了一个零依赖、便于开发的后端,适合原型开发与测试。在 Phase 6+ 可以
+// 替换为生产级后端,如 Qdrant、Weaviate 或 pgvector。
 //
-// Similarity search uses cosine similarity — normalized so that:
-//   score = 1.0 → identical vectors
-//   score = 0.0 → orthogonal (unrelated)
-//   score = -1.0 → opposite (rare in practice)
+// 相似度搜索使用 cosine similarity —— 归一化后:
+//   score = 1.0 → 完全相同的 vector
+//   score = 0.0 → 正交(无关联)
+//   score = -1.0 → 相反(实践中罕见)
 
 package memory
 
 import "math"
 
-// SearchResult represents a single result from a vector similarity search.
+// SearchResult 表示一次 vector similarity 搜索中的单条结果。
 type SearchResult struct {
-	// ID is the unique identifier of the stored vector.
+	// ID 是所存储 vector 的唯一标识。
 	ID string
 
-	// Score is the cosine similarity score (0.0 to 1.0, higher = more similar).
+	// Score 是 cosine similarity 分数(0.0 到 1.0,越高越相似)。
 	Score float64
 
-	// Metadata is the arbitrary key-value data associated with the vector at storage time.
+	// Metadata 是存储 vector 时关联的任意键值数据。
 	Metadata map[string]any
 }
 
-// VectorStore defines the interface for embedding storage and similarity search.
+// VectorStore 定义了 embedding 存储与 similarity 搜索的接口。
 //
-// Implementations must be goroutine-safe — concurrent Upsert/Search/Delete
-// calls should not corrupt state.
+// 实现必须是 goroutine 安全的 —— 并发的 Upsert/Search/Delete
+// 调用不应破坏内部状态。
 type VectorStore interface {
-	// Upsert stores or updates a vector with associated metadata.
-	// If a vector with the same id already exists, it is overwritten.
-	// The vector length must match the provider's Dimensions().
+	// Upsert 存储或更新一个 vector 及其关联 metadata。
+	// 若相同 id 的 vector 已存在,会被覆盖。
+	// vector 长度必须匹配 provider 的 Dimensions()。
 	Upsert(id string, vector []float32, metadata map[string]any) error
 
-	// Search finds the top-K vectors most similar to the query vector
-	// using cosine similarity. Returns results sorted by score descending.
-	// An empty store or no matches returns an empty slice (not an error).
+	// Search 使用 cosine similarity 查找与 query 最相似的 top-K 个 vector。
+	// 返回结果按 score 降序排序。
+	// store 为空或无匹配时返回空 slice(而非错误)。
 	Search(query []float32, topK int) ([]SearchResult, error)
 
-	// Delete removes a vector by its id. No-op if the id does not exist.
+	// Delete 按 id 移除一个 vector。若 id 不存在则为 no-op。
 	Delete(id string) error
 }
 
-// CosineSimilarity computes the cosine similarity between two vectors.
-// Returns 0 if either vector is empty or has zero magnitude.
-// The result is in the range [-1, 1], though embeddings are typically
-// non-negative so results are in [0, 1].
+// CosineSimilarity 计算两个 vector 之间的 cosine similarity。
+// 若任一 vector 为空或模长为零,返回 0。
+// 结果范围为 [-1, 1],但 embedding 通常非负,因此实际结果一般在 [0, 1]。
 func CosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
 		return 0
@@ -71,8 +69,8 @@ func CosineSimilarity(a, b []float32) float64 {
 	return dotProduct / denominator
 }
 
-// NewSearchResult creates a SearchResult with the given fields.
-// A convenience constructor used by store implementations.
+// NewSearchResult 用给定字段创建一个 SearchResult。
+// 供 store 实现使用的便捷构造函数。
 func NewSearchResult(id string, score float64, metadata map[string]any) SearchResult {
 	return SearchResult{
 		ID:       id,

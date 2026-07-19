@@ -1,44 +1,40 @@
-// sqlite_vector_store.go — SQLite-backed VectorStore implementation.
+// sqlite_vector_store.go —— 基于 SQLite 的 VectorStore 实现。
 //
-// # Design Rationale
+// # 设计理由
 //
-// SqliteVectorStore persists every embedding to the `memory_embeddings` table
-// (added in the v16 migration) while keeping an in-memory mirror for fast
-// cosine-similarity search. The pair (memory map, SQLite) lets us:
+// SqliteVectorStore 将每条 embedding 持久化到 `memory_embeddings` 表
+// (在 v16 migration 中新增),同时在内存中维护镜像,用于快速的
+// cosine similarity 搜索。这一组合(内存 map + SQLite)使我们能够:
 //
-//  1. Survive restarts — the in-memory index is rebuilt from disk at startup
-//     via LoadAllMemoryEmbeddings, so no vector is "lost" when the process
-//     exits.
-//  2. Keep search fast — cosine similarity still runs over the in-memory map
-//     (the SQLite BLOB is read once at startup, not per query).
-//  3. Stay simple — no external vector DB (Qdrant/Weaviate/pgvector) required.
-//     This implementation is appropriate when the candidate set is small
-//     (< ~10k vectors). When we outgrow that, the VectorStore interface lets
-//     us swap in an ANN index without touching callers.
+//  1. 重启后恢复 —— 内存 index 在启动时通过 LoadAllMemoryEmbeddings
+//     从磁盘重建,因此进程退出时不会"丢失"任何 vector。
+//  2. 搜索保持快速 —— cosine similarity 仍在内存 map 上执行
+//     (SQLite BLOB 仅在启动时读取一次,而非每次查询都读)。
+//  3. 保持简单 —— 无需外部 vector DB(Qdrant/Weaviate/pgvector)。
+//     当候选集较小(< ~10k vector)时该实现足够合适。当规模超出时,
+//     VectorStore 接口允许我们替换为 ANN index 而无需改动调用方。
 //
-// # Thread Safety
+// # 线程安全
 //
-// All public methods (Upsert / Search / Delete / Reload / Len / Clear) are
-// guarded by a sync.RWMutex. Reads (Search, Len) take the read lock; writes
-// (Upsert, Delete, Reload, Clear) take the write lock.
+// 所有公开方法(Upsert / Search / Delete / Reload / Len / Clear)均由
+// sync.RWMutex 保护。读(Search、Len)持读锁;写(Upsert、Delete、
+// Reload、Clear)持写锁。
 //
-// # Failure Modes
+// # 失败模式
 //
-//   - Dimension mismatch (provider.Dimensions() > 0 and len(vec) != dims):
-//     returned as ErrDimensionMismatch; nothing is written.
-//   - Empty id or empty vector: ErrEmptyID / ErrEmptyVector.
-//   - SQLite errors during upsert/delete: wrapped via fmt.Errorf("...: %w", err).
-//     The in-memory state is mutated BEFORE the SQLite write so a transient
-//     write failure leaves the in-memory state ahead of disk; Reload()
-//     can be used to reconcile from disk.
+//   - 维度不匹配(provider.Dimensions() > 0 且 len(vec) != dims):
+//     返回 ErrDimensionMismatch;不写入任何内容。
+//   - 空 id 或空 vector:返回 ErrEmptyID / ErrEmptyVector。
+//   - upsert/delete 期间的 SQLite 错误:通过 fmt.Errorf("...: %w", err) 包装。
+//     内存状态会在 SQLite 写入之前被修改,因此短暂的写入失败会让内存
+//     状态领先于磁盘;可通过 Reload() 从磁盘重新对齐。
 //
-// # Boundary Cases
+// # 边界情况
 //
-//   - nil embedProvider: dimension validation is skipped (matches InMemory store).
-//   - provider.Dimensions() == 0: same — no validation.
-//   - Reload on an empty table: clears the in-memory state.
-//   - Clear(): clears in-memory state only (callers can delete rows from
-//     SQLite separately if desired).
+//   - embedProvider 为 nil:跳过维度校验(与 InMemory store 行为一致)。
+//   - provider.Dimensions() == 0:同上 —— 不校验。
+//   - 对空表调用 Reload:会清空内存状态。
+//   - Clear():仅清空内存状态(调用方若需要可另行从 SQLite 删除行)。
 package memory
 
 import (
@@ -53,37 +49,34 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// SqliteVectorStore is a persistent VectorStore backed by SQLite.
+// SqliteVectorStore 是基于 SQLite 的持久化 VectorStore。
 //
-// It mirrors every vector in an in-memory map keyed by id, plus a SQLite row
-// keyed by memory_id. The two are kept in sync on every write (memory first,
-// then SQLite). On startup, Reload() reads the full SQLite table to warm
-// the in-memory map.
+// 它将每个 vector 镜像到以 id 为键的内存 map 中,同时在 SQLite 中以
+// memory_id 为键存储一行。每次写入时两侧同步(先写内存,再写 SQLite)。
+// 启动时 Reload() 读取整个 SQLite 表来预热内存 map。
 type SqliteVectorStore struct {
 	db            *sql.DB
 	embedProvider llm.EmbeddingProvider
 
 	mu       sync.RWMutex
-	vectors  map[string][]float32      // id → embedding (deep-copied)
-	metadata map[string]map[string]any // id → metadata (deep-copied)
+	vectors  map[string][]float32      // id → embedding(深拷贝)
+	metadata map[string]map[string]any // id → metadata(深拷贝)
 
-	// model is the embedding provider name stamped onto every persisted row.
-	// Used by LoadMemoryEmbeddingsByModel for model-rotation workflows. When
-	// the provider is nil we fall back to "unknown" so the column is still
-	// populated (the schema requires NOT NULL).
+	// model 是戳记到每条持久化行上的 embedding provider 名称。
+	// 用于 LoadMemoryEmbeddingsByModel 以支持模型轮换工作流。当
+	// provider 为 nil 时回退为 "unknown",以保持该列仍有值
+	//(schema 要求 NOT NULL)。
 	model string
 }
 
-// NewSqliteVectorStore creates a SqliteVectorStore, automatically loading all
-// existing embeddings from the memory_embeddings table into memory.
+// NewSqliteVectorStore 创建一个 SqliteVectorStore,并自动将 memory_embeddings
+// 表中所有已存在的 embedding 加载到内存。
 //
-// The embedProvider is optional — when non-nil and reporting Dimensions() > 0,
-// Upsert will validate vector lengths against it. The provider's concrete
-// type name is stamped onto every persisted row (via fmt.Sprintf("%T", ...))
-// so a future model rotation can find rows produced by the old model.
+// embedProvider 是可选的 —— 非 nil 且 Dimensions() > 0 时,Upsert 会据此校验
+// vector 长度。provider 的具体类型名会通过 fmt.Sprintf("%T", ...) 戳记到
+// 每条持久化行上,以便将来模型轮换时能找到旧模型生成的行。
 //
-// Returns an error if the initial load fails; callers should treat this as
-// a startup failure (the DB is unusable for vector search).
+// 初始加载失败时返回错误;调用方应将其视为启动失败(该 DB 对 vector 搜索不可用)。
 func NewSqliteVectorStore(sqlDB *sql.DB, provider llm.EmbeddingProvider) (*SqliteVectorStore, error) {
 	if sqlDB == nil {
 		return nil, fmt.Errorf("NewSqliteVectorStore: db is nil")
@@ -101,10 +94,9 @@ func NewSqliteVectorStore(sqlDB *sql.DB, provider llm.EmbeddingProvider) (*Sqlit
 	return s, nil
 }
 
-// resolveProviderName returns a stable identifier for the embedding provider.
-// We use the concrete type name (e.g. "*llm.LocalEmbeddingProvider") when
-// available and fall back to "unknown" when the provider is nil — the
-// model column is NOT NULL.
+// resolveProviderName 返回 embedding provider 的稳定标识符。
+// 可用时使用具体类型名(例如 "*llm.LocalEmbeddingProvider"),
+// provider 为 nil 时回退为 "unknown" —— model 列是 NOT NULL。
 func resolveProviderName(provider llm.EmbeddingProvider) string {
 	if provider == nil {
 		return "unknown"
@@ -112,11 +104,11 @@ func resolveProviderName(provider llm.EmbeddingProvider) string {
 	return fmt.Sprintf("%T", provider)
 }
 
-// Reload rebuilds the in-memory vector and metadata maps from the SQLite
-// table. Useful after an external process (admin tool, batch script) has
-// modified memory_embeddings directly, or after a model rotation.
+// Reload 从 SQLite 表重建内存中的 vector 与 metadata map。
+// 当外部进程(管理工具、批处理脚本)直接修改了 memory_embeddings,
+// 或在模型轮换之后使用此方法。
 //
-// Safe to call concurrently with searches (write lock is held during reload).
+// 可与搜索并发调用(reload 期间持写锁)。
 func (s *SqliteVectorStore) Reload() error {
 	rows, err := db.LoadAllMemoryEmbeddings(s.db)
 	if err != nil {
@@ -125,30 +117,30 @@ func (s *SqliteVectorStore) Reload() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Reset maps in place — keeps the same map header so existing references
-	// in callers remain valid after a Reload (they will just see empty data
-	// briefly during the swap, which is acceptable for an admin operation).
+	// 原地重置 map —— 保留同一 map header,使调用方中已有的引用在
+	// Reload 之后仍然有效(在切换期间他们会短暂看到空数据,这对
+	// 管理操作来说是可接受的)。
 	s.vectors = make(map[string][]float32, len(rows))
 	s.metadata = make(map[string]map[string]any, len(rows))
 
 	for _, r := range rows {
-		// Deep-copy the vector so caller mutation cannot corrupt our index.
+		// 深拷贝 vector,防止调用方修改破坏我们的 index。
 		vec := make([]float32, len(r.Embedding))
 		copy(vec, r.Embedding)
 		s.vectors[r.MemoryID] = vec
-		// memory_embeddings does not persist metadata (only embedding/model/dims);
-		// load an empty placeholder so callers that inspect len(metadata) don't
-		// panic on a missing key. Real metadata round-tripping is a future
-		// enhancement (would need a separate column or JSON blob).
+		// memory_embeddings 不持久化 metadata(只存 embedding/model/dims);
+		// 这里加载一个空占位,使检查 len(metadata) 的调用方不会因为
+		// 缺键而 panic。真正的 metadata 往返是未来的增强
+		//(需要单独的列或 JSON blob)。
 		s.metadata[r.MemoryID] = map[string]any{}
 	}
 	return nil
 }
 
-// Upsert stores or updates a vector with associated metadata. The write is
-// double-sided: in-memory map first, then SQLite via INSERT ... ON CONFLICT.
-// Returns ErrEmptyID / ErrEmptyVector / ErrDimensionMismatch on validation
-// failures; SQLite errors are wrapped with context.
+// Upsert 存储或更新一个 vector 及其关联 metadata。写入是双侧的:
+// 先写内存 map,再通过 INSERT ... ON CONFLICT 写入 SQLite。
+// 校验失败时返回 ErrEmptyID / ErrEmptyVector / ErrDimensionMismatch;
+// SQLite 错误会带上上下文包装。
 func (s *SqliteVectorStore) Upsert(id string, vector []float32, metadata map[string]any) error {
 	if id == "" {
 		return ErrEmptyID
@@ -156,32 +148,30 @@ func (s *SqliteVectorStore) Upsert(id string, vector []float32, metadata map[str
 	if len(vector) == 0 {
 		return ErrEmptyVector
 	}
-	// Dimension validation — same rule as InMemoryVectorStore.
+	// 维度校验 —— 与 InMemoryVectorStore 相同规则。
 	if s.embedProvider != nil {
 		expected := s.embedProvider.Dimensions()
 		if expected > 0 && len(vector) != expected {
 			return ErrDimensionMismatch
 		}
 	}
-	// Deep-copy the vector and metadata so caller mutation cannot corrupt us.
+	// 深拷贝 vector 与 metadata,防止调用方修改破坏我们的数据。
 	vecCopy := make([]float32, len(vector))
 	copy(vecCopy, vector)
 	metaCopy := make(map[string]any, len(metadata))
 	for k, v := range metadata {
 		metaCopy[k] = v
 	}
-	// Update in-memory state first so Search sees the new vector even if the
-	// SQLite write fails transiently. On persistent failure, the caller can
-	// invoke Reload() to reconcile from disk.
+	// 先更新内存状态,这样即使 SQLite 写入短暂失败,Search 也能看到新 vector。
+	// 若持续失败,调用方可以调用 Reload() 从磁盘重新对齐。
 	s.mu.Lock()
 	s.vectors[id] = vecCopy
 	s.metadata[id] = metaCopy
 	s.mu.Unlock()
 
-	// Persist to SQLite. Encoding is little-endian float32 — the same scheme
-	// as pkg/db's encodeEmbedding. We replicate the encoding here (rather than
-	// importing the private helper) so this file's import surface stays clean
-	// and the encoding stays alongside its only caller.
+	// 持久化到 SQLite。编码为 little-endian float32 —— 与 pkg/db 的
+	// encodeEmbedding 相同方案。我们在此复制编码(而非导入私有 helper),
+	// 以保持本文件的 import 表干净,并使编码与其唯一调用方放在一起。
 	blob := encodeFloat32LittleEndian(vecCopy)
 	if err := db.InsertOrReplaceMemoryEmbedding(s.db, id, blob, s.model, len(vecCopy)); err != nil {
 		return fmt.Errorf("SqliteVectorStore.Upsert(%q): persist: %w", id, err)
@@ -189,10 +179,9 @@ func (s *SqliteVectorStore) Upsert(id string, vector []float32, metadata map[str
 	return nil
 }
 
-// Search finds the top-K vectors most similar to the query vector using
-// cosine similarity. Returns results sorted by score descending. An empty
-// store or empty query returns an empty slice (or ErrEmptyVector for an
-// empty query, matching InMemoryVectorStore's behaviour).
+// Search 使用 cosine similarity 查找与 query 最相似的 top-K 个 vector。
+// 返回结果按 score 降序排序。store 为空或 query 为空时返回空 slice
+//(query 为空时返回 ErrEmptyVector,与 InMemoryVectorStore 行为一致)。
 func (s *SqliteVectorStore) Search(query []float32, topK int) ([]SearchResult, error) {
 	if len(query) == 0 {
 		return nil, ErrEmptyVector
@@ -234,8 +223,8 @@ func (s *SqliteVectorStore) Search(query []float32, topK int) ([]SearchResult, e
 	return results, nil
 }
 
-// Delete removes a vector and its metadata by id, from both the in-memory
-// map and the SQLite table. No-op if the id does not exist in either.
+// Delete 按 id 从内存 map 与 SQLite 表中同时移除一个 vector 及其 metadata。
+// 若两处都不存在该 id 则为 no-op。
 func (s *SqliteVectorStore) Delete(id string) error {
 	if id == "" {
 		return ErrEmptyID
@@ -251,18 +240,17 @@ func (s *SqliteVectorStore) Delete(id string) error {
 	return nil
 }
 
-// Len returns the number of vectors currently in the in-memory mirror.
-// Reads under a read lock; safe to call concurrently.
+// Len 返回当前内存镜像中的 vector 数量。
+// 在读锁下读取;可安全并发调用。
 func (s *SqliteVectorStore) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.vectors)
 }
 
-// Clear empties the in-memory state only — the SQLite table is left intact.
-// Use this for tests that need to reset the in-memory index without losing
-// the on-disk embeddings. Callers that want a full wipe should also delete
-// rows from memory_embeddings directly.
+// Clear 仅清空内存状态 —— SQLite 表保持不变。
+// 用于测试场景,需要在不清空磁盘 embedding 的情况下重置内存 index。
+// 若需要完全清空,调用方还应直接从 memory_embeddings 删除行。
 func (s *SqliteVectorStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,11 +258,10 @@ func (s *SqliteVectorStore) Clear() {
 	s.metadata = make(map[string]map[string]any)
 }
 
-// encodeFloat32LittleEndian serializes a []float32 into a little-endian byte
-// slice of length 4*len(v). Each float32 is laid out as its IEEE-754 binary
-// representation in little-endian byte order. This mirrors the encoder in
-// pkg/db/memory_embedding.go so on-disk BLOBs are compatible across both
-// write paths.
+// encodeFloat32LittleEndian 将 []float32 序列化为 little-endian 字节 slice,
+// 长度为 4*len(v)。每个 float32 以其 IEEE-754 二进制表示按 little-endian
+// 字节序排列。这与 pkg/db/memory_embedding.go 中的编码器保持一致,
+// 以保证两条写入路径产生的磁盘 BLOB 相互兼容。
 func encodeFloat32LittleEndian(v []float32) []byte {
 	buf := make([]byte, 4*len(v))
 	for i, f := range v {
