@@ -6,7 +6,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
-// newTestEvent creates an Event with the given id and type.
+// newTestEvent 用给定的 id 和 type 创建一个 Event。
 func newTestEvent(id, typ string) event.Event {
 	return event.Event{EventID: id, Type: typ}
 }
@@ -39,7 +39,7 @@ func TestEventBufferReplayLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	// eventsAfter returns events strictly after b, up to limit.
+	// eventsAfter 返回 b 严格之后的事件，最多 limit 条。
 	if len(evts) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(evts))
 	}
@@ -67,7 +67,7 @@ func TestEventBufferEviction(t *testing.T) {
 		buf.append(newTestEvent(string(rune('a'+i)), "e"))
 	}
 
-	// a and b should have been evicted.
+	// a 和 b 应已被驱逐。
 	_, err := buf.eventsAfter("a", 10)
 	if err != ErrEventIDNotFound {
 		t.Fatalf("expected 'a' to be evicted, got %v", err)

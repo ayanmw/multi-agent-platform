@@ -1,17 +1,16 @@
-// Package cases provides preset Task Cases for one-click task execution.
-// Each case is a pre-configured TaskContract with a specific goal, system prompt,
-// and acceptance criteria. Cases are designed to demonstrate different agent
-// capabilities: code generation, research, multi-agent collaboration, dialogue,
-// and long-running tasks.
+// Package cases 提供用于一键执行 task 的预设 Task Case。
+// 每个 case 都是一个预配置的 TaskContract，带有特定的 goal、system prompt 与
+// acceptance criteria。这些 case 用于演示 agent 的不同能力：代码生成、研究、
+// 多 Agent 协作、对话以及长任务。
 //
-// # Usage
+// # 用法
 //
 //	cases := cases.All()
 //	for _, c := range cases {
 //	    fmt.Println(c.Name, c.Description)
 //	}
 //
-//	// Start a task with a specific case
+//	// 以特定 case 启动一个 task
 //	c := cases.Get("code-gen")
 //	taskID := startTask(c)
 package cases
@@ -22,52 +21,52 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 )
 
-// Case represents a preset task configuration that users can launch with one click.
-// Each case has a name, description, system prompt, default input, and contract
-// that defines the task's scope, permissions, and acceptance criteria.
+// Case 表示用户可一键启动的预设 task 配置。
+// 每个 case 都有 name、description、system prompt、default input 以及定义该 task
+// 范围、权限和 acceptance criteria 的 contract。
 //
 // 内置用例（IsBuiltin=true）不可被修改或删除，仅作为种子数据存在；
 // 用户自定义用例通过 Repository 持久化到 SQLite，可通过 Service 进行 CRUD。
 type Case struct {
-	// ID is a unique slug for the case (e.g., "code-gen", "research")
+	// ID 是 case 的唯一 slug（例如 "code-gen"、"research"）
 	ID string `json:"id"`
 
-	// Name is the human-readable display name
+	// Name 是人类可读的展示名称
 	Name string `json:"name"`
 
-	// Description explains what the case does and what it demonstrates
+	// Description 说明该 case 做什么以及演示了什么
 	Description string `json:"description"`
 
-	// Icon is a single emoji or icon identifier for the case card
+	// Icon 是用于 case 卡片的单个 emoji 或图标标识
 	Icon string `json:"icon"`
 
-	// Category groups related cases (e.g., "generation", "research", "interaction")
+	// Category 对相关 case 进行分组（例如 "generation"、"research"、"interaction"）
 	Category string `json:"category"`
 
-	// SystemPrompt is the agent's system prompt for this case
+	// SystemPrompt 是该 case 下 agent 的 system prompt
 	SystemPrompt string `json:"system_prompt"`
 
-	// DefaultInput is the pre-filled user input (can be overridden by the user)
+	// DefaultInput 是预填写的用户输入（可被用户覆盖）
 	DefaultInput string `json:"default_input"`
 
-	// Contract is the TaskContract that defines scope, permissions, and acceptance criteria
+	// Contract 是定义范围、权限和 acceptance criteria 的 TaskContract
 	Contract harness.TaskContract `json:"contract"`
 
-	// Tags for filtering in the UI
+	// Tags 用于 UI 中的过滤
 	Tags []string `json:"tags"`
 
-	// IsBuiltin marks whether this case is a built-in preset.
-	// Builtin cases are seeded on an empty database and are immutable.
+	// IsBuiltin 标记该 case 是否为内置预设。
+	// Builtin case 在空数据库上被种子化，且不可变。
 	IsBuiltin bool `json:"is_builtin"`
 
-	// CreatedAt is the creation timestamp
+	// CreatedAt 是创建时间戳
 	CreatedAt time.Time `json:"created_at"`
 
-	// UpdatedAt is the last update timestamp
+	// UpdatedAt 是最后更新时间戳
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// All returns all preset task cases. Add new cases here as they are designed.
+// All 返回所有预设 task case。新设计的 case 在此处添加。
 // 返回内置用例列表，供 Service 在空库时种子初始化，也供前端展示内置卡片。
 func All() []Case {
 	return []Case{
@@ -79,7 +78,7 @@ func All() []Case {
 	}
 }
 
-// Get returns a case by ID, or nil if not found.
+// Get 按 ID 返回 case，找不到则返回 nil。
 func Get(id string) *Case {
 	for _, c := range All() {
 		if c.ID == id {
@@ -89,8 +88,8 @@ func Get(id string) *Case {
 	return nil
 }
 
-// CodeGenCase demonstrates code generation with tool execution and self-fix loop.
-// The agent generates code, writes it to a file, runs tests, and fixes any failures.
+// CodeGenCase 演示带 tool 执行与 self-fix loop 的代码生成。
+// agent 生成代码、写入文件、运行测试，并修复任何失败。
 func CodeGenCase() Case {
 	return Case{
 		ID:          "code-gen",
@@ -127,8 +126,8 @@ func CodeGenCase() Case {
 	}
 }
 
-// ResearchCase demonstrates multi-step reasoning and report generation.
-// The agent breaks down a research question, writes findings to a report.
+// ResearchCase 演示多步推理与报告生成。
+// agent 拆解一个研究问题，将结论写入报告。
 func ResearchCase() Case {
 	return Case{
 		ID:          "research",
@@ -163,9 +162,9 @@ func ResearchCase() Case {
 	}
 }
 
-// MultiAgentCase demonstrates multi-agent coordination (Phase 4 readiness).
-// In Phase 3, this runs as a single agent simulating the multi-agent workflow.
-// In Phase 4+, this will spawn multiple agents in parallel.
+// MultiAgentCase 演示多 Agent 协作（Phase 4 就绪）。
+// 在 Phase 3 中，它作为单 agent 运行，模拟多 agent 工作流。
+// 在 Phase 4+ 中，它将并行派生多个 agent。
 func MultiAgentCase() Case {
 	return Case{
 		ID:          "multi-agent",
@@ -201,8 +200,8 @@ Write all outputs to files in the output/ directory.`,
 	}
 }
 
-// DialogueCase demonstrates pure LLM conversation without tool calls.
-// This tests the streaming rendering (TypeWriter) and Markdown display.
+// DialogueCase 演示无 tool 调用的纯 LLM 对话。
+// 用于测试流式渲染（TypeWriter）与 Markdown 显示。
 func DialogueCase() Case {
 	return Case{
 		ID:          "dialogue",
@@ -224,16 +223,15 @@ Do NOT use any tools — this is a pure conversation.`,
 			Scope:    ".",
 			MaxSteps: 2,
 			Permissions: harness.TaskPermissions{
-				// No tool permissions — pure dialogue
+				// 无任何 tool 权限——纯对话
 			},
 		},
 		Tags: []string{"dialogue", "streaming", "markdown", "baseline"},
 	}
 }
 
-// LongTaskCase demonstrates multi-step task with progress tracking.
-// The agent performs a series of related operations, demonstrating the
-// Progress file and checkpoint capabilities.
+// LongTaskCase 演示带进度追踪的多步任务。
+// agent 执行一系列相关操作，演示 Progress 文件与 checkpoint 能力。
 func LongTaskCase() Case {
 	return Case{
 		ID:          "long-task",

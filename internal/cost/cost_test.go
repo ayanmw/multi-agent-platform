@@ -45,7 +45,7 @@ func TestCalculateCost(t *testing.T) {
 
 	t.Run("zero total tokens returns 0", func(t *testing.T) {
 		p := sampleProfile(1.0, 2.0, llm.TierStandard)
-		// TotalTokens=0 triggers the early return even if prompt/completion are non-zero
+		// TotalTokens=0 即使 prompt/completion 非零也会触发提前返回
 		if got := ct.CalculateCost(p, llm.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 0}); got != 0 {
 			t.Errorf("TotalTokens=0 should return 0, got %f", got)
 		}
@@ -65,7 +65,7 @@ func TestCalculateCost(t *testing.T) {
 	})
 
 	t.Run("small token count preserves sub-cent precision", func(t *testing.T) {
-		// $1/1M input → 1000 tokens = $0.001 (sub-cent; integer-cents would truncate to 0)
+		// $1/1M input → 1000 tokens = $0.001（sub-cent；整数-cent 会截断为 0）
 		p := sampleProfile(1.0, 0.0, llm.TierStandard)
 		usage := llm.Usage{PromptTokens: 1000, CompletionTokens: 0, TotalTokens: 1000}
 		got := ct.CalculateCost(p, usage)
@@ -164,7 +164,7 @@ func TestCostTrackerRecordAndAggregate(t *testing.T) {
 		if !approxEq(rep.TotalCostUSD, 0.0) {
 			t.Errorf("expected empty TotalCostUSD 0.0, got %f", rep.TotalCostUSD)
 		}
-		// maps should be initialized (not nil) to avoid下游 nil panic
+		// map 应被初始化（非 nil），避免下游 nil panic
 		if rep.ByModel == nil {
 			t.Error("ByModel should be initialized even when empty")
 		}
@@ -208,7 +208,7 @@ func TestCostTrackerCallbackPanicIsContained(t *testing.T) {
 	ct := NewCostTracker(WithOnRecord(func(r CostRecord) {
 		panic("boom")
 	}))
-	// Record must not propagate the callback panic
+	// Record 不得传播 callback 的 panic
 	defer func() {
 		if rec := recover(); rec != nil {
 			t.Errorf("Record should not propagate callback panic, got %v", rec)
@@ -231,8 +231,8 @@ func TestCostTrackerConcurrentRecord(t *testing.T) {
 		go func(gid int) {
 			defer wg.Done()
 			for i := 0; i < perG; i++ {
-				// CostCents=1 → CostUSD=0.01. Keeps the legacy TotalCostCents
-				// assertion meaningful alongside the new float64 TotalCostUSD check.
+				// CostCents=1 → CostUSD=0.01。让 legacy 的 TotalCostCents
+				// 断言与新的 float64 TotalCostUSD 检查并存仍有意义。
 				ct.Record(CostRecord{ID: "r", TaskID: "shared", AgentID: "a", CostCents: 1, CostUSD: 0.01})
 			}
 		}(g)
@@ -243,7 +243,7 @@ func TestCostTrackerConcurrentRecord(t *testing.T) {
 	if rep.RecordCount != goroutines*perG || rep.TotalCostCents != want {
 		t.Errorf("after concurrent records: count=%d cents=%d, want %d/%d", rep.RecordCount, rep.TotalCostCents, goroutines*perG, want)
 	}
-	// 1000 records * $0.01 = $10.00 USD
+	// 1000 条记录 * $0.01 = $10.00 USD
 	if !approxEq(rep.TotalCostUSD, 10.0) {
 		t.Errorf("after concurrent records: TotalCostUSD = %f, want 10.0", rep.TotalCostUSD)
 	}
@@ -289,9 +289,9 @@ func TestBuildRecordFromProfile(t *testing.T) {
 		reg := llm.NewModelRegistry()
 		reg.Register(&llm.ModelProfile{Name: "test-model", Tier: llm.TierPremium})
 		ct := NewCostTracker(WithRegistry(reg))
-		p := sampleProfile(1.0, 2.0, llm.TierStandard) // profile's own tier differs from registry
+		p := sampleProfile(1.0, 2.0, llm.TierStandard) // profile 自身的 tier 与 registry 不同
 		rec := ct.BuildRecordFromProfile("t", "s", "p", "a", 0, "test-model", p, llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
-		// Tier is resolved from registry.Get(model), not from the passed profile
+		// Tier 从 registry.Get(model) 解析，而非来自传入的 profile
 		if rec.Tier != "premium" {
 			t.Errorf("Tier should be resolved from registry as premium, got %q", rec.Tier)
 		}
@@ -366,7 +366,7 @@ func TestResolveFallbackChain(t *testing.T) {
 	t.Run("circular reference is broken", func(t *testing.T) {
 		reg := llm.NewModelRegistry()
 		x := &llm.ModelProfile{Name: "x", FallbackModel: "y"}
-		y := &llm.ModelProfile{Name: "y", FallbackModel: "x"} // circular
+		y := &llm.ModelProfile{Name: "y", FallbackModel: "x"} // 循环引用
 		reg.Register(x)
 		reg.Register(y)
 		chain := ResolveFallbackChain(reg, x, 10)
@@ -433,5 +433,5 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
-// fmtError wraps a string as an error for table-driven tests.
+// fmtError 将字符串包装为 error，用于表驱动测试。
 func fmtError(s string) error { return errors.New(s) }

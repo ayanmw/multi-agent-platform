@@ -9,7 +9,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// setupEvalTestDB creates a temp SQLite database with the case_evaluations schema.
+// setupEvalTestDB 创建一个带 case_evaluations schema 的临时 SQLite 数据库。
 func setupEvalTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")

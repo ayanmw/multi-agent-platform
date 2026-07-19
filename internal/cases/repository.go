@@ -12,19 +12,19 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 )
 
-// Repository provides SQLite CRUD operations for the cases table.
+// Repository 提供 cases 表的 SQLite CRUD 操作。
 // Repository 负责 cases 表与 case_evaluations 表的持久化，仅管理自定义用例；
 // 内置用例作为种子由 Service 合并，不写入此仓库。
 type Repository struct {
 	db *sql.DB
 }
 
-// NewRepository creates a new case repository wrapping the given sql.DB.
+// NewRepository 创建一个包装给定 sql.DB 的 case repository。
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// CountAll returns the total number of case rows (built-in + custom).
+// CountAll 返回 case 行的总数（内置 + 自定义）。
 // CountAll 返回 cases 表总行数，包括内置与自定义用例。
 func (r *Repository) CountAll() (int, error) {
 	var count int
@@ -35,7 +35,7 @@ func (r *Repository) CountAll() (int, error) {
 	return count, nil
 }
 
-// generateCaseID generates a short random id prefixed with "case-".
+// generateCaseID 生成以 "case-" 为前缀的短随机 id。
 // 使用 crypto/rand 产生 16 字节 hex，避免引入额外依赖。
 func generateCaseID() (string, error) {
 	b := make([]byte, 16)
@@ -45,8 +45,8 @@ func generateCaseID() (string, error) {
 	return "case-" + hex.EncodeToString(b), nil
 }
 
-// toJSONString marshals the value to JSON. Callers that want `null`/`[]`/`{}`
-// must initialize nil slices/maps before calling this helper.
+// toJSONString 将值序列化为 JSON。希望得到 `null`/`[]`/`{}` 的调用方
+// 必须在调用此 helper 之前初始化 nil slice/map。
 func toJSONString(v any) (string, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -55,7 +55,7 @@ func toJSONString(v any) (string, error) {
 	return string(data), nil
 }
 
-// parseTags unmarshals a JSON array of tags, returning nil on empty/null.
+// parseTags 反序列化 JSON 数组形式的 tags，空值或 null 时返回 nil。
 func parseTags(s string) ([]string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "null" {
@@ -68,7 +68,7 @@ func parseTags(s string) ([]string, error) {
 	return tags, nil
 }
 
-// scanCases scans a rows result set into a slice of Case values.
+// scanCases 将 rows 结果集扫描到 Case 值的 slice 中。
 func scanCases(rows *sql.Rows) ([]Case, error) {
 	defer rows.Close()
 	var cases []Case
@@ -82,8 +82,8 @@ func scanCases(rows *sql.Rows) ([]Case, error) {
 	return cases, rows.Err()
 }
 
-// scanCaseFromRows scans the current row into a *Case. It is used by both
-// scanCase (single-row) and scanCases (multi-row) to avoid duplication.
+// scanCaseFromRows 将当前行扫描到 *Case。它被 scanCase（单行）和 scanCases
+// （多行）共用，以避免重复代码。
 func scanCaseFromRows(scanner interface {
 	Scan(dest ...any) error
 }) (*Case, error) {
@@ -118,12 +118,12 @@ func scanCaseFromRows(scanner interface {
 	return &c, nil
 }
 
-// scanCase scans a cases table row into a Case value.
+// scanCase 将一行 cases 表数据扫描到 Case 值中。
 func scanCase(row *sql.Row) (*Case, error) {
 	return scanCaseFromRows(row)
 }
 
-// Create inserts a new custom case into the cases table.
+// Create 插入一条新的自定义用例到 cases 表。
 // Create 插入一条新的自定义用例；若 ID 为空则自动生成，并为时间戳填充默认值。
 func (r *Repository) Create(c Case) (*Case, error) {
 	if c.ID == "" {
@@ -162,7 +162,7 @@ func (r *Repository) Create(c Case) (*Case, error) {
 	return &c, nil
 }
 
-// GetByID returns a custom case by id, or sql.ErrNoRows if not found.
+// GetByID 按 ID 返回自定义用例；未找到则返回 sql.ErrNoRows。
 // GetByID 按 ID 查询自定义用例；未找到时返回 sql.ErrNoRows。
 func (r *Repository) GetByID(id string) (*Case, error) {
 	row := r.db.QueryRow(`
@@ -171,7 +171,7 @@ func (r *Repository) GetByID(id string) (*Case, error) {
 	return scanCase(row)
 }
 
-// List returns all custom cases from the database, optionally filtered by category.
+// List 返回数据库中所有自定义用例，可按 category 过滤。
 // 内置用例（is_builtin=1）由代码管理，不在这里返回，避免 Service 合并时重复。
 func (r *Repository) List(category string) ([]Case, error) {
 	query := `
@@ -190,7 +190,7 @@ func (r *Repository) List(category string) ([]Case, error) {
 	return scanCases(rows)
 }
 
-// Update updates all mutable fields of a custom case.
+// Update 更新自定义用例的所有可变字段。
 // Update 更新自定义用例的所有可变字段；若未更新到任何行则返回 sql.ErrNoRows。
 func (r *Repository) Update(c Case) (*Case, error) {
 	c.UpdatedAt = time.Now()
@@ -222,7 +222,7 @@ func (r *Repository) Update(c Case) (*Case, error) {
 	return &c, nil
 }
 
-// Delete removes a custom case by id.
+// Delete 按 id 删除自定义用例。
 // Delete 删除指定 ID 的自定义用例；若不存在则返回 sql.ErrNoRows。
 func (r *Repository) Delete(id string) error {
 	res, err := r.db.Exec(`DELETE FROM cases WHERE id = ?`, id)
@@ -239,7 +239,7 @@ func (r *Repository) Delete(id string) error {
 	return nil
 }
 
-// boolToInt converts a bool to an int for SQLite storage.
+// boolToInt 将 bool 转换为 int，以便 SQLite 存储。
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -247,7 +247,7 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// CaseEvaluation records the result of evaluating a completed task against its case.
+// CaseEvaluation 记录一个已完成 task 针对其 case 的评估结果。
 type CaseEvaluation struct {
 	ID          int64     `json:"id,omitempty"`
 	TaskID      string    `json:"task_id"`
@@ -258,7 +258,7 @@ type CaseEvaluation struct {
 	EvaluatedAt time.Time `json:"evaluated_at"`
 }
 
-// SaveEvaluation inserts a case evaluation into the case_evaluations table.
+// SaveEvaluation 将一条 case evaluation 插入 case_evaluations 表。
 // SaveEvaluation 保存任务针对用例的评估结果；若 EvaluatedAt 为空则设为当前时间。
 func (r *Repository) SaveEvaluation(eval CaseEvaluation) error {
 	if eval.EvaluatedAt.IsZero() {
@@ -275,7 +275,7 @@ func (r *Repository) SaveEvaluation(eval CaseEvaluation) error {
 	return nil
 }
 
-// GetEvaluation returns the most recent evaluation for a given task and case.
+// GetEvaluation 返回给定 task 与 case 的最新评估。
 // GetEvaluation 返回指定任务与用例的最新评估记录；SQLite 的 DATETIME 直接扫描为 time.Time。
 func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, error) {
 	row := r.db.QueryRow(`
@@ -299,5 +299,5 @@ func (r *Repository) GetEvaluation(taskID, caseID string) (*CaseEvaluation, erro
 	return &e, nil
 }
 
-// Ensure interface compatibility: a new case should carry a valid contract when passed to services.
+// 保证接口兼容性：传给各 service 的新的 case 应携带有效的 contract。
 var _ = harness.TaskContract{}

@@ -1,15 +1,13 @@
-// Package cost provides fallback chain resolution and error classification
-// for model fallback strategies.
+// Package cost 提供 model fallback 策略的 fallback chain 解析与错误分类。
 //
-// # Design Rationale
+// # 设计理由
 //
-// When a primary model fails, the system needs a structured way to:
-//  1. Resolve the fallback chain from ModelProfile.FallbackModel links
-//  2. Determine whether an error is worth retrying (retryable) or not
+// 当主模型失败时，系统需要一种结构化的方式来：
+//  1. 从 ModelProfile.FallbackModel 链接解析 fallback chain
+//  2. 判断一个错误是否值得重试（retryable）
 //
-// Retryable errors include transient failures (network issues, rate limits,
-// server errors) that may resolve on a subsequent attempt. Non-retryable
-// errors (client errors, auth failures) should propagate immediately.
+// Retryable 错误包括可能在下次尝试时恢复的瞬时故障（网络问题、rate limit、
+// 服务器错误）。Non-retryable 错误（客户端错误、认证失败）应立即传播。
 package cost
 
 import (
@@ -19,16 +17,15 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 )
 
-// ResolveFallbackChain resolves the fallback chain starting from the primary
-// model profile. It follows the FallbackModel links in the registry, collecting
-// up to maxDepth profiles (including the primary at position 0).
+// ResolveFallbackChain 从主 model profile 起解析 fallback chain。它沿 registry 中的
+// FallbackModel 链接跟进，最多收集 maxDepth 个 profile（含位于位置 0 的主模型）。
 //
-// The returned slice always includes the primary as the first element.
-// If the primary has no fallback configured, the slice contains only the primary.
-// The chain stops when a model's FallbackModel is empty, not found in the
-// registry, or maxDepth is reached (preventing infinite loops from circular refs).
+// 返回的 slice 始终以主模型作为第一个元素。
+// 若主模型未配置 fallback，则 slice 仅包含主模型。
+// 当某个模型的 FallbackModel 为空、在 registry 中找不到，或达到 maxDepth 时，
+// chain 停止（从而防止循环引用导致的无限循环）。
 //
-// # Example
+// # 示例
 //
 //	registry := llm.NewModelRegistry()
 //	registry.Register(&llm.ModelProfile{Name: "pro", FallbackModel: "flash"})
@@ -45,15 +42,15 @@ func ResolveFallbackChain(registry *llm.ModelRegistry, primary *llm.ModelProfile
 
 	for len(chain) < maxDepth {
 		if current.FallbackModel == "" {
-			break // no more fallbacks configured
+			break // 没有更多 fallback 配置
 		}
 
 		next := registry.Get(current.FallbackModel)
 		if next == nil {
-			break // fallback model not in registry
+			break // fallback model 不在 registry 中
 		}
 
-		// Avoid circular references (already in chain)
+		// 避免循环引用（已在 chain 中）
 		alreadyInChain := false
 		for _, existing := range chain {
 			if existing.Name == next.Name {
@@ -72,49 +69,48 @@ func ResolveFallbackChain(registry *llm.ModelRegistry, primary *llm.ModelProfile
 	return chain
 }
 
-// IsRetryableError classifies whether an error from an LLM API call is transient
-// and worth retrying on a fallback model.
+// IsRetryableError 判断一个来自 LLM API 调用的错误是否为瞬时错误，值得在 fallback
+// model 上重试。
 //
-// Retryable errors:
-//   - Network errors (connection refused, DNS failure, etc.)
-//   - HTTP 429 (rate limit exceeded)
-//   - HTTP 5xx (server errors)
-//   - Context deadline exceeded (timeout)
-//   - Errors containing "timeout" or "deadline" in message
+// Retryable 错误：
+//   - 网络错误（connection refused、DNS 失败等）
+//   - HTTP 429（rate limit exceeded）
+//   - HTTP 5xx（服务器错误）
+//   - Context deadline exceeded（超时）
+//   - 消息中包含 "timeout" 或 "deadline" 的错误
 //
-// Non-retryable errors (return false):
-//   - HTTP 400 (bad request)
-//   - HTTP 401 (unauthorized / invalid API key)
-//   - HTTP 403 (forbidden)
-//   - HTTP 404 (not found)
-//   - HTTP 422 (validation error)
-//   - Any other 4xx client error
+// Non-retryable 错误（返回 false）：
+//   - HTTP 400（bad request）
+//   - HTTP 401（unauthorized / 无效 API key）
+//   - HTTP 403（forbidden）
+//   - HTTP 404（not found）
+//   - HTTP 422（validation error）
+//   - 其它任何 4xx 客户端错误
 //
-// When the error is not an HTTP error and doesn't match known transient patterns,
-// IsRetryableError returns true as a safe default — unknown errors are assumed
-// to be potentially transient.
+// 当错误不是 HTTP 错误且不匹配已知的瞬时模式时，IsRetryableError 作为安全默认返回
+// true——未知错误被假定为可能是瞬时的。
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for context deadline exceeded (timeout)
+	// 检查 context deadline exceeded（超时）
 	if errors.Is(err, contextDeadlineExceeded) {
 		return true
 	}
 
-	// Check for wrapped deadline exceeded
+	// 检查被包装的 deadline exceeded
 	if strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") ||
 		strings.Contains(strings.ToLower(err.Error()), "timeout") {
 		return true
 	}
 
-	// Try to extract HTTP status code from the error message
-	// Many OpenAI-compatible clients embed the status code in the error string
-	// e.g., "openai: status code 429" or "HTTP 500"
+	// 尝试从错误消息中提取 HTTP 状态码
+	// 许多 OpenAI 兼容客户端将状态码嵌入错误字符串中，
+	// 例如 "openai: status code 429" 或 "HTTP 500"
 	errMsg := err.Error()
 
-	// Check for common HTTP status patterns in error messages
+	// 检查错误消息中常见的 HTTP 状态模式
 	for _, statusPattern := range []string{
 		"status code 429",
 		"status code 500",
@@ -137,7 +133,7 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
-	// Check for common retryable patterns
+	// 检查常见的 retryable 模式
 	retryablePatterns := []string{
 		"rate limit",
 		"too many requests",
@@ -158,7 +154,7 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
-	// Check for non-retryable 4xx patterns
+	// 检查 non-retryable 的 4xx 模式
 	nonRetryablePatterns := []string{
 		"status code 400",
 		"status code 401",
@@ -191,11 +187,11 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
-	// If we can't classify the error, assume it's retryable (safe default)
-	// This ensures transient network flakiness gets a retry attempt
+	// 如果无法分类该错误，则假定为 retryable（安全默认值）
+	// 这确保了瞬时网络抖动能获得重试机会
 	return true
 }
 
-// contextDeadlineExceeded is used for error comparison without importing context
-// directly to keep the cost package lightweight.
+// contextDeadlineExceeded 用于错误比较，但不直接导入 context，
+// 以保持 cost 包的轻量。
 var contextDeadlineExceeded = errors.New("context deadline exceeded")

@@ -10,7 +10,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 )
 
-// CreateCaseRequest is the payload for creating a new custom case.
+// CreateCaseRequest 是创建新自定义用例的请求 payload。
 type CreateCaseRequest struct {
 	Name         string                `json:"name"`
 	Description  string                `json:"description"`
@@ -22,8 +22,8 @@ type CreateCaseRequest struct {
 	Tags         []string              `json:"tags"`
 }
 
-// UpdateCaseRequest is the payload for updating an existing custom case.
-// All fields are optional; omitted fields keep their existing values.
+// UpdateCaseRequest 是更新已存在自定义用例的请求 payload。
+// 所有字段均为可选；省略的字段保留其现有值。
 type UpdateCaseRequest struct {
 	Name         *string                `json:"name,omitempty"`
 	Description  *string                `json:"description,omitempty"`
@@ -35,21 +35,21 @@ type UpdateCaseRequest struct {
 	Tags         *[]string              `json:"tags,omitempty"`
 }
 
-// Service provides the business logic for managing cases.
-// It combines immutable built-in cases with persisted custom cases.
+// Service 提供 cases 管理的业务逻辑。
+// 它将不可变的内置用例与持久化的自定义用例组合在一起。
 type Service struct {
 	repo      *Repository
 	builtins  []Case
 	builtinBy map[string]*Case
 }
 
-// Repository returns the underlying cases.Repository so callers can persist
-// evaluation results directly (e.g., from the runtime Engine).
+// Repository 返回底层的 cases.Repository，便于调用方直接持久化
+// evaluation 结果（例如来自 runtime Engine）。
 func (s *Service) Repository() *Repository {
 	return s.repo
 }
 
-// Init creates a new Service, seeds builtin cases if the database is empty, and indexes builtins.
+// Init 创建一个新的 Service，若数据库为空则种子化内置用例，并对 builtins 建立索引。
 func Init(db *sql.DB) (*Service, error) {
 	repo := NewRepository(db)
 	svc := &Service{
@@ -74,7 +74,7 @@ func Init(db *sql.DB) (*Service, error) {
 	return svc, nil
 }
 
-// seedBuiltins inserts all built-in cases into the database with IsBuiltin=1.
+// seedBuiltins 将所有内置用例以 IsBuiltin=1 插入数据库。
 func (s *Service) seedBuiltins() error {
 	for _, c := range s.builtins {
 		if _, err := s.repo.Create(c); err != nil {
@@ -84,7 +84,7 @@ func (s *Service) seedBuiltins() error {
 	return nil
 }
 
-// validateContract checks the contract constraints for creation/update.
+// validateContract 检查用于创建/更新的 contract 约束。
 func validateContract(contract harness.TaskContract) error {
 	if contract.MaxSteps <= 0 || contract.MaxSteps > 100 {
 		return fmt.Errorf("max_steps must be between 1 and 100, got %d", contract.MaxSteps)
@@ -92,7 +92,7 @@ func validateContract(contract harness.TaskContract) error {
 	return nil
 }
 
-// validateCreate validates a create request.
+// validateCreate 校验一个创建请求。
 func validateCreate(req CreateCaseRequest) (Case, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return Case{}, errors.New("name cannot be empty")
@@ -122,7 +122,7 @@ func validateCreate(req CreateCaseRequest) (Case, error) {
 	}, nil
 }
 
-// Create validates the request and persists a new custom case.
+// Create 校验请求并持久化一条新的自定义用例。
 func (s *Service) Create(req CreateCaseRequest) (*Case, error) {
 	c, err := validateCreate(req)
 	if err != nil {
@@ -131,13 +131,13 @@ func (s *Service) Create(req CreateCaseRequest) (*Case, error) {
 	return s.repo.Create(c)
 }
 
-// isBuiltin reports whether the given id refers to a built-in case.
+// isBuiltin 判断给定 id 是否指向内置用例。
 func (s *Service) isBuiltin(id string) bool {
 	_, ok := s.builtinBy[id]
 	return ok
 }
 
-// Get returns a case by id, preferring builtin cases, then database cases.
+// Get 按 id 返回 case，优先查内置用例，其次查数据库用例。
 func (s *Service) Get(id string) (*Case, error) {
 	if c, ok := s.builtinBy[id]; ok {
 		return c, nil
@@ -145,8 +145,8 @@ func (s *Service) Get(id string) (*Case, error) {
 	return s.repo.GetByID(id)
 }
 
-// List returns all cases (builtin + custom) with optional tag/category filtering.
-// tags filter uses OR semantics: a case matches if it contains ANY of the requested tags.
+// List 返回所有用例（内置 + 自定义），可按 tag/category 过滤。
+// tags 过滤采用 OR 语义：只要 case 包含所请求 tag 中的任意一个即视为匹配。
 func (s *Service) List(tags []string, category string) ([]Case, error) {
 	category = strings.TrimSpace(category)
 	custom, err := s.repo.List(category)
@@ -157,7 +157,7 @@ func (s *Service) List(tags []string, category string) ([]Case, error) {
 	all = append(all, s.builtins...)
 	all = append(all, custom...)
 
-	// Normalize tag filter
+	// 规范化 tag 过滤
 	filterTags := make([]string, 0, len(tags))
 	for _, t := range tags {
 		t = strings.TrimSpace(t)
@@ -183,8 +183,8 @@ func (s *Service) List(tags []string, category string) ([]Case, error) {
 	return result, nil
 }
 
-// hasAnyTag reports whether caseTags contains at least one tag in required (case-insensitive).
-// An empty required set matches every case.
+// hasAnyTag 判断 caseTags 是否至少包含 required 中的一个 tag（大小写不敏感）。
+// required 为空集时匹配每一个 case。
 func hasAnyTag(caseTags, required []string) bool {
 	if len(required) == 0 {
 		return true
@@ -200,7 +200,7 @@ func hasAnyTag(caseTags, required []string) bool {
 	return false
 }
 
-// Update modifies an existing custom case; builtin cases cannot be updated.
+// Update 修改已存在的自定义用例；内置用例不可更新。
 var ErrBuiltinImmutable = errors.New("cannot modify or delete built-in case")
 func (s *Service) Update(id string, req UpdateCaseRequest) (*Case, error) {
 	if s.isBuiltin(id) {
@@ -247,7 +247,7 @@ func (s *Service) Update(id string, req UpdateCaseRequest) (*Case, error) {
 	return s.repo.Update(*c)
 }
 
-// Delete removes a custom case by id; builtin cases cannot be deleted.
+// Delete 按 id 删除自定义用例；内置用例不可删除。
 func (s *Service) Delete(id string) error {
 	if s.isBuiltin(id) {
 		return ErrBuiltinImmutable
@@ -255,7 +255,7 @@ func (s *Service) Delete(id string) error {
 	return s.repo.Delete(id)
 }
 
-// BuiltinIDs returns the ids of all builtin cases.
+// BuiltinIDs 返回所有内置用例的 id。
 func (s *Service) BuiltinIDs() []string {
 	ids := make([]string, 0, len(s.builtins))
 	for _, c := range s.builtins {

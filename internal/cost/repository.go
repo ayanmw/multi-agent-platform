@@ -1,8 +1,7 @@
-// Package cost provides persistence interfaces and implementations for cost records.
+// Package cost 提供 cost 记录的持久化接口与实现。
 //
-// CostRepository is the abstraction used by the HTTP layer and Engine integration
-// to query and store cost records. The default production implementation writes
-// to the SQLite cost_records table created by migration v10 (and extended by v11).
+// CostRepository 是 HTTP 层与 Engine 集成用于查询和存储 cost 记录的抽象。
+// 默认的生产实现写入由 migration v10 创建（并由 v11 扩展）的 SQLite cost_records 表。
 package cost
 
 import (
@@ -14,35 +13,35 @@ import (
 	"github.com/google/uuid"
 )
 
-// CostRepository abstracts persistence for CostRecords.
+// CostRepository 抽象 CostRecord 的持久化。
 type CostRepository interface {
-	// Insert stores a new cost record.
+	// Insert 存储一条新的 cost 记录。
 	Insert(record CostRecord) error
-	// QueryByTask returns all records for a task, ordered by creation time.
+	// QueryByTask 返回某个 task 的所有记录，按创建时间排序。
 	QueryByTask(taskID string) ([]CostRecord, error)
-	// QueryBySession returns all records for a session.
+	// QueryBySession 返回某个 session 的所有记录。
 	QueryBySession(sessionID string) ([]CostRecord, error)
-	// QueryByProject returns all records for a project.
+	// QueryByProject 返回某个 project 的所有记录。
 	QueryByProject(projectID string) ([]CostRecord, error)
-	// QueryRecent returns the most recent N records across all tasks.
+	// QueryRecent 返回跨所有 task 的最近 N 条记录。
 	QueryRecent(limit int) ([]CostRecord, error)
 }
 
-// InMemoryCostRepository is a thread-safe in-memory store used for tests and as a
-// fallback when no SQLite database is available. Records are lost on process exit.
+// InMemoryCostRepository 是一个线程安全的内存存储，用于测试，以及在没有
+// SQLite 数据库可用时作为 fallback。进程退出时记录会丢失。
 type InMemoryCostRepository struct {
 	mu      sync.RWMutex
 	records []CostRecord
 }
 
-// NewInMemoryCostRepository creates an in-memory cost repository.
+// NewInMemoryCostRepository 创建一个内存型 cost repository。
 func NewInMemoryCostRepository() *InMemoryCostRepository {
 	return &InMemoryCostRepository{
 		records: make([]CostRecord, 0),
 	}
 }
 
-// Insert appends a record to the in-memory cache.
+// Insert 将一条记录追加到内存缓存。
 func (r *InMemoryCostRepository) Insert(record CostRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -50,7 +49,7 @@ func (r *InMemoryCostRepository) Insert(record CostRecord) error {
 	return nil
 }
 
-// QueryByTask returns records matching taskID.
+// QueryByTask 返回匹配 taskID 的记录。
 func (r *InMemoryCostRepository) QueryByTask(taskID string) ([]CostRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -63,7 +62,7 @@ func (r *InMemoryCostRepository) QueryByTask(taskID string) ([]CostRecord, error
 	return out, nil
 }
 
-// QueryBySession returns records matching sessionID.
+// QueryBySession 返回匹配 sessionID 的记录。
 func (r *InMemoryCostRepository) QueryBySession(sessionID string) ([]CostRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -76,7 +75,7 @@ func (r *InMemoryCostRepository) QueryBySession(sessionID string) ([]CostRecord,
 	return out, nil
 }
 
-// QueryByProject returns records matching projectID.
+// QueryByProject 返回匹配 projectID 的记录。
 func (r *InMemoryCostRepository) QueryByProject(projectID string) ([]CostRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -89,7 +88,7 @@ func (r *InMemoryCostRepository) QueryByProject(projectID string) ([]CostRecord,
 	return out, nil
 }
 
-// QueryRecent returns the most recent limit records.
+// QueryRecent 返回最近的 limit 条记录。
 func (r *InMemoryCostRepository) QueryRecent(limit int) ([]CostRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -100,12 +99,12 @@ func (r *InMemoryCostRepository) QueryRecent(limit int) ([]CostRecord, error) {
 	return append([]CostRecord(nil), r.records[start:]...), nil
 }
 
-// SqliteCostRepository persists cost records to the SQLite cost_records table.
+// SqliteCostRepository 将 cost 记录持久化到 SQLite cost_records 表。
 type SqliteCostRepository struct {
 	db *sql.DB
 }
 
-// NewSqliteCostRepository creates a SQLite-backed repository.
+// NewSqliteCostRepository 创建一个 SQLite 后端的 repository。
 func NewSqliteCostRepository(db *sql.DB) (*SqliteCostRepository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
@@ -113,7 +112,7 @@ func NewSqliteCostRepository(db *sql.DB) (*SqliteCostRepository, error) {
 	return &SqliteCostRepository{db: db}, nil
 }
 
-// Insert writes a CostRecord to the cost_records table.
+// Insert 将一条 CostRecord 写入 cost_records 表。
 func (r *SqliteCostRepository) Insert(record CostRecord) error {
 	if record.ID == "" {
 		record.ID = "cost_" + uuid.New().String()
@@ -131,22 +130,22 @@ func (r *SqliteCostRepository) Insert(record CostRecord) error {
 	return err
 }
 
-// QueryByTask returns all records matching taskID ordered by created_at.
+// QueryByTask 返回所有匹配 taskID 的记录，按 created_at 排序。
 func (r *SqliteCostRepository) QueryByTask(taskID string) ([]CostRecord, error) {
 	return r.queryWhere("task_id = ? ORDER BY created_at", taskID)
 }
 
-// QueryBySession returns all records matching sessionID ordered by created_at.
+// QueryBySession 返回所有匹配 sessionID 的记录，按 created_at 排序。
 func (r *SqliteCostRepository) QueryBySession(sessionID string) ([]CostRecord, error) {
 	return r.queryWhere("session_id = ? ORDER BY created_at", sessionID)
 }
 
-// QueryByProject returns all records matching projectID ordered by created_at.
+// QueryByProject 返回所有匹配 projectID 的记录，按 created_at 排序。
 func (r *SqliteCostRepository) QueryByProject(projectID string) ([]CostRecord, error) {
 	return r.queryWhere("project_id = ? ORDER BY created_at", projectID)
 }
 
-// QueryRecent returns the most recent N records by created_at.
+// QueryRecent 返回按 created_at 排序的最近 N 条记录。
 func (r *SqliteCostRepository) QueryRecent(limit int) ([]CostRecord, error) {
 	if limit <= 0 {
 		limit = 100

@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// setupTestDB creates an in-memory SQLite database and applies the cases table schema.
+// setupTestDB 创建一个内存型 SQLite 数据库，并应用 cases 表 schema。
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -39,7 +39,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return d
 }
 
-// TestAll returns five builtin cases.
+// TestAll 返回五个内置用例。
 func TestAll(t *testing.T) {
 	cases := All()
 	if len(cases) != 5 {
@@ -63,7 +63,7 @@ func TestAll(t *testing.T) {
 	}
 }
 
-// TestGetBuiltin returns a builtin case by id.
+// TestGetBuiltin 按 id 返回一个内置用例。
 func TestGetBuiltin(t *testing.T) {
 	c := Get("code-gen")
 	if c == nil {
@@ -77,7 +77,7 @@ func TestGetBuiltin(t *testing.T) {
 	}
 }
 
-// TestServiceSeedsBuiltins initializes an empty DB and verifies seeding.
+// TestServiceSeedsBuiltins 初始化空 DB 并验证种子化。
 func TestServiceSeedsBuiltins(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -116,7 +116,7 @@ func TestServiceSeedsBuiltins(t *testing.T) {
 	}
 }
 
-// TestServiceDoesNotReseedWhenNotEmpty ensures re-Init does not duplicate cases.
+// TestServiceDoesNotReseedWhenNotEmpty 确保重新 Init 不会重复用例。
 func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -129,7 +129,7 @@ func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 		t.Fatalf("create case: %v", err)
 	}
 
-	// Re-init on non-empty DB should keep existing rows (6 total).
+	// 在非空 DB 上重新 Init 应保留现有行（共 6 条）。
 	svc2, err := Init(d)
 	if err != nil {
 		t.Fatalf("re-init service: %v", err)
@@ -143,7 +143,7 @@ func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 	}
 }
 
-// TestCreateCustomCase validates creation and that it appears in listings.
+// TestCreateCustomCase 校验创建行为，并确认其出现在列表中。
 func TestCreateCustomCase(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -180,7 +180,7 @@ func TestCreateCustomCase(t *testing.T) {
 	}
 }
 
-// TestCreateValidation checks validation rules for creation.
+// TestCreateValidation 检查创建请求的校验规则。
 func TestCreateValidation(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -215,7 +215,7 @@ func TestCreateValidation(t *testing.T) {
 	}
 }
 
-// TestUpdateCustomCase checks update behavior for custom cases.
+// TestUpdateCustomCase 检查自定义用例的更新行为。
 func TestUpdateCustomCase(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -251,7 +251,7 @@ func TestUpdateCustomCase(t *testing.T) {
 	}
 }
 
-// TestUpdateBuiltinRejected ensures builtin cases cannot be updated.
+// TestUpdateBuiltinRejected 确保内置用例不可被更新。
 func TestUpdateBuiltinRejected(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -266,7 +266,7 @@ func TestUpdateBuiltinRejected(t *testing.T) {
 	}
 }
 
-// TestDeleteCustomCase removes a custom case and verifies it is gone.
+// TestDeleteCustomCase 删除一个自定义用例并验证其已不存在。
 func TestDeleteCustomCase(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -287,7 +287,7 @@ func TestDeleteCustomCase(t *testing.T) {
 	}
 }
 
-// TestDeleteBuiltinRejected ensures builtin cases cannot be deleted.
+// TestDeleteBuiltinRejected 确保内置用例不可被删除。
 func TestDeleteBuiltinRejected(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -301,7 +301,7 @@ func TestDeleteBuiltinRejected(t *testing.T) {
 	}
 }
 
-// TestListFiltering verifies tag and category filtering.
+// TestListFiltering 验证 tag 与 category 过滤。
 func TestListFiltering(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -319,7 +319,7 @@ func TestListFiltering(t *testing.T) {
 		t.Fatalf("expected at least 5 cases, got %d", len(all))
 	}
 
-	// Builtin code-gen has category "generation".
+	// 内置 code-gen 的 category 为 "generation"。
 	generation, err := svc.List(nil, "generation")
 	if err != nil {
 		t.Fatalf("list generation: %v", err)
@@ -334,7 +334,7 @@ func TestListFiltering(t *testing.T) {
 		t.Errorf("expected code-gen in generation category")
 	}
 
-	// Builtin dialogue has tag "dialogue".
+	// 内置 dialogue 的 tag 为 "dialogue"。
 	dialogue, err := svc.List([]string{"dialogue"}, "")
 	if err != nil {
 		t.Fatalf("list by tag: %v", err)
@@ -349,7 +349,7 @@ func TestListFiltering(t *testing.T) {
 		t.Errorf("expected dialogue case by tag")
 	}
 
-	// Combined filter: category interaction + tag baseline should match dialogue.
+	// 组合过滤：category interaction + tag baseline 应匹配到 dialogue。
 	combined, err := svc.List([]string{"baseline"}, "interaction")
 	if err != nil {
 		t.Fatalf("list combined: %v", err)
@@ -365,7 +365,7 @@ func TestListFiltering(t *testing.T) {
 	}
 }
 
-// TestListWithNoMatchTag returns empty when tags don't match.
+// TestListWithNoMatchTag 当 tag 不匹配时返回空结果。
 func TestListWithNoMatchTag(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -383,7 +383,7 @@ func TestListWithNoMatchTag(t *testing.T) {
 	}
 }
 
-// TestRepositoryListExcludesBuiltins verifies repo.List filters out builtin rows.
+// TestRepositoryListExcludesBuiltins 验证 repo.List 会过滤掉内置行。
 func TestRepositoryListExcludesBuiltins(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -426,7 +426,7 @@ func TestRepositoryListExcludesBuiltins(t *testing.T) {
 	}
 }
 
-// TestRepositoryCRUD directly tests the repository layer.
+// TestRepositoryCRUD 直接测试 repository 层。
 func TestRepositoryCRUD(t *testing.T) {
 	d := setupTestDB(t)
 	defer d.Close()
@@ -487,7 +487,7 @@ func TestRepositoryCRUD(t *testing.T) {
 	}
 }
 
-// newValidCreate returns a valid CreateCaseRequest for tests.
+// newValidCreate 返回一个用于测试的合法 CreateCaseRequest。
 func newValidCreate() CreateCaseRequest {
 	return CreateCaseRequest{
 		Name:         "My Custom Case",

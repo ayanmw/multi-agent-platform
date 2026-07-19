@@ -1,11 +1,10 @@
-// Package cost provides HTTP handlers for cost tracking queries.
+// Package cost 提供 cost 跟踪查询的 HTTP handler。
 //
-// These handlers expose cost data via simple HTTP endpoints so the frontend
-// and other services can query aggregated cost reports without direct access
-// to the CostTracker instance.
+// 这些 handler 通过简单的 HTTP 端点暴露 cost 数据，使前端和其它服务
+// 可以在无需直接访问 CostTracker 实例的情况下查询聚合的 cost 报告。
 //
-// The handlers are deliberately simple — they accept query parameters for
-// the dimension (task, session, project) and return a JSON-encoded CostReport.
+// 这些 handler 被刻意保持简单——它们接收查询参数指定维度（task、session、project），
+// 并返回 JSON 编码的 CostReport。
 package cost
 
 import (
@@ -14,9 +13,8 @@ import (
 	"strconv"
 )
 
-// HandleCostTask returns an HTTP handler that queries the cost report for a
-// specific task.
-// Query parameter: task_id (required)
+// HandleCostTask 返回一个 HTTP handler，用于查询特定 task 的 cost 报告。
+// Query parameter: task_id（必填）
 func (ct *CostTracker) HandleCostTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -38,9 +36,8 @@ func (ct *CostTracker) HandleCostTask(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, report)
 }
 
-// HandleCostSession returns an HTTP handler that queries the cost report for a
-// specific session.
-// Query parameter: session_id (required)
+// HandleCostSession 返回一个 HTTP handler，用于查询特定 session 的 cost 报告。
+// Query parameter: session_id（必填）
 func (ct *CostTracker) HandleCostSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -62,9 +59,8 @@ func (ct *CostTracker) HandleCostSession(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, report)
 }
 
-// HandleCostProject returns an HTTP handler that queries the cost report for a
-// specific project.
-// Query parameter: project_id (required)
+// HandleCostProject 返回一个 HTTP handler，用于查询特定 project 的 cost 报告。
+// Query parameter: project_id（必填）
 func (ct *CostTracker) HandleCostProject(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -86,9 +82,8 @@ func (ct *CostTracker) HandleCostProject(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, report)
 }
 
-// HandleCostDaily returns an HTTP handler that queries the cost report for the
-// last N days.
-// Query parameter: days (optional, default 7)
+// HandleCostDaily 返回一个 HTTP handler，用于查询最近 N 天的 cost 报告。
+// Query parameter: days（可选，默认 7）
 func (ct *CostTracker) HandleCostDaily(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -96,7 +91,7 @@ func (ct *CostTracker) HandleCostDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	daysStr := r.URL.Query().Get("days")
-	days := 7 // default to 7 days
+	days := 7 // 默认 7 天
 	if daysStr != "" {
 		parsed, err := strconv.Atoi(daysStr)
 		if err != nil || parsed < 0 {
@@ -115,7 +110,7 @@ func (ct *CostTracker) HandleCostDaily(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, report)
 }
 
-// respondJSON writes the given value as a JSON response with 200 status.
+// respondJSON 以 200 状态码将给定值作为 JSON 响应写入。
 func respondJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {

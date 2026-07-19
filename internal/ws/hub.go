@@ -30,28 +30,28 @@ type Client struct {
 	closed bool
 }
 
-// ClientControlMsg represents a control message sent from the client
+// ClientControlMsg 表示从客户端发来的 control message
 type ClientControlMsg struct {
-	Action     string `json:"action"`      // pause, resume, cancel, approve, deny
+	Action     string `json:"action"`      // pause、resume、cancel、approve、deny
 	TaskID     string `json:"task_id"`
 	AgentID    string `json:"agent_id"`
 	ApprovalID string `json:"approval_id"` // Phase 5: 审批请求 ID
 }
 
-// ControlHandler is called when a client sends a control message
+// ControlHandler 在客户端发来 control message 时被调用
 type ControlHandler func(msg ClientControlMsg)
 
 const defaultEventBufferSize = 1000
 
-// eventBuffer is a fixed-capacity circular buffer for recently broadcast events.
-// It keeps a bounded in-memory history so clients that reconnect after a brief
-// disconnect can request events they missed since their last known event_id.
+// eventBuffer 是一个固定容量的环形缓冲区，用于缓存最近广播的事件。
+// 它保留有界的内存历史，使短暂断连后重连的客户端可以请求自其上次已知
+// event_id 之后错过的事件。
 type eventBuffer struct {
-	//events holds events in insertion order; oldest at index 0.
+	//events 按插入顺序保存事件；最旧的在 index 0。
 	events []event.Event
-	//index maps event_id to its position in events for O(1) lookup.
+	//index 将 event_id 映射到其在 events 中的位置，用于 O(1) 查找。
 	index map[string]int
-	//capacity is the maximum number of events retained.
+	//capacity 是保留事件的最大数量。
 	capacity int
 	mu       sync.RWMutex
 }
@@ -67,7 +67,7 @@ func newEventBuffer(capacity int) *eventBuffer {
 	}
 }
 
-// append adds an event to the buffer, evicting the oldest event when full.
+// append 将一个事件添加到缓冲区，缓冲区满时驱逐最旧的事件。
 func (b *eventBuffer) append(evt event.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -86,10 +86,10 @@ func (b *eventBuffer) append(evt event.Event) {
 	b.events = append(b.events, evt)
 }
 
-// eventsAfter returns up to limit events strictly after sinceEventID,
-// ordered by ascending timestamp / insertion order.
-// If sinceEventID is not found in the buffer, it returns ErrEventIDNotFound
-// so the caller can ask the client to fall back to a full replay.
+// eventsAfter 返回 sinceEventID 严格之后最多 limit 条事件，
+// 按时间/插入顺序升序返回。
+// 若 sinceEventID 不在缓冲区中，则返回 ErrEventIDNotFound，
+// 以便调用方让客户端回退到完整 replay。
 func (b *eventBuffer) eventsAfter(sinceEventID string, limit int) ([]event.Event, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -112,8 +112,8 @@ func (b *eventBuffer) eventsAfter(sinceEventID string, limit int) ([]event.Event
 	return out, nil
 }
 
-// ErrEventIDNotFound indicates the requested event_id is no longer in the
-// short-term buffer (disconnected too long or server restarted).
+// ErrEventIDNotFound 表示请求的 event_id 已不在短期缓冲区中
+// （断连时间过长或服务器重启）。
 var ErrEventIDNotFound = errors.New("event_id not found in replay buffer")
 
 type Hub struct {
@@ -123,7 +123,7 @@ type Hub struct {
 	broadcast      chan event.Event
 	controlHandler ControlHandler
 	mu             sync.RWMutex
-	//eventBuf caches recently broadcast events for reconnect replay.
+	//eventBuf 缓存最近广播的事件，用于断连重连后的 replay。
 	eventBuf *eventBuffer
 }
 
@@ -174,16 +174,14 @@ func (h *Hub) SendEvent(evt event.Event) {
 	h.broadcast <- evt
 }
 
-// ReplayEvents returns cached events strictly after sinceEventID.
-// The result is ordered by ascending timestamp/insertion order and capped at
-// limit. If sinceEventID is not in the buffer it returns ErrEventIDNotFound,
-// signaling that the client has been disconnected too long and should fall
-// back to a full task replay.
+// ReplayEvents 返回 sinceEventID 严格之后的缓存事件。
+// 结果按时间/插入顺序升序排列，并以 limit 为上限。若 sinceEventID 不在缓冲区中，
+// 则返回 ErrEventIDNotFound，表示客户端已断连过久，应回退到完整的 task replay。
 func (h *Hub) ReplayEvents(sinceEventID string, limit int) ([]event.Event, error) {
 	return h.eventBuf.eventsAfter(sinceEventID, limit)
 }
 
-// SetControlHandler registers a handler for client control messages
+// SetControlHandler 注册一个用于处理客户端 control message 的 handler
 func (h *Hub) SetControlHandler(handler ControlHandler) {
 	h.controlHandler = handler
 }
@@ -221,14 +219,14 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Try to parse as control message
+		// 尝试解析为 control message
 		var msg ClientControlMsg
 		if err := json.Unmarshal(message, &msg); err != nil {
 			log.Printf("Client %s: unparseable message: %s", c.ID, string(message))
 			continue
 		}
 
-		// Route to control handler if registered
+		// 若已注册 control handler 则路由给它
 		if c.Hub.controlHandler != nil {
 			go c.Hub.controlHandler(msg)
 		}
@@ -246,7 +244,7 @@ func (c *Client) writePump() {
 		select {
 		case message, ok := <-c.Send:
 			if !ok {
-				// Hub closed the channel
+				// Hub 已关闭该 channel
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -257,7 +255,7 @@ func (c *Client) writePump() {
 			}
 			c.mu.Unlock()
 
-			// Marshal event to JSON and send
+			// 将 event 序列化为 JSON 并发送
 			data, err := json.Marshal(message)
 			if err != nil {
 				log.Printf("writePump: marshal error: %v", err)

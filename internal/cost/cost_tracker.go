@@ -1,36 +1,31 @@
-// Package cost provides token usage and cost tracking for LLM calls.
+// Package cost 提供 LLM 调用的 token 用量与 cost 跟踪。
 //
-// # Design Rationale
+// # 设计理由
 //
-// CostTracker records every LLM call's token consumption and calculates the
-// associated USD cost based on model pricing profiles. It supports multi-
-// dimensional aggregation (by model, tier, agent, session, project, task)
-// and emits real-time events when new records are captured.
+// CostTracker 记录每一次 LLM 调用的 token 消耗，并基于模型 pricing profile 计算对应的
+// USD cost。它支持多维聚合（按 model、tier、agent、session、project、task），
+// 并在捕获新记录时发出实时事件。
 //
-// The cost calculation strictly uses the API-returned Usage fields — no local
-// estimation. Prices are expressed per 1M input/output tokens as defined in
-// llm.ModelProfile. Cost is stored as float64 USD at full precision; the
-// display layer is responsible for truncation (frontend toFixed(3)). The
-// CostCents int64 field is retained only as a derived value (= round(CostUSD*100))
-// for backward compatibility with legacy consumers such as the cost_cents_total
-// Prometheus counter.
+// cost 计算严格使用 API 返回的 Usage 字段——不做任何本地估算。价格以每 1M
+// input/output token 的形式表达，定义于 llm.ModelProfile。Cost 以 float64 USD 形式
+// 按全精度存储；截断由展示层负责（前端 toFixed(3)）。CostCents int64 字段仅作为
+// 派生值（= round(CostUSD*100)）保留，用于与 legacy 消费者（如 cost_cents_total
+// Prometheus counter）保持向后兼容。
 //
-// Rationale: a single LLM call's cost lives at the $0.0001 scale, so integer-cent
-// arithmetic truncates small conversations to $0, defeating the "costs must be
-// non-zero" requirement; float64 accumulation drift stays at the 1e-15 level,
-// invisible at 3-decimal display precision.
+// 理由：单次 LLM 调用的 cost 处于 $0.0001 量级，因此整数-cent 算术会把小对话截断
+// 为 $0，违背「cost 必须非零」的要求；float64 累加的漂移维持在 1e-15 量级，
+// 在 3 位小数的展示精度下不可见。
 //
-// # Integration Pattern
+// # 集成模式
 //
-// The tracker is integrated via the callback pattern. When an Engine Run()
-// completes, the caller creates a CostRecord from the task's final usage data
-// and calls Record(). This keeps Engine clean (no cost coupling) while still
-// capturing every LLM transaction for billing, budgeting, and observability.
+// tracker 通过 callback 模式集成。当一次 Engine Run() 完成时，调用方从该 task 的
+// 最终 usage 数据创建 CostRecord 并调用 Record()。这使 Engine 保持干净（无 cost 耦合），
+// 同时仍能捕获每一笔 LLM 交易，用于计费、budget 与可观测性。
 //
-// Phase 6+: In a full implementation, the tracker would also:
-//   - Persist records to the cost_records table via migration v10
-//   - Expose HTTP handlers for real-time cost queries
-//   - Support budget alerts when a project's cost exceeds a configured limit
+// Phase 6+：在完整实现中，tracker 还会：
+//   - 通过 migration v10 将记录持久化到 cost_records 表
+//   - 暴露 HTTP handler 用于实时 cost 查询
+//   - 在某个 project 的 cost 超过配置阈值时支持 budget 告警
 package cost
 
 import (
@@ -42,99 +37,94 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 )
 
-// CostRecord captures the token consumption and cost of a single LLM call
-// (or a batch of calls in a single ReAct step). It is the primary data unit
-// for cost tracking and reporting.
+// CostRecord 记录单次 LLM 调用（或单个 ReAct step 中的一批调用）的 token 消耗与 cost。
+// 它是 cost 跟踪与报告的主数据单元。
 type CostRecord struct {
-	// ID is a unique identifier for this cost record.
+	// ID 是此 cost 记录的唯一标识符。
 	ID string
 
-	// TaskID is the task this cost belongs to (links to tasks.id).
+	// TaskID 是此 cost 所属的 task（对应 tasks.id）。
 	TaskID string
 
-	// SessionID is the session this cost belongs to (links to sessions.id).
+	// SessionID 是此 cost 所属的 session（对应 sessions.id）。
 	SessionID string
 
-	// ProjectID is the project this cost belongs to (links to projects.id).
+	// ProjectID 是此 cost 所属的 project（对应 projects.id）。
 	ProjectID string
 
-	// AgentID is the agent that performed the LLM call.
+	// AgentID 是执行该 LLM 调用的 agent。
 	AgentID string
 
-	// StepIndex is the ReAct step index within the task.
+	// StepIndex 是该 task 内的 ReAct step 索引。
 	StepIndex int
 
-	// Model is the LLM model name (e.g., "deepseek-v4-flash").
+	// Model 是 LLM 模型名（例如 "deepseek-v4-flash"）。
 	Model string
 
-	// Provider is the API provider (e.g., "openai", "deepseek", "anthropic").
+	// Provider 是 API provider（例如 "openai"、"deepseek"、"anthropic"）。
 	Provider string
 
-	// Tier is the model tier derived from ModelProfile (e.g., "efficient", "standard").
+	// Tier 是从 ModelProfile 派生的 model tier（例如 "efficient"、"standard"）。
 	Tier string
 
-	// InputTokens is the number of input/prompt tokens consumed.
+	// InputTokens 是消耗的 input/prompt token 数量。
 	InputTokens int
 
-	// OutputTokens is the number of output/completion tokens generated.
+	// OutputTokens 是生成的 output/completion token 数量。
 	OutputTokens int
 
-	// TotalTokens is the total token count (input + output).
+	// TotalTokens 是总 token 数（input + output）。
 	TotalTokens int
 
-	// CostUSD is the calculated cost in US dollars, stored at full float64
-	// precision. This is the primary field for cost tracking, aggregation,
-	// and persistence. The display layer is responsible for truncation
-	// (e.g., frontend toFixed(3)).
+	// CostUSD 是以美元计算的 cost，按 float64 全精度存储。这是 cost 跟踪、聚合与
+	// 持久化的主字段。截断由展示层负责（例如前端 toFixed(3)）。
 	CostUSD float64
 
-	// CostCents is a derived field equal to round(CostUSD * 100), retained
-	// for backward compatibility with legacy consumers (the cost_cents_total
-	// Prometheus counter and the integer cost_cents DB column). It is NOT
-	// the source of truth — small per-call costs live below 1 cent and would
-	// truncate to 0 if computed via integer arithmetic.
+	// CostCents 是派生字段，等于 round(CostUSD * 100)，为与 legacy 消费者
+	// （cost_cents_total Prometheus counter 和整数型 cost_cents 数据库列）保持向后
+	// 兼容而保留。它并非 source of truth——单次调用的 cost 小于 1 cent，若用整数
+	// 算术计算会被截断为 0。
 	CostCents int64
 
-	// CreatedAt is the timestamp when this record was created.
+	// CreatedAt 是此记录创建时的时间戳。
 	CreatedAt time.Time
 }
 
-// CostReport is an aggregated cost report across a set of CostRecords.
-// It provides top-level totals plus breakdowns by model, tier, and agent.
+// CostReport 是跨一组 CostRecord 聚合的 cost 报告。
+// 它提供顶层总计，以及按 model、tier 和 agent 的分项明细。
 type CostReport struct {
-	// TotalCostUSD is the sum of all CostUSD values in the report, aggregated
-	// at full float64 precision. This is the primary total cost field.
+	// TotalCostUSD 是报告中所有 CostUSD 值的总和，以 float64 全精度聚合。这是
+	// 主要的 total cost 字段。
 	TotalCostUSD float64
 
-	// TotalCostCents is a derived value equal to the sum of each record's
-	// CostCents (= round(CostUSD*100)). Retained for backward compatibility
-	// with legacy integer-cents consumers. Note that summing rounded values
-	// can diverge slightly from round(TotalCostUSD*100) at the edges.
+	// TotalCostCents 是派生值，等于每条记录 CostCents 的总和（= round(CostUSD*100)）。
+	// 为与 legacy 整数-cent 消费者保持向后兼容而保留。注意：将已四舍五入的值相加
+	// 在边界处可能与 round(TotalCostUSD*100) 略有偏差。
 	TotalCostCents int64
 
-	// TotalTokens is the sum of all TotalTokens values.
+	// TotalTokens 是所有 TotalTokens 值的总和。
 	TotalTokens int
 
-	// TotalInputTokens is the sum of all input tokens.
+	// TotalInputTokens 是所有 input token 的总和。
 	TotalInputTokens int
 
-	// TotalOutputTokens is the sum of all output tokens.
+	// TotalOutputTokens 是所有 output token 的总和。
 	TotalOutputTokens int
 
-	// ByModel maps model name → total cost in USD (full float64 precision).
+	// ByModel 将 model 名称映射到以 USD 表示的 total cost（float64 全精度）。
 	ByModel map[string]float64
 
-	// ByTier maps tier name → total cost in USD (full float64 precision).
+	// ByTier 将 tier 名称映射到以 USD 表示的 total cost（float64 全精度）。
 	ByTier map[string]float64
 
-	// ByAgent maps agent ID → total cost in USD (full float64 precision).
+	// ByAgent 将 agent ID 映射到以 USD 表示的 total cost（float64 全精度）。
 	ByAgent map[string]float64
 
-	// RecordCount is the number of records included in this report.
+	// RecordCount 是本报告包含的记录数。
 	RecordCount int
 }
 
-// newCostReport creates a zero-valued CostReport with initialized maps.
+// newCostReport 创建一个零值的 CostReport，并初始化其中的 map。
 func newCostReport() *CostReport {
 	return &CostReport{
 		ByModel: make(map[string]float64),
@@ -143,56 +133,55 @@ func newCostReport() *CostReport {
 	}
 }
 
-// CostTracker is the central cost tracking component. It maintains an in-memory
-// cache of CostRecords and provides aggregation methods for multi-dimensional
-// cost analysis.
+// CostTracker 是核心的 cost 跟踪组件。它维护 CostRecord 的内存缓存，并提供用于
+// 多维 cost 分析的聚合方法。
 //
-// Thread-safe: all public methods safe for concurrent use.
+// Thread-safe：所有公开方法均可安全用于并发使用。
 type CostTracker struct {
 	mu      sync.RWMutex
 	records []CostRecord
 
-	// onRecord is an optional callback invoked after a record is stored.
-	// It is called asynchronously — errors are not propagated to the caller.
+	// onRecord 是可选的 callback，在记录被存储后调用。
+	// 它被异步调用——错误不会传播给调用方。
 	onRecord func(CostRecord)
 
-	// registry is the optional model registry for tier lookups.
-	// When nil, tier resolution defaults to "unknown".
+	// registry 是可选的 model registry，用于 tier 查询。
+	// 当为 nil 时，tier 解析默认为 "unknown"。
 	registry *llm.ModelRegistry
 }
 
-// CostTrackerOption is a functional option for configuring a CostTracker.
+// CostTrackerOption 是用于配置 CostTracker 的 functional option。
 type CostTrackerOption func(*CostTracker)
 
-// WithOnRecord sets the callback invoked when a new record is stored.
-// The callback is called after the record is appended to the in-memory cache.
+// WithOnRecord 设置在新记录被存储时调用的 callback。
+// 该 callback 在记录被追加到内存缓存之后调用。
 func WithOnRecord(fn func(CostRecord)) CostTrackerOption {
 	return func(ct *CostTracker) {
 		ct.onRecord = fn
 	}
 }
 
-// WithRegistry sets the model registry for tier resolution in cost records.
-// When set, the tracker can populate the Tier field from the model name.
+// WithRegistry 设置用于 cost 记录中 tier 解析的 model registry。
+// 设置后，tracker 可从模型名填充 Tier 字段。
 func WithRegistry(registry *llm.ModelRegistry) CostTrackerOption {
 	return func(ct *CostTracker) {
 		ct.registry = registry
 	}
 }
 
-// NewCostTracker creates a new CostTracker with optional configuration.
+// NewCostTracker 创建一个带可选配置的 CostTracker。
 //
-// Usage:
+// 用法：
 //
-//	// Basic usage — in-memory only, no callback
+//	// 基本用法——仅内存，无 callback
 //	ct := cost.NewCostTracker()
 //
-//	// With event callback for real-time cost broadcasting
+//	// 带事件 callback，用于实时 cost 广播
 //	ct := cost.NewCostTracker(cost.WithOnRecord(func(r cost.CostRecord) {
 //	    bus.SendEvent(event.NewEvent("cost_recorded", r.TaskID, r.AgentID, r.StepIndex, map[string]any{"cost": r.CostUSD}))
 //	}))
 //
-//	// With model registry for automatic tier resolution
+//	// 带 model registry，自动解析 tier
 //	ct := cost.NewCostTracker(cost.WithRegistry(registry))
 func NewCostTracker(opts ...CostTrackerOption) *CostTracker {
 	ct := &CostTracker{
@@ -204,26 +193,25 @@ func NewCostTracker(opts ...CostTrackerOption) *CostTracker {
 	return ct
 }
 
-// Record appends a CostRecord to the in-memory cache and invokes the onRecord
-// callback if configured.
+// Record 将一条 CostRecord 追加到内存缓存，并在已配置时调用 onRecord callback。
 //
-// This is the primary entry point for cost data — call it after each LLM interaction
-// (or batch of interactions per ReAct step) with the completed CostRecord.
+// 这是 cost 数据的主入口——在每次 LLM 交互（或每个 ReAct step 的一批交互）完成后，
+// 用填写完整的 CostRecord 调用它。
 //
-// The method is non-blocking even if the callback is slow, because the callback
-// is invoked in a best-effort manner (logged-warning on panic, no error returned).
+// 即使 callback 较慢，本方法也不会阻塞，因为 callback 以 best-effort 方式调用
+// （panic 时仅记录日志告警，不返回错误）。
 func (ct *CostTracker) Record(record CostRecord) {
 	ct.mu.Lock()
 	ct.records = append(ct.records, record)
 	ct.mu.Unlock()
 
 	if ct.onRecord != nil {
-		// Callback in a best-effort manner — we don't block the caller if the callback panics.
+		// 以 best-effort 方式调用 callback——如果 callback panic，我们不会阻塞调用方。
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					// Log the panic but don't propagate it to the caller.
-					// The callback is a side effect; Record must not fail because of it.
+					// 记录 panic 但不向调用方传播。
+					// callback 只是副作用；Record 不能因它而失败。
 					fmt.Printf("[CostTracker] onRecord callback panicked: %v\n", r)
 				}
 			}()
@@ -232,7 +220,7 @@ func (ct *CostTracker) Record(record CostRecord) {
 	}
 }
 
-// TaskCost aggregates costs for all records matching the given task_id.
+// TaskCost 聚合所有匹配给定 task_id 的记录的 cost。
 func (ct *CostTracker) TaskCost(taskID string) (*CostReport, error) {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
@@ -247,7 +235,7 @@ func (ct *CostTracker) TaskCost(taskID string) (*CostReport, error) {
 	return report, nil
 }
 
-// SessionCost aggregates costs for all records matching the given session_id.
+// SessionCost 聚合所有匹配给定 session_id 的记录的 cost。
 func (ct *CostTracker) SessionCost(sessionID string) (*CostReport, error) {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
@@ -262,7 +250,7 @@ func (ct *CostTracker) SessionCost(sessionID string) (*CostReport, error) {
 	return report, nil
 }
 
-// ProjectCost aggregates costs for all records matching the given project_id.
+// ProjectCost 聚合所有匹配给定 project_id 的记录的 cost。
 func (ct *CostTracker) ProjectCost(projectID string) (*CostReport, error) {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
@@ -277,9 +265,9 @@ func (ct *CostTracker) ProjectCost(projectID string) (*CostReport, error) {
 	return report, nil
 }
 
-// DailyReport aggregates costs for the last N days across all records.
-// Days=0 returns all records (no date filter).
-// Days=1 returns records from today only.
+// DailyReport 聚合最近 N 天所有记录的 cost。
+// Days=0 返回所有记录（不做日期过滤）。
+// Days=1 仅返回今天的记录。
 func (ct *CostTracker) DailyReport(days int) (*CostReport, error) {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
@@ -299,20 +287,18 @@ func (ct *CostTracker) DailyReport(days int) (*CostReport, error) {
 	return report, nil
 }
 
-// CalculateCost computes the USD cost (float64) for a single LLM call based on
-// the model's pricing profile and the API-reported token usage.
+// CalculateCost 基于模型的 pricing profile 与 API 上报的 token 用量，计算单次 LLM 调用
+// 的 USD cost（float64）。
 //
-// The prices in ModelProfile are USD per 1M tokens. The cost is computed in
-// straight float64 USD and stored at full precision — the display layer is
-// responsible for truncation (e.g., frontend toFixed(3)):
+// ModelProfile 中的价格为每 1M token 的 USD 价格。cost 以纯 float64 USD 计算并按
+// 全精度存储——截断由展示层负责（例如前端 toFixed(3)）：
 //
 //	cost_usd = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
 //
-// This strictly uses the API-returned Usage — no local token estimation.
+// 本方法严格使用 API 返回的 Usage——不做本地 token 估算。
 //
-// Returns 0 if profile is nil or usage has zero tokens. Callers that need the
-// backward-compatible integer-cents value should derive it via
-// int64(math.Round(cost * 100)) (as BuildRecordFromProfile does).
+// 当 profile 为 nil 或 usage 的 token 为零时返回 0。需要向后兼容整数-cent 值的调用方
+// 应通过 int64(math.Round(cost * 100)) 自行派生（正如 BuildRecordFromProfile 所做）。
 func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage) float64 {
 	if profile == nil {
 		return 0
@@ -321,20 +307,19 @@ func (ct *CostTracker) CalculateCost(profile *llm.ModelProfile, usage llm.Usage)
 		return 0
 	}
 
-	// Prices are USD per 1M tokens; divide by 1_000_000 to scale per-token.
-	// float64 keeps sub-cent precision (e.g., 1000 tokens at $1/1M = $0.001),
-	// which integer-cents arithmetic would truncate to $0.
+	// 价格为每 1M token 的 USD；除以 1_000_000 以换算到单 token。
+	// float64 保留了 sub-cent 精度（例如 $1/1M 下 1000 token = $0.001），
+	// 整数-cent 算术会将其截断为 $0。
 	inputCost := float64(usage.PromptTokens) * profile.InputPrice / 1_000_000
 	outputCost := float64(usage.CompletionTokens) * profile.OutputPrice / 1_000_000
 	return inputCost + outputCost
 }
 
-// BuildRecordFromProfile constructs a CostRecord from a model profile, usage
-// data, and task/agent identifiers. It auto-populates the Tier field from the
-// registry (if available) and assigns a unique ID and timestamp.
+// BuildRecordFromProfile 从 model profile、usage 数据和 task/agent 标识构造一条
+// CostRecord。它会（在可用时）从 registry 自动填充 Tier 字段，并分配唯一 ID 与
+// 时间戳。
 //
-// This is a convenience constructor used by integration code to create records
-// from Engine execution results without manually filling every field.
+// 这是一个便捷构造器，供集成代码从 Engine 执行结果创建记录使用，无需手动填写每个字段。
 func (ct *CostTracker) BuildRecordFromProfile(
 	taskID, sessionID, projectID, agentID string,
 	stepIndex int,
@@ -359,20 +344,19 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		AgentID:      agentID,
 		StepIndex:    stepIndex,
 		Model:        model,
-		Provider:     "", // filled by caller if needed
+		Provider:     "", // 由调用方按需填充
 		Tier:         tier,
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
-		CostUSD:      costUSD,                        // primary, full precision
-		CostCents:    int64(math.Round(costUSD * 100)), // derived, legacy-compatible
+		CostUSD:      costUSD,                        // 主字段，全精度
+		CostCents:    int64(math.Round(costUSD * 100)), // 派生字段，兼容 legacy
 		CreatedAt:    time.Now(),
 	}
 }
 
-// add is an internal helper that accumulates a single record's data into
-// the report aggregates. It is called by the public query methods while
-// holding the read lock.
+// add 是内部辅助方法，将单条记录的数据累加到报告聚合中。
+// 它由公开的查询方法在持有读锁时调用。
 func (r *CostReport) add(record CostRecord) {
 	r.TotalCostCents += record.CostCents
 	r.TotalCostUSD += record.CostUSD
