@@ -862,6 +862,25 @@ func main() {
 			return
 		}
 
+		// lookupCase 按 ID 解析用例：优先走 caseService（同时覆盖内置用例与
+		// SQLite 持久化的自定义用例），当 caseService 不可用时退回只含内置用例的
+		// cases.Get。自定义用例仅存于数据库，cases.Get 无法命中，会令请求丢失
+		// case 的 default_input / system_prompt / max_steps 兜底，最终以
+		// "input is required for chat action" 400 返回。
+		lookupCase := func(caseID string) *cases.Case {
+			if caseID == "" {
+				return nil
+			}
+			if caseService != nil {
+				c, err := caseService.Get(caseID)
+				if err != nil || c == nil {
+					return nil
+				}
+				return c
+			}
+			return cases.Get(caseID)
+		}
+
 		var req struct {
 			Action         string                   `json:"action"`
 			AgentID        string                   `json:"agent_id"`
@@ -887,7 +906,7 @@ func main() {
 		var contract harness.TaskContract
 		caseID := r.URL.Query().Get("case")
 		if caseID != "" {
-			if c := cases.Get(caseID); c != nil {
+			if c := lookupCase(caseID); c != nil {
 				contract = c.Contract
 				// Use case's default input if none provided in request
 				if req.Input == "" {
@@ -1026,7 +1045,7 @@ func main() {
 			// default input, and system prompt before validating the request.
 			caseID := r.URL.Query().Get("case")
 			if caseID != "" {
-				if c := cases.Get(caseID); c != nil {
+				if c := lookupCase(caseID); c != nil {
 					contract = c.Contract
 					// Use case's default input if none provided in request
 					if req.Input == "" {

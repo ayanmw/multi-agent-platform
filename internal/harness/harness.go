@@ -786,8 +786,9 @@ func (ae *AcceptanceEvaluator) evaluateOne(criterion AcceptanceCriterion) EvalRe
 		return EvalResult{
 			Criterion: criterion,
 			Passed:    false,
-			Message:   fmt.Sprintf("Unknown criterion type: %s", criterion.Type),
-			Duration:  time.Since(start).Milliseconds(),
+			Message: fmt.Sprintf("Unknown criterion type: %q. Valid types: file_exists, content_contains, test_pass, shell_exit_zero, llm_judge",
+				criterion.Type),
+			Duration: time.Since(start).Milliseconds(),
 		}
 	}
 }

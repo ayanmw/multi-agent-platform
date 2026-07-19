@@ -1301,7 +1301,21 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		return
 	}
 
-	evaluator := harness.NewAcceptanceEvaluator(e.cfg.Contract.Scope)
+	// 解析验收评估的作用域根目录。case 的 contract.Scope 通常是宽松的 "."
+	// (见 harness.DefaultContract / cases.go)，若直接用它评估相对路径的
+	// file_exists/content_contains 标准，会把 target 解析到服务器 CWD 而非
+	// 本次任务真正落盘的 session workspace 目录，导致明明 Agent 已在
+	// <cwd>/workspace/session-<id>/ 下写出了文件却报 "File not found"。
+	//
+	// 因此当 contract.Scope 是默认的 "." 或为空时，回退到 EngineConfig.WorkspaceDir
+	//（即 session 的 workspace_dir，由 runAgentLoopWithTurn 从 sessions 表读入并
+	// 在 tool 调用时作为 "workdir" 注入）。这样 evaluator 与 write_file/run_shell
+	// 的 CWD 保持一致，相对路径的验收标准能命中真实落盘位置。
+	scope := e.cfg.Contract.Scope
+	if (scope == "" || scope == ".") && e.cfg.WorkspaceDir != "" {
+		scope = e.cfg.WorkspaceDir
+	}
+	evaluator := harness.NewAcceptanceEvaluator(scope)
 
 	// Collect recent tool outputs from the conversation history. We keep the last
 	// 10 "tool" role messages; older ones are unlikely to be relevant to the final

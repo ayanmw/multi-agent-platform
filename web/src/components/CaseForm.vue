@@ -38,6 +38,18 @@ const ICON_OPTIONS = [
   '🎨', '🗂️', '🌐', '🔒', '⏱️', '✅', '📦', '🧠', '🔄', '🎯',
 ]
 
+// 验收标准类型枚举：与后端 internal/harness.AcceptanceCriterionType 严格对齐。
+// 后端 evaluateOne 只识别这 5 个 type，其它值会落到 default 分支返回
+// "Unknown criterion type"，导致 case 永远评估失败。这里改成下拉枚举，从源头
+// 杜绝自由文本输入拼错（如 file_exist / FileExists / exists）。
+const CRITERION_TYPES: { value: string; label: string; hint: string }[] = [
+  { value: 'file_exists', label: 'file_exists', hint: 'target 文件存在' },
+  { value: 'content_contains', label: 'content_contains', hint: 'target 文件包含 expected 子串' },
+  { value: 'test_pass', label: 'test_pass', hint: 'target 测试命令退出码为 0' },
+  { value: 'shell_exit_zero', label: 'shell_exit_zero', hint: 'target shell 命令退出码为 0' },
+  { value: 'llm_judge', label: 'llm_judge', hint: '由 LLM 依据 target 描述判分' },
+]
+
 // 5 项权限的中文标签，与 TaskContract.permissions 键名完全一致
 const PERMISSION_LABELS: { key: keyof NonNullable<TaskContract['permissions']>; label: string }[] = [
   { key: 'allow_network', label: '允许访问网络' },
@@ -626,14 +638,17 @@ function handleClose() {
               <label>验收标准</label>
               <p class="field-help">
                 用于评估 Agent 任务是否完成。每条由 type（评估类型）、target（评估目标）、description（补充说明）组成。
-                示例：exact_match | hello.go | 文件包含 /hello 路由处理函数。
+                type 必须是后端支持的枚举：file_exists / content_contains / test_pass / shell_exit_zero / llm_judge。
               </p>
               <div
                 v-for="(ac, idx) in criteria"
                 :key="ac.id"
                 class="criterion-row"
               >
-                <input v-model="ac.type" placeholder="类型，如 exact_match" />
+                <select v-model="ac.type" class="criterion-type-select" :title="CRITERION_TYPES.find(t => t.value === ac.type)?.hint || '选择评估类型'">
+                  <option value="" disabled>选择类型</option>
+                  <option v-for="t in CRITERION_TYPES" :key="t.value" :value="t.value" :title="t.hint">{{ t.label }}</option>
+                </select>
                 <input v-model="ac.target" placeholder="目标，如 hello.go" />
                 <input v-model="ac.description" placeholder="补充说明（可选）" />
                 <button
@@ -1049,8 +1064,20 @@ function handleClose() {
   margin-bottom: 8px;
 }
 
-.criterion-row input {
+.criterion-row input,
+.criterion-row select {
   min-width: 0;
+}
+
+.criterion-type-select {
+  /* 与同行的 input 保持一致的外观，避免下拉框突兀 */
+  padding: 6px 8px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: var(--bg-elevated, #1e1e1e);
+  color: var(--text-primary, #ddd);
+  font-size: 13px;
+  cursor: pointer;
 }
 
 .criterion-remove {

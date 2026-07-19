@@ -2071,9 +2071,27 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 
 	// Mirror the chat-action logic from POST /api/tasks: apply case defaults,
 	// then run the agent loop.
+	// Resolve the case via caseService so custom cases persisted in SQLite are
+	// also honored. cases.Get only knows built-in cases; falling back to it would
+	// drop the case's default_input/system_prompt/max_steps for custom cases and
+	// surface as a 400 "input is required" from the chat path.
+	resolveCase := func(caseID string) *cases.Case {
+		if caseID == "" {
+			return nil
+		}
+		if caseService != nil {
+			c, err := caseService.Get(caseID)
+			if err != nil || c == nil {
+				return nil
+			}
+			return c
+		}
+		return cases.Get(caseID)
+	}
+
 	var contract harness.TaskContract
 	if caseID != "" {
-		if c := cases.Get(caseID); c != nil {
+		if c := resolveCase(caseID); c != nil {
 			contract = c.Contract
 			if req.Input == "" {
 				req.Input = c.DefaultInput
