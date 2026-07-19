@@ -21,8 +21,74 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+// projectRoot 是内置示例市场的项目根目录绝对路径，由 cmd/server 在启动时
+// 通过 SetProjectRoot 注入。ResolveConfig 会用它把 stdio 服务器 args 中的
+// 相对路径（如 examples/mcp/time/mcp-time-server.js）解析成绝对路径，从而
+// 让子进程不再依赖 server 进程的当前工作目录。
+//
+// Why: default.json 中内置示例用的是相对路径。当 server 从 bin/ 等子目录
+// 启动时，子进程继承的 cwd 无法找到这些脚本，node 立即退出，stdout EOF，
+// 表现为 "initialize request: transport receive: EOF"。解析为绝对路径后，
+// 无论 server 从哪里启动都能正确定位脚本。
+var projectRoot string
+
+// SetProjectRoot 注入项目根目录绝对路径，供 ResolveConfig 解析相对路径使用。
+// 通常在进程启动时调用一次。空字符串表示不启用相对路径解析。
+func SetProjectRoot(root string) {
+	if root == "" {
+		return
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		projectRoot = abs
+	} else {
+		projectRoot = root
+	}
+}
+
+// ProjectRoot 返回当前注入的项目根目录（可能为空）。
+func ProjectRoot() string {
+	return projectRoot
+}
+
+// DetectProjectRoot 尽力推导项目根目录：
+//  1. 从可执行文件所在目录向上查找包含 examples/mcp 的目录（覆盖从 bin/ 启动）；
+//  2. 从进程 cwd 向上查找（覆盖 go run 等临时编译场景）。
+//
+// 找不到时返回空字符串，调用方应优雅降级。判定标志用 examples/mcp 是因为
+// 内置市场的两个示例 server 脚本就放在该目录下，能稳定标识项目根。
+func DetectProjectRoot() string {
+	if exe, err := os.Executable(); err == nil {
+		if root := findRootFrom(filepath.Dir(exe)); root != "" {
+			return root
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if root := findRootFrom(cwd); root != "" {
+			return root
+		}
+	}
+	return ""
+}
+
+// findRootFrom 从 dir 开始向上最多 8 层，返回第一个包含 examples/mcp 的目录。
+func findRootFrom(dir string) string {
+	for range 8 {
+		if _, err := os.Stat(filepath.Join(dir, "examples", "mcp")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
 
 //go:embed default.json
 var defaultCatalog []byte
@@ -214,6 +280,10 @@ func (s *StaticProvider) GetServer(ctx context.Context, id string) (Package, err
 
 // ResolveConfig implements ConfigResolver for the static market.
 // It returns the fully resolved InstallConfig, including command/args or endpoint.
+//
+// 当 projectRoot 已注入时，args 中相对路径（不以 / 或盘符开头、且非绝对路径）
+// 会被拼接成基于 projectRoot 的绝对路径。这样无论 server 进程从哪个目录启动，
+// 内置示例的 stdio 子进程都能找到自己的脚本文件。
 func (s *StaticProvider) ResolveConfig(ctx context.Context, id string) (InstallConfig, error) {
 	_ = ctx
 	for _, e := range s.catalog.Servers {
@@ -222,7 +292,7 @@ func (s *StaticProvider) ResolveConfig(ctx context.Context, id string) (InstallC
 				Name:        e.Name,
 				Transport:   e.Transport,
 				Command:     e.Command,
-				Args:        e.Args,
+				Args:        resolveArgs(e.Args),
 				Endpoint:    e.Endpoint,
 				Environment: e.Environment,
 				Enabled:     true,
@@ -230,6 +300,37 @@ func (s *StaticProvider) ResolveConfig(ctx context.Context, id string) (InstallC
 		}
 	}
 	return InstallConfig{}, fmt.Errorf("market package not found: %s/%s", s.Name(), id)
+}
+
+// resolveArgs 在 projectRoot 注入时把相对路径参数转成绝对路径。
+// 仅作用于看起来像本地路径的参数：以 "examples/"、"./" 等开头或包含路径分隔符
+// 且文件确实存在的参数；其余参数（如 npm 包名、命令 flag）原样返回，避免误伤。
+func resolveArgs(args []string) []string {
+	if projectRoot == "" || len(args) == 0 {
+		return args
+	}
+	resolved := make([]string, len(args))
+	for i, a := range args {
+		resolved[i] = resolveArg(a)
+	}
+	return resolved
+}
+
+// resolveArg 处理单个参数：若 projectRoot 下存在该相对路径文件则转为绝对路径，
+// 否则原样返回。
+func resolveArg(a string) string {
+	if a == "" || filepath.IsAbs(a) {
+		return a
+	}
+	// 仅对疑似本地文件路径的参数做解析：必须包含路径分隔符且在 projectRoot 下存在。
+	if !strings.ContainsAny(a, "/\\") {
+		return a
+	}
+	candidate := filepath.Join(projectRoot, a)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return a
 }
 
 // MCPPreinstallEntry describes one preinstall market/package pair.

@@ -636,6 +636,17 @@ func main() {
 
 	// Register the bundled default static market so the frontend can browse and
 	// install example MCP servers without any external marketplace configuration.
+	//
+	// 内置示例市场的 stdio 服务器脚本用的是相对路径（如 examples/mcp/time/...）。
+	// 当 server 从非项目根目录（如 bin/）启动时，子进程的 cwd 找不到脚本，
+	// 会在 initialize 阶段以 stdout EOF 退出。这里探测并注入项目根目录，
+	// 让 ResolveConfig 把相对路径解析为绝对路径，从根上消除 cwd 依赖。
+	if root := marketplace.DetectProjectRoot(); root != "" {
+		marketplace.SetProjectRoot(root)
+		log.Printf("MCP marketplace: project root = %s", root)
+	} else {
+		observability.DefaultLogger.Warn("mcp", "could not detect project root; built-in stdio servers may fail if launched from a different cwd", nil)
+	}
 	if defaultMarket, err := marketplace.DefaultStaticProvider(); err == nil {
 		mcpManager.RegisterMarket(defaultMarket)
 		log.Printf("MCP marketplace: registered %s (%s)", defaultMarket.Name(), defaultMarket.DisplayName())
