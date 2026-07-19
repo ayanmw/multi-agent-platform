@@ -1,9 +1,9 @@
 # UI v2 — Observable Control Room 设计方案
 
-> 状态：规划中  
+> 状态：实施中（骨架 + 核心连线完成，颜色 token 统一，待端到端验证）  
 > 分支：`ui-v2-control-room`  
-> 工作目录：`D:\Claude-Code-MultiAgent\.worktrees\ui-v2-control-room`  
-> 日期：2026-07-19
+> 工作目录：`D:\Claude-Code-MultiAgent\.claude\worktrees\ui-v2-control-room`  
+> 日期：2026-07-19 起
 
 ---
 
@@ -274,14 +274,36 @@ func WebFS() fs.FS {
 
 ## 10. 验收标准
 
-- [x] `web-v2` 可 `npm run dev` 并连接 backend WebSocket / API。
+- [x] `web/v2` 可 `npm run dev` 并连接 backend WebSocket / API。
 - [x] 桌面端呈现三栏控制室布局。
 - [x] 手机端呈现底部 3-tab 布局。
-- [ ] 可发起 chat / multi-agent / case / skill 任务。（待 store 连线完成后验收）
-- [ ] 可实时观察 step / tool call / observation / final result。（待 store 连线完成后验收）
-- [ ] Inspector 可切换 Memory / RAG / Context / Cases / Agent Config / Project / Skills / Traces。（Tabs 已就绪，内容组件待集成）
-- [x] `npm run build` 无 TypeScript / Vue 错误。
-- [ ] 不破坏 `web/` 原有构建。
+- [x] 可发起 chat / multi-agent / case / skill 任务。（`handleSend` 解析 `/skill-id ` 前缀 → `enableSkill` → `startTask` / `startTurn` / `startMultiAgentTask`；`handleRunCase` → `startTaskWithCase`）
+- [x] 可实时观察 step / tool call / observation / final result。（`useTaskStore` WebSocket 事件已接入，`TimelineTrack` / `AgentLane` / `StepCard` 渲染）
+- [x] Inspector 可切换 Memory / RAG / Context / Cases / Agent Config / Project / Skills / Traces。（Tabs + 真实组件全部接入；Cases tab 的 view/edit/save 已接 `CaseDetailModal` + `CaseForm`）
+- [x] `npm run build` 无 TypeScript / Vue 错误。（v1 `web/dist` 与 v2 `web/v2/dist` 均构建通过，`go build ./cmd/server` 通过）
+- [x] 不破坏 `web/` 原有构建。
+- [x] 颜色 token 统一：Case 系列组件、TopBar / DockPanel / MobileNav 的 v1 硬编码颜色与 hex fallback 全部迁移到 v2 CSS variables（新增 `--text-on-accent`）。
+- [ ] 端到端冒烟：真实启动 backend（`UI_VERSION=v2`）跑通 chat / case / skill / multi-agent 四类任务，桌面三栏与移动 3-tab 均正常。（留作后续测试阶段）
+
+---
+
+## 10.1 实施进度（2026-07-19）
+
+### 已完成
+- **基础架构**：`web/embed.go` 同时 embed `web/dist`（v1）与 `web/v2/dist`（v2）；`cmd/server/main.go` 通过 `UI_VERSION=v2` 环境变量运行时切换静态资源，默认 v1。
+- **设计系统**：`global.css` deep-space dark + industrial 主题；`responsive.css` 桌面/平板/移动适配；CSS tokens（bg/border/text/accent/font/space/radius）。
+- **布局组件**：`TopBar` / `DockPanel` / `SessionDock` / `CommandBar` / `MobileNav` / `TimelineTrack` / `AgentLane` / `StepCard` / `StatusIndicator` / `InspectorTabs` / `InspectorContent`。
+- **Store composables**：`useTaskStore` / `useSessionStore` / `useAgentStore` / `useProjectStore` / `useCaseStore` / `useMemoryStore` / `useContextWindow` / `useTraceStore` / `useToast` / `useRecentMods` / `useModelPrices` / `useMCPStore` / `useKeyboard` / `useLayout` / `useSkills`。
+- **后端 API 连线**：WebSocket 事件驱动；Skill 真实 API（`GET /api/skills?source=built_in`、`POST /api/skills/:id/enable`）与 `/skill-id ` 前缀解析；multi-agent `/api/multi-agent`；`startTaskWithCase`；会话/任务历史加载；审批对话框。
+- **Inspector 全 tab 接入**：Memory / RAG / Context（含子任务选择）/ AgentConfig / ProjectConfig / SkillPanel / Traces（最小树）/ Sessions 概览 / Cases 列表。
+- **Cases tab 完整功能**：`CaseDetailModal`（查看）/ `CaseForm`（新建 + 编辑）/ `CaseCard` Run / tag 筛选；`handleCaseSave` 走 `createCase` / `updateCase`，toast 反馈。
+- **颜色 token 统一**：CaseForm / CaseDetailModal / CaseCard / CaseFilter 全量迁移到 v2 token；TopBar / DockPanel / MobileNav 去除 hex fallback；新增 `--text-on-accent` 供 Run/Save 按钮文字用。
+
+### 待进行（后续测试阶段）
+- 端到端冒烟验证（`UI_VERSION=v2` 启动 + 四类任务跑通 + 移动端实机/DevTools 模拟）。
+- Traces tab 从最小列表升级为可折叠树（当前仅拍平展示）。
+- 移动端交互细节复核（底部 sheet、tab 切换、CommandBar 不被遮挡）。
+- 用户满意后将 `ui-v2-control-room` 合并回 `main`。
 
 ---
 
