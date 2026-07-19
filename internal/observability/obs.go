@@ -1,9 +1,8 @@
-// Package observability provides structured logging and metrics for the platform.
+// Package observability 为平台提供结构化日志与 metric 指标。
 //
-// Phase 6-D: This package intentionally avoids external dependencies such as
-// Prometheus client SDK or OpenTelemetry. Metrics are kept as simple counters
-// exposed in Prometheus text format so operators can scrape them without
-// introducing new binaries or libraries.
+// Phase 6-D：本 package 刻意避免引入 Prometheus client SDK 或 OpenTelemetry 等
+// 外部依赖。metric 以简单的 counter 形式保存，并以 Prometheus 文本格式输出，
+// 运维方无需新增二进制或库即可直接抓取。
 package observability
 
 import (
@@ -19,7 +18,7 @@ import (
 
 // --- Logger -----------------------------------------------------------------
 
-// LogLevel represents the severity of a log entry.
+// LogLevel 表示一条日志的严重级别。
 type LogLevel string
 
 const (
@@ -30,14 +29,14 @@ const (
 	LevelFatal LogLevel = "fatal"
 )
 
-// StructuredLogger provides structured (JSON) logging with level filtering.
+// StructuredLogger 提供带级别过滤的结构化（JSON）日志。
 type StructuredLogger struct {
 	mu     sync.Mutex
 	output *log.Logger
 	level  LogLevel
 }
 
-// NewStructuredLogger creates a logger writing JSON to os.Stdout at Info level.
+// NewStructuredLogger 创建一个向 os.Stdout 输出 JSON、级别为 Info 的 logger。
 func NewStructuredLogger() *StructuredLogger {
 	return &StructuredLogger{
 		output: log.New(os.Stdout, "", 0),
@@ -45,23 +44,23 @@ func NewStructuredLogger() *StructuredLogger {
 	}
 }
 
-// SetLevel changes the minimum log level.
+// SetLevel 调整最低日志级别。
 func (l *StructuredLogger) SetLevel(level LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
 }
 
-// SetOutput replaces the underlying writer of the structured logger.
-// This is typically called at startup after opening a log file so that
-// logs go to both the console and a persistent file via io.MultiWriter.
+// SetOutput 替换 structured logger 底层的 writer。
+// 通常在启动阶段打开日志文件后调用，以便通过 io.MultiWriter 将日志
+// 同时写入控制台和持久化文件。
 func (l *StructuredLogger) SetOutput(w io.Writer) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.output = log.New(w, "", 0)
 }
 
-// Log emits a structured log entry if the level passes the filter.
+// Log 在级别通过过滤时输出一条结构化日志。
 func (l *StructuredLogger) Log(level LogLevel, component, msg string, fields map[string]any) {
 	l.mu.Lock()
 	minLevel := l.level
@@ -85,37 +84,37 @@ func (l *StructuredLogger) Log(level LogLevel, component, msg string, fields map
 	l.output.Println(string(data))
 }
 
-// Debug logs a debug-level structured message.
+// Debug 输出 debug 级别的结构化日志。
 func (l *StructuredLogger) Debug(component, msg string, fields map[string]any) {
 	l.Log(LevelDebug, component, msg, fields)
 }
 
-// Info logs an info-level structured message.
+// Info 输出 info 级别的结构化日志。
 func (l *StructuredLogger) Info(component, msg string, fields map[string]any) {
 	l.Log(LevelInfo, component, msg, fields)
 }
 
-// Warn logs a warning-level structured message.
+// Warn 输出 warn 级别的结构化日志。
 func (l *StructuredLogger) Warn(component, msg string, fields map[string]any) {
 	l.Log(LevelWarn, component, msg, fields)
 }
 
-// Error logs an error-level structured message.
+// Error 输出 error 级别的结构化日志。
 func (l *StructuredLogger) Error(component, msg string, fields map[string]any) {
 	l.Log(LevelError, component, msg, fields)
 }
 
-// Infof logs an info message with fmt-style formatting.
+// Infof 以 fmt 风格格式化输出一条 info 日志。
 func (l *StructuredLogger) Infof(component, format string, args ...any) {
 	l.Log(LevelInfo, component, fmt.Sprintf(format, args...), nil)
 }
 
-// Warnf logs a warning message with fmt-style formatting.
+// Warnf 以 fmt 风格格式化输出一条 warn 日志。
 func (l *StructuredLogger) Warnf(component, format string, args ...any) {
 	l.Log(LevelWarn, component, fmt.Sprintf(format, args...), nil)
 }
 
-// Errorf logs an error message with fmt-style formatting.
+// Errorf 以 fmt 风格格式化输出一条 error 日志。
 func (l *StructuredLogger) Errorf(component, format string, args ...any) {
 	l.Log(LevelError, component, fmt.Sprintf(format, args...), nil)
 }
@@ -127,8 +126,8 @@ func levelEnabled(level, minLevel LogLevel) bool {
 	return order[level] >= order[minLevel]
 }
 
-// ParseLogLevel converts a string to a LogLevel. Unrecognized values default
-// to Info so a typo in configuration does not silence all logs.
+// ParseLogLevel 将字符串转换为 LogLevel。无法识别的值会回退为 Info，
+// 以避免配置中一个拼写错误就让所有日志静默。
 func ParseLogLevel(s string) LogLevel {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
@@ -148,9 +147,8 @@ func ParseLogLevel(s string) LogLevel {
 
 // --- Metrics ----------------------------------------------------------------
 
-// MetricsCollector holds simple thread-safe counters for observability.
-// All counters are monotonically increasing uint64 values rendered in
-// Prometheus exposition format.
+// MetricsCollector 保存用于 observability 的简单线程安全计数器。
+// 所有 counter 都是单调递增的 uint64 值，以 Prometheus exposition 格式输出。
 type MetricsCollector struct {
 	mu              sync.RWMutex
 	tasksStarted    uint64
@@ -165,7 +163,7 @@ type MetricsCollector struct {
 	toolLatencyHist *HistogramCollector
 }
 
-// NewMetricsCollector returns a zero-valued metrics collector.
+// NewMetricsCollector 返回一个零值的 metric 收集器。
 func NewMetricsCollector() *MetricsCollector {
 	buckets := []float64{10, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
 	return &MetricsCollector{
@@ -174,28 +172,28 @@ func NewMetricsCollector() *MetricsCollector {
 	}
 }
 
-// IncrTasksStarted increments the counter for agent tasks that have started.
+// IncrTasksStarted 递增已启动 agent task 的计数器。
 func (m *MetricsCollector) IncrTasksStarted() {
 	m.mu.Lock()
 	m.tasksStarted++
 	m.mu.Unlock()
 }
 
-// IncrTasksCompleted increments the counter for tasks that finished successfully.
+// IncrTasksCompleted 递增成功完成 task 的计数器。
 func (m *MetricsCollector) IncrTasksCompleted() {
 	m.mu.Lock()
 	m.tasksCompleted++
 	m.mu.Unlock()
 }
 
-// IncrTasksFailed increments the counter for tasks that failed or were cancelled.
+// IncrTasksFailed 递增失败或被取消 task 的计数器。
 func (m *MetricsCollector) IncrTasksFailed() {
 	m.mu.Lock()
 	m.tasksFailed++
 	m.mu.Unlock()
 }
 
-// RecordLLMCall increments the LLM call counter and adds the token usage.
+// RecordLLMCall 递增 LLM 调用计数器并累加 token 使用量。
 func (m *MetricsCollector) RecordLLMCall(inputTokens, outputTokens, totalTokens uint64) {
 	m.mu.Lock()
 	m.llmCalls++
@@ -205,29 +203,29 @@ func (m *MetricsCollector) RecordLLMCall(inputTokens, outputTokens, totalTokens 
 	m.mu.Unlock()
 }
 
-// RecordCost adds the cost in cents to the total cost counter.
+// RecordCost 将以分为单位的成本累加到总成本计数器。
 func (m *MetricsCollector) RecordCost(cents int64) {
 	m.mu.Lock()
 	m.costCents += cents
 	m.mu.Unlock()
 }
 
-// RecordLLMLatency records the latency of an LLM API call.
+// RecordLLMLatency 记录一次 LLM API 调用的延迟。
 func (m *MetricsCollector) RecordLLMLatency(d time.Duration) {
 	m.mu.Lock()
 	m.llmLatencyHist.Record(d)
 	m.mu.Unlock()
 }
 
-// RecordToolLatency records the latency of a tool execution.
+// RecordToolLatency 记录一次 tool 执行的延迟。
 func (m *MetricsCollector) RecordToolLatency(d time.Duration) {
 	m.mu.Lock()
 	m.toolLatencyHist.Record(d)
 	m.mu.Unlock()
 }
 
-// PrometheusText returns the current metrics in Prometheus exposition format.
-// This is suitable for scraping by Prometheus, Grafana Agent, or curl.
+// PrometheusText 以 Prometheus exposition 格式返回当前 metric。
+// 适合由 Prometheus、Grafana Agent 或 curl 抓取。
 func (m *MetricsCollector) PrometheusText() string {
 	m.mu.RLock()
 	ts := uint64(time.Now().UnixMilli())
@@ -263,11 +261,11 @@ cost_cents_total %d %d
 	return out
 }
 
-// DefaultMetrics is the package-level shared metrics collector.
+// DefaultMetrics 是 package 级别共享的 metric 收集器。
 var DefaultMetrics = NewMetricsCollector()
 
-// DefaultLogger is the package-level shared logger.
+// DefaultLogger 是 package 级别共享的 logger。
 var DefaultLogger = NewStructuredLogger()
 
-// DefaultAuditor is the package-level shared auditor.
+// DefaultAuditor 是 package 级别共享的 auditor。
 var DefaultAuditor Auditor = NewMemoryAuditor(10000)

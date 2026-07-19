@@ -2,7 +2,7 @@ package observability
 
 import "github.com/anmingwei/multi-agent-platform/pkg/db"
 
-// SQLiteAuditor wraps an Auditor and also persists to SQLite.
+// SQLiteAuditor 包装一个 Auditor，并同时持久化到 SQLite。
 type SQLiteAuditor struct {
 	inner Auditor
 }

@@ -8,33 +8,33 @@ import (
 	"time"
 )
 
-// AuditRecord captures a write operation for compliance and forensics.
+// AuditRecord 记录一次写操作，用于合规与取证。
 type AuditRecord struct {
 	ID        string         `json:"id"`
 	Timestamp time.Time      `json:"timestamp"`
 	Actor     string         `json:"actor"`            // user/api_key/agent id
-	Action    string         `json:"action"`           // e.g. delete_session, write_file
-	Target    string         `json:"target"`           // resource id / path
+	Action    string         `json:"action"`           // 例如 delete_session、write_file
+	Target    string         `json:"target"`           // 资源 id / 路径
 	Before    map[string]any `json:"before,omitempty"`
 	After     map[string]any `json:"after,omitempty"`
 	Reason    string         `json:"reason,omitempty"`
 	IP        string         `json:"ip,omitempty"`
 }
 
-// Auditor is the interface for audit logging.
+// Auditor 是 audit 日志记录的接口。
 type Auditor interface {
 	Record(rec AuditRecord)
 	List(limit int) []AuditRecord
 }
 
-// MemoryAuditor keeps audit records in a bounded ring buffer.
+// MemoryAuditor 将 audit 记录保存在有界的 ring buffer(环形缓冲)中。
 type MemoryAuditor struct {
 	mu      sync.RWMutex
 	records []AuditRecord
 	limit   int
 }
 
-// NewMemoryAuditor creates an in-memory auditor.
+// NewMemoryAuditor 创建一个内存 audit 记录器。
 func NewMemoryAuditor(limit int) *MemoryAuditor {
 	if limit <= 0 {
 		limit = 10000
@@ -68,7 +68,7 @@ func (a *MemoryAuditor) List(limit int) []AuditRecord {
 	return out
 }
 
-// JSON returns the latest N records as JSON.
+// JSON 返回最近 N 条记录的 JSON 形式。
 func (a *MemoryAuditor) JSON(limit int) ([]byte, error) {
 	return json.Marshal(a.List(limit))
 }

@@ -7,18 +7,18 @@ import (
 	"time"
 )
 
-// HistogramCollector tracks latency samples in explicit buckets and supports
-// Prometheus exposition without an external SDK.
+// HistogramCollector 在显式 bucket 中跟踪延迟样本，并支持
+// 不依赖外部 SDK 的 Prometheus exposition 格式输出。
 type HistogramCollector struct {
 	mu      sync.RWMutex
-	buckets []float64 // upper bounds in ms
+	buckets []float64 // upper bounds in ms（以毫秒为单位的上界）
 	counts  []uint64
 	total   uint64
 	sum     float64
 }
 
-// NewHistogramCollector creates a histogram. Buckets must be sorted ascending
-// and are interpreted as milliseconds upper bounds.
+// NewHistogramCollector 创建一个 histogram。buckets 必须按升序排序，
+// 并被解释为以毫秒为单位的上界。
 func NewHistogramCollector(bucketsMS []float64) *HistogramCollector {
 	b := make([]float64, len(bucketsMS))
 	copy(b, bucketsMS)
@@ -29,7 +29,7 @@ func NewHistogramCollector(bucketsMS []float64) *HistogramCollector {
 	}
 }
 
-// Record adds a latency sample.
+// Record 添加一个延迟样本。
 func (h *HistogramCollector) Record(d time.Duration) {
 	ms := float64(d.Milliseconds())
 	h.mu.Lock()
@@ -42,15 +42,15 @@ func (h *HistogramCollector) Record(d time.Duration) {
 			return
 		}
 	}
-	// If larger than all buckets, increment the last (overflow) bucket.
+	// 若大于所有 bucket，则累加到最后一个（溢出）bucket。
 	if len(h.counts) > 0 {
 		h.counts[len(h.counts)-1]++
 	}
 }
 
-// Quantile returns an approximate latency in milliseconds for the given
-// quantile (0-1). Uses linear interpolation within the bucket where the
-// quantile falls, matching Prometheus histogram_quantile semantics.
+// Quantile 返回给定分位数（0-1）对应的近似延迟（毫秒）。
+// 在分位数落入的 bucket 内使用线性插值，与 Prometheus 的
+// histogram_quantile 语义保持一致。
 func (h *HistogramCollector) Quantile(q float64) float64 {
 	if q <= 0 || q > 1 || len(h.buckets) == 0 {
 		return 0
@@ -83,7 +83,7 @@ func (h *HistogramCollector) Quantile(q float64) float64 {
 	return h.buckets[len(h.buckets)-1]
 }
 
-// PrometheusHistogram returns the bucket lines in Prometheus format.
+// PrometheusHistogram 返回 Prometheus 格式的 bucket 行。
 func (h *HistogramCollector) PrometheusHistogram(name, help string) string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

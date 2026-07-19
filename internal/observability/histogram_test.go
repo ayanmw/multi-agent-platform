@@ -6,7 +6,7 @@ import (
 )
 
 func TestHistogramQuantiles(t *testing.T) {
-	h := NewHistogramCollector([]float64{1, 10, 100, 1000}) // ms buckets
+	h := NewHistogramCollector([]float64{1, 10, 100, 1000}) // ms bucket（毫秒 bucket）
 	for i := 0; i < 100; i++ {
 		h.Record(time.Duration(i) * time.Millisecond)
 	}

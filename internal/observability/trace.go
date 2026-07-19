@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// TraceContext carries trace identifiers across goroutines / HTTP boundaries.
-// It is intentionally lightweight and dependency-free (no OpenTelemetry libs).
+// TraceContext 在 goroutine / HTTP 边界之间传递 trace 标识符。
+// 它刻意保持轻量且无外部依赖（不引入 OpenTelemetry 库）。
 type TraceContext struct {
 	TraceID      string
 	SpanID       string
@@ -21,7 +21,7 @@ type TraceContext struct {
 	StartTime    time.Time
 }
 
-// HTTPHeaders returns W3C-style headers for propagation over HTTP.
+// HTTPHeaders 返回用于通过 HTTP 传播的 W3C 风格 header。
 func (tc *TraceContext) HTTPHeaders() map[string]string {
 	return map[string]string{
 		"X-Trace-ID": tc.TraceID,
@@ -31,7 +31,7 @@ func (tc *TraceContext) HTTPHeaders() map[string]string {
 	}
 }
 
-// SpanRecord is the completed, exportable representation of a span.
+// SpanRecord 是一个已完成、可导出的 span 表示。
 type SpanRecord struct {
 	TraceID      string         `json:"trace_id"`
 	SpanID       string         `json:"span_id"`
@@ -45,15 +45,15 @@ type SpanRecord struct {
 	Attributes   map[string]any `json:"attributes,omitempty"`
 }
 
-// Tracer is a simple in-memory span producer. It keeps a bounded ring buffer of
-// completed spans so operators can query recent traces without an external collector.
+// Tracer 是一个简单的内存 span 生成器。它用有界 ring buffer 保存已完成
+// 的 span，运维方无需外部 collector 即可查询最近的 trace。
 type Tracer struct {
 	mu    sync.Mutex
 	spans []SpanRecord
 	limit int
 }
 
-// NewTracer creates a tracer with a bounded span buffer.
+// NewTracer 创建一个带界 span 缓冲的 tracer。
 func NewTracer(limit int) *Tracer {
 	if limit <= 0 {
 		limit = 1000
@@ -73,7 +73,7 @@ func generateSpanID() string {
 	return hex.EncodeToString(b)
 }
 
-// StartRoot creates a root span for a top-level operation (e.g., a task).
+// StartRoot 为一个顶层操作（例如一个 task）创建 root span。
 func (t *Tracer) StartRoot(taskID, operation string) *TraceContext {
 	return &TraceContext{
 		TraceID:   generateTraceID(),
@@ -84,7 +84,7 @@ func (t *Tracer) StartRoot(taskID, operation string) *TraceContext {
 	}
 }
 
-// StartChild creates a child span. Call Finish to complete it.
+// StartChild 创建一个 child span。调用 Finish 完成它。
 func (t *Tracer) StartChild(parent *TraceContext, operation string) *TraceContext {
 	return &TraceContext{
 		TraceID:      parent.TraceID,
@@ -97,7 +97,7 @@ func (t *Tracer) StartChild(parent *TraceContext, operation string) *TraceContex
 	}
 }
 
-// Finish completes a span and pushes it to the bounded buffer.
+// Finish 完成一个 span 并将其推入有界缓冲。
 func (t *Tracer) Finish(ctx *TraceContext, err error) {
 	if ctx == nil {
 		return
@@ -120,7 +120,7 @@ func (t *Tracer) Finish(ctx *TraceContext, err error) {
 	t.push(rec)
 }
 
-// FinishWithAttributes completes a span with extra attributes.
+// FinishWithAttributes 完成一个 span，并附带额外的 attributes。
 func (t *Tracer) FinishWithAttributes(ctx *TraceContext, err error, attrs map[string]any) {
 	if ctx == nil {
 		return
@@ -153,7 +153,7 @@ func (t *Tracer) push(rec SpanRecord) {
 	}
 }
 
-// Flush returns a copy of all buffered spans and clears the buffer.
+// Flush 返回所有已缓冲 span 的副本并清空缓冲。
 func (t *Tracer) Flush() []SpanRecord {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -163,7 +163,7 @@ func (t *Tracer) Flush() []SpanRecord {
 	return out
 }
 
-// Peek returns a copy without clearing.
+// Peek 返回副本但不清空缓冲。
 func (t *Tracer) Peek() []SpanRecord {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -172,7 +172,7 @@ func (t *Tracer) Peek() []SpanRecord {
 	return out
 }
 
-// Extract reconstructs a TraceContext from propagated headers.
+// Extract 从传播过来的 header 中重建一个 TraceContext。
 func (t *Tracer) Extract(headers map[string]string) (*TraceContext, error) {
 	traceID := headers["X-Trace-ID"]
 	spanID := headers["X-Span-ID"]
@@ -187,7 +187,7 @@ func (t *Tracer) Extract(headers map[string]string) (*TraceContext, error) {
 	}, nil
 }
 
-// JSON returns all buffered spans as JSON.
+// JSON 以 JSON 形式返回所有已缓冲的 span。
 func (t *Tracer) JSON() ([]byte, error) {
 	return json.Marshal(t.Peek())
 }
