@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1675,9 +1676,22 @@ func main() {
 	// Serve Vue SPA from embedded filesystem (production mode).
 	// In dev mode, users can run `cd web && npm run dev` to use Vite's dev server
 	// with HMR. The embedded dist/ is used when building the Go binary.
-	distFS, err := fs.Sub(web.Dist, "dist")
+	//
+	// Phase UI-v2: 同时嵌入 v1 (web/dist) 与 v2 (web/v2/dist)，通过 UI_VERSION
+	// 环境变量切换；默认使用 v1，保证现有部署行为不变。
+	uiVersion := strings.ToLower(strings.TrimSpace(os.Getenv("UI_VERSION")))
+	var activeEmbed embed.FS
+	var subDir string
+	if uiVersion == "v2" {
+		activeEmbed = web.V2Dist
+		subDir = "v2/dist"
+	} else {
+		activeEmbed = web.Dist
+		subDir = "dist"
+	}
+	distFS, err := fs.Sub(activeEmbed, subDir)
 	if err != nil {
-		log.Printf("Warning: embedded frontend dist not found: %v", err)
+		log.Printf("Warning: embedded frontend dist not found (version=%s): %v", uiVersion, err)
 	} else {
 		// Create a file server that serves the embedded dist/ directory
 		fileServer := http.FileServer(http.FS(distFS))
@@ -1708,7 +1722,7 @@ func main() {
 			}
 			fileServer.ServeHTTP(w, r)
 		})
-		log.Println("Frontend embedded: serving from embedded dist/")
+		log.Printf("Frontend embedded: serving from embedded %s/ (UI_VERSION=%s)", subDir, uiVersion)
 	}
 
 	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"

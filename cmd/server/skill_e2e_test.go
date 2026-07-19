@@ -78,6 +78,10 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 		LLMModel:   "deepseek-v4-flash",
 		LLMUseMock: true,
 	}
+	// 测试中手动构造 Config，未走 config.Load() 的 LoadContractLimits() 流程，
+	// 导致所有 ContractLimits 字段为 0。handleSessionChat 会校验 / 钳制请求参数，
+	// input length > 0 会触发 bad request。这里显式加载 safe defaults。
+	cfg.LoadContractLimits()
 
 	// 注册 builtins + skill 管理工具，与 main.go 启动流程保持一致。
 	toolRegistry := tool.NewRegistry()
@@ -284,7 +288,10 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 // chat 是异步 goroutine，本函数只负责投递请求并解析响应中的 task_id。
 func postChat(t *testing.T, client *http.Client, baseURL, sessionID, input string) string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]any{"input": input})
+	body, _ := json.Marshal(map[string]any{
+		"input":     input,
+		"max_steps": 30,
+	})
 	resp, err := client.Post(baseURL+"/api/sessions/"+sessionID+"/chat", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("post chat: %v", err)
