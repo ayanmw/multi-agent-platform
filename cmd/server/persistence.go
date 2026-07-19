@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// DBPersistence implements runtime.Persistence using SQLite
+// DBPersistence 基于 SQLite 实现 runtime.Persistence
 type DBPersistence struct{}
 
 func (p *DBPersistence) SaveTask(taskID string, userInput string, agentIDs []string) error {
@@ -35,10 +35,9 @@ func (p *DBPersistence) UpdateTaskDuration(taskID string, durationMs int) error 
 	return db.UpdateTaskDuration(taskID, durationMs)
 }
 
-// newTaskID returns a human-readable, time-ordered task identifier.
-// It combines a timestamp prefix with the first 8 characters of a UUID so that
-// concurrent task creation (multi-agent fan-out, quick UI clicks, root + child
-// tasks) never collides.
+// newTaskID 返回一个人类可读、按时间排序的 task 标识。
+// 它把时间戳前缀与 UUID 的前 8 个字符组合，确保并发任务创建
+//（multi-agent 扇出、UI 快速点击、root + child 任务）永不冲突。
 func newTaskID() string {
 	return "task_" + time.Now().Format("20060102150405") + "_" + uuid.New().String()[:8]
 }
@@ -83,8 +82,8 @@ func (p *DBPersistence) SaveConversation(c runtime.ConversationRecord) error {
 	)
 }
 
-// QueryTaskSessionID returns the session_id for a task from SQLite.
-// Returns empty string if the task does not exist or the DB is unavailable.
+// QueryTaskSessionID 从 SQLite 返回某 task 的 session_id。
+// 若 task 不存在或 DB 不可用，返回空字符串。
 func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
 	t, err := db.QueryTaskByID(taskID)
 	if err != nil {
@@ -93,11 +92,10 @@ func (p *DBPersistence) QueryTaskSessionID(taskID string) string {
 	return t.SessionID
 }
 
-// SaveAgentMessage persists an inter-agent message routed through the
-// AgentBus. The runtime.AgentBusMessage is a lightweight DTO that already
-// carries everything the agent_messages table needs (TaskID, FromAgentID,
-// Type, Content, Metadata); the persistence layer just forwards to the
-// db.InsertAgentMessage helper.
+// SaveAgentMessage 持久化一条经 AgentBus 路由的 agent 间消息。
+// runtime.AgentBusMessage 是一个轻量 DTO，已经带有 agent_messages 表所需的
+// 全部字段（TaskID、FromAgentID、Type、Content、Metadata）；持久化层只需
+// 转发给 db.InsertAgentMessage helper。
 //
 // Phase 7-I: 同时转发 SubTaskID，使 agent_messages 表能记录精确路由目标。
 // Phase 7-J: 同时转发 FromSubTaskID，记录发送方子任务。
@@ -114,8 +112,8 @@ func (p *DBPersistence) SaveAgentMessage(msg runtime.AgentBusMessage) error {
 	})
 }
 
-// LoadAgentMessages returns the full AgentBus message history for a task,
-// ordered oldest first. Empty slice when the task has no messages.
+// LoadAgentMessages 返回某 task 的完整 AgentBus 消息历史，
+// 按时间从旧到新排序。task 无消息时返回空 slice。
 func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMessage, error) {
 	rows, err := db.QueryAgentMessages(taskID)
 	if err != nil {
@@ -137,8 +135,8 @@ func (p *DBPersistence) LoadAgentMessages(taskID string) ([]runtime.AgentBusMess
 	return out, nil
 }
 
-// InsertApproval implements runtime.ApprovalRepository by forwarding to
-// db.InsertApproval. Phase 7-I: keeps database schema details in pkg/db.
+// InsertApproval 实现 runtime.ApprovalRepository，转发给
+// db.InsertApproval。Phase 7-I: 把 database schema 细节留在 pkg/db。
 func (p *DBPersistence) InsertApproval(record runtime.ApprovalRecord) error {
 	return db.InsertApproval(db.ApprovalRecord{
 		ID:                   record.ApprovalID,
@@ -155,15 +153,15 @@ func (p *DBPersistence) InsertApproval(record runtime.ApprovalRecord) error {
 	})
 }
 
-// UpdateApprovalLeaderDecision implements runtime.ApprovalRepository by
-// forwarding to db.UpdateApprovalLeaderDecision.
+// UpdateApprovalLeaderDecision 实现 runtime.ApprovalRepository，
+// 转发给 db.UpdateApprovalLeaderDecision。
 func (p *DBPersistence) UpdateApprovalLeaderDecision(approvalID string, approved bool, reason string) error {
 	return db.UpdateApprovalLeaderDecision(approvalID, approved, reason)
 }
 
-// resolveSession either uses an existing session ID or creates a new empty session.
-// It then creates a new root task bound to that session.
-// Returns (sessionID, taskID, error).
+// resolveSession 使用既有 session ID 或创建一个新的空 session，
+// 然后在该 session 下创建一个新的 root task。
+// 返回 (sessionID, taskID, error)。
 func resolveSession(sessionID, userInput string, persist runtime.Persistence) (string, string, error) {
 	if sessionID == "" {
 		newID := "sess_" + uuid.New().String()
@@ -190,7 +188,7 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 			return "", "", fmt.Errorf("bind task to session: %w", err)
 		}
 	}
-	// Bind the root task to the session so the frontend can load it after page refresh
+	// 把 root task 绑定到 session，让前端刷新后仍能加载
 	if sessionID != "" {
 		log.Printf("[resolveSession] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
 		sess, err := db.QuerySessionByID(sessionID)
@@ -207,11 +205,11 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 	return sessionID, taskID, nil
 }
 
-// deriveSessionStatus computes the session status from all its tasks.
-// Returns the status of the latest task that has a meaningful (non-empty/idle) status,
-// falling back to "empty" if no task has one.
-// ORDER BY is_root DESC, started_at ASC puts root first, so the last element
-// with a non-empty/idle status is the latest meaningful task.
+// deriveSessionStatus 根据某 session 的所有 task 计算其状态。
+// 返回最后一个拥有有意义（非空/非 idle）状态的 task 状态；
+// 若没有 task 拥有这样的状态，则回退到 "empty"。
+// ORDER BY is_root DESC, started_at ASC 让 root 排在前，
+// 因此最后一个非空/非 idle 状态的元素就是最新的有意义 task。
 func deriveSessionStatus(sessionID string) string {
 	tasks, err := db.QueryTasksBySession(sessionID)
 	if err != nil || len(tasks) == 0 {

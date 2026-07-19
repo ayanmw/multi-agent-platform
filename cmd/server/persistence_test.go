@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// TestNewTaskIDUnique verifies that rapid concurrent calls to newTaskID never
-// produce duplicate IDs.
+// TestNewTaskIDUnique 验证快速并发调用 newTaskID 永不产生重复 ID。
 func TestNewTaskIDUnique(t *testing.T) {
 	const n = 1000
 	ids := make([]string, n)

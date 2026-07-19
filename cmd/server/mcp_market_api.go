@@ -9,12 +9,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 )
 
-// registerMCPMarketRoutes wires MCP marketplace endpoints into mux.
+// registerMCPMarketRoutes 把 MCP marketplace endpoint 挂载到 mux。
 //
-// Endpoints:
-//   GET    /api/mcp/markets                         — list registered markets
-//   GET    /api/mcp/markets/:market/servers         — list packages in a market
-//   POST   /api/mcp/markets/:market/servers/:id/install — install package as managed server
+// Endpoints：
+//   GET    /api/mcp/markets                         — 列出已注册的 market
+//   GET    /api/mcp/markets/:market/servers         — 列出某 market 中的 package
+//   POST   /api/mcp/markets/:market/servers/:id/install — 将 package 安装为受管理的 server
 func registerMCPMarketRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 	mux.HandleFunc("/api/mcp/markets", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -30,7 +30,7 @@ func registerMCPMarketRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 			return
 		}
 
-		// Expected: :market/servers or :market/servers/:id/install
+		// 期望格式：:market/servers 或 :market/servers/:id/install
 		parts := strings.SplitN(path, "/", 4)
 		if len(parts) < 2 || parts[1] != "servers" {
 			writeJSONError(w, "invalid market path", http.StatusBadRequest)
@@ -49,7 +49,7 @@ func registerMCPMarketRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 			handleInstallMarketServer(w, r, mgr, marketName, parts[2])
 			return
 		}
-		// when path has 4 parts the ID itself may contain a slash, unlikely but safe to rejoin
+		// 当路径有 4 段时，ID 本身可能包含斜杠（不太可能但安全起见做拼接）
 		if len(parts) >= 3 && r.Method == http.MethodPost {
 			id := strings.Join(parts[2:len(parts)-1], "/")
 			if parts[len(parts)-1] == "install" {
@@ -62,7 +62,7 @@ func registerMCPMarketRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 	})
 }
 
-// handleListMarkets returns all registered marketplace providers.
+// handleListMarkets 返回所有已注册的 marketplace provider。
 func handleListMarkets(w http.ResponseWriter, _ *http.Request, mgr *mcp.Manager) {
 	providers := mgr.Markets()
 	markets := make([]map[string]any, 0, len(providers))
@@ -76,7 +76,7 @@ func handleListMarkets(w http.ResponseWriter, _ *http.Request, mgr *mcp.Manager)
 	json.NewEncoder(w).Encode(map[string]any{"markets": markets})
 }
 
-// handleListMarketServers returns all packages available in a market.
+// handleListMarketServers 返回某 market 中所有可用的 package。
 func handleListMarketServers(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager, marketName string) {
 	provider, ok := mgr.GetMarket(marketName)
 	if !ok {
@@ -95,7 +95,7 @@ func handleListMarketServers(w http.ResponseWriter, r *http.Request, mgr *mcp.Ma
 	})
 }
 
-// handleInstallMarketServer installs a marketplace package as a managed server.
+// handleInstallMarketServer 将一个 marketplace package 安装为受管理的 server。
 func handleInstallMarketServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager, marketName, id string) {
 	if id == "" {
 		writeJSONError(w, "server ID required", http.StatusBadRequest)

@@ -89,13 +89,13 @@ func TestInstallMarketServer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	// The install may fail to connect because the fake command is invalid, but
-	// the server record should still be created as a disabled managed server.
+	// install 可能因 fake 命令非法而连接失败，但 server 记录仍应作为
+	// disabled 的受管理 server 被创建。
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
 
-	// Verify the server is now managed.
+	// 验证 server 现在已受管理。
 	if _, err := mgr.GetServer("test"); err != nil {
 		t.Fatalf("server not installed: %v", err)
 	}
@@ -115,6 +115,6 @@ func TestInstallMissingMarketServer(t *testing.T) {
 	}
 }
 
-// Ensure context.Background is used as a placeholder to satisfy any unused import
-// linter if future edits remove ctx usage.
+// 使用 context.Background 作为占位，以满足"未来编辑移除 ctx 使用后"
+// 未使用 import linter 的检查。
 var _ = context.Background

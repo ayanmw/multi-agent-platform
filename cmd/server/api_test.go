@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// setupCaseTestDB creates a fresh SQLite database with the full schema.
+// setupCaseTestDB 初始化一个带有完整 schema 的新 SQLite 数据库。
 func setupCaseTestDB(t *testing.T) {
 	t.Helper()
 	if err := db.Init(filepath.Join(t.TempDir(), "test.db")); err != nil {
@@ -30,7 +30,7 @@ func setupCaseTestDB(t *testing.T) {
 	})
 }
 
-// newCaseService creates an initialized case service for tests.
+// newCaseService 为测试创建一个已初始化的 case service。
 func newCaseService(t *testing.T) *cases.Service {
 	t.Helper()
 	setupCaseTestDB(t)
@@ -41,7 +41,7 @@ func newCaseService(t *testing.T) *cases.Service {
 	return svc
 }
 
-// newTestCreateRequest returns a valid create payload.
+// newTestCreateRequest 返回一个合法的 create payload。
 func newTestCreateRequest() cases.CreateCaseRequest {
 	return cases.CreateCaseRequest{
 		Name:         "Test Case",
@@ -58,7 +58,7 @@ func newTestCreateRequest() cases.CreateCaseRequest {
 	}
 }
 
-// TestHandleListCases returns all cases by default.
+// TestHandleListCases 默认返回所有 case。
 func TestHandleListCases(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +82,7 @@ func TestHandleListCases(t *testing.T) {
 	}
 }
 
-// TestHandleListCasesByCategory filters by category.
+// TestHandleListCasesByCategory 按 category 过滤。
 func TestHandleListCasesByCategory(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,14 +115,14 @@ func TestHandleListCasesByCategory(t *testing.T) {
 	}
 }
 
-// TestHandleListCasesByTagOr filters with OR semantics.
+// TestHandleListCasesByTagOr 以 OR 语义进行过滤。
 func TestHandleListCasesByTagOr(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleListCases(w, r, svc)
 	})
 
-	// Both dialogue and code-gen should match.
+	// dialogue 和 code-gen 都应命中。
 	req := httptest.NewRequest(http.MethodGet, "/api/cases?tag=dialogue,code", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -147,7 +147,7 @@ func TestHandleListCasesByTagOr(t *testing.T) {
 	}
 }
 
-// TestHandleGetCaseBuiltin returns a builtin case.
+// TestHandleGetCaseBuiltin 返回一个内置 case。
 func TestHandleGetCaseBuiltin(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +171,7 @@ func TestHandleGetCaseBuiltin(t *testing.T) {
 	}
 }
 
-// TestHandleGetCaseNotFound returns 404.
+// TestHandleGetCaseNotFound 返回 404。
 func TestHandleGetCaseNotFound(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +187,7 @@ func TestHandleGetCaseNotFound(t *testing.T) {
 	}
 }
 
-// TestHandleCreateCase creates a custom case.
+// TestHandleCreateCase 创建一个自定义 case。
 func TestHandleCreateCase(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +219,7 @@ func TestHandleCreateCase(t *testing.T) {
 	}
 }
 
-// TestHandleCreateCaseValidation rejects invalid request.
+// TestHandleCreateCaseValidation 拒绝非法请求。
 func TestHandleCreateCaseValidation(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +239,7 @@ func TestHandleCreateCaseValidation(t *testing.T) {
 	}
 }
 
-// TestHandleUpdateCase updates a custom case.
+// TestHandleUpdateCase 更新一个自定义 case。
 func TestHandleUpdateCase(t *testing.T) {
 	svc := newCaseService(t)
 	created, err := svc.Create(newTestCreateRequest())
@@ -271,7 +271,7 @@ func TestHandleUpdateCase(t *testing.T) {
 	}
 }
 
-// TestHandleUpdateBuiltinCaseRejected returns 403.
+// TestHandleUpdateBuiltinCaseRejected 返回 403。
 func TestHandleUpdateBuiltinCaseRejected(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +290,7 @@ func TestHandleUpdateBuiltinCaseRejected(t *testing.T) {
 	}
 }
 
-// TestHandleUpdateCaseNotFound returns 404.
+// TestHandleUpdateCaseNotFound 返回 404。
 func TestHandleUpdateCaseNotFound(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +309,7 @@ func TestHandleUpdateCaseNotFound(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteCase deletes a custom case.
+// TestHandleDeleteCase 删除一个自定义 case。
 func TestHandleDeleteCase(t *testing.T) {
 	svc := newCaseService(t)
 	created, err := svc.Create(newTestCreateRequest())
@@ -337,7 +337,7 @@ func TestHandleDeleteCase(t *testing.T) {
 	}
 }
 
-// TestHandleDeleteBuiltinCaseRejected returns 403.
+// TestHandleDeleteBuiltinCaseRejected 返回 403。
 func TestHandleDeleteBuiltinCaseRejected(t *testing.T) {
 	svc := newCaseService(t)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +353,7 @@ func TestHandleDeleteBuiltinCaseRejected(t *testing.T) {
 	}
 }
 
-// TestHandleContractLimits returns server-enforced contract bounds as JSON.
+// TestHandleContractLimits 以 JSON 返回服务端强制 contract 边界。
 func TestHandleContractLimits(t *testing.T) {
 	cfg := &config.Config{
 		ContractLimits: config.ContractLimits{
@@ -369,7 +369,7 @@ func TestHandleContractLimits(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/contract-limits", nil)
 	rr := httptest.NewRecorder()
 
-	// handleContractLimits returns an http.HandlerFunc bound to cfg.
+	// handleContractLimits 返回一个绑定到 cfg 的 http.HandlerFunc。
 	handler := handleContractLimits(cfg)
 	handler.ServeHTTP(rr, req)
 
@@ -405,7 +405,7 @@ func TestHandleContractLimits(t *testing.T) {
 	}
 }
 
-// TestCaseRoutesIntegration runs the full API through an httptest server.
+// TestCaseRoutesIntegration 通过 httptest server 跑完整 API。
 func TestCaseRoutesIntegration(t *testing.T) {
 	svc := newCaseService(t)
 
@@ -442,7 +442,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 
 	client := ts.Client()
 
-	// 1. List cases
+	// 1. 列出 case
 	resp, err := client.Get(ts.URL + "/api/cases")
 	if err != nil {
 		t.Fatalf("list cases: %v", err)
@@ -453,7 +453,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Fatalf("expected 200 listing cases, got %d: %s", resp.StatusCode, string(body))
 	}
 
-	// 2. Create case
+	// 2. 创建 case
 	payload, _ := json.Marshal(newTestCreateRequest())
 	resp, err = client.Post(ts.URL+"/api/cases", "application/json", bytes.NewReader(payload))
 	if err != nil {
@@ -469,7 +469,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Fatalf("decode created case: %v", err)
 	}
 
-	// 3. Get case
+	// 3. 获取 case
 	resp, err = client.Get(ts.URL + "/api/cases/" + created.ID)
 	if err != nil {
 		t.Fatalf("get case: %v", err)
@@ -480,7 +480,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Fatalf("expected 200 getting case, got %d: %s", resp.StatusCode, string(body))
 	}
 
-	// 4. Filter by category
+	// 4. 按 category 过滤
 	resp, err = client.Get(ts.URL + "/api/cases?category=test")
 	if err != nil {
 		t.Fatalf("filter by category: %v", err)
@@ -504,7 +504,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Errorf("expected created case in filtered results")
 	}
 
-	// 5. Update case
+	// 5. 更新 case
 	newName := "Updated Integration"
 	updatePayload, _ := json.Marshal(cases.UpdateCaseRequest{Name: &newName})
 	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/cases/"+created.ID, bytes.NewReader(updatePayload))
@@ -519,7 +519,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Fatalf("expected 200 updating case, got %d: %s", resp.StatusCode, string(body))
 	}
 
-	// 6. Delete case
+	// 6. 删除 case
 	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/api/cases/"+created.ID, nil)
 	resp, err = client.Do(req)
 	if err != nil {
@@ -530,7 +530,7 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		t.Fatalf("expected 204 deleting case, got %d", resp.StatusCode)
 	}
 
-	// 7. Confirm gone
+	// 7. 确认已删除
 	resp, err = client.Get(ts.URL + "/api/cases/" + created.ID)
 	if err != nil {
 		t.Fatalf("get deleted case: %v", err)

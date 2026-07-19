@@ -9,14 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// RegisterMockRoutes registers the mock script management API endpoints on mux.
-// It exposes CRUD operations for mock scripts and a reset endpoint that reloads
-// the built-in scripts. These endpoints are intended for development and testing
-// so operators can inspect and modify mock LLM behavior without restarting the
-// server.
+// RegisterMockRoutes 把 mock 脚本管理 API endpoint 注册到 mux。
+// 它暴露对 mock 脚本的 CRUD 操作，以及一个 reset endpoint 用于重新加载
+// 内置脚本。这些 endpoint 面向开发与测试，便于运维无需重启 server 即可
+// 检查并修改 mock LLM 行为。
 func RegisterMockRoutes(mux *http.ServeMux, store llm.MockScriptStore, builtinScripts []llm.MockScript) {
-	// GET /api/mock/scripts — list all scripts
-	// POST /api/mock/scripts — create or update a script
+	// GET /api/mock/scripts —— 列出所有脚本
+	// POST /api/mock/scripts —— 创建或更新一个脚本
 	mux.HandleFunc("/api/mock/scripts", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -28,8 +27,8 @@ func RegisterMockRoutes(mux *http.ServeMux, store llm.MockScriptStore, builtinSc
 		}
 	})
 
-	// GET /api/mock/scripts/{id} — get a script
-	// DELETE /api/mock/scripts/{id} — delete a script
+	// GET /api/mock/scripts/{id} —— 获取一个脚本
+	// DELETE /api/mock/scripts/{id} —— 删除一个脚本
 	mux.HandleFunc("/api/mock/scripts/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 			http.Error(w, "GET, DELETE only", http.StatusMethodNotAllowed)
@@ -48,7 +47,7 @@ func RegisterMockRoutes(mux *http.ServeMux, store llm.MockScriptStore, builtinSc
 		}
 	})
 
-	// POST /api/mock/reset — clear store and reload built-in scripts
+	// POST /api/mock/reset —— 清空 store 并重新加载内置脚本
 	mux.HandleFunc("/api/mock/reset", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -58,7 +57,7 @@ func RegisterMockRoutes(mux *http.ServeMux, store llm.MockScriptStore, builtinSc
 	})
 }
 
-// listScripts returns all mock scripts in the store.
+// listScripts 返回 store 中的所有 mock 脚本。
 // GET /api/mock/scripts
 func listScripts(w http.ResponseWriter, _ *http.Request, store llm.MockScriptStore) {
 	scripts, err := store.List()
@@ -72,7 +71,7 @@ func listScripts(w http.ResponseWriter, _ *http.Request, store llm.MockScriptSto
 	respondJSON(w, http.StatusOK, map[string]any{"scripts": scripts})
 }
 
-// getScript returns a single mock script by ID.
+// getScript 按 ID 返回单个 mock 脚本。
 // GET /api/mock/scripts/{id}
 func getScript(w http.ResponseWriter, _ *http.Request, store llm.MockScriptStore, id string) {
 	script, err := store.Get(id)
@@ -83,8 +82,8 @@ func getScript(w http.ResponseWriter, _ *http.Request, store llm.MockScriptStore
 	respondJSON(w, http.StatusOK, map[string]any{"script": script})
 }
 
-// saveScript creates or updates a mock script. If the request body omits an ID,
-// a new UUID is generated and returned in the saved script.
+// saveScript 创建或更新一个 mock 脚本。若请求体未提供 ID，
+// 则生成一个新的 UUID 并在保存的脚本中返回。
 // POST /api/mock/scripts
 func saveScript(w http.ResponseWriter, r *http.Request, store llm.MockScriptStore) {
 	var script llm.MockScript
@@ -103,7 +102,7 @@ func saveScript(w http.ResponseWriter, r *http.Request, store llm.MockScriptStor
 	respondJSON(w, http.StatusOK, map[string]any{"script": saved})
 }
 
-// deleteScript removes a mock script from the store.
+// deleteScript 从 store 中移除一个 mock 脚本。
 // DELETE /api/mock/scripts/{id}
 func deleteScript(w http.ResponseWriter, _ *http.Request, store llm.MockScriptStore, id string) {
 	if err := store.Delete(id); err != nil {
@@ -113,7 +112,7 @@ func deleteScript(w http.ResponseWriter, _ *http.Request, store llm.MockScriptSt
 	respondJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
-// resetScripts clears the store and reloads the built-in scripts.
+// resetScripts 清空 store 并重新加载内置脚本。
 // POST /api/mock/reset
 func resetScripts(w http.ResponseWriter, _ *http.Request, store llm.MockScriptStore, builtinScripts []llm.MockScript) {
 	if err := store.LoadBuiltin(builtinScripts); err != nil {
@@ -123,7 +122,7 @@ func resetScripts(w http.ResponseWriter, _ *http.Request, store llm.MockScriptSt
 	respondJSON(w, http.StatusOK, map[string]any{"reset": true})
 }
 
-// respondJSON encodes v as JSON and writes it to w with the given status code.
+// respondJSON 把 v 编码为 JSON 并按给定 status code 写入 w。
 func respondJSON(w http.ResponseWriter, status int, v map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

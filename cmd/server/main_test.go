@@ -26,14 +26,14 @@ func TestIsAllowedScope(t *testing.T) {
 }
 
 func TestResolveAllowedTools(t *testing.T) {
-	// When request provides explicit tools, they win.
+	// 请求显式提供 tool 时，以请求为准。
 	reqTools := []string{"run_shell"}
 	got := resolveAllowedTools(reqTools, "any")
 	if len(got) != 1 || got[0] != "run_shell" {
 		t.Errorf("resolveAllowedTools explicit = %v, want [run_shell]", got)
 	}
 
-	// When request provides nothing and agentID is empty, result is nil.
+	// 请求未提供且 agentID 为空时，结果为 nil。
 	got = resolveAllowedTools(nil, "")
 	if len(got) != 0 {
 		t.Errorf("resolveAllowedTools(nil, \"\") = %v, want empty", got)
@@ -41,7 +41,7 @@ func TestResolveAllowedTools(t *testing.T) {
 }
 
 func TestEnrichAgentSpecAllowedTools(t *testing.T) {
-	// Spec with explicit AllowedTools is unchanged.
+	// 显式带 AllowedTools 的 spec 保持不变。
 	specs := []orchestrator.AgentSpec{
 		{AgentID: "explicit", AllowedTools: []string{"run_shell"}},
 	}
@@ -50,8 +50,7 @@ func TestEnrichAgentSpecAllowedTools(t *testing.T) {
 		t.Fatalf("explicit spec should be preserved")
 	}
 
-	// For an unknown agent with no tools, AllowedTools stays empty and
-	// contract is untouched.
+	// 对没有配置 tool 的未知 agent，AllowedTools 保持空，contract 也不被改动。
 	specs = []orchestrator.AgentSpec{
 		{AgentID: "unknown_agent", Input: "test"},
 	}

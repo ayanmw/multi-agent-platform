@@ -12,13 +12,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// toolCounter is used to generate unique names for dynamic tools that
-// don't provide an explicit name. It increments atomically to avoid
-// collisions across concurrent API requests.
+// toolCounter 用于为未显式提供 name 的动态 tool 生成唯一 name。
+// 它以原子方式自增，避免并发 API 请求间的冲突。
 var toolCounter uint64
 
-// handleRegisterTool handles POST /api/tools — register a new dynamic tool.
-// The tool is immediately available to agents after registration.
+// handleRegisterTool 处理 POST /api/tools —— 注册一个新的动态 tool。
+// 注册后该 tool 立即对 agent 可用。
 func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -30,12 +29,12 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		Description string         `json:"description"`
 		Parameters  map[string]any `json:"parameters"`
 		Type        string         `json:"type"`
-		// Shell-type fields
+		// Shell 类型字段
 		Command string `json:"command"`
-		// HTTP-type fields
+		// HTTP 类型字段
 		URL    string `json:"url"`
 		Method string `json:"method"`
-		// Inline-type fields
+		// Inline 类型字段
 		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -43,19 +42,19 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		return
 	}
 
-	// Validate tool type
+	// 校验 tool 类型
 	if req.Type != "shell" && req.Type != "http" && req.Type != "inline" {
 		http.Error(w, fmt.Sprintf("type must be 'shell', 'http', or 'inline', got: %s", req.Type), http.StatusBadRequest)
 		return
 	}
 
-	// Generate unique name if not provided
+	// 未提供 name 时生成唯一 name
 	if req.Name == "" {
 		counter := atomic.AddUint64(&toolCounter, 1)
 		req.Name = fmt.Sprintf("dynamic_tool_%03d", counter)
 	}
 
-	// Check for name collision
+	// 检查 name 冲突
 	for _, t := range toolRegistry.List() {
 		if t.Name() == req.Name {
 			http.Error(w, fmt.Sprintf("tool with name '%s' already exists", req.Name), http.StatusConflict)
@@ -63,7 +62,7 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		}
 	}
 
-	// Validate type-specific fields
+	// 校验类型相关字段
 	switch req.Type {
 	case "shell":
 		if req.Command == "" {
@@ -85,12 +84,12 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		}
 	}
 
-	// Default description if not provided
+	// 未提供 description 时使用默认值
 	if req.Description == "" {
 		req.Description = fmt.Sprintf("Dynamic tool: %s (%s)", req.Name, req.Type)
 	}
 
-	// Default parameters schema if not provided
+	// 未提供 parameters schema 时使用默认值
 	if req.Parameters == nil {
 		req.Parameters = map[string]any{
 			"type":       "object",
@@ -98,7 +97,7 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		}
 	}
 
-	// Create and configure the DynamicTool
+	// 创建并配置 DynamicTool
 	dt := tool.NewDynamicTool(req.Name, req.Description, req.Parameters, tool.DynamicToolType(req.Type))
 	switch req.Type {
 	case "shell":
@@ -109,18 +108,18 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		dt.SetCode(req.Code)
 	}
 
-	// Register in the global tool registry (immediately available to agents)
+	// 注册到全局 tool registry（立即对 agent 可用）
 	toolRegistry.Register(dt)
 
-	// Persist to the tools table in SQLite
+	// 持久化到 SQLite 的 tools 表
 	if err := db.InsertTool(req.Name, req.Description, req.Parameters, true); err != nil {
-		// Rollback registration on persistence failure
+		// 持久化失败时回滚注册
 		toolRegistry.Unregister(req.Name)
 		http.Error(w, fmt.Sprintf("failed to persist tool: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Phase 7-C: audit log dynamic tool registration.
+	// Phase 7-C: 审计日志记录动态 tool 注册。
 	observability.DefaultAuditor.Record(observability.AuditRecord{
 		Actor:  currentActor(r),
 		Action: "register_tool",
@@ -136,7 +135,7 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		},
 	})
 
-	// Build response
+	// 构建响应
 	response := map[string]any{
 		"name":        dt.Name(),
 		"description": dt.Description(),
@@ -158,7 +157,7 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 	json.NewEncoder(w).Encode(response)
 }
 
-// currentActor extracts an actor identifier from the request Authorization header.
+// currentActor 从请求的 Authorization 头中提取 actor 标识。
 func currentActor(r *http.Request) string {
 	if r == nil {
 		return "system"
@@ -172,8 +171,8 @@ func currentActor(r *http.Request) string {
 	}
 	return "apikey:" + key
 }
-// (both built-in and dynamic). Each tool is returned with its metadata
-// and a "builtin" flag indicating whether it is a protected built-in tool.
+// （包括内置与动态 tool）。每个 tool 返回时附带其 metadata，
+// 以及一个 "builtin" 标志，指示它是否为受保护的内置 tool。
 func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -189,7 +188,7 @@ func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.
 			"parameters":  t.Parameters(),
 			"builtin":     toolRegistry.IsBuiltin(t.Name()),
 		}
-		// Include type-specific info for dynamic tools
+		// 对动态 tool 附带类型特定信息
 		if dt, ok := t.(*tool.DynamicTool); ok {
 			entry["type"] = string(dt.ToolType())
 			switch dt.ToolType() {
@@ -207,8 +206,8 @@ func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleDeleteTool handles DELETE /api/tools?name=xxx — unregister a dynamic tool.
-// Built-in tools (run_shell, write_file, read_file) are protected and cannot be deleted.
+// handleDeleteTool 处理 DELETE /api/tools?name=xxx —— 注销一个动态 tool。
+// 内置 tool（run_shell、write_file、read_file）受保护，不能删除。
 func handleDeleteTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "DELETE only", http.StatusMethodNotAllowed)
@@ -221,25 +220,25 @@ func handleDeleteTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool
 		return
 	}
 
-	// Protect built-in tools from deletion
+	// 保护内置 tool 不被删除
 	if toolRegistry.IsBuiltin(name) {
 		http.Error(w, fmt.Sprintf("cannot delete built-in tool: %s", name), http.StatusForbidden)
 		return
 	}
 
-	// Unregister from the global tool registry
+	// 从全局 tool registry 中注销
 	if err := toolRegistry.Unregister(name); err != nil {
 		http.Error(w, fmt.Sprintf("tool not found: %s", name), http.StatusNotFound)
 		return
 	}
 
-	// Remove from SQLite tools table
+	// 从 SQLite tools 表中删除
 	if err := db.DeleteTool(name); err != nil {
 		http.Error(w, fmt.Sprintf("failed to delete tool from database: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Phase 7-C: audit log dynamic tool unregistration.
+	// Phase 7-C: 审计日志记录动态 tool 注销。
 	observability.DefaultAuditor.Record(observability.AuditRecord{
 		Actor:  currentActor(r),
 		Action: "delete_tool",

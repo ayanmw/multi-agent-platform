@@ -9,14 +9,14 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 )
 
-// registerMCPRoutes wires the MCP management API endpoints into mux.
+// registerMCPRoutes 把 MCP 管理 API endpoint 挂载到 mux。
 //
-// Endpoints:
-//   GET    /api/mcp/servers              — list managed servers and load status
-//   POST   /api/mcp/servers              — add a dynamic server
-//   POST   /api/mcp/servers/:id/enable   — enable and connect a server
-//   POST   /api/mcp/servers/:id/disable  — disconnect and disable a server
-//   DELETE /api/mcp/servers/:id          — remove a dynamic server
+// Endpoints：
+//   GET    /api/mcp/servers              — 列出受管理的 server 及加载状态
+//   POST   /api/mcp/servers              — 添加一个动态 server
+//   POST   /api/mcp/servers/:id/enable   — 启用并连接某个 server
+//   POST   /api/mcp/servers/:id/disable  — 断开并禁用某个 server
+//   DELETE /api/mcp/servers/:id          — 移除一个动态 server
 func registerMCPRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 	registerMCPServerRoutes(mux, mgr)
 	registerMCPMarketRoutes(mux, mgr)
@@ -41,7 +41,7 @@ func registerMCPServerRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 		}
 		id := path
 
-		// POST /api/mcp/servers/:id/enable or /disable
+		// POST /api/mcp/servers/:id/enable 或 /disable
 		if r.Method == http.MethodPost {
 			if suffix, ok := strings.CutSuffix(path, "/enable"); ok {
 				handleEnableMCPServer(w, r, mgr, suffix)
@@ -63,7 +63,7 @@ func registerMCPServerRoutes(mux *http.ServeMux, mgr *mcp.Manager) {
 	})
 }
 
-// handleListMCPServers returns all configured MCP servers with runtime load status.
+// handleListMCPServers 返回所有已配置 MCP server 及运行时加载状态。
 func handleListMCPServers(w http.ResponseWriter, _ *http.Request, mgr *mcp.Manager) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -71,7 +71,7 @@ func handleListMCPServers(w http.ResponseWriter, _ *http.Request, mgr *mcp.Manag
 	})
 }
 
-// handleCreateMCPServer adds a dynamic MCP server, persists it, and connects if enabled.
+// handleCreateMCPServer 添加一个动态 MCP server，持久化它，并在启用时建立连接。
 func handleCreateMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager) {
 	var req struct {
 		ID      string           `json:"id"`
@@ -122,7 +122,7 @@ func handleCreateMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Mana
 	})
 }
 
-// handleEnableMCPServer enables and connects a managed MCP server.
+// handleEnableMCPServer 启用并连接一个受管理的 MCP server。
 func handleEnableMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager, id string) {
 	if err := mgr.EnableServer(r.Context(), id); err != nil {
 		status := http.StatusInternalServerError
@@ -139,7 +139,7 @@ func handleEnableMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Mana
 	})
 }
 
-// handleDisableMCPServer disconnects and disables a managed MCP server.
+// handleDisableMCPServer 断开并禁用一个受管理的 MCP server。
 func handleDisableMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager, id string) {
 	if err := mgr.DisableServer(r.Context(), id); err != nil {
 		status := http.StatusInternalServerError
@@ -156,7 +156,7 @@ func handleDisableMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Man
 	})
 }
 
-// handleDeleteMCPServer removes a managed MCP server.
+// handleDeleteMCPServer 移除一个受管理的 MCP server。
 func handleDeleteMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Manager, id string) {
 	if err := mgr.RemoveServer(r.Context(), id); err != nil {
 		status := http.StatusInternalServerError
@@ -175,8 +175,8 @@ func handleDeleteMCPServer(w http.ResponseWriter, r *http.Request, mgr *mcp.Mana
 	})
 }
 
-// writeJSONError is duplicated from internal/auth/auth_http.go so the auth package
-// does not need to export helpers. It writes a JSON error with the given status code.
+// writeJSONError 复制自 internal/auth/auth_http.go，避免 auth 包需要导出
+// 该 helper。它用给定的 status code 写入一条 JSON 错误。
 func writeJSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
