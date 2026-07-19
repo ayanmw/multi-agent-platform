@@ -78,6 +78,7 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 		LLMModel:   "deepseek-v4-flash",
 		LLMUseMock: true,
 	}
+	cfg.LoadContractLimits()
 
 	// 注册 builtins + skill 管理工具，与 main.go 启动流程保持一致。
 	toolRegistry := tool.NewRegistry()

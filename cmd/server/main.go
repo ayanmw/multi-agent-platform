@@ -897,6 +897,15 @@ func main() {
 				if req.SystemPrompt == "" {
 					req.SystemPrompt = c.SystemPrompt
 				}
+				// Case's contract carries its own MaxSteps/TimeoutSeconds defaults.
+				// If the client does not override them, inherit from the case so the
+				// validation below does not reject a valid case-based request.
+				if req.MaxSteps <= 0 {
+					req.MaxSteps = c.Contract.MaxSteps
+				}
+				if req.TimeoutSeconds <= 0 {
+					req.TimeoutSeconds = c.Contract.TimeoutSeconds
+				}
 			}
 		}
 
@@ -907,8 +916,8 @@ func main() {
 		}
 
 		if req.MaxSteps < 1 {
-			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
-			return
+			// No explicit max_steps and no case context — fall back to the server default.
+			req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
 		}
 		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
 			req.MaxSteps = cfg.ContractLimits.MaxSteps
@@ -1026,6 +1035,14 @@ func main() {
 					// Use case's system prompt if none provided in request
 					if req.SystemPrompt == "" {
 						req.SystemPrompt = c.SystemPrompt
+					}
+					// Inherit case-level step/timeout defaults when client does not override,
+					// otherwise the mandatory positive-step check below rejects case runs.
+					if req.MaxSteps <= 0 {
+						req.MaxSteps = c.Contract.MaxSteps
+					}
+					if req.TimeoutSeconds <= 0 {
+						req.TimeoutSeconds = c.Contract.TimeoutSeconds
 					}
 				}
 			}
@@ -1433,8 +1450,8 @@ func main() {
 			return
 		}
 		if req.MaxSteps < 1 {
-			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
-			return
+			// No explicit max_steps — fall back to the server default for multi-agent requests.
+			req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
 		}
 		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
 			req.MaxSteps = cfg.ContractLimits.MaxSteps

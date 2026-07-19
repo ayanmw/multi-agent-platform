@@ -1772,8 +1772,10 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		return
 	}
 	if req.MaxSteps < 1 {
-		http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
-		return
+		// No explicit max_steps and no case context — fall back to the server default
+		// so plain chat requests remain usable without requiring the client to always
+		// provide a positive value.
+		req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
 	}
 	if req.MaxSteps > cfg.ContractLimits.MaxSteps {
 		req.MaxSteps = cfg.ContractLimits.MaxSteps
@@ -2078,6 +2080,14 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 			}
 			if req.SystemPrompt == "" {
 				req.SystemPrompt = c.SystemPrompt
+			}
+			// Inherit case-level step/timeout defaults when client does not override,
+			// otherwise a request without explicit max_steps will fail validation.
+			if req.MaxSteps <= 0 {
+				req.MaxSteps = c.Contract.MaxSteps
+			}
+			if req.TimeoutSeconds <= 0 {
+				req.TimeoutSeconds = c.Contract.TimeoutSeconds
 			}
 		}
 	}
