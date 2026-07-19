@@ -8,48 +8,44 @@ import (
 	"sync"
 )
 
-// Tool represents a callable tool that agents can use. Every tool belongs to an
-// optional namespace and carries a set of tags for discovery and filtering.
-// The registry keys tools by their FullName (namespace/name or just name when
-// namespace is empty).
+// Tool 表示 agent 可调用的工具。每个工具属于一个可选的 namespace，
+// 并携带一组用于发现与过滤的 tags。Registry 以工具的 FullName
+// （namespace/name，或 namespace 为空时仅 name）为键存储工具。
 type Tool interface {
-	// Namespace returns the tool's namespace. Empty means the tool lives in the
-	// global namespace and its FullName equals its Name.
+	// Namespace 返回工具的 namespace。空表示工具位于全局 namespace，
+	// 其 FullName 等于 Name。
 	Namespace() string
-	// Name returns the tool's short identifier, unique within its namespace.
+	// Name 返回工具的短标识符，在其 namespace 内唯一。
 	Name() string
-	// FullName returns the fully-qualified identifier used by the Registry:
-	// "namespace/name" when namespace is non-empty, otherwise "name".
+	// FullName 返回 Registry 使用的完全限定标识符：
+	// namespace 非空时为 "namespace/name"，否则为 "name"。
 	FullName() string
-	// Aliases returns alternative names that should resolve to this tool. Aliases
-	// share the same namespace as the primary FullName and are added to the
-	// registry so searches can find the tool under common synonyms (e.g.
-	// "web_fetch" for "core/fetch_url").
+	// Aliases 返回应解析到该工具的别名。别名与主 FullName 共享同一
+	// namespace，并会被加入 registry，使搜索可以按常见同义词找到工具
+	// （例如用 "web_fetch" 指代 "core/fetch_url"）。
 	Aliases() []string
-	// Description returns a human-readable explanation of what the tool does.
+	// Description 返回工具用途的人类可读说明。
 	Description() string
-	// Parameters returns a JSON Schema describing the expected input shape.
+	// Parameters 返回描述输入形状的 JSON Schema。
 	Parameters() map[string]any
-	// Tags returns a list of labels used for categorization and filtering.
+	// Tags 返回用于分类与过滤的标签列表。
 	Tags() []string
-	// Execute runs the tool with the given input map and returns the result.
+	// Execute 使用给定输入 map 运行工具并返回结果。
 	Execute(input map[string]any) (any, error)
 }
 
-// Registry manages available tools. It is safe for concurrent use by multiple
-// goroutines. Built-in tools cannot be unregistered at the Registry level;
-// callers can use IsBuiltin to check before attempting Unregister.
+// Registry 管理可用工具。可被多个 goroutine 并发安全使用。
+// 内置工具不能在 Registry 层面反注册；调用方可通过 IsBuiltin 先行检查，
+// 再决定是否调用 Unregister。
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
-	// order preserves registration order so List() returns a deterministic
-	// sequence. The slice is append-only; re-registration of an existing tool
-	// keeps its original position to keep tool indices stable across multiple
-	// registration calls.
+	// order 保留注册顺序，使 List() 返回确定性的序列。该 slice 仅追加；
+	// 重复注册同一工具会保留其原始位置，以保证多次注册调用间工具索引稳定。
 	order []string
 }
 
-// NewRegistry creates an empty Registry with no registered tools.
+// NewRegistry 创建一个不含任何工具的空 Registry。
 func NewRegistry() *Registry {
 	return &Registry{
 		tools: make(map[string]Tool),
@@ -57,16 +53,15 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register adds a tool to the registry. If another tool with the same FullName
-// is already present, it is silently overwritten. Any Aliases defined by the
-// tool are also registered and point to the same Tool instance.
+// Register 将工具加入 registry。若已存在同 FullName 的工具，将被静默覆盖。
+// 工具定义的任何 Aliases 也会被注册并指向同一 Tool 实例。
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.registerLocked(tool)
 }
 
-// registerLocked registers a tool and its aliases under the registry lock.
+// registerLocked 在持有 registry 锁的情况下注册工具及其别名。
 func (r *Registry) registerLocked(tool Tool) {
 	name := tool.FullName()
 	if _, exists := r.tools[name]; !exists {
@@ -88,7 +83,7 @@ func (r *Registry) registerLocked(tool Tool) {
 	}
 }
 
-// Execute runs the tool identified by its FullName with the provided input.
+// Execute 以工具的 FullName 标识并使用所提供的输入运行该工具。
 func (r *Registry) Execute(name string, input map[string]any) (any, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
@@ -99,19 +94,18 @@ func (r *Registry) Execute(name string, input map[string]any) (any, error) {
 	return tool.Execute(input)
 }
 
-// List returns a snapshot of all registered tools, optionally including aliases.
-// The returned slice is a copy and is safe to iterate without holding the
-// registry lock. When includeAliases is false (default for LLM tool definitions),
-// aliases are omitted so duplicate function definitions are not sent to the
-// model. When true, callers receive every registered entry including aliases.
+// List 返回所有已注册工具的快照（不含别名）。返回的 slice 是副本，
+// 可在不持有 registry 锁的情况下安全迭代。当 includeAliases 为 false
+// （LLM 工具定义的默认行为）时，别名会被省略，避免向模型发送重复的
+// 函数定义。当为 true 时，调用方会收到包含别名在内的全部注册条目。
 func (r *Registry) List() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	list := make([]Tool, 0, len(r.tools))
 	seen := make(map[Tool]struct{})
-	// Iterate in registration order for deterministic tool definitions sent to
-	// the LLM. Map iteration order is intentionally randomized in Go, so we
-	// must use the order slice rather than ranging over r.tools.
+	// 按注册顺序迭代，以保证发给 LLM 的工具定义具有确定性。
+	// Go 中 map 的迭代顺序刻意被随机化，因此必须使用 order slice，
+	// 而不能直接对 r.tools 进行 range。
 	for _, name := range r.order {
 		if tool, ok := r.tools[name]; ok {
 			if _, exists := seen[tool]; !exists {
@@ -123,8 +117,8 @@ func (r *Registry) List() []Tool {
 	return list
 }
 
-// ListAll returns all registered tool entries including aliases. This is useful
-// for discovery APIs where users may search by alias.
+// ListAll 返回所有已注册工具条目，包含别名。适用于用户可能按别名搜索的
+// 发现 API。
 func (r *Registry) ListAll() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -137,10 +131,10 @@ func (r *Registry) ListAll() []Tool {
 	return list
 }
 
-// Unregister removes a tool from the registry by its FullName.
-// Returns an error if the tool is not found, or if the tool is built-in
-// (built-in tools cannot be removed via the Registry; use IsBuiltin to check).
-// Note: unregistering a primary name also removes all aliases that point to it.
+// Unregister 按 FullName 从 registry 中移除工具。
+// 若工具未找到则返回错误；若为内置工具也返回错误（内置工具不能通过
+// Registry 移除，可使用 IsBuiltin 先行检查）。
+// 注意：反注册主名称也会一并移除指向它的所有别名。
 func (r *Registry) Unregister(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -151,7 +145,7 @@ func (r *Registry) Unregister(name string) error {
 	if !ok {
 		return fmt.Errorf("tool not found: %s", name)
 	}
-	// Remove primary name and all registered aliases pointing to this tool.
+	// 移除主名称及所有指向该工具的已注册别名。
 	delete(r.tools, name)
 	for _, alias := range tool.Aliases() {
 		fullAlias := alias
@@ -160,13 +154,12 @@ func (r *Registry) Unregister(name string) error {
 		}
 		delete(r.tools, fullAlias)
 	}
-	// Keep order slice as-is: stale names are ignored by List().
+	// order slice 保持不变：过期的名称会被 List() 忽略。
 	return nil
 }
 
-// IsBuiltin returns true if the given tool name is one of the built-in tools
-// (run_shell, write_file, read_file). Built-in tools cannot be deleted via the
-// dynamic tool registration API.
+// IsBuiltin 当给定工具名是内置工具之一（run_shell、write_file、read_file）
+// 时返回 true。内置工具不能通过动态工具注册 API 删除。
 func (r *Registry) IsBuiltin(name string) bool {
 	switch name {
 	case "run_shell", "write_file", "read_file":
@@ -175,8 +168,8 @@ func (r *Registry) IsBuiltin(name string) bool {
 	return false
 }
 
-// ToJSON serializes every registered tool into a JSON array. Each entry contains
-// the tool's namespace, name, full name, description, parameters, and tags.
+// ToJSON 将每个已注册工具序列化为 JSON 数组。每个条目包含工具的
+// namespace、name、full name、description、parameters 与 tags。
 func (r *Registry) ToJSON() ([]byte, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -196,9 +189,9 @@ func (r *Registry) ToJSON() ([]byte, error) {
 	return json.Marshal(schema)
 }
 
-// ToolTags returns the tags for the tool registered under the given name,
-// or nil if no such tool exists. This is used by the Harness TagPolicyRule to
-// enforce TaskContract permissions without importing the concrete BuiltinTool type.
+// ToolTags 返回以给定名称注册的工具的 tags；若工具不存在则返回 nil。
+// Harness 的 TagPolicyRule 用它来强制 TaskContract 权限，而无需引入
+// 具体的 BuiltinTool 类型。
 func (r *Registry) ToolTags(name string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -209,9 +202,8 @@ func (r *Registry) ToolTags(name string) []string {
 	return tool.Tags()
 }
 
-// ToolMetadata returns the namespace, description, and tags for the tool
-// registered under the given name. It is used by the Engine to emit
-// authoritative tool metadata in tool_call_started and approval events.
+// ToolMetadata 返回以给定名称注册的工具的 namespace、description 与 tags。
+// Engine 用它在 tool_call_started 与 approval 事件中发出权威的工具元数据。
 func (r *Registry) ToolMetadata(name string) (namespace, description string, tags []string, ok bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -222,7 +214,7 @@ func (r *Registry) ToolMetadata(name string) (namespace, description string, tag
 	return tool.Namespace(), tool.Description(), tool.Tags(), true
 }
 
-// Names returns the short Name() values for the provided tools, preserving order.
+// Names 返回所提供工具的短 Name() 值，保留原顺序。
 func Names(tools []Tool) []string {
 	out := make([]string, 0, len(tools))
 	for _, t := range tools {
@@ -231,7 +223,7 @@ func Names(tools []Tool) []string {
 	return out
 }
 
-// FilterByTag returns the subset of tools whose Tags() contain the given tag.
+// FilterByTag 返回 Tags() 包含给定 tag 的工具子集。
 func FilterByTag(tools []Tool, tag string) []Tool {
 	out := make([]Tool, 0)
 	for _, t := range tools {

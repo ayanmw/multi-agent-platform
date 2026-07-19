@@ -7,24 +7,23 @@ import (
 	"time"
 )
 
-// ProgramRunner abstracts how execute_program runs code. Implementations can
-// execute locally (the default for backward compatibility) or inside a sandbox
-// such as Docker. The abstraction lets Phase 5 introduce sandboxing without
-// rewriting the executor.
+// ProgramRunner 抽象了 execute_program 运行代码的方式。实现可以在本地执行
+// （为向后兼容的默认行为）或在 sandbox（如 Docker）中执行。该抽象使
+// Phase 5 可以在不重写 executor 的情况下引入 sandbox。
 type ProgramRunner interface {
-	// Run executes the given program source code with a timeout. It returns
-	// stdout combined with stderr, the exit code, and any execution error.
+	// Run 以给定超时执行源代码，返回 stdout 与 stderr 合并的输出、
+	// exit code 以及可能的执行错误。
 	Run(ctx context.Context, language, code string, timeout time.Duration) (output string, exitCode int, err error)
 }
 
-// LocalRunner executes code in a supported interpreter on the host machine.
-// It is the default runner and matches the pre-sandbox behavior.
+// LocalRunner 在宿主机器上以受支持的解释器执行代码。它是默认 runner，
+// 与引入 sandbox 之前的行为保持一致。
 type LocalRunner struct{}
 
-// NewLocalRunner creates a LocalRunner.
+// NewLocalRunner 创建一个 LocalRunner。
 func NewLocalRunner() *LocalRunner { return &LocalRunner{} }
 
-// Run executes the code locally using python, node, or bash.
+// Run 在本地使用 python、node 或 bash 执行代码。
 func (r *LocalRunner) Run(ctx context.Context, language, code string, timeout time.Duration) (string, int, error) {
 	var cmdArgs []string
 	switch language {
@@ -62,21 +61,19 @@ func (r *LocalRunner) Run(ctx context.Context, language, code string, timeout ti
 	return string(out), exitCode, err
 }
 
-// DockerRunner executes code inside a short-lived Docker container.
-// It disables network access and mounts the filesystem read-only by default.
-// Only python, node, and bash are supported via their respective official images.
+// DockerRunner 在短生命周期的 Docker 容器内执行代码。默认禁用网络访问，
+// 并以只读方式挂载文件系统。仅支持 python、node 与 bash，分别使用其官方镜像。
 type DockerRunner struct {
 	Image string
 }
 
-// NewDockerRunner creates a DockerRunner with the given image.
+// NewDockerRunner 以给定镜像创建一个 DockerRunner。
 func NewDockerRunner(image string) *DockerRunner {
 	return &DockerRunner{Image: image}
 }
 
-// Run executes the code inside a Docker container using the interpreter image
-// selected by language. The container is run with --rm -i --network none
-// and a read-only root filesystem.
+// Run 在 Docker 容器内执行代码，容器使用按 language 选择的解释器镜像。
+// 容器以 --rm -i --network none 与只读根文件系统运行。
 func (r *DockerRunner) Run(ctx context.Context, language, code string, timeout time.Duration) (string, int, error) {
 	image := r.imageFor(language)
 	if image == "" {
@@ -135,17 +132,16 @@ func (r *DockerRunner) interpreterFor(language string) string {
 	}
 }
 
-// defaultRunner is the package-level ProgramRunner used by execute_program.
-// It defaults to local execution and may be replaced at startup when sandbox is
-// enabled.
+// defaultRunner 是 execute_program 使用的包级 ProgramRunner。默认为本地
+// 执行，可在启动时启用 sandbox 时被替换。
 var defaultRunner ProgramRunner = NewLocalRunner()
 
-// SetDefaultRunner replaces the runner used by execute_program.
+// SetDefaultRunner 替换 execute_program 使用的 runner。
 func SetDefaultRunner(runner ProgramRunner) {
 	defaultRunner = runner
 }
 
-// GetDefaultRunner returns the currently configured ProgramRunner.
+// GetDefaultRunner 返回当前配置的 ProgramRunner。
 func GetDefaultRunner() ProgramRunner {
 	return defaultRunner
 }

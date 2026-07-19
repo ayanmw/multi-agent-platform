@@ -13,24 +13,23 @@ import (
 	"time"
 )
 
-// WebSearchConfig tells NewWebSearchTool how to reach the search providers.
-// A zero value enables the DuckDuckGo fallback (no API key). When DisableDDG
-// is true and no other provider is configured, the executor returns a friendly
-// "not configured" status.
+// WebSearchConfig 告知 NewWebSearchTool 如何连接各搜索 provider。
+// 零值会启用 DuckDuckGo 回退（无需 API key）。当 DisableDDG 为 true 且
+// 没有配置其他 provider 时，executor 返回友好的 "not configured" 状态。
 //
-// Provider identifiers (use with WEBSEARCH_PROVIDER):
+// Provider 标识符（配合 WEBSEARCH_PROVIDER 使用）：
 //   "exa", "parallel", "bing", "google", "tavily", "brave",
 //   "kimi_search", "glm_search", "duckduckgo"
 //
-// Provider priority when WEBSEARCH_PROVIDER is empty:
+// WEBSEARCH_PROVIDER 为空时的 provider 优先级：
 //   brave -> bing -> google -> tavily -> parallel -> exa -> duckduckgo
 //
-// All providers except DuckDuckGo default to off; enable them via WEBSEARCH_ENABLE_*
-// and provide the corresponding API key / credentials.
+// 除 DuckDuckGo 外的所有 provider 默认关闭；通过 WEBSEARCH_ENABLE_* 启用
+// 并提供对应的 API key / 凭证。
 type WebSearchConfig struct {
-	Provider string // explicit override; empty means auto-select
+	Provider string // 显式覆盖；空表示自动选择
 
-	// MCP providers
+	// MCP provider
 	EnableExa      bool
 	EnableParallel bool
 	ExaAPIKey      string
@@ -44,14 +43,14 @@ type WebSearchConfig struct {
 	// Google Custom Search JSON API
 	EnableGoogle   bool
 	GoogleAPIKey   string
-	GoogleCX       string // search engine ID
+	GoogleCX       string // 搜索引擎 ID
 	GoogleEndpoint string
 
-	// Tavily Search API (developer-friendly, LLM-ready results)
+	// Tavily Search API（对开发者友好、LLM-ready 的结果）
 	EnableTavily        bool
 	TavilyAPIKey        string
 	TavilyEndpoint      string
-	TavilySearchDepth   string // "basic" or "advanced"
+	TavilySearchDepth   string // "basic" 或 "advanced"
 	TavilyIncludeAnswer bool
 
 	// Brave Search API
@@ -59,42 +58,42 @@ type WebSearchConfig struct {
 	BraveAPIKey   string
 	BraveEndpoint string
 
-	// Placeholder providers (public endpoints not yet known)
+	// 占位 provider（公开端点尚未知）
 	EnableKimiSearch bool
 	EnableGlmSearch  bool
 
-	// DisableDDG turns off the DuckDuckGo fallback. Useful in environments where
-	// external search must be disabled or only allowed via configured providers.
+	// DisableDDG 关闭 DuckDuckGo 回退。适用于必须禁用外部搜索、
+	// 或仅允许通过已配置 provider 进行搜索的环境。
 	DisableDDG bool
 
-	// HTTPClient is used for provider requests. nil uses http.DefaultClient.
+	// HTTPClient 用于 provider 请求。nil 表示使用 http.DefaultClient。
 	HTTPClient *http.Client
 
-	// UserAgent sent to providers. Defaults to "multi-agent-platform/0.1.0".
+	// 发送给 provider 的 UserAgent。默认为 "multi-agent-platform/0.1.0"。
 	UserAgent string
 
-	// Timeout for a single provider call. Defaults to 25s.
+	// 单次 provider 调用的超时。默认 25s。
 	Timeout time.Duration
 }
 
-// NewWebSearchTool creates a web search tool named "core/web_search".
+// NewWebSearchTool 创建名为 "core/web_search" 的 web 搜索工具。
 //
-// Parameters:
-//   - query                (string, required): Search query.
-//   - num_results          (integer, optional): Number of results (1-30 for API/
-//     MCP providers, 1-20 for DuckDuckGo; default 8).
-//   - livecrawl            (string,  optional): "fallback" or "preferred" (default
-//     "fallback"). Only used by Exa.
-//   - search_type          (string,  optional): "auto", "fast", or "deep" (default
-//     "auto"). Only used by Exa.
-//   - context_max_chars    (integer, optional): Max context chars per result
-//     (default 10000). Only used by Exa.
-//   - session_context_id   (string,  optional): Stable ID reserved for future use.
+// 参数：
+//   - query                (string, required)：搜索查询。
+//   - num_results          (integer, optional)：结果数量（API/MCP provider
+//     为 1-30，DuckDuckGo 为 1-20；默认 8）。
+//   - livecrawl            (string,  optional)："fallback" 或 "preferred"
+//     （默认 "fallback"）。仅 Exa 使用。
+//   - search_type          (string,  optional)："auto"、"fast" 或 "deep"
+//     （默认 "auto"）。仅 Exa 使用。
+//   - context_max_chars    (integer, optional)：每条结果的最大上下文字符数
+//     （默认 10000）。仅 Exa 使用。
+//   - session_context_id   (string,  optional)：为未来使用预留的稳定 ID。
 //
-// Provider selection:
-//   1. If WEBSEARCH_PROVIDER is set, that provider is used (if configured).
-//   2. Otherwise auto-select the first configured provider in priority order.
-//   3. If nothing is configured, fall back to DuckDuckGo (unless disabled).
+// Provider 选择：
+//  1. 若设置了 WEBSEARCH_PROVIDER，则使用该 provider（前提是已配置）。
+//  2. 否则按优先级顺序自动选择第一个已配置的 provider。
+//  3. 若都未配置，则回退到 DuckDuckGo（除非被禁用）。
 func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 25 * time.Second
@@ -158,19 +157,18 @@ func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 	).WithTags("network", "websearch")
 }
 
-// webSearchExecutor dispatches to the selected provider and returns the
-// provider name plus the search result text.
+// webSearchExecutor 分派到所选的 provider，返回 provider 名称与搜索结果文本。
 //
-// When no API provider is configured, the executor automatically falls back to
-// DuckDuckGo HTML/lite search, which requires no API key. If a configured
-// provider fails, DuckDuckGo is used as a last resort (unless disabled).
+// 当未配置任何 API provider 时，executor 自动回退到无需 API key 的
+// DuckDuckGo HTML/lite 搜索。若已配置的 provider 失败，则把 DuckDuckGo
+// 作为最后手段使用（除非被禁用）。
 func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 	query := getString(input, "query", "")
 	if query == "" {
 		return nil, fmt.Errorf("query required")
 	}
 
-	// Normalize optional parameters with sane defaults.
+	// 用合理的默认值规整可选参数。
 	numResults := clampInt(getInt(input, "num_results", 8), 1, 30)
 	livecrawl := getString(input, "livecrawl", "fallback")
 	if livecrawl != "fallback" && livecrawl != "preferred" {
@@ -185,14 +183,14 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 		contextMaxChars = 10000
 	}
 	sessionID := getString(input, "session_context_id", "")
-	_ = sessionID // reserved for future stable provider pinning; currently unused
+	_ = sessionID // 为未来稳定 provider 绑定预留；当前未使用
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
 	provider := selectWebSearchProvider(cfg)
 
-	// If nothing is configured and DuckDuckGo is disabled, return early.
+	// 若都未配置且 DuckDuckGo 被禁用，则提前返回。
 	if provider == "" && cfg.DisableDDG {
 		return map[string]any{
 			"status":  "not_configured",
@@ -204,7 +202,7 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 	var text string
 	var err error
 	if provider == "" {
-		// No API provider configured — go straight to DuckDuckGo.
+		// 未配置任何 API provider —— 直接走 DuckDuckGo。
 		text, err = callDuckDuckGo(ctx, cfg, query, numResults)
 		provider = "duckduckgo"
 	} else {
@@ -234,8 +232,8 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 		}
 	}
 
-	// If the chosen provider failed, try DuckDuckGo as a robust fallback
-	// when the fallback is not disabled and the provider was a real API.
+	// 若所选 provider 失败，且回退未被禁用、该 provider 是真实 API 时，
+	// 尝试用 DuckDuckGo 作为稳健的回退。
 	if err != nil && provider != "duckduckgo" && !cfg.DisableDDG && !isPlaceholderProvider(provider) {
 		dgText, dgErr := callDuckDuckGo(ctx, cfg, query, numResults)
 		if dgErr == nil {
@@ -259,9 +257,9 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 	}, nil
 }
 
-// selectWebSearchProvider picks a configured provider deterministically.
-// Priority order: brave -> bing -> google -> tavily -> parallel -> exa.
-// When no provider is configured, it returns "" so the caller uses DuckDuckGo.
+// selectWebSearchProvider 以确定性方式挑选已配置的 provider。
+// 优先级顺序：brave -> bing -> google -> tavily -> parallel -> exa。
+// 当没有任何 provider 被配置时返回 ""，使调用方转而使用 DuckDuckGo。
 func selectWebSearchProvider(cfg WebSearchConfig) string {
 	if cfg.Provider != "" {
 		return cfg.Provider
@@ -287,7 +285,7 @@ func selectWebSearchProvider(cfg WebSearchConfig) string {
 	return ""
 }
 
-// isPlaceholderProvider reports providers that have no public API endpoint yet.
+// isPlaceholderProvider 报告哪些 provider 尚未有公开 API 端点。
 func isPlaceholderProvider(provider string) bool {
 	switch provider {
 	case "kimi_search", "glm_search":
@@ -296,7 +294,7 @@ func isPlaceholderProvider(provider string) bool {
 	return false
 }
 
-// clampInt bounds v to [min, max].
+// clampInt 将 v 限制在 [min, max] 区间内。
 func clampInt(v, min, max int) int {
 	if v < min {
 		return min
@@ -307,16 +305,14 @@ func clampInt(v, min, max int) int {
 	return v
 }
 
-// searchResult is a provider-agnostic search result used by the unified
-// formatter.
+// searchResult 是与 provider 无关的搜索结果，供统一格式化器使用。
 type searchResult struct {
 	Title string
 	URL   string
 	Desc  string
 }
 
-// formatSearchResults converts parsed results into a concise text summary
-// suitable for inclusion in an LLM context.
+// formatSearchResults 将解析后的结果转换为适合放入 LLM 上下文的简洁文本摘要。
 func formatSearchResults(results []searchResult) string {
 	if len(results) == 0 {
 		return ""
@@ -335,7 +331,7 @@ func formatSearchResults(results []searchResult) string {
 
 const exaURL = "https://mcp.exa.ai/mcp"
 
-// exaSearchArgs mirrors the Exa web_search_exa tool arguments.
+// exaSearchArgs 与 Exa 的 web_search_exa 工具参数对应。
 type exaSearchArgs struct {
 	Query                string `json:"query"`
 	Type                 string `json:"type"`
@@ -358,7 +354,7 @@ func callExa(ctx context.Context, cfg WebSearchConfig, args exaSearchArgs) (stri
 
 const parallelURL = "https://search.parallel.ai/mcp"
 
-// parallelSearchArgs mirrors the Parallel web_search tool arguments.
+// parallelSearchArgs 与 Parallel 的 web_search 工具参数对应。
 type parallelSearchArgs struct {
 	Objective     string   `json:"objective"`
 	SearchQueries []string `json:"search_queries"`
@@ -383,7 +379,7 @@ func callParallel(ctx context.Context, cfg WebSearchConfig, query string) (strin
 // Bing Web Search API provider
 // ---------------------------------------------------------------------------
 
-// bingResponse is the subset of the Bing Web Search API v7 response we need.
+// bingResponse 是 Bing Web Search API v7 响应中我们需要的子集。
 type bingResponse struct {
 	WebPages struct {
 		Value []struct {
@@ -435,7 +431,7 @@ func callBing(ctx context.Context, cfg WebSearchConfig, query string, numResults
 // Google Custom Search JSON API provider
 // ---------------------------------------------------------------------------
 
-// googleResponse is the subset of the Google Custom Search JSON API response.
+// googleResponse 是 Google Custom Search JSON API 响应的子集。
 type googleResponse struct {
 	Items []struct {
 		Title   string `json:"title"`
@@ -483,7 +479,7 @@ func callGoogle(ctx context.Context, cfg WebSearchConfig, query string, numResul
 // Tavily Search API provider
 // ---------------------------------------------------------------------------
 
-// tavilyResponse is the subset of the Tavily search response we need.
+// tavilyResponse 是 Tavily 搜索响应中我们需要的子集。
 type tavilyResponse struct {
 	Answer  string `json:"answer"`
 	Results []struct {
@@ -493,7 +489,7 @@ type tavilyResponse struct {
 	} `json:"results"`
 }
 
-// tavilyRequest is the JSON body sent to Tavily.
+// tavilyRequest 是发送给 Tavily 的 JSON body。
 type tavilyRequest struct {
 	Query         string `json:"query"`
 	MaxResults    int    `json:"max_results"`
@@ -547,7 +543,7 @@ func callTavily(ctx context.Context, cfg WebSearchConfig, query string, numResul
 // Brave Search API provider
 // ---------------------------------------------------------------------------
 
-// braveResponse is the subset of the Brave Web Search API response we need.
+// braveResponse 是 Brave Web Search API 响应中我们需要的子集。
 type braveResponse struct {
 	Web struct {
 		Results []struct {
@@ -595,12 +591,12 @@ func callBrave(ctx context.Context, cfg WebSearchConfig, query string, numResult
 }
 
 // ---------------------------------------------------------------------------
-// Shared HTTP helper
+// 共享 HTTP 辅助函数
 // ---------------------------------------------------------------------------
 
-// doHTTPRead executes req using cfg.HTTPClient (or http.DefaultClient) and
-// returns the response body capped at 1 MB. It returns an error for non-2xx
-// status codes. The request must already have its context set by the caller.
+// doHTTPRead 使用 cfg.HTTPClient（或 http.DefaultClient）执行 req，并返回
+// 最多 1 MB 的响应体。对非 2xx 状态码返回错误。请求的 context 必须由
+// 调用方事先设置。
 func doHTTPRead(_ context.Context, cfg WebSearchConfig, req *http.Request) ([]byte, error) {
 	client := cfg.HTTPClient
 	if client == nil {
@@ -629,10 +625,10 @@ func doHTTPRead(_ context.Context, cfg WebSearchConfig, req *http.Request) ([]by
 }
 
 // ---------------------------------------------------------------------------
-// Shared MCP-over-HTTP helper
+// 共享的 MCP-over-HTTP 辅助函数
 // ---------------------------------------------------------------------------
 
-// mcpRequest is a JSON-RPC 2.0 tools/call request body.
+// mcpRequest 是 JSON-RPC 2.0 tools/call 请求体。
 type mcpRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int    `json:"id"`
@@ -640,8 +636,8 @@ type mcpRequest struct {
 	Params  any    `json:"params"`
 }
 
-// mcpResponse is the shape returned by tools/call, with content as an array of
-// typed items. We extract the first text item.
+// mcpResponse 是 tools/call 返回的响应结构，content 为带类型的条目数组。
+// 我们提取其中第一个 text 条目。
 type mcpResponse struct {
 	Result struct {
 		Content []struct {
@@ -655,9 +651,9 @@ type mcpResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// callMCPHTTP sends a JSON-RPC tools/call POST to a remote MCP endpoint using
-// plain HTTP (transport-level MCP). It accepts optional extra headers and
-// parses both direct JSON and SSE-style "data: ..." frames.
+// callMCPHTTP 通过普通 HTTP（传输层 MCP）向远端 MCP 端点发送
+// JSON-RPC tools/call POST 请求。它接受可选的额外 header，并支持解析
+// 直接 JSON 与 SSE 风格的 "data: ..." 帧。
 func callMCPHTTP(ctx context.Context, cfg WebSearchConfig, url, toolName string, arguments any, extraHeaders ...map[string]string) (string, error) {
 	params := map[string]any{
 		"name":      toolName,
@@ -697,7 +693,7 @@ func callMCPHTTP(ctx context.Context, cfg WebSearchConfig, url, toolName string,
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Best-effort read of error body for diagnostics.
+		// 尽力读取错误响应体以便诊断。
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
@@ -718,8 +714,8 @@ func callMCPHTTP(ctx context.Context, cfg WebSearchConfig, url, toolName string,
 	return text, nil
 }
 
-// parseMCPResponse extracts the first text content from either a plain
-// JSON-RPC response or an SSE stream with "data: ..." frames.
+// parseMCPResponse 从普通 JSON-RPC 响应或带 "data: ..." 帧的 SSE 流中
+// 提取第一个 text 内容。
 func parseMCPResponse(body string) (string, error) {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
@@ -763,8 +759,8 @@ func tryExtractText(payload string) (string, bool) {
 	return "", true
 }
 
-// urlEncode is a tiny helper to percent-encode query values for Exa.
-// DuckDuckGo uses net/url directly.
+// urlEncode 是为 Exa 的 query 值做百分号编码的小辅助函数。
+// DuckDuckGo 直接使用 net/url。
 func urlEncode(s string) string {
 	re := regexp.MustCompile(`[^a-zA-Z0-9_.~-]`)
 	return re.ReplaceAllStringFunc(s, func(c string) string {
@@ -773,23 +769,22 @@ func urlEncode(s string) string {
 }
 
 // ---------------------------------------------------------------------------
-// DuckDuckGo fallback provider
+// DuckDuckGo 回退 provider
 // ---------------------------------------------------------------------------
 
-// duckDuckGoResult is the internal shape of an organic DuckDuckGo result.
-// Kept separate from searchResult because the parser extracts raw HTML text.
+// duckDuckGoResult 是 DuckDuckGo 自然结果的内部结构。
+// 与 searchResult 分开保留，因为解析器提取的是原始 HTML 文本。
 type duckDuckGoResult struct {
 	Title       string
 	URL         string
 	Description string
 }
 
-// callDuckDuckGo searches DuckDuckGo via the lite/html endpoint and returns a
-// plain-text summary of the top results. It requires no API key and acts as the
-// zero-config fallback for core/web_search.
+// callDuckDuckGo 通过 lite/html 端点搜索 DuckDuckGo，返回前几条结果的
+// 纯文本摘要。无需 API key，作为 core/web_search 的零配置回退。
 //
-// It first tries the JavaScript-friendly HTML endpoint, then falls back to the
-// lite endpoint if the first returns no parseable results.
+// 它会先尝试对 JavaScript 友好的 HTML 端点；若无可解析结果，再回退到
+// lite 端点。
 func callDuckDuckGo(ctx context.Context, cfg WebSearchConfig, query string, numResults int) (string, error) {
 	if numResults <= 0 {
 		numResults = 8
@@ -798,13 +793,13 @@ func callDuckDuckGo(ctx context.Context, cfg WebSearchConfig, query string, numR
 		numResults = 30
 	}
 
-	// Try the main HTML search endpoint first.
+	// 先尝试主 HTML 搜索端点。
 	text, err := callDuckDuckGoHTML(ctx, cfg, query, numResults)
 	if err == nil && text != "" {
 		return text, nil
 	}
 
-	// Fall back to the lite endpoint, which is simpler and often less protected.
+	// 回退到 lite 端点，它更简单，且通常受保护更少。
 	return callDuckDuckGoLite(ctx, cfg, query, numResults)
 }
 
@@ -890,29 +885,28 @@ func callDuckDuckGoLite(ctx context.Context, cfg WebSearchConfig, query string, 
 	return formatDuckDuckGoResults(results), nil
 }
 
-// duckResultTitleRe matches result titles in DuckDuckGo HTML.
+// duckResultTitleRe 匹配 DuckDuckGo HTML 中的结果标题。
 var duckResultTitleRe = regexp.MustCompile(`<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>`)
 
-// duckResultSnippetRe matches result snippets in DuckDuckGo HTML.
+// duckResultSnippetRe 匹配 DuckDuckGo HTML 中的结果摘要。
 var duckResultSnippetRe = regexp.MustCompile(`<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>`)
 
 func parseDuckDuckGoHTML(body string, limit int) []duckDuckGoResult {
 	return parseDuckDuckGoBody(body, duckResultTitleRe, duckResultSnippetRe, limit)
 }
 
-// liteTitleRe matches result titles in DuckDuckGo lite.
+// liteTitleRe 匹配 DuckDuckGo lite 中的结果标题。
 var liteTitleRe = regexp.MustCompile(`<a[^>]*href="([^"]*)"[^>]*class="[^"]*result-link[^"]*"[^>]*>([\s\S]*?)</a>`)
 
-// liteSnippetRe matches snippets in DuckDuckGo lite.
+// liteSnippetRe 匹配 DuckDuckGo lite 中的摘要。
 var liteSnippetRe = regexp.MustCompile(`<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)</td>`)
 
 func parseDuckDuckGoLiteHTML(body string, limit int) []duckDuckGoResult {
 	return parseDuckDuckGoBody(body, liteTitleRe, liteSnippetRe, limit)
 }
 
-// parseDuckDuckGoBody extracts organic results from DuckDuckGo HTML using the
-// provided title and snippet regexes. It strips tags, decodes entities, and
-// returns up to limit results.
+// parseDuckDuckGoBody 使用所提供的标题与摘要正则，从 DuckDuckGo HTML 中
+// 提取自然结果。它剥离标签、解码实体，并最多返回 limit 条结果。
 func parseDuckDuckGoBody(body string, titleRe, snippetRe *regexp.Regexp, limit int) []duckDuckGoResult {
 	var results []duckDuckGoResult
 	titleMatches := titleRe.FindAllStringSubmatch(body, -1)
@@ -941,12 +935,12 @@ func parseDuckDuckGoBody(body string, titleRe, snippetRe *regexp.Regexp, limit i
 
 var duckTagRe = regexp.MustCompile(`<[^>]+>`)
 
-// stripTags removes HTML tags.
+// stripTags 移除 HTML 标签。
 func stripTags(s string) string {
 	return duckTagRe.ReplaceAllString(s, " ")
 }
 
-// htmlUnescape performs a minimal set of HTML entity replacements.
+// htmlUnescape 执行最小集合的 HTML 实体替换。
 func htmlUnescape(s string) string {
 	replacements := map[string]string{
 		"&nbsp;": " ",
@@ -962,7 +956,7 @@ func htmlUnescape(s string) string {
 	return s
 }
 
-// formatDuckDuckGoResults converts parsed DuckDuckGo results into text.
+// formatDuckDuckGoResults 将解析后的 DuckDuckGo 结果转换为文本。
 func formatDuckDuckGoResults(results []duckDuckGoResult) string {
 	out := make([]searchResult, 0, len(results))
 	for _, r := range results {

@@ -11,13 +11,12 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// mockTool — minimal Tool implementation for Registry tests
+// mockTool — 用于 Registry 测试的最小 Tool 实现
 // ---------------------------------------------------------------------------
 
-// mockTool is a minimal, deterministic Tool implementation used to exercise the
-// Registry without touching the filesystem or shell. It records each Execute
-// call and the last input it received so tests can assert routing and input
-// pass-through.
+// mockTool 是一个最小且确定性的 Tool 实现，用于在不触碰文件系统或 shell 的
+// 情况下测试 Registry。它会记录每次 Execute 调用以及最后接收到的输入，
+// 以便测试断言路由与输入透传的正确性。
 type mockTool struct {
 	namespace   string
 	name        string
@@ -33,8 +32,8 @@ type mockTool struct {
 func (m *mockTool) Namespace() string { return m.namespace }
 func (m *mockTool) Name() string      { return m.name }
 
-// FullName returns the fully-qualified tool identifier. When namespace is empty
-// it returns the short name; otherwise it returns "namespace/name".
+// FullName 返回工具的完全限定标识符。当 namespace 为空时返回短名，
+// 否则返回 "namespace/name"。
 func (m *mockTool) FullName() string {
 	if m.namespace == "" {
 		return m.name
@@ -47,8 +46,8 @@ func (m *mockTool) Parameters() map[string]any { return m.params }
 func (m *mockTool) Tags() []string             { return m.tags }
 func (m *mockTool) Aliases() []string          { return m.aliases }
 
-// Execute records the call and delegates to execFn if set, otherwise returns a
-// deterministic "mock-output:<name>" string.
+// Execute 记录本次调用，并在设置了 execFn 时委托给它；否则返回确定性的
+// "mock-output:<name>" 字符串。
 func (m *mockTool) Execute(input map[string]any) (any, error) {
 	m.execCalls++
 	m.lastInput = input
@@ -58,8 +57,7 @@ func (m *mockTool) Execute(input map[string]any) (any, error) {
 	return "mock-output:" + m.name, nil
 }
 
-// Compile-time assertions that mockTool and the built-in tool types satisfy the
-// Tool interface.
+// 编译期断言：mockTool 与内置工具类型均满足 Tool 接口。
 var (
 	_ Tool = (*mockTool)(nil)
 	_ Tool = (*BuiltinTool)(nil)
@@ -67,7 +65,7 @@ var (
 )
 
 // ---------------------------------------------------------------------------
-// helpers
+// 辅助函数
 // ---------------------------------------------------------------------------
 
 func toolNames(tools []Tool) []string {
@@ -88,10 +86,10 @@ func contains(slice []string, s string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// NewRegistry / List basics
+// NewRegistry / List 基础
 // ---------------------------------------------------------------------------
 
-// TestNewRegistryEmpty verifies that a fresh Registry has no tools.
+// TestNewRegistryEmpty 验证新创建的 Registry 不含任何工具。
 func TestNewRegistryEmpty(t *testing.T) {
 	r := NewRegistry()
 	if r == nil {
@@ -102,7 +100,7 @@ func TestNewRegistryEmpty(t *testing.T) {
 	}
 }
 
-// TestListContainsAllRegistered verifies that List returns every registered tool.
+// TestListContainsAllRegistered 验证 List 会返回每个已注册工具。
 func TestListContainsAllRegistered(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&mockTool{name: "a"})
@@ -121,12 +119,11 @@ func TestListContainsAllRegistered(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Register + Execute routing
+// Register + Execute 路由
 // ---------------------------------------------------------------------------
 
-// TestRegisterAndExecute verifies that a registered custom tool can be invoked
-// via Execute, that Execute is called exactly once, and that the input map is
-// passed through unchanged.
+// TestRegisterAndExecute 验证已注册的自定义工具可通过 Execute 调用，
+// Execute 恰好被调用一次，且输入 map 原样透传。
 func TestRegisterAndExecute(t *testing.T) {
 	r := NewRegistry()
 	mt := &mockTool{
@@ -152,8 +149,8 @@ func TestRegisterAndExecute(t *testing.T) {
 	}
 }
 
-// TestExecuteInputPassthrough uses a capturing execFn to verify the exact input
-// map is forwarded to the underlying Tool.
+// TestExecuteInputPassthrough 使用捕获式 execFn 验证确切的输入 map
+// 被转发到底层 Tool。
 func TestExecuteInputPassthrough(t *testing.T) {
 	r := NewRegistry()
 	var captured map[string]any
@@ -174,8 +171,7 @@ func TestExecuteInputPassthrough(t *testing.T) {
 	}
 }
 
-// TestExecuteMissingTool verifies that executing an unregistered tool returns an
-// error mentioning "tool not found".
+// TestExecuteMissingTool 验证执行未注册的工具会返回包含 "tool not found" 的错误。
 func TestExecuteMissingTool(t *testing.T) {
 	r := NewRegistry()
 	_, err := r.Execute("nonexistent", nil)
@@ -187,8 +183,8 @@ func TestExecuteMissingTool(t *testing.T) {
 	}
 }
 
-// TestExecuteErrorPropagation verifies that errors returned by a Tool's Execute
-// are propagated unchanged to the caller.
+// TestExecuteErrorPropagation 验证 Tool 的 Execute 返回的错误会原样
+// 传播给调用方。
 func TestExecuteErrorPropagation(t *testing.T) {
 	r := NewRegistry()
 	sentinel := errors.New("boom")
@@ -205,11 +201,10 @@ func TestExecuteErrorPropagation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Namespace / Tags metadata
+// Namespace / Tags 元数据
 // ---------------------------------------------------------------------------
 
-// TestToolMetadata verifies the new namespace and tags methods on the Tool
-// interface.
+// TestToolMetadata 验证 Tool 接口上新增的 namespace 与 tags 方法。
 func TestToolMetadata(t *testing.T) {
 	mt := &mockTool{
 		namespace: "core",
@@ -240,20 +235,20 @@ func TestToolMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Register overwrite semantics
+// Register 覆盖语义
 // ---------------------------------------------------------------------------
 
-// TestRegisterOverwritesSilently documents that Register has no return value and
-// silently overwrites any existing tool with the same name. This is the actual
-// behavior per registry.go (Register just assigns into the map).
+// TestRegisterOverwritesSilently 文档化说明 Register 没有返回值，会静默
+// 覆盖同名的任何已存在工具。这是 registry.go 中 Register 的实际行为
+// （Register 只是直接写入 map）。
 func TestRegisterOverwritesSilently(t *testing.T) {
 	r := NewRegistry()
 	first := &mockTool{name: "dup", description: "first"}
 	second := &mockTool{name: "dup", description: "second"}
 	r.Register(first)
-	r.Register(second) // no error possible — Register returns nothing
+	r.Register(second) // 不可能返回错误 —— Register 不返回任何值
 
-	// Execute should call the second (overwriting) tool.
+	// Execute 应当调用第二个（覆盖）工具。
 	out, err := r.Execute("dup", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -268,7 +263,7 @@ func TestRegisterOverwritesSilently(t *testing.T) {
 		t.Errorf("second tool should be called once, execCalls=%d", second.execCalls)
 	}
 
-	// List must contain exactly one entry for "dup" (no duplicates).
+	// List 必须恰好含有一个名为 "dup" 的条目（无重复）。
 	count := 0
 	for _, tl := range r.List() {
 		if tl.Name() == "dup" {
@@ -284,8 +279,8 @@ func TestRegisterOverwritesSilently(t *testing.T) {
 // Unregister
 // ---------------------------------------------------------------------------
 
-// TestUnregisterExisting verifies that unregistering a registered custom tool
-// succeeds and makes subsequent Execute calls fail.
+// TestUnregisterExisting 验证反注册一个已注册的自定义工具会成功，并使
+// 后续 Execute 调用失败。
 func TestUnregisterExisting(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&mockTool{name: "temp"})
@@ -298,8 +293,8 @@ func TestUnregisterExisting(t *testing.T) {
 	}
 }
 
-// TestUnregisterMissing verifies that unregistering a tool that was never
-// registered returns an error mentioning "tool not found".
+// TestUnregisterMissing 验证反注册从未注册过的工具会返回包含
+// "tool not found" 的错误。
 func TestUnregisterMissing(t *testing.T) {
 	r := NewRegistry()
 	err := r.Unregister("nope")
@@ -311,9 +306,9 @@ func TestUnregisterMissing(t *testing.T) {
 	}
 }
 
-// TestUnregisterBuiltinRejected verifies that Unregister refuses to remove a
-// built-in tool, returning an error that mentions "built-in". This protects
-// run_shell, write_file, and read_file from accidental removal via the Registry.
+// TestUnregisterBuiltinRejected 验证 Unregister 拒绝移除内置工具，并返回
+// 包含 "built-in" 的错误。这可以防止 run_shell、write_file、read_file 被
+// 通过 Registry 意外移除。
 func TestUnregisterBuiltinRejected(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
@@ -330,7 +325,7 @@ func TestUnregisterBuiltinRejected(t *testing.T) {
 			if !strings.Contains(err.Error(), "built-in") {
 				t.Errorf("error should mention 'built-in', got %q", err.Error())
 			}
-			// Tool should still be registered.
+			// 工具应当仍然处于注册状态。
 			if _, err := r.Execute(name, map[string]any{}); err != nil {
 				if strings.Contains(err.Error(), "tool not found") {
 					t.Errorf("built-in tool was removed despite error: %v", err)
@@ -344,9 +339,9 @@ func TestUnregisterBuiltinRejected(t *testing.T) {
 // IsBuiltin
 // ---------------------------------------------------------------------------
 
-// TestIsBuiltin is a table-driven test of the IsBuiltin name check. IsBuiltin
-// is a pure string switch over "run_shell"/"write_file"/"read_file" and does
-// not consult the registry contents.
+// TestIsBuiltin 是对 IsBuiltin 名称检查的表驱动测试。IsBuiltin 是对
+// "run_shell"/"write_file"/"read_file" 的纯字符串 switch，不查询
+// registry 的内容。
 func TestIsBuiltin(t *testing.T) {
 	r := NewRegistry()
 	tests := []struct {
@@ -357,13 +352,13 @@ func TestIsBuiltin(t *testing.T) {
 		{"write_file", true},
 		{"read_file", true},
 		{"", false},
-		{"Run_Shell", false},    // case-sensitive
-		{"run_shell ", false},   // exact match only (no trimming)
-		{" run_shell", false},   // leading space
-		{"run_shell", true},     // duplicate to ensure determinism
+		{"Run_Shell", false},    // 大小写敏感
+		{"run_shell ", false},   // 仅精确匹配（不做 trim）
+		{" run_shell", false},   // 前导空格
+		{"run_shell", true},     // 重复一次以保证确定性
 		{"custom_tool", false},
 		{"my_tool", false},
-		{"run_shell_v2", false}, // suffix breaks exact match
+		{"run_shell_v2", false}, // 后缀破坏精确匹配
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -375,10 +370,10 @@ func TestIsBuiltin(t *testing.T) {
 	}
 }
 
-// TestIsBuiltinIndependentOfRegistration verifies that IsBuiltin returns true
-// for built-in names even on an empty registry that never registered them.
+// TestIsBuiltinIndependentOfRegistration 验证即使在一个从未注册过内置工具的
+// 空 registry 上，IsBuiltin 对内置名称仍返回 true。
 func TestIsBuiltinIndependentOfRegistration(t *testing.T) {
-	r := NewRegistry() // empty
+	r := NewRegistry() // 空
 	for _, name := range []string{"run_shell", "write_file", "read_file"} {
 		if !r.IsBuiltin(name) {
 			t.Errorf("IsBuiltin(%q) = false on empty registry, want true", name)
@@ -393,25 +388,24 @@ func TestIsBuiltinIndependentOfRegistration(t *testing.T) {
 // RegisterBuiltins
 // ---------------------------------------------------------------------------
 
-// TestRegisterBuiltins verifies that after RegisterBuiltins, all three built-in
-// tools are present in the registry (findable via Execute) and listed by List.
+// TestRegisterBuiltins 验证 RegisterBuiltins 后，三个内置工具都存在于
+// registry 中（可通过 Execute 找到），并被 List 列出。
 func TestRegisterBuiltins(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
 
 	wantNames := []string{"run_shell", "write_file", "read_file"}
 
-	// Each built-in should be findable. We invoke Execute with an empty input
-	// map: each built-in's executor validates its required string field and
-	// returns its own validation error (e.g. "command must be a string"). The
-	// key assertion is that the error is NOT "tool not found", which would
-	// indicate the tool was never registered.
+	// 每个内置工具都应可被找到。我们用空输入 map 调用 Execute：
+	// 每个内置工具的 executor 会校验自己必填的 string 字段并返回自身的
+	// 校验错误（例如 "command must be a string"）。关键断言是错误不是
+	// "tool not found" —— 那表示工具从未被注册。
 	for _, name := range wantNames {
 		t.Run("Execute_"+name, func(t *testing.T) {
 			_, err := r.Execute(name, map[string]any{})
 			if err == nil {
-				// Some tools might tolerate empty input; that's fine as long as
-				// they were found. Only fail on "tool not found".
+				// 某些工具可能容忍空输入；只要工具能被找到就没问题。
+				// 仅在出现 "tool not found" 时判为失败。
 				return
 			}
 			if strings.Contains(err.Error(), "tool not found") {
@@ -420,7 +414,7 @@ func TestRegisterBuiltins(t *testing.T) {
 		})
 	}
 
-	// List must contain all three built-in names.
+	// List 必须包含全部三个内置名称。
 	names := toolNames(r.List())
 	for _, name := range wantNames {
 		if !contains(names, name) {
@@ -429,11 +423,10 @@ func TestRegisterBuiltins(t *testing.T) {
 	}
 }
 
-// TestBuiltinToolsWriteAndReadInTempDir exercises the write_file and read_file
-// built-in executors end-to-end inside a temp directory. This confirms the
-// registered built-in tools actually work, not just that they are listed.
-// run_shell is intentionally not executed here to avoid shell/platform
-// dependencies; its registration is covered by TestRegisterBuiltins.
+// TestBuiltinToolsWriteAndReadInTempDir 在临时目录中端到端演练 write_file 与
+// read_file 内置 executor。这确认了已注册的内置工具确实可工作，而不仅仅是
+// 被列出。这里刻意不执行 run_shell 以避免 shell/平台依赖；其注册由
+// TestRegisterBuiltins 覆盖。
 func TestBuiltinToolsWriteAndReadInTempDir(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
@@ -442,7 +435,7 @@ func TestBuiltinToolsWriteAndReadInTempDir(t *testing.T) {
 	path := filepath.Join(dir, "testfile.txt")
 	content := "hello world"
 
-	// write_file should create the file and report success.
+	// write_file 应创建文件并报告成功。
 	out, err := r.Execute("write_file", map[string]any{"path": path, "content": content})
 	if err != nil {
 		t.Fatalf("write_file: %v", err)
@@ -455,7 +448,7 @@ func TestBuiltinToolsWriteAndReadInTempDir(t *testing.T) {
 		t.Errorf("write_file success = %v, want true", m["success"])
 	}
 
-	// read_file should return the same content we wrote.
+	// read_file 应返回我们写入的相同内容。
 	out, err = r.Execute("read_file", map[string]any{"path": path})
 	if err != nil {
 		t.Fatalf("read_file: %v", err)
@@ -470,11 +463,10 @@ func TestBuiltinToolsWriteAndReadInTempDir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Filtering / listing by full name
+// 按 full name 过滤 / 列举
 // ---------------------------------------------------------------------------
 
-// TestRegistryFilterByTag verifies FilterByTag returns only tools with the
-// requested tag.
+// TestRegistryFilterByTag 验证 FilterByTag 只返回带有所请求 tag 的工具。
 func TestRegistryFilterByTag(t *testing.T) {
 	tools := []Tool{
 		&mockTool{name: "a", tags: []string{"readonly"}},
@@ -505,22 +497,21 @@ func TestRegistryFilterByTag(t *testing.T) {
 	}
 }
 
-// TestRegistryListUsesFullName verifies that tools registered with a namespace
-// are keyed by their FullName in the registry, so Execute works with the fully
-// qualified name.
+// TestRegistryListUsesFullName 验证带 namespace 注册的工具以 FullName 为键
+// 存入 registry，因此 Execute 可用完全限定名工作。
 func TestRegistryListUsesFullName(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&mockTool{namespace: "core", name: "reader", tags: []string{"readonly"}})
 	r.Register(&mockTool{namespace: "ext", name: "reader", tags: []string{"network"}})
 	r.Register(&mockTool{name: "plain"})
 
-	// List should contain all three tools.
+	// List 应包含全部三个工具。
 	list := r.List()
 	if len(list) != 3 {
 		t.Fatalf("expected 3 tools, got %d", len(list))
 	}
 
-	// Execute must work using full names.
+	// Execute 必须能使用 full name 工作。
 	if _, err := r.Execute("core/reader", map[string]any{}); err != nil {
 		t.Errorf("Execute(core/reader): %v", err)
 	}
@@ -531,8 +522,8 @@ func TestRegistryListUsesFullName(t *testing.T) {
 		t.Errorf("Execute(plain): %v", err)
 	}
 
-	// Shorthand "reader" should not match anything because both readers live in
-	// namespaces and the plain tool is named "plain".
+	// 简写 "reader" 不应匹配任何工具，因为两个 reader 都在 namespace 中，
+	// 而 plain 工具名为 "plain"。
 	if _, err := r.Execute("reader", map[string]any{}); err == nil {
 		t.Errorf("Execute(reader) should fail for namespaced-only registrations")
 	}
@@ -542,8 +533,8 @@ func TestRegistryListUsesFullName(t *testing.T) {
 // ToJSON
 // ---------------------------------------------------------------------------
 
-// TestToJSON verifies that ToJSON produces a valid JSON array describing each
-// registered tool's namespace, name, full name, description, parameters, and tags.
+// TestToJSON 验证 ToJSON 生成一个有效的 JSON 数组，描述每个已注册工具的
+// namespace、name、full name、description、parameters 与 tags。
 func TestToJSON(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&mockTool{
@@ -585,8 +576,8 @@ func TestToJSON(t *testing.T) {
 	}
 }
 
-// TestToJSONEmpty verifies that an empty registry serializes to "[]" (not "null"),
-// since ToJSON initializes the slice with make(..., 0).
+// TestToJSONEmpty 验证空 registry 序列化为 "[]"（而非 "null"），
+// 因为 ToJSON 使用 make(..., 0) 初始化 slice。
 func TestToJSONEmpty(t *testing.T) {
 	r := NewRegistry()
 	data, err := r.ToJSON()
@@ -599,30 +590,28 @@ func TestToJSONEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Interface compliance
+// 接口合规性
 // ---------------------------------------------------------------------------
 
-// TestBuiltinToolConstructorsImplementsTool is a compile-time check that each
-// built-in tool constructor returns something that satisfies the Tool interface.
+// TestBuiltinToolConstructorsImplementsTool 是编译期检查，确保每个内置工具
+// 构造器返回的对象都满足 Tool 接口。
 func TestBuiltinToolConstructorsImplementsTool(t *testing.T) {
 	var _ Tool = NewRunShellTool()
 	var _ Tool = NewWriteFileTool()
 	var _ Tool = NewReadFileTool()
 }
 
-// TestDynamicToolImplementsTool is a compile-time check that DynamicTool
-// satisfies the Tool interface.
+// TestDynamicToolImplementsTool 是编译期检查，确保 DynamicTool 满足 Tool 接口。
 func TestDynamicToolImplementsTool(t *testing.T) {
 	var _ Tool = NewDynamicTool("d", "desc", nil, DynamicToolInline)
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency
+// 并发
 // ---------------------------------------------------------------------------
 
-// TestConcurrentReadSafe verifies that concurrent read-only operations (List,
-// IsBuiltin, Execute-then-tool-returns) do not panic. Go maps are safe for
-// concurrent reads as long as no goroutine is writing.
+// TestConcurrentReadSafe 验证并发只读操作（List、IsBuiltin、Execute-then-tool-
+// returns）不会 panic。只要没有 goroutine 在写，Go map 即可被并发安全读取。
 func TestConcurrentReadSafe(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
@@ -636,19 +625,18 @@ func TestConcurrentReadSafe(t *testing.T) {
 			_ = r.List()
 			_ = r.IsBuiltin("run_shell")
 			_ = r.IsBuiltin("custom")
-			// Execute triggers a map lookup (read) and then calls the tool's
-			// executor, which returns a validation error without mutating the
-			// registry. This exercises the read path of Execute.
+			// Execute 触发一次 map 查找（读），然后调用工具的 executor，
+			// 后者返回一个校验错误，且不会修改 registry。这覆盖了
+			// Execute 的读路径。
 			_, _ = r.Execute("run_shell", map[string]any{})
 		}()
 	}
 	wg.Wait()
-	// Reaching here without panic means concurrent reads are safe.
+	// 走到这里未 panic 即说明并发读是安全的。
 }
 
-// TestDataRaceThroughMutex verifies that all Registry methods are safe under
-// the Go race detector when exercised concurrently. This guards against
-// accidental removal of the sync.RWMutex in future changes.
+// TestDataRaceThroughMutex 验证 Registry 的所有方法在并发调用下对 Go
+// race detector 是安全的。这可以防止未来修改中意外移除 sync.RWMutex。
 func TestDataRaceThroughMutex(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
@@ -675,5 +663,5 @@ func TestDataRaceThroughMutex(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// Race detector will flag any missing RLock/Lock around the tools map.
+	// race detector 会标记出任何围绕 tools map 缺失的 RLock/Lock。
 }

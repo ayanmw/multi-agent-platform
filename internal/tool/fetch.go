@@ -11,15 +11,15 @@ import (
 	"time"
 )
 
-// NewFetchURLTool creates an HTTP GET tool named "core/fetch_url".
+// NewFetchURLTool 创建名为 "core/fetch_url" 的 HTTP GET 工具。
 //
-// Parameters:
-//   - url           (string,  required): URL to fetch.
-//   - timeout_ms    (integer, optional): Request timeout in milliseconds (default 30000).
-//   - max_bytes     (integer, optional): Maximum body bytes to read (default 1048576).
-//   - headers       (object,  optional): Extra HTTP headers.
-//   - extract_text  (boolean, optional): If true and content looks like HTML,
-//     convert the body to plain text before returning.
+// 参数：
+//   - url           (string,  required)：要抓取的 URL。
+//   - timeout_ms    (integer, optional)：请求超时，单位毫秒（默认 30000）。
+//   - max_bytes     (integer, optional)：最多读取的响应体字节数（默认 1048576）。
+//   - headers       (object,  optional)：额外的 HTTP headers。
+//   - extract_text  (boolean, optional)：为 true 且内容看起来像 HTML 时，
+//     在返回前将响应体转为纯文本。
 func NewFetchURLTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"fetch_url",
@@ -55,7 +55,7 @@ func NewFetchURLTool() *BuiltinTool {
 	).WithTags("network", "readonly").WithAliases("web_fetch")
 }
 
-// fetchURLExecutor performs an HTTP GET with timeout and byte limits.
+// fetchURLExecutor 执行带超时与字节上限的 HTTP GET。
 func fetchURLExecutor(input map[string]any) (any, error) {
 	url := getString(input, "url", "")
 	if url == "" {
@@ -102,8 +102,8 @@ func fetchURLExecutor(input map[string]any) (any, error) {
 	}, nil
 }
 
-// looksLikeHTML guesses whether a response body is HTML based on Content-Type
-// or a leading <!doctype>/<html> tag.
+// looksLikeHTML 根据 Content-Type 或开头的 <!doctype>/<html> 标签猜测
+// 响应体是否为 HTML。
 func looksLikeHTML(contentType, body string) bool {
 	ct := strings.ToLower(contentType)
 	if strings.Contains(ct, "text/html") {
@@ -113,10 +113,9 @@ func looksLikeHTML(contentType, body string) bool {
 	return strings.HasPrefix(trim, "<!doctype html") || strings.HasPrefix(trim, "<html")
 }
 
-// htmlToText performs a best-effort HTML to plain-text conversion using only
-// the Go standard library. It removes tags, collapses whitespace, and decodes
-// entities. This is intentionally simple; complex pages will still retain some
-// structure noise, but the output is far smaller than raw HTML.
+// htmlToText 仅使用 Go 标准库进行尽力而为的 HTML 到纯文本转换。
+// 它移除标签、折叠空白并解码实体。这里刻意保持简单；复杂页面仍会残留
+// 一些结构噪声，但输出已远小于原始 HTML。
 var (
 	scriptStyleRe = regexp.MustCompile(`(?i)<(script|style)[^>]*>[\s\S]*?</(script|style)>`)
 	tagRe         = regexp.MustCompile(`<[^>]+>`)
@@ -124,19 +123,18 @@ var (
 )
 
 func htmlToText(htmlStr string) string {
-	// Drop <script> and <style> blocks first to avoid leaking JS/CSS text.
+	// 先丢弃 <script> 与 <style> 块，避免泄露 JS/CSS 文本。
 	text := scriptStyleRe.ReplaceAllString(htmlStr, " ")
-	// Remove remaining tags.
+	// 移除剩余标签。
 	text = tagRe.ReplaceAllString(text, " ")
-	// Decode HTML entities (&lt; → <, &amp; → &, etc.).
+	// 解码 HTML 实体（&lt; → <、&amp; → & 等）。
 	text = html.UnescapeString(text)
-	// Collapse runs of whitespace.
+	// 折叠连续空白。
 	text = whitespaceRe.ReplaceAllString(text, " ")
 	return strings.TrimSpace(text)
 }
 
-// readLimited reads up to max bytes from r and reports whether the data was
-// truncated.
+// readLimited 从 r 最多读取 max 字节，并报告数据是否被截断。
 func readLimited(r io.Reader, max int64) ([]byte, bool, error) {
 	lr := io.LimitReader(r, max+1)
 	data, err := io.ReadAll(lr)

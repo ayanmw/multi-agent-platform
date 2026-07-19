@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-// NewParseJSONTool creates a JSON query tool named "core/parse_json".
+// NewParseJSONTool 创建名为 "core/parse_json" 的 JSON 查询工具。
 //
-// Parameters:
-//   - input     (string,  required): JSON string to parse.
-//   - query     (string,  required): Dot-separated path (e.g. "a.b").
-//   - max_chars (integer, optional): Maximum characters for the preview.
+// 参数：
+//   - input     (string,  required)：要解析的 JSON 字符串。
+//   - query     (string,  required)：以点分隔的路径（例如 "a.b"）。
+//   - max_chars (integer, optional)：预览的最大字符数。
 func NewParseJSONTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"parse_json",
@@ -39,7 +39,7 @@ func NewParseJSONTool() *BuiltinTool {
 	).WithTags("data", "readonly")
 }
 
-// parseJSONExecutor unmarshals JSON and traverses a dotted query path.
+// parseJSONExecutor 反序列化 JSON 并遍历以点分隔的查询路径。
 func parseJSONExecutor(input map[string]any) (any, error) {
 	raw := getString(input, "input", "")
 	query := getString(input, "query", "")
@@ -67,8 +67,8 @@ func parseJSONExecutor(input map[string]any) (any, error) {
 				return map[string]any{"matches": []any{}, "count": 0, "preview": nil}, nil
 			}
 		default:
-			// Key not present in a non-object value: treat as no match rather
-			// than an error so callers can query nested paths safely.
+			// 键不存在于非对象值中：视为无匹配而非错误，
+			// 以便调用方可以安全地查询嵌套路径。
 			return map[string]any{"matches": []any{}, "count": 0, "preview": nil}, nil
 		}
 	}

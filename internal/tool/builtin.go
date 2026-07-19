@@ -1,34 +1,32 @@
-// Package tool implements the agent tool system, providing a registry-based
-// mechanism for agents to invoke external capabilities.
+// Package tool 实现 agent 工具系统，提供基于 registry 的机制供 agent 调用外部能力。
 //
-// # Tool System Overview
+// # 工具系统概览
 //
-// The tool system is built around the Tool interface (defined in registry.go),
-// which provides a uniform contract for tool execution. Every tool exposes:
-//   - Name: a unique identifier used for invocation
-//   - Description: a human-readable explanation of what the tool does
-//   - Parameters: a JSON Schema describing the expected input shape
-//   - Execute: the runtime function that performs the tool's work
+// 工具系统围绕 Tool 接口（定义于 registry.go）构建，该接口为工具执行提供
+// 统一契约。每个工具暴露：
+//   - Name：用于调用的唯一标识符
+//   - Description：人类可读的工具用途说明
+//   - Parameters：描述输入形状的 JSON Schema
+//   - Execute：执行工具实际工作的运行时函数
 //
-// # Built-in Tools
+// # 内置工具
 //
-// This file defines three built-in tools that are always available:
-//   - run_shell: Execute shell commands with timeout support
-//   - write_file: Write content to the filesystem with path traversal protection
-//   - read_file: Read file contents with configurable byte limit and line offset/limit
+// 本文件定义了三个始终可用的内置工具：
+//   - run_shell：带超时支持的 shell 命令执行
+//   - write_file：将内容写入文件系统，含 path traversal 保护
+//   - read_file：读取文件内容，支持可配置字节上限与行 offset/limit
 //
-// # Security
+// # 安全
 //
-// All built-in tools include safety guards:
-//   - run_shell: context-based timeout prevents runaway processes
-//   - write_file: rejects paths containing ".." to prevent directory traversal
-//   - read_file: enforces a maximum byte limit (default 1 MB) to prevent memory exhaustion
+// 所有内置工具均含安全防护：
+//   - run_shell：基于 context 的超时机制防止进程失控
+//   - write_file：拒绝包含 ".." 的路径以防止 directory traversal
+//   - read_file：强制最大字节上限（默认 1 MB）以防止内存耗尽
 //
-// # Registration
+// # 注册
 //
-// Call RegisterBuiltins(registry) to register all built-in tools into a
-// tool.Registry instance. Additional tools created via NewToolFromJSON (in
-// tool_json.go) can be registered individually.
+// 调用 RegisterBuiltins(registry) 可将所有内置工具注册到 tool.Registry 实例。
+// 通过 NewToolFromJSON（位于 tool_json.go）创建的额外工具可单独注册。
 package tool
 
 import (
@@ -46,18 +44,16 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// BuiltinTool — base implementation of the Tool interface
+// BuiltinTool — Tool 接口的基础实现
 // ---------------------------------------------------------------------------
 
-// BuiltinTool is a concrete implementation of the Tool interface backed by
-// a simple executor function. It stores the tool's metadata (name, namespace,
-// description, JSON Schema parameters, aliases and tags) and delegates
-// execution to the provided executor.
+// BuiltinTool 是 Tool 接口的具体实现，由一个简单的 executor 函数支撑。
+// 它存储工具的元数据（name、namespace、description、JSON Schema 参数、
+// aliases 与 tags），并将执行委托给所提供的 executor。
 //
-// BuiltinTool is used internally by the built-in tool constructors
-// (NewRunShellTool, NewWriteFileTool, NewReadFileTool). External callers
-// should not construct BuiltinTool directly; use the Registry or
-// NewToolFromJSON instead.
+// BuiltinTool 供内置工具构造器（NewRunShellTool、NewWriteFileTool、
+// NewReadFileTool）内部使用。外部调用方不应直接构造 BuiltinTool，
+// 请改用 Registry 或 NewToolFromJSON。
 type BuiltinTool struct {
 	name        string
 	namespace   string
@@ -68,15 +64,15 @@ type BuiltinTool struct {
 	executor    func(input map[string]any) (any, error)
 }
 
-// Namespace returns the tool's namespace. Empty string means the tool lives in
-// the global namespace; non-empty namespaces produce a "namespace/name" FullName.
+// Namespace 返回工具的 namespace。空字符串表示工具位于全局 namespace；
+// 非空 namespace 会生成 "namespace/name" 形式的 FullName。
 func (t *BuiltinTool) Namespace() string { return t.namespace }
 
-// Name returns the tool's unique identifier, e.g. "run_shell".
+// Name 返回工具的唯一标识符，例如 "run_shell"。
 func (t *BuiltinTool) Name() string { return t.name }
 
-// FullName returns the tool's fully-qualified identifier. When namespace is
-// non-empty, it returns "namespace/name"; otherwise it returns Name.
+// FullName 返回工具的完全限定标识符。当 namespace 非空时返回
+// "namespace/name"，否则返回 Name。
 func (t *BuiltinTool) FullName() string {
 	if t.namespace == "" {
 		return t.name
@@ -84,35 +80,34 @@ func (t *BuiltinTool) FullName() string {
 	return t.namespace + "/" + t.name
 }
 
-// Description returns a human-readable explanation of the tool's purpose,
-// suitable for inclusion in LLM system prompts.
+// Description 返回工具用途的人类可读说明，适合放入 LLM 的 system prompt。
 func (t *BuiltinTool) Description() string { return t.description }
 
-// Parameters returns the JSON Schema describing the expected input shape.
-// The schema follows the JSON Schema (draft-07) convention with "type",
-// "properties", and "required" keys.
+// Parameters 返回描述输入形状的 JSON Schema。
+// 该 schema 遵循 JSON Schema (draft-07) 规范，含 "type"、"properties"
+// 与 "required" 键。
 func (t *BuiltinTool) Parameters() map[string]any { return t.parameters }
 
-// Tags returns the tool's tags. Tags are used for discovery and filtering.
+// Tags 返回工具的 tags。Tags 用于发现与过滤。
 func (t *BuiltinTool) Tags() []string { return t.tags }
 
-// Aliases returns alternative names that resolve to this tool.
+// Aliases 返回可解析到该工具的别名。
 func (t *BuiltinTool) Aliases() []string { return t.aliases }
 
-// WithAliases attaches aliases to a BuiltinTool and returns it for chaining.
+// WithAliases 为 BuiltinTool 附加 aliases，并返回自身以便链式调用。
 func (t *BuiltinTool) WithAliases(aliases ...string) *BuiltinTool {
 	t.aliases = append(t.aliases, aliases...)
 	return t
 }
 
-// Execute runs the tool with the given input map and returns the result.
-// The input map must conform to the schema returned by Parameters().
+// Execute 使用给定的输入 map 运行工具并返回结果。
+// 输入 map 必须符合 Parameters() 返回的 schema。
 func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
 	return t.executor(input)
 }
 
-// NewBuiltinTool creates a new BuiltinTool with the given metadata.
-// When namespace is non-empty, the tool's FullName becomes "namespace/name".
+// NewBuiltinTool 使用给定的元数据创建一个新的 BuiltinTool。
+// 当 namespace 非空时，工具的 FullName 为 "namespace/name"。
 func NewBuiltinTool(name, namespace, description string, parameters map[string]any, executor func(input map[string]any) (any, error)) *BuiltinTool {
 	return &BuiltinTool{
 		name:        name,
@@ -125,18 +120,17 @@ func NewBuiltinTool(name, namespace, description string, parameters map[string]a
 	}
 }
 
-// WithTags attaches tags to a BuiltinTool and returns it for chaining.
+// WithTags 为 BuiltinTool 附加 tags，并返回自身以便链式调用。
 func (t *BuiltinTool) WithTags(tags ...string) *BuiltinTool {
 	t.tags = append(t.tags, tags...)
 	return t
 }
 
 // ---------------------------------------------------------------------------
-// Generic helpers for reading typed values from tool input maps
+// 从工具输入 map 中读取类型化值的通用辅助函数
 // ---------------------------------------------------------------------------
 
-// getString extracts a string value from m[key], returning def when missing
-// or when the value is not a string.
+// getString 从 m[key] 提取 string 值，当键缺失或值不是 string 时返回 def。
 func getString(m map[string]any, key, def string) string {
 	if v, ok := m[key].(string); ok {
 		return v
@@ -144,8 +138,7 @@ func getString(m map[string]any, key, def string) string {
 	return def
 }
 
-// getBool extracts a bool value from m[key], returning def when missing
-// or when the value is not a bool.
+// getBool 从 m[key] 提取 bool 值，当键缺失或值不是 bool 时返回 def。
 func getBool(m map[string]any, key string, def bool) bool {
 	if v, ok := m[key].(bool); ok {
 		return v
@@ -153,9 +146,8 @@ func getBool(m map[string]any, key string, def bool) bool {
 	return def
 }
 
-// getInt extracts an integer value from m[key], returning def when missing
-// or when the value is not a numeric type. JSON numbers unmarshal as float64,
-// while callers may also pass int or int64 directly.
+// getInt 从 m[key] 提取整数值，当键缺失或值不是数值类型时返回 def。
+// JSON 数字以 float64 反序列化，调用方也可能直接传入 int 或 int64。
 func getInt(m map[string]any, key string, def int) int {
 	switch v := m[key].(type) {
 	case float64:
@@ -169,8 +161,7 @@ func getInt(m map[string]any, key string, def int) int {
 	}
 }
 
-// getMap extracts a nested map value from m[key], returning nil when missing
-// or when the value is not a map[string]any.
+// getMap 从 m[key] 提取嵌套 map 值，当键缺失或值不是 map[string]any 时返回 nil。
 func getMap(m map[string]any, key string) map[string]any {
 	if v, ok := m[key].(map[string]any); ok {
 		return v
@@ -178,12 +169,11 @@ func getMap(m map[string]any, key string) map[string]any {
 	return nil
 }
 
-// resolvePath normalizes a tool input path. Absolute paths are cleaned and
-// returned as-is. Relative paths are resolved against the input["workdir"]
-// value when present, falling back to the process working directory.
+// resolvePath 对工具输入路径做规范化。绝对路径会被 Clean 后原样返回。
+// 相对路径会先尝试基于 input["workdir"] 解析，若不存在则回退到进程工作目录。
 //
-// Callers should check isPathTraversal before calling resolvePath to prevent
-// directory traversal through ".." segments.
+// 调用方应在调用 resolvePath 之前先通过 isPathTraversal 检查，以防止
+// 通过 ".." 段进行 directory traversal。
 func resolvePath(path string, input map[string]any) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
@@ -198,22 +188,21 @@ func resolvePath(path string, input map[string]any) string {
 }
 
 // ---------------------------------------------------------------------------
-// run_shell — shell command execution with timeout
+// run_shell — 带超时的 shell 命令执行
 // ---------------------------------------------------------------------------
 
-// NewRunShellTool creates a shell execution tool named "run_shell".
+// NewRunShellTool 创建名为 "run_shell" 的 shell 执行工具。
 //
-// Parameters:
-//   - command  (string, required):  The shell command to execute.
-//   - workdir  (string, optional):  Working directory for the command.
-//   - timeout_ms (integer, optional): Timeout in milliseconds (default 30000).
+// 参数：
+//   - command  (string, required)：要执行的 shell 命令。
+//   - workdir  (string, optional)：命令的工作目录。
+//   - timeout_ms (integer, optional)：超时时间，单位毫秒（默认 30000）。
 //
-// The tool selects the appropriate shell based on the runtime OS:
-//   - Windows: tries "bash" (Git Bash) first, falls back to "cmd /c".
-//   - Linux/macOS: uses "sh -c".
+// 工具根据运行时 OS 选择合适的 shell：
+//   - Windows：优先尝试 "bash"（Git Bash），失败时回退到 "cmd /c"。
+//   - Linux/macOS：使用 "sh -c"。
 //
-// Execution is guarded by context.WithTimeout; if the command does not
-// complete within the timeout, it is killed and an error is returned.
+// 执行由 context.WithTimeout 守护；若命令在超时内未完成，将被终止并返回错误。
 func NewRunShellTool() *BuiltinTool {
 	return &BuiltinTool{
 		name:        "run_shell",
@@ -240,21 +229,20 @@ func NewRunShellTool() *BuiltinTool {
 	}
 }
 
-// executeShell is the executor function for the run_shell tool.
-// It resolves the shell binary, creates a context with timeout, and runs the
-// command via exec.CommandContext. The result includes stdout, stderr, and
-// exit_code.
+// executeShell 是 run_shell 工具的 executor 函数。
+// 它解析 shell 二进制文件、创建带超时的 context，并通过 exec.CommandContext
+// 运行命令。结果包含 stdout、stderr 与 exit_code。
 func executeShell(input map[string]any) (any, error) {
 	cmdStr, ok := input["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command must be a string")
 	}
 
-	// Determine the shell binary and flag for the current OS.
+	// 根据当前 OS 确定 shell 二进制文件与对应 flag。
 	var shell string
 	var shellFlag string
 	if runtime.GOOS == "windows" {
-		// Try bash first (Git Bash), fall back to cmd.
+		// 优先尝试 bash（Git Bash），失败则回退到 cmd。
 		shell = "bash"
 		shellFlag = "-c"
 		if _, err := exec.LookPath("bash"); err != nil {
@@ -266,7 +254,7 @@ func executeShell(input map[string]any) (any, error) {
 		shellFlag = "-c"
 	}
 
-	// Parse timeout, default 30 seconds.
+	// 解析超时，默认 30 秒。
 	timeoutMs := 30000
 	if t, ok := input["timeout_ms"].(float64); ok && t > 0 {
 		timeoutMs = int(t)
@@ -277,7 +265,7 @@ func executeShell(input map[string]any) (any, error) {
 
 	cmd := exec.CommandContext(ctx, shell, shellFlag, cmdStr)
 
-	// Set working directory if provided.
+	// 如提供 workdir 则设置工作目录。
 	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
 		cmd.Dir = workdir
 	}
@@ -290,7 +278,7 @@ func executeShell(input map[string]any) (any, error) {
 	}
 
 	if err != nil {
-		// Check for context timeout / cancellation explicitly.
+		// 显式检查 context 超时/取消。
 		if ctx.Err() != nil {
 			result["exit_code"] = -1
 			result["stderr"] = fmt.Sprintf("command timed out after %d ms", timeoutMs)
@@ -309,18 +297,17 @@ func executeShell(input map[string]any) (any, error) {
 }
 
 // ---------------------------------------------------------------------------
-// write_file — file creation with path traversal protection
+// write_file — 含 path traversal 保护的文件写入
 // ---------------------------------------------------------------------------
 
-// NewWriteFileTool creates a file write tool named "write_file".
+// NewWriteFileTool 创建名为 "write_file" 的文件写入工具。
 //
-// Parameters:
-//   - path    (string, required):  The file path to write to.
-//   - content (string, required):  The content to write into the file.
+// 参数：
+//   - path    (string, required)：要写入的文件路径。
+//   - content (string, required)：要写入文件的内容。
 //
-// The tool automatically creates parent directories if they do not exist.
-// For security, paths containing ".." are rejected to prevent directory
-// traversal attacks.
+// 工具会自动创建尚不存在的父目录。出于安全考虑，包含 ".." 的路径会被
+// 拒绝，以防止 directory traversal 攻击。
 func NewWriteFileTool() *BuiltinTool {
 	return &BuiltinTool{
 		name: "write_file",
@@ -343,12 +330,11 @@ func NewWriteFileTool() *BuiltinTool {
 	}
 }
 
-// isPathTraversal returns true if the given path attempts to escape its
-// intended directory through ".." segments.
+// isPathTraversal 当给定路径试图通过 ".." 段逃逸出其预期目录时返回 true。
 func isPathTraversal(path string) bool {
 	cleanPath := filepath.Clean(path)
-	// After cleaning, a traversing path will either be exactly ".." or
-	// start with ".." followed by the OS path separator.
+	// 经过 Clean 之后，存在 traversal 的路径要么恰好是 ".."，
+	// 要么以 ".." 加 OS 路径分隔符开头。
 	if cleanPath == ".." {
 		return true
 	}
@@ -358,8 +344,8 @@ func isPathTraversal(path string) bool {
 	return false
 }
 
-// executeWriteFile is the executor function for the write_file tool.
-// It validates the path, creates parent directories, and writes the content.
+// executeWriteFile 是 write_file 工具的 executor 函数。
+// 它校验路径、创建父目录并写入内容。
 func executeWriteFile(input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
@@ -370,16 +356,16 @@ func executeWriteFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("content must be a string")
 	}
 
-	// Reject paths that attempt directory traversal BEFORE resolving against
-	// workdir. filepath.Join + filepath.Clean would normalize ".." segments and
-	// silently re-root the path, defeating the traversal check.
+	// 在根据 workdir 解析之前先拒绝尝试 directory traversal 的路径。
+	// filepath.Join + filepath.Clean 会规范化 ".." 段并悄无声息地重新
+	// 改变路径根目录，从而绕过 traversal 检查。
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// Resolve relative path against workdir if provided. When workdir is empty
-	// (workspace_dir not bound to the session), fall back to the current
-	// working directory so relative paths still resolve predictably.
+	// 如提供 workdir，则将相对路径解析到 workdir 之下。当 workdir 为空
+	// （session 未绑定 workspace_dir）时，回退到当前工作目录，确保
+	// 相对路径仍能以可预期方式解析。
 	if !filepath.IsAbs(path) {
 		if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
 			path = filepath.Join(workdir, path)
@@ -391,12 +377,12 @@ func executeWriteFile(input map[string]any) (any, error) {
 		}
 	}
 
-	// Reject paths that attempt directory traversal.
+	// 拒绝尝试 directory traversal 的路径。
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// Ensure parent directory exists.
+	// 确保父目录存在。
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
@@ -415,24 +401,22 @@ func executeWriteFile(input map[string]any) (any, error) {
 }
 
 // ---------------------------------------------------------------------------
-// read_file — file reading with byte limit and line offset/limit
+// read_file — 带字节上限与行 offset/limit 的文件读取
 // ---------------------------------------------------------------------------
 
-// DefaultMaxBytes is the default maximum number of bytes read_file will read
-// from a single file (1 MB).
+// DefaultMaxBytes 是 read_file 从单个文件读取的默认最大字节数（1 MB）。
 const DefaultMaxBytes = 1 << 20 // 1,048,576 bytes
 
-// NewReadFileTool creates a file read tool named "read_file".
+// NewReadFileTool 创建名为 "read_file" 的文件读取工具。
 //
-// Parameters:
-//   - path      (string, required):  The file path to read.
-//   - offset    (integer, optional): 1-based line number to start reading from.
-//   - limit     (integer, optional): Maximum number of lines to read.
-//   - max_bytes (integer, optional): Maximum bytes to read (default 1048576 = 1 MB).
+// 参数：
+//   - path      (string, required)：要读取的文件路径。
+//   - offset    (integer, optional)：从第几行开始读取（1-based）。
+//   - limit     (integer, optional)：最多读取的行数。
+//   - max_bytes (integer, optional)：最多读取的字节数（默认 1048576 = 1 MB）。
 //
-// The tool reads the file contents, enforces the max_bytes limit, and then
-// applies the optional line offset/limit. If the file exceeds max_bytes the
-// content is truncated and a "truncated" flag is set in the result.
+// 工具读取文件内容，强制 max_bytes 上限，然后应用可选的行 offset/limit。
+// 若文件超过 max_bytes，内容会被截断，并在结果中设置 "truncated" 标志。
 func NewReadFileTool() *BuiltinTool {
 	return &BuiltinTool{
 		name: "read_file",
@@ -463,31 +447,31 @@ func NewReadFileTool() *BuiltinTool {
 	}
 }
 
-// executeReadFile is the executor function for the read_file tool.
-// It opens the file, reads up to max_bytes bytes (default 1 MB), then applies
-// optional line offset and limit filters to the resulting content.
+// executeReadFile 是 read_file 工具的 executor 函数。
+// 它打开文件，读取最多 max_bytes 字节（默认 1 MB），然后对结果内容
+// 应用可选的行 offset 与 limit 过滤。
 func executeReadFile(input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
 	}
 
-	// Reject paths that attempt directory traversal.
+	// 拒绝尝试 directory traversal 的路径。
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// Resolve relative path against workdir if provided.
+	// 如提供 workdir，则将相对路径解析到 workdir 之下。
 	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
 		path = filepath.Join(workdir, path)
 	}
 
-	// Reject paths that attempt directory traversal after resolving against workdir.
+	// 在根据 workdir 解析之后再次拒绝尝试 directory traversal 的路径。
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// Determine the maximum bytes to read (default 1 MB).
+	// 确定最大读取字节数（默认 1 MB）。
 	maxBytes := int64(DefaultMaxBytes)
 	if mb, ok := input["max_bytes"].(float64); ok && mb > 0 {
 		maxBytes = int64(mb)
@@ -499,7 +483,7 @@ func executeReadFile(input map[string]any) (any, error) {
 	}
 	defer f.Close()
 
-	// Read up to maxBytes+1; if we read that extra byte, the file was truncated.
+	// 最多读取 maxBytes+1 字节；若读到了多余的那一字节，说明文件被截断。
 	lr := io.LimitReader(f, maxBytes+1)
 	data, err := io.ReadAll(lr)
 	if err != nil {
@@ -514,7 +498,7 @@ func executeReadFile(input map[string]any) (any, error) {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
-	// Apply line offset (1-based, convert to 0-based).
+	// 应用行 offset（1-based 转为 0-based）。
 	offset := 0
 	if o, ok := input["offset"].(float64); ok {
 		offset = int(o) - 1
@@ -534,7 +518,7 @@ func executeReadFile(input map[string]any) (any, error) {
 		}, nil
 	}
 
-	// Apply line limit.
+	// 应用行 limit。
 	limit := len(lines) - offset
 	if l, ok := input["limit"].(float64); ok {
 		limit = int(l)
@@ -561,18 +545,17 @@ func executeReadFile(input map[string]any) (any, error) {
 }
 
 // ---------------------------------------------------------------------------
-// RegisterBuiltins — bulk registration of all built-in tools
+// RegisterBuiltins — 批量注册所有内置工具
 // ---------------------------------------------------------------------------
 
-// RegisterBuiltins registers all built-in tools (run_shell, write_file,
-// read_file) into the provided Registry. This is the primary entry point
-// for bootstrapping the tool system.
+// RegisterBuiltins 将所有内置工具（run_shell、write_file、read_file）注册到
+// 所提供的 Registry 中。这是引导工具系统的主要入口。
 //
-// Usage:
+// 用法：
 //
 //	reg := tool.NewRegistry()
 //	tool.RegisterBuiltins(reg)
-//	// ... register additional custom tools if needed
+//	// ... 如需可额外注册自定义工具
 func RegisterBuiltins(registry *Registry) {
 	registry.Register(NewRunShellTool())
 	registry.Register(NewWriteFileTool())
@@ -706,11 +689,11 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func()
 			"required": []string{"reason", "strategy", "agents"},
 		},
 		func(input map[string]any) (any, error) {
-			if canDispatchFn == nil || !canDispatchFn() {
-				// Phase 7-I: 使用 policy-blocked 语义返回错误，让 Engine 把错误作
-				// 为 observation 反馈给 LLM，而不是当作不可恢复失败终止任务。
-				return nil, fmt.Errorf("[POLICY BLOCK] leader-only-dispatch blocked dispatch_sub_agent: sub-agent dispatch is only allowed for the leader agent")
-			}
+		if canDispatchFn == nil || !canDispatchFn() {
+			// Phase 7-I: 使用 policy-blocked 语义返回错误，让 Engine 把错误作
+			// 为 observation 反馈给 LLM，而不是当作不可恢复失败终止任务。
+			return nil, fmt.Errorf("[POLICY BLOCK] leader-only-dispatch blocked dispatch_sub_agent: sub-agent dispatch is only allowed for the leader agent")
+		}
 
 			strategy := getString(input, "strategy", "parallel")
 			switch strategy {
@@ -794,7 +777,7 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func()
 	).WithTags("orchestration")
 }
 
-// NewListDirTool creates a directory listing tool named "core/list_dir".
+// NewListDirTool 创建名为 "core/list_dir" 的目录列举工具。
 func NewListDirTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"list_dir",
@@ -830,7 +813,7 @@ func NewListDirTool() *BuiltinTool {
 	).WithTags("filesystem", "filesystem:readonly")
 }
 
-// listDirExecutor implements the list_dir tool logic.
+// listDirExecutor 实现 list_dir 工具的逻辑。
 func listDirExecutor(input map[string]any) (any, error) {
 	path := getString(input, "path", ".")
 	recursive := getBool(input, "recursive", false)
@@ -855,7 +838,7 @@ func listDirExecutor(input map[string]any) (any, error) {
 	}, nil
 }
 
-// walkDir enumerates entries under root according to the supplied filters.
+// walkDir 按所提供的过滤条件枚举 root 之下的条目。
 func walkDir(root string, recursive bool, maxDepth int, pattern string, includeHidden bool) ([]map[string]any, error) {
 	info, err := os.Stat(root)
 	if err != nil {
@@ -916,8 +899,7 @@ func walkDir(root string, recursive bool, maxDepth int, pattern string, includeH
 		}
 
 		if !recursive && d.IsDir() {
-			// For non-recursive mode we still report the directory itself,
-			// but we must not descend into it.
+			// 对于非递归模式，我们仍报告目录本身，但不应进入其中。
 			entry["type"] = "dir"
 			out = append(out, entry)
 			return fs.SkipDir

@@ -5,13 +5,13 @@ import (
 	"os"
 )
 
-// NewDeleteFileTool creates a file deletion tool named "core/delete_file".
+// NewDeleteFileTool 创建名为 "core/delete_file" 的文件删除工具。
 //
-// Parameters:
-//   - path      (string,  required): File or directory path to delete.
-//   - recursive (boolean, optional): If true, delete directories and contents.
-//     Recursive deletion of directories containing files still requires the
-//     filesystem:destructive permission; this flag only controls tool behavior.
+// 参数：
+//   - path      (string,  required)：要删除的文件或目录路径。
+//   - recursive (boolean, optional)：为 true 时删除目录及其内容。
+//     对包含文件的目录进行递归删除仍需 filesystem:destructive 权限；
+//     此 flag 仅控制工具行为。
 func NewDeleteFileTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"delete_file",
@@ -35,7 +35,7 @@ func NewDeleteFileTool() *BuiltinTool {
 	).WithTags("filesystem", "filesystem:destructive")
 }
 
-// deleteFileExecutor removes a file or directory after path traversal checks.
+// deleteFileExecutor 在路径 traversal 检查之后删除文件或目录。
 func deleteFileExecutor(input map[string]any) (any, error) {
 	path := getString(input, "path", "")
 	if path == "" {

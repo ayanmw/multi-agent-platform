@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// NewExecuteProgramTool creates a code execution tool named "core/execute_program".
+// NewExecuteProgramTool 创建名为 "core/execute_program" 的代码执行工具。
 //
-// Parameters:
-//   - language   (string,  required): One of python, node, bash.
-//   - code       (string,  required): Code to execute.
-//   - timeout_ms (integer, optional): Timeout in milliseconds (default 30000).
+// 参数：
+//   - language   (string,  required)：python、node、bash 之一。
+//   - code       (string,  required)：要执行的代码。
+//   - timeout_ms (integer, optional)：超时时间，单位毫秒（默认 30000）。
 //
-// Security: this tool is tagged exec:dangerous. The Harness TagPolicyRule will
-// block it unless TaskPermissions.AllowShellDangerous is true. Even when
-// allowed, the executor also performs lightweight static checks for common
-// destructive patterns (rm, curl|bash, etc.) as an additional defence in depth.
+// 安全：该工具带有 exec:dangerous tag。Harness 的 TagPolicyRule 会拦截它，
+// 除非 TaskPermissions.AllowShellDangerous 为 true。即便被允许，executor
+// 也会对常见破坏性模式（rm、curl|bash 等）做轻量静态检查，作为额外的
+// 纵深防御。
 func NewExecuteProgramTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"execute_program",
@@ -46,9 +46,9 @@ func NewExecuteProgramTool() *BuiltinTool {
 	).WithTags("exec", "exec:dangerous")
 }
 
-// executeProgramExecutor runs code in a supported interpreter via the configured
-// ProgramRunner. By default this is the local host runner; SetDefaultRunner can
-// swap in the DockerRunner at startup.
+// executeProgramExecutor 通过所配置的 ProgramRunner 在受支持的解释器中
+// 运行代码。默认是本地 host runner；启动时可通过 SetDefaultRunner 替换为
+// DockerRunner。
 func executeProgramExecutor(input map[string]any) (any, error) {
 	language := strings.ToLower(getString(input, "language", ""))
 	code := getString(input, "code", "")
@@ -82,30 +82,30 @@ func executeProgramExecutor(input map[string]any) (any, error) {
 	}, err
 }
 
-// dangerousPatterns maps risky keywords to a human-readable reason. These checks
-// are intentionally shallow (a determined bypass is possible). Their purpose is
-// to catch obvious accidental misuse by an LLM before spawning a process.
+// dangerousPatterns 将风险关键字映射为人类可读的原因。这些检查刻意保持
+// 浅层（有决心的话仍可绕过）。其目的是在启动进程之前捕捉 LLM 明显的
+// 误用。
 var dangerousPatterns = []struct {
 	pattern string
 	reason  string
 }{
-	// Shell execution pipelines that download and execute untrusted code.
+	// 下载并执行不可信代码的 shell 执行管道。
 	{`curl\s+[^|]*\|\s*(sh|bash)`, "pipe curl into shell"},
 	{`wget\s+[^|]*\|\s*(sh|bash)`, "pipe wget into shell"},
-	// Destructive filesystem operations.
+	// 破坏性文件系统操作。
 	{`\brm\s+-rf\s+/`, "recursive remove from root"},
 	{`\brm\s+-rf\s+[~\\/]`, "recursive remove home/system"},
-	// Common exfiltration / backdoor helpers.
+	// 常见的数据外泄 / 后门辅助工具。
 	{`\bnc\s+-[ecl]\s+`, "netcat remote shell"},
 	{`\bmkfifo\b`, "fifo backdoor"},
 	{`\bprivilege\s*escalation\b`, "explicit privilege escalation"},
 }
 
-// checkDangerousCode scans source code for obviously risky idioms. It returns
-// an empty string when no known pattern is found. The matching is case-insensitive.
+// checkDangerousCode 扫描源代码中明显有风险的习惯用法。若未匹配到任何
+// 已知模式，则返回空字符串。匹配大小写不敏感。
 func checkDangerousCode(language, code string) string {
 	lower := strings.ToLower(code)
-	// Python-specific dangerous calls.
+	// Python 特有的危险调用。
 	if language == "python" {
 		pyPatterns := []struct {
 			pattern string

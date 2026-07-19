@@ -6,21 +6,20 @@ import (
 	"strings"
 )
 
-// NewApplyDiffTool creates a text replacement tool named "core/apply_diff".
+// NewApplyDiffTool 创建名为 "core/apply_diff" 的文本替换工具。
 //
-// Parameters:
-//   - path              (string,  required): File path to modify.
-//   - diffs             (array,   required): List of diff objects.
-//   - create_if_missing (boolean, optional): If true, create the file when it
-//     does not exist.
+// 参数：
+//   - path              (string,  required)：要修改的文件路径。
+//   - diffs             (array,   required)：diff 对象列表。
+//   - create_if_missing (boolean, optional)：为 true 时若文件不存在则创建。
 //
-// Each diff object may contain:
-//   - old_string (string,  optional): Text to replace.
-//   - new_string (string,  optional): Replacement text.
-//   - line_start (integer, optional): 1-based start line for range replacement.
-//   - line_end   (integer, optional): 1-based end line for range replacement.
-//   - count      (integer, optional): Maximum number of replacements for
-//     old_string. Use -1 for "replace all". Default is 1.
+// 每个 diff 对象可包含：
+//   - old_string (string,  optional)：要替换的文本。
+//   - new_string (string,  optional)：替换后的文本。
+//   - line_start (integer, optional)：按行范围替换的 1-based 起始行。
+//   - line_end   (integer, optional)：按行范围替换的 1-based 结束行。
+//   - count      (integer, optional)：old_string 的最大替换次数。
+//     使用 -1 表示"全部替换"。默认为 1。
 func NewApplyDiffTool() *BuiltinTool {
 	return NewBuiltinTool(
 		"apply_diff",
@@ -73,7 +72,7 @@ func NewApplyDiffTool() *BuiltinTool {
 	).WithTags("filesystem", "filesystem:write")
 }
 
-// applyDiffExecutor applies a sequence of edits to a file.
+// applyDiffExecutor 对文件依次应用一组编辑。
 func applyDiffExecutor(input map[string]any) (any, error) {
 	path := getString(input, "path", "")
 	if path == "" {
@@ -157,9 +156,8 @@ func applyDiffExecutor(input map[string]any) (any, error) {
 	}, nil
 }
 
-// lineIndex returns the byte offset of the first character of the given
-// 1-based line number. If line is greater than the number of lines, it returns
-// len(s).
+// lineIndex 返回给定 1-based 行号首字符对应的字节偏移。
+// 若 line 大于总行数，则返回 len(s)。
 func lineIndex(s string, line int) int {
 	if line <= 1 {
 		return 0

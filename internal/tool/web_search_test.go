@@ -14,9 +14,9 @@ func TestWebSearchFallbackWhenNoProvider(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
 
-	// Without any provider/API key config, web_search should fall back to
-	// DuckDuckGo. We simulate DuckDuckGo HTML by intercepting HTTP with a custom
-	// client injected through the tool's HTTPClient field.
+	// 在没有任何 provider/API key 配置时，web_search 应回退到 DuckDuckGo。
+	// 我们通过工具的 HTTPClient 字段注入自定义 client 拦截 HTTP，以模拟
+	// DuckDuckGo HTML 响应。
 	var requestedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.Path
@@ -32,9 +32,9 @@ func TestWebSearchFallbackWhenNoProvider(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Replace the globally registered placeholder with a configured version that
-	// points to the test server. DuckDuckGo URLs are hard-coded, but the injected
-	// HTTPClient redirects all HTTP(S) calls to srv via transport rewrite below.
+	// 用指向测试服务器的配置版本替换全局注册的占位工具。
+	// DuckDuckGo 的 URL 是硬编码的，但注入的 HTTPClient 通过下面的
+	// transport 改写，把所有 HTTP(S) 调用重定向到 srv。
 	client := srv.Client()
 	client.Transport = &rewriteHostTransport{base: client.Transport, host: srv.URL}
 	cfg := WebSearchConfig{HTTPClient: client, Timeout: 5 * time.Second}
@@ -56,8 +56,8 @@ func TestWebSearchFallbackWhenNoProvider(t *testing.T) {
 	_ = requestedPath
 }
 
-// rewriteHostTransport replaces every request URL host with the test server host
-// so that hard-coded DuckDuckGo endpoints hit our httptest server.
+// rewriteHostTransport 将每个请求 URL 的 host 替换为测试服务器的 host，
+// 使硬编码的 DuckDuckGo 端点指向我们的 httptest 服务器。
 type rewriteHostTransport struct {
 	base http.RoundTripper
 	host string
@@ -95,9 +95,8 @@ func TestWebSearchMCPRequest(t *testing.T) {
 		HTTPClient: srv.Client(),
 		Timeout:    5 * time.Second,
 	}
-	// We cannot redirect the hard-coded Exa endpoint in unit tests without a
-	// test hook, so exercise the parser directly and keep the server for future
-	// hook-based integration tests.
+	// 在单元测试中我们无法在缺少测试 hook 的情况下重定向硬编码的 Exa 端点，
+	// 因此这里直接演练解析器，服务器则保留供未来基于 hook 的集成测试使用。
 	_ = srv
 	_ = cfg
 
