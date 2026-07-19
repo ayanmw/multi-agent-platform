@@ -9,15 +9,14 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
-// TestShouldMockPriority verifies the three-layer mock switch priority using
-// table-driven subtests. Each subtest builds a Config directly (no Load) and
-// exercises ShouldMock.
+// TestShouldMockPriority 使用表驱动子测试验证三层 mock 开关的优先级。
+// 每个子测试直接构造 Config(不调用 Load)并演练 ShouldMock。
 //
-// Priority (highest first):
-//  1) LLMMockEndpoints contains caseID or endpointHint → force mock
-//  2) LLMRealCases contains caseID → force real
+// 优先级(从高到低):
+//  1) LLMMockEndpoints 包含 caseID 或 endpointHint → 强制 mock
+//  2) LLMRealCases 包含 caseID → 强制 real
 //  3) LLMUseMock == true → mock
-//  4) otherwise → real
+//  4) 其他情况 → real
 func TestShouldMockPriority(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -28,7 +27,7 @@ func TestShouldMockPriority(t *testing.T) {
 		endpointHint string
 		want         bool
 	}{
-		// Layer 1: mock endpoints force mock, regardless of useMock and realCases.
+		// 第 1 层:mock endpoints 强制 mock,与 useMock 和 realCases 无关。
 		{
 			name:          "mock_endpoint_caseID_hit_forces_mock_even_if_useMock_false_and_realCases_hit",
 			useMock:       false,
@@ -55,7 +54,7 @@ func TestShouldMockPriority(t *testing.T) {
 			want:          false,
 		},
 
-		// Layer 2: real cases force real, regardless of useMock=true.
+		// 第 2 层:real cases 强制 real,与 useMock=true 无关。
 		{
 			name:       "real_case_hit_forces_real_even_if_useMock_true",
 			useMock:    true,
@@ -71,7 +70,7 @@ func TestShouldMockPriority(t *testing.T) {
 			want:       true,
 		},
 
-		// Layer 3 & 4: useMock default.
+		// 第 3、4 层:useMock 默认值。
 		{
 			name:    "useMock_true_no_overrides_returns_true",
 			useMock: true,
@@ -85,7 +84,7 @@ func TestShouldMockPriority(t *testing.T) {
 			want:    false,
 		},
 
-		// Boundary: empty caseID and empty endpointHint.
+		// 边界:caseID 与 endpointHint 均为空。
 		{
 			name:          "empty_caseID_and_endpointHint_with_useMock_true",
 			useMock:       true,
@@ -103,12 +102,12 @@ func TestShouldMockPriority(t *testing.T) {
 		{
 			name:          "empty_caseID_in_mockEndpoints_does_not_match",
 			useMock:       false,
-			mockEndpoints: []string{""}, // empty element — contains() guards on value != ""
+			mockEndpoints: []string{""}, // 空元素 — contains() 会对 value != "" 做守卫
 			caseID:        "",
 			want:          false,
 		},
 
-		// Case-insensitivity: source uses strings.EqualFold.
+		// 大小写不敏感:源码使用 strings.EqualFold。
 		{
 			name:          "real_case_case_insensitive_match",
 			useMock:       true,
@@ -124,7 +123,7 @@ func TestShouldMockPriority(t *testing.T) {
 			want:          true,
 		},
 
-		// Nil vs empty slice equivalence.
+		// nil 与空切片等价。
 		{
 			name:       "nil_realCases_behaves_like_empty",
 			useMock:    true,
@@ -155,18 +154,18 @@ func TestShouldMockPriority(t *testing.T) {
 	}
 }
 
-// TestLoadEnvParsing covers the environment-variable parsing paths of Load.
-// Each subtest chdir's into a temp dir without a .env file so that only
-// t.Setenv values influence the result.
+// TestLoadEnvParsing 覆盖 Load 的环境变量解析路径。
+// 每个子测试 chdir 到一个没有 .env 文件的临时目录,从而只有
+// t.Setenv 设置的值会影响结果。
 func TestLoadEnvParsing(t *testing.T) {
-	// Helper that runs fn inside a clean temp working directory with all
-	// relevant env vars cleared, so each subtest starts from a known baseline.
+	// 辅助函数:在一个清空了相关 env 变量的临时工作目录中运行 fn,
+	// 使每个子测试都从一个已知基线开始。
 	withCleanEnv := func(t *testing.T, fn func(t *testing.T)) {
 		t.Helper()
-		// Use a temp dir so loadEnvFile(".env") finds no file.
+		// 使用临时目录,使 loadEnvFile(".env") 找不到文件。
 		dir := t.TempDir()
 		chdir(t, dir)
-		// Clear all LLM_* / DB_PATH / SERVER_PORT vars for a deterministic base.
+		// 清空所有 LLM_* / DB_PATH / SERVER_PORT 变量以获得确定性基线。
 		clearEnv := []string{
 			"LLM_ENDPOINT", "LLM_API_KEY", "LLM_MODEL", "DB_PATH", "SERVER_PORT",
 			"LLM_USE_MOCK", "LLM_REAL_CASES", "LLM_MOCK_ENDPOINTS",
@@ -433,7 +432,7 @@ func TestLoadMCPPreinstallConfig(t *testing.T) {
 	})
 }
 
-// TestSplitAndTrim covers the unexported helper directly (white-box).
+// TestSplitAndTrim 直接(白盒)覆盖未导出的辅助函数。
 func TestSplitAndTrim(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -479,7 +478,7 @@ func TestLoadEmbeddingConfig(t *testing.T) {
 	}
 }
 
-// only keys that are not already present in the environment.
+// 仅在环境变量中尚未存在的 key 才会被加载。
 func TestLoadEnvFileLoadsVarsAndDoesNotOverrideExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
@@ -488,9 +487,9 @@ func TestLoadEnvFileLoadsVarsAndDoesNotOverrideExisting(t *testing.T) {
 		t.Fatalf("write .env: %v", err)
 	}
 
-	// Pre-set FOO in environment; it must NOT be overridden by the file.
+	// 预先在环境变量中设置 FOO;它绝不能被文件覆盖。
 	t.Setenv("FOO", "fromenv")
-	// BAR should be loaded from file.
+	// BAR 应从文件加载。
 	os.Unsetenv("BAR")
 
 	if err := loadEnvFile(path); err != nil {
@@ -504,15 +503,15 @@ func TestLoadEnvFileLoadsVarsAndDoesNotOverrideExisting(t *testing.T) {
 	}
 }
 
-// TestLoadEnvFileMissingReturnsError verifies that a missing .env file yields
-// an error (caller is expected to treat it as non-fatal).
+// TestLoadEnvFileMissingReturnsError 验证缺失的 .env 文件会产生错误
+//(调用方应将其视为非致命错误)。
 func TestLoadEnvFileMissingReturnsError(t *testing.T) {
 	if err := loadEnvFile(filepath.Join(t.TempDir(), "missing.env")); err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
-// TestGetAgentConfigNotImplemented verifies the stub returns an error.
+// TestGetAgentConfigNotImplemented 验证 stub 返回一个错误。
 func TestGetAgentConfigNotImplemented(t *testing.T) {
 	_, err := GetAgentConfig("any")
 	if err == nil {
@@ -520,8 +519,8 @@ func TestGetAgentConfigNotImplemented(t *testing.T) {
 	}
 }
 
-// TestLoadContractLimits verifies that Config.LoadContractLimits loads server-
-// enforced task contract bounds from environment variables with safe defaults.
+// TestLoadContractLimits 验证 Config.LoadContractLimits 能从环境变量加载
+// server 端强制执行的任务合约边界,并提供安全默认值。
 func TestLoadContractLimits(t *testing.T) {
 	defaultLimits := ContractLimits{
 		MaxSteps:          200,
@@ -570,7 +569,7 @@ func TestLoadContractLimits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set env vars for this subtest and defer cleanup to avoid side effects.
+			// 为该子测试设置 env 变量,并 defer 清理以避免副作用。
 			for k, v := range tt.env {
 				os.Setenv(k, v)
 				defer os.Unsetenv(k)
@@ -606,8 +605,7 @@ func TestLoadContractLimits(t *testing.T) {
 	}
 }
 
-// chdir changes the working directory for the duration of the test. Restored
-// automatically via t.Cleanup.
+// chdir 在测试期间切换工作目录。通过 t.Cleanup 自动恢复。
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	wd, err := os.Getwd()

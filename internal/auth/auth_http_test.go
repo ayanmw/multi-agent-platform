@@ -22,7 +22,7 @@ func TestAuthMiddlewareProtectedGETRequiresToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// GET /api/tasks without token should be rejected.
+	// 不带 token 的 GET /api/tasks 应被拒绝。
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -30,7 +30,7 @@ func TestAuthMiddlewareProtectedGETRequiresToken(t *testing.T) {
 		t.Fatalf("expected 401 for protected GET, got %d", rr.Code)
 	}
 
-	// GET /healthz without token should pass.
+	// 不带 token 的 GET /healthz 应放行。
 	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -71,15 +71,15 @@ func TestAuthMiddlewareUnprotectedRoutePasses(t *testing.T) {
 	}
 }
 
-// TestAuthMiddlewareInjectsRole verifies the middleware resolves the API key
-// owner's role and places it into the request context.
+// TestAuthMiddlewareInjectsRole 验证 middleware 会解析 API key
+// 所有者的 role 并将其放入请求 context。
 func TestAuthMiddlewareInjectsRole(t *testing.T) {
 	store := NewMemoryAPIKeyStore()
 	_, rawKey, err := store.Create("admin-user", "admin-key")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
-	// memory store defaults RoleUser; manually promote to admin for this test.
+	// memory store 默认 RoleUser;此处手动提升为 admin 以便测试。
 	if sqliteStore, ok := store.(*memoryAPIKeyStore); ok {
 		sqliteStore.mu.Lock()
 		sqliteStore.users["admin-user"].Role = RoleAdmin
@@ -104,8 +104,8 @@ func TestAuthMiddlewareInjectsRole(t *testing.T) {
 	}
 }
 
-// TestAuthMiddlewareViewerWriteBlocked ensures a viewer cannot perform write
-// operations even when authenticated.
+// TestAuthMiddlewareViewerWriteBlocked 确保 viewer 即使已认证,
+// 也无法执行写操作。
 func TestAuthMiddlewareViewerWriteBlocked(t *testing.T) {
 	store := NewMemoryAPIKeyStore()
 	_, rawKey, err := store.Create("viewer-user", "viewer-key")
@@ -132,16 +132,16 @@ func TestAuthMiddlewareViewerWriteBlocked(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	// Middleware currently only enforces auth; the viewer-write guard should be
-	// applied by the handler or an explicit RequireRole wrapper.
-	// This test documents that role is correctly identified as viewer.
+	// 当前 middleware 只强制认证;viewer-write 守卫应由
+	// handler 或显式的 RequireRole wrapper 来施加。
+	// 本测试记录 role 被正确识别为 viewer。
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected downstream to see viewer role, got status %d", rr.Code)
 	}
 }
 
-// TestRequireRoleMiddlewareAllowedAndDenied checks RequireRole permits matching
-// roles and rejects others with 403.
+// TestRequireRoleMiddlewareAllowedAndDenied 检查 RequireRole 允许匹配的
+// role,并以 403 拒绝其他 role。
 func TestRequireRoleMiddlewareAllowedAndDenied(t *testing.T) {
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -176,8 +176,8 @@ func TestRequireRoleMiddlewareAllowedAndDenied(t *testing.T) {
 	}
 }
 
-// TestRequireRoleFuncHandlerLevel verifies the exported handler-level role
-// guard is usable by http.HandleFunc closures.
+// TestRequireRoleFuncHandlerLevel 验证已导出的 handler 级别 role 守卫
+// 可被 http.HandleFunc 闭包使用。
 func TestRequireRoleFuncHandlerLevel(t *testing.T) {
 	adminOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !RequireRoleFunc(w, r, RoleAdmin) {

@@ -12,51 +12,50 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
-// Config holds application configuration loaded from environment and .env
+// Config 持有从环境变量与 .env 加载的应用配置。
 //
-// Backward-compatible design: existing single-model fields (LLMEndpoint, LLMAPIKey,
-// LLMModel) remain for the simple case. Multi-model support is added via the Models
-// slice and ProviderDefault field, loaded from LLM_MODELS (JSON) and
-// LLM_PROVIDER_DEFAULT environment variables.
+// 向后兼容设计:已有的单 model 字段(LLMEndpoint、LLMAPIKey、LLMModel)
+// 在简单场景下保留。多 model 支持通过 Models 切片与 ProviderDefault 字段
+// 提供,分别从 LLM_MODELS(JSON)与 LLM_PROVIDER_DEFAULT 环境变量加载。
 type Config struct {
 	LLMEndpoint   string
 	LLMAPIKey     string
 	LLMModel      string
 	DBPath        string
 	ServerPort    string
-	ProviderDefault string           // default provider name for multi-model routing
-	Models        []ModelConfig     // multi-model configuration list
+	ProviderDefault string           // 多 model 路由的默认 provider 名称
+	Models        []ModelConfig     // 多 model 配置列表
 
-	// LLM mock switch: global default, per-case real outliers, and endpoint/hint overrides.
-	// Used to route LLM calls to MockProvider instead of real providers during testing/demo.
-	// LLMUseMock defaults to true so new deployments run in deterministic mock mode unless
-	// explicitly configured otherwise (or the case is listed in LLMRealCases).
-	LLMUseMock      bool     // global default: true → mock, false → real
-	LLMRealCases    []string // case IDs that always use real providers (comma-separated from LLM_REAL_CASES)
-	LLMMockEndpoints []string // case IDs or endpoint hints that always use mock (comma-separated from LLM_MOCK_ENDPOINTS)
+	// LLM mock 开关:全局默认、按 case 的真实例外,以及 endpoint/hint 覆盖。
+	// 用于在测试 / demo 时将 LLM 调用路由到 MockProvider 而非真实 provider。
+	// LLMUseMock 默认为 true,使新部署在显式配置为其他值(或 case 被列入 LLMRealCases)
+	// 之前以确定性 mock 模式运行。
+	LLMUseMock      bool     // 全局默认:true → mock,false → real
+	LLMRealCases    []string // 始终使用真实 provider 的 case ID(来自 LLM_REAL_CASES,逗号分隔)
+	LLMMockEndpoints []string // 始终使用 mock 的 case ID 或 endpoint hint(来自 LLM_MOCK_ENDPOINTS,逗号分隔)
 
-	// MCPServers lists statically configured MCP servers loaded from MCP_SERVERS.
-	// Dynamic servers added at runtime are loaded separately by the MCP manager.
+	// MCPServers 列出从 MCP_SERVERS 加载的静态配置 MCP server。
+	// 运行时动态添加的 server 由 MCP manager 单独加载。
 	MCPServers []mcp.ServerConfig
 
-	// MCPMarkets lists remote marketplace catalogs loaded from MCP_MARKETS.
-	// Each entry is fetched at startup and registered as a marketplace provider.
+	// MCPMarkets 列出从 MCP_MARKETS 加载的远程 marketplace catalog。
+	// 每条记录在启动时被拉取并注册为一个 marketplace provider。
 	MCPMarkets []MCPMarketConfig
 
-	// MCPPreinstall lists market packages that should be installed automatically
-	// at server startup. Loaded from MCP_PREINSTALL; failures are logged but do
-	// not block startup because packages may depend on external commands.
+	// MCPPreinstall 列出应在 server 启动时自动安装的 market 包。
+	// 从 MCP_PREINSTALL 加载;失败会被记录但不会阻断启动,
+	// 因为包可能依赖外部命令。
 	MCPPreinstall []marketplace.MCPPreinstallEntry
 
-	// Sandbox configuration for execute_program (Phase 5 preview).
-	// When EnableSandbox is false (default), execute_program runs locally.
-	// When true, the runner uses Docker with the configured image.
+	// Sandbox(execute_program,Phase 5 预览)配置。
+	// 当 EnableSandbox 为 false(默认)时,execute_program 在本地运行。
+	// 当为 true 时,runner 使用 Docker 与配置的镜像。
 	EnableSandbox bool   // SANDBOX_ENABLE
 	SandboxImage  string // SANDBOX_IMAGE
 
-	// WebSearch configuration maps to environment variables for provider selection
-	// and API keys. Loaded in Load() so the server can wire the core/web_search tool.
-	// DuckDuckGo is the zero-key fallback; all other providers default to off.
+	// WebSearch 配置映射到用于选择 provider 与 API key 的环境变量。
+	// 在 Load() 中加载,以便 server 能接入 core/web_search 工具。
+	// DuckDuckGo 是零 key 的兜底方案;其他所有 provider 默认关闭。
 	WebSearchProvider       string // WEBSEARCH_PROVIDER
 	WebSearchDisableDDG     bool   // WEBSEARCH_DISABLE_DDG
 	WebSearchEnableExa      bool   // WEBSEARCH_ENABLE_EXA
@@ -64,51 +63,51 @@ type Config struct {
 	WebSearchExaAPIKey      string // WEBSEARCH_EXA_API_KEY
 	WebSearchParallelAPIKey string // WEBSEARCH_PARALLEL_API_KEY
 
-	// Bing Web Search API (Azure) configuration.
+	// Bing Web Search API(Azure)配置。
 	WebSearchEnableBing   bool   // WEBSEARCH_ENABLE_BING
 	WebSearchBingAPIKey   string // WEBSEARCH_BING_API_KEY
 	WebSearchBingEndpoint string // WEBSEARCH_BING_ENDPOINT
 
-	// Google Custom Search JSON API configuration.
+	// Google Custom Search JSON API 配置。
 	WebSearchEnableGoogle   bool   // WEBSEARCH_ENABLE_GOOGLE
 	WebSearchGoogleAPIKey   string // WEBSEARCH_GOOGLE_API_KEY
 	WebSearchGoogleCX       string // WEBSEARCH_GOOGLE_CX
 	WebSearchGoogleEndpoint string // WEBSEARCH_GOOGLE_ENDPOINT
 
-	// Tavily Search API configuration.
+	// Tavily Search API 配置。
 	WebSearchEnableTavily        bool   // WEBSEARCH_ENABLE_TAVILY
 	WebSearchTavilyAPIKey        string // WEBSEARCH_TAVILY_API_KEY
 	WebSearchTavilyEndpoint      string // WEBSEARCH_TAVILY_ENDPOINT
 	WebSearchTavilySearchDepth   string // WEBSEARCH_TAVILY_SEARCH_DEPTH
 	WebSearchTavilyIncludeAnswer bool   // WEBSEARCH_TAVILY_INCLUDE_ANSWER
 
-	// Brave Search API configuration.
+	// Brave Search API 配置。
 	WebSearchEnableBrave   bool   // WEBSEARCH_ENABLE_BRAVE
 	WebSearchBraveAPIKey   string // WEBSEARCH_BRAVE_API_KEY
 	WebSearchBraveEndpoint string // WEBSEARCH_BRAVE_ENDPOINT
 
-	// Placeholder providers for future kimi_search and glm_search support.
+	// 用于未来 kimi_search 和 glm_search 支持的占位 provider。
 	WebSearchEnableKimiSearch bool // WEBSEARCH_ENABLE_KIMI_SEARCH
 	WebSearchEnableGlmSearch  bool // WEBSEARCH_ENABLE_GLM_SEARCH
 
-	// Embedding provider configuration. When provider is empty or "local", the
-	// existing LocalEmbeddingProvider is used. When "openai" or "cohere", a
-	// remote HTTP provider is constructed from the fields below.
+	// Embedding provider 配置。当 provider 为空或 "local" 时,
+	// 使用现有的 LocalEmbeddingProvider。当为 "openai" 或 "cohere" 时,
+	// 根据下列字段构造一个远程 HTTP provider。
 	EmbeddingProvider   string // EMBEDDING_PROVIDER (local | openai | cohere)
 	EmbeddingEndpoint   string // EMBEDDING_ENDPOINT
 	EmbeddingAPIKey     string // EMBEDDING_API_KEY
 	EmbeddingModel      string // EMBEDDING_MODEL
 	EmbeddingDimensions int    // EMBEDDING_DIMENSIONS
 
-	// ContractLimits defines server-enforced upper bounds for task contracts.
-	// Loaded from CONTRACT_LIMIT_* environment variables and exposed via the
-	// /api/contract-limits endpoint so frontends can clamp user inputs.
+	// ContractLimits 定义 server 端强制执行的任务合约上限。
+	// 从 CONTRACT_LIMIT_* 环境变量加载,并通过 /api/contract-limits 端点暴露,
+	// 以便前端可以据此约束用户输入。
 	ContractLimits ContractLimits
 }
 
-// ContractLimits stores server-enforced upper bounds for task contracts.
-// Values are loaded from CONTRACT_LIMIT_* environment variables and consumed
-// by HTTP handlers to validate / clamp user-provided task parameters.
+// ContractLimits 存储 server 端强制执行的任务合约上限。
+// 值从 CONTRACT_LIMIT_* 环境变量加载,由 HTTP handler 消费,
+// 用于校验 / 约束用户提供的任务参数。
 type ContractLimits struct {
 	MaxSteps          int      `json:"max_steps"`
 	MaxTokensPerStep  int      `json:"max_tokens_per_step"`
@@ -118,23 +117,23 @@ type ContractLimits struct {
 	Scopes            []string `json:"scopes"`
 }
 
-// ModelConfig describes a single model's configuration for multi-model setups.
-// Each model is associated with a provider type and its own endpoint/credentials.
+// ModelConfig 描述多 model 设置中单个 model 的配置。
+// 每个 model 关联一个 provider 类型,并拥有自己的 endpoint / 凭据。
 type ModelConfig struct {
-	Name     string // model identifier (e.g., "deepseek-v4-flash", "claude-sonnet-4-6")
-	Provider string // provider type: "openai", "anthropic", "deepseek"
+	Name     string // model 标识(例如 "deepseek-v4-flash"、"claude-sonnet-4-6")
+	Provider string // provider 类型:"openai"、"anthropic"、"deepseek"
 	Endpoint string // provider API base URL
 	APIKey   string // provider API key
 }
 
-// MCPMarketConfig describes a remote MCP marketplace catalog.
-// The Name field becomes the provider name; URL is the JSON catalog endpoint.
+// MCPMarketConfig 描述一个远程 MCP marketplace catalog。
+// Name 字段会成为 provider 名称;URL 是 JSON catalog 端点。
 type MCPMarketConfig struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 }
 
-// Load reads .env file and environment variables to populate Config
+// Load 读取 .env 文件与环境变量以填充 Config
 func Load() (*Config, error) {
 	cfg := &Config{
 		LLMEndpoint:  "https://aicoding.dobest.com/v1",
@@ -145,13 +144,13 @@ func Load() (*Config, error) {
 		SandboxImage: "python:3.11-slim",
 	}
 
-	// Load .env file (lowest priority)
+	// 加载 .env 文件(优先级最低)
 	if err := loadEnvFile(".env"); err != nil {
-		// .env is optional — don't fail if missing
+		// .env 是可选的 — 缺失不应导致失败
 		fmt.Fprintf(os.Stderr, "Warning: .env file not found or unreadable: %v\n", err)
 	}
 
-	// Override with environment variables (higher priority)
+	// 用环境变量覆盖(优先级更高)
 	if v := os.Getenv("LLM_ENDPOINT"); v != "" {
 		cfg.LLMEndpoint = v
 	}
@@ -177,7 +176,7 @@ func Load() (*Config, error) {
 		cfg.LLMMockEndpoints = splitAndTrim(v)
 	}
 
-	// Sandbox configuration: disabled by default, enabled via SANDBOX_ENABLE=true.
+	// Sandbox 配置:默认关闭,通过 SANDBOX_ENABLE=true 启用。
 	if v := os.Getenv("SANDBOX_ENABLE"); v != "" {
 		cfg.EnableSandbox = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -185,7 +184,7 @@ func Load() (*Config, error) {
 		cfg.SandboxImage = v
 	}
 
-	// WebSearch provider configuration.
+	// WebSearch provider 配置。
 	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {
 		cfg.WebSearchProvider = v
 	}
@@ -205,7 +204,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchParallelAPIKey = v
 	}
 
-	// Bing Web Search API configuration.
+	// Bing Web Search API 配置。
 	if v := os.Getenv("WEBSEARCH_ENABLE_BING"); v != "" {
 		cfg.WebSearchEnableBing = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -216,7 +215,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchBingEndpoint = v
 	}
 
-	// Google Custom Search JSON API configuration.
+	// Google Custom Search JSON API 配置。
 	if v := os.Getenv("WEBSEARCH_ENABLE_GOOGLE"); v != "" {
 		cfg.WebSearchEnableGoogle = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -230,7 +229,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchGoogleEndpoint = v
 	}
 
-	// Tavily Search API configuration.
+	// Tavily Search API 配置。
 	if v := os.Getenv("WEBSEARCH_ENABLE_TAVILY"); v != "" {
 		cfg.WebSearchEnableTavily = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -247,7 +246,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchTavilyIncludeAnswer = strings.EqualFold(v, "true") || v == "1"
 	}
 
-	// Brave Search API configuration.
+	// Brave Search API 配置。
 	if v := os.Getenv("WEBSEARCH_ENABLE_BRAVE"); v != "" {
 		cfg.WebSearchEnableBrave = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -258,7 +257,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchBraveEndpoint = v
 	}
 
-	// Placeholder kimi_search / glm_search configuration.
+	// 占位的 kimi_search / glm_search 配置。
 	if v := os.Getenv("WEBSEARCH_ENABLE_KIMI_SEARCH"); v != "" {
 		cfg.WebSearchEnableKimiSearch = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -266,7 +265,7 @@ func Load() (*Config, error) {
 		cfg.WebSearchEnableGlmSearch = strings.EqualFold(v, "true") || v == "1"
 	}
 
-	// Embedding provider configuration.
+	// Embedding provider 配置。
 	if v := os.Getenv("EMBEDDING_PROVIDER"); v != "" {
 		cfg.EmbeddingProvider = v
 	}
@@ -285,40 +284,40 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Load multi-model configuration
+	// 加载多 model 配置
 	if err := cfg.LoadMultiModelConfig(); err != nil {
 		return nil, fmt.Errorf("load multi-model config: %w", err)
 	}
 
-	// Load static MCP server configuration
+	// 加载静态 MCP server 配置
 	if err := cfg.LoadMCPConfig(); err != nil {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
-	// Load remote MCP marketplace configuration
+	// 加载远程 MCP marketplace 配置
 	if err := cfg.LoadMCPMarketConfig(); err != nil {
 		return nil, fmt.Errorf("load mcp market config: %w", err)
 	}
 
-	// Load MCP preinstall configuration
+	// 加载 MCP preinstall 配置
 	if err := cfg.LoadMCPPreinstallConfig(); err != nil {
 		return nil, fmt.Errorf("load mcp preinstall config: %w", err)
 	}
 
-	// Load server-enforced contract limits from environment variables.
+	// 从环境变量加载 server 端强制执行的合约上限。
 	cfg.LoadContractLimits()
 
 	return cfg, nil
 }
 
-// LoadMCPConfig loads static MCP server configuration from the MCP_SERVERS
-// environment variable. The value must be a JSON array of mcp.ServerConfig objects.
+// LoadMCPConfig 从 MCP_SERVERS 环境变量加载静态 MCP server 配置。
+// 值必须是一个 mcp.ServerConfig 对象的 JSON 数组。
 //
-// Example:
+// 示例:
 //   MCP_SERVERS=[{"name":"time","transport":"stdio","command":"node","args":["mcp/time.js"],"enabled":true}]
 //
-// Disabled servers are kept in the list but skipped by the MCP manager; this allows
-// configuration files to declare servers that are off by default.
+// 被禁用的 server 仍保留在列表中,但会被 MCP manager 跳过;这使得配置文件
+// 可以声明默认关闭的 server。
 func (cfg *Config) LoadMCPConfig() error {
 	jsonStr := os.Getenv("MCP_SERVERS")
 	if jsonStr == "" {
@@ -332,10 +331,9 @@ func (cfg *Config) LoadMCPConfig() error {
 	return nil
 }
 
-// LoadMCPMarketConfig loads remote MCP marketplace catalogs from the
-// MCP_MARKETS environment variable. The value must be a JSON array of
-// MCPMarketConfig objects. Providers that fail to fetch are logged but do not
-// prevent the rest of the configuration from loading.
+// LoadMCPMarketConfig 从 MCP_MARKETS 环境变量加载远程 MCP marketplace catalog。
+// 值必须是一个 MCPMarketConfig 对象的 JSON 数组。拉取失败的 provider 会被记录日志,
+// 但不会阻止其余配置的加载。
 func (cfg *Config) LoadMCPMarketConfig() error {
 	jsonStr := os.Getenv("MCP_MARKETS")
 	if jsonStr == "" {
@@ -349,20 +347,20 @@ func (cfg *Config) LoadMCPMarketConfig() error {
 	return nil
 }
 
-// LoadMCPPreinstallConfig loads the list of market packages that should be
-// installed automatically at startup from MCP_PREINSTALL.
+// LoadMCPPreinstallConfig 从 MCP_PREINSTALL 加载应在启动时自动安装的
+// market 包列表。
 //
-// The value is a JSON array where each element is either a shorthand string
-// "market/package" (market defaults to "default" if omitted) or an object
-// {"market":"...","package":"..."}. Parse errors are returned so the server
-// can decide whether to log and continue or fail fast.
+// 值是一个 JSON 数组,每个元素要么是简写字符串 "market/package"
+//(省略 market 时默认为 "default"),要么是对象
+// {"market":"...","package":"..."}。解析错误会被返回,以便 server
+// 决定是记录日志后继续还是直接失败。
 func (cfg *Config) LoadMCPPreinstallConfig() error {
 	jsonStr := os.Getenv("MCP_PREINSTALL")
 	if jsonStr == "" {
 		return nil
 	}
 
-	// First try the heterogeneous array: strings and objects.
+	// 先尝试异构数组:字符串与对象混合。
 	var raw []json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		return fmt.Errorf("parse MCP_PREINSTALL JSON: %w", err)
@@ -397,7 +395,7 @@ func (cfg *Config) LoadMCPPreinstallConfig() error {
 	return nil
 }
 
-// loadEnvFile parses a simple KEY=VALUE .env file (no quotes, no interpolation)
+// loadEnvFile 解析简单的 KEY=VALUE .env 文件(无引号、无插值)
 func loadEnvFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -408,7 +406,7 @@ func loadEnvFile(path string) error {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
+		// 跳过空行与注释
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -418,7 +416,7 @@ func loadEnvFile(path string) error {
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
-		// Only set if not already in environment
+		// 仅在环境变量尚未存在时才设置
 		if os.Getenv(key) == "" {
 			os.Setenv(key, val)
 		}
@@ -426,7 +424,7 @@ func loadEnvFile(path string) error {
 	return scanner.Err()
 }
 
-// splitAndTrim splits a comma-separated string and trims whitespace from each element.
+// splitAndTrim 拆分逗号分隔的字符串,并对每个元素做 trim 去除空白。
 func splitAndTrim(s string) []string {
 	parts := strings.Split(s, ",")
 	var result []string
@@ -439,8 +437,8 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
-// parseEnvIntDefault reads an integer environment variable and returns the
-// default value when the variable is missing, empty, or not a valid integer.
+// parseEnvIntDefault 读取一个整数类型的环境变量,当变量缺失、为空或
+// 不是合法整数时返回默认值。
 func parseEnvIntDefault(key string, defaultValue int) int {
 	v := os.Getenv(key)
 	if v == "" {
@@ -454,9 +452,9 @@ func parseEnvIntDefault(key string, defaultValue int) int {
 	return n
 }
 
-// LoadContractLimits loads server-enforced task contract bounds from
-// CONTRACT_LIMIT_* environment variables. Any missing or invalid value falls
-// back to a safe default so the server can start without manual tuning.
+// LoadContractLimits 从 CONTRACT_LIMIT_* 环境变量加载 server 端强制执行的
+// 任务合约边界。任何缺失或非法的值都会回退到一个安全默认值,使 server
+// 无需手动调参即可启动。
 func (cfg *Config) LoadContractLimits() {
 	cfg.ContractLimits = ContractLimits{
 		MaxSteps:          parseEnvIntDefault("CONTRACT_LIMIT_MAX_STEPS", 200),
@@ -468,14 +466,14 @@ func (cfg *Config) LoadContractLimits() {
 	}
 }
 
-// ShouldMock decides whether a request for the given case/endpoint should be routed
-// to MockProvider based on the three-layer mock switch.
+// ShouldMock 基于三层 mock 开关,判断对给定 case / endpoint 的请求是否应
+// 路由到 MockProvider。
 //
-// Priority (highest first):
-//  1) LLMMockEndpoints contains caseID or endpointHint → force mock
-//  2) LLMRealCases contains caseID → force real
+// 优先级(从高到低):
+//  1) LLMMockEndpoints 包含 caseID 或 endpointHint → 强制 mock
+//  2) LLMRealCases 包含 caseID → 强制 real
 //  3) LLMUseMock == true → mock
-//  4) otherwise → real
+//  4) 其他情况 → real
 func (cfg *Config) ShouldMock(caseID string, endpointHint string) bool {
 	contains := func(list []string, value string) bool {
 		for _, item := range list {
@@ -495,19 +493,17 @@ func (cfg *Config) ShouldMock(caseID string, endpointHint string) bool {
 	return cfg.LLMUseMock
 }
 
-// GetAgentConfig loads an agent's configuration from the database.
-// Note: DB persistence is implemented (pkg/db with agents table), but this
-// function currently returns a not-implemented error, mirroring the
-// behavior of the legacy in-memory config path.
+// GetAgentConfig 从数据库加载某个 agent 的配置。
+// 注意:DB 持久化已实现(pkg/db 中的 agents 表),但本函数当前返回
+// not-implemented 错误,以镜像旧 in-memory 配置路径的行为。
 func GetAgentConfig(agentID string) (*AgentConfig, error) {
 	_ = agentID
 	return nil, fmt.Errorf("agent config DB loading not yet implemented")
 }
 
-// BuildEmbeddingProviderParams holds the parameters needed by the server to
-// construct an embedding provider from configuration. Keeping this struct in
-// config (instead of returning a concrete provider directly) avoids an
-// import cycle between internal/config and internal/llm.
+// BuildEmbeddingProviderParams 持有 server 从配置构造 embedding provider
+// 所需的参数。将此结构体保留在 config 中(而非直接返回具体 provider)
+// 可避免 internal/config 与 internal/llm 之间的 import cycle(循环依赖)。
 type BuildEmbeddingProviderParams struct {
 	Provider   string // EMBEDDING_PROVIDER (local | openai | cohere)
 	Endpoint   string // EMBEDDING_ENDPOINT
@@ -516,9 +512,9 @@ type BuildEmbeddingProviderParams struct {
 	Dimensions int    // EMBEDDING_DIMENSIONS
 }
 
-// EmbeddingProviderParams returns the parameters needed to build an embedding
-// provider. The server layer constructs the concrete provider to avoid an
-// import cycle between internal/config and internal/llm.
+// EmbeddingProviderParams 返回构造 embedding provider 所需的参数。
+// 由 server 层构造具体 provider,以避免 internal/config 与 internal/llm
+// 之间的 import cycle。
 func (cfg *Config) EmbeddingProviderParams() BuildEmbeddingProviderParams {
 	return BuildEmbeddingProviderParams{
 		Provider:   cfg.EmbeddingProvider,
@@ -529,7 +525,7 @@ func (cfg *Config) EmbeddingProviderParams() BuildEmbeddingProviderParams {
 	}
 }
 
-// AgentConfig mirrors the agent configuration from the database
+// AgentConfig 镜像数据库中的 agent 配置
 type AgentConfig struct {
 	ID           string
 	Name         string
@@ -542,28 +538,28 @@ type AgentConfig struct {
 	Tools        []string
 }
 
-// LoadMultiModelConfig loads multi-model configuration from environment variables.
+// LoadMultiModelConfig 从环境变量加载多 model 配置。
 //
-// Supported methods (in priority order):
-//  1. LLM_MODELS — JSON array of ModelConfig objects (preferred for complex setups)
-//  2. LLM_MODEL_<INDEX>_PROVIDER / ENDPOINT / API_KEY — indexed environment variables
-//     for simpler, declarative configuration without JSON
+// 支持的方法(按优先级顺序):
+//  1. LLM_MODELS — ModelConfig 对象的 JSON 数组(复杂配置推荐)
+//  2. LLM_MODEL_<INDEX>_PROVIDER / ENDPOINT / API_KEY — 带索引的环境变量,
+//     适合无需 JSON 的简单声明式配置
 //
-// Example LLM_MODELS:
+// LLM_MODELS 示例:
 //  LLM_MODELS=[
 //    {"name":"deepseek-v4-flash","provider":"deepseek","endpoint":"https://aicoding.dobest.com/v1","api_key":"sk-xxx"},
 //    {"name":"gpt-4o","provider":"openai","endpoint":"https://api.openai.com/v1","api_key":"sk-yyy"}
 //  ]
 //
-// Example indexed vars:
+// 带索引变量示例:
 //  LLM_MODEL_0_PROVIDER=deepseek
 //  LLM_MODEL_0_ENDPOINT=https://aicoding.dobest.com/v1
 //  LLM_MODEL_0_API_KEY=sk-xxx
 //  LLM_MODEL_0_NAME=deepseek-v4-flash
 //
-// LLM_PROVIDER_DEFAULT sets the default provider name (defaults to the first model's name).
+// LLM_PROVIDER_DEFAULT 设置默认 provider 名称(默认为第一个 model 的 name)。
 func (cfg *Config) LoadMultiModelConfig() error {
-	// Method 1: Try JSON array from LLM_MODELS
+	// 方法 1:从 LLM_MODELS 尝试 JSON 数组
 	if jsonStr := os.Getenv("LLM_MODELS"); jsonStr != "" {
 		var models []ModelConfig
 		if err := json.Unmarshal([]byte(jsonStr), &models); err != nil {
@@ -571,32 +567,32 @@ func (cfg *Config) LoadMultiModelConfig() error {
 		}
 		cfg.Models = models
 	} else {
-		// Method 2: Try indexed environment variables
+		// 方法 2:尝试带索引的环境变量
 		cfg.Models = loadIndexedModelConfigs()
 	}
 
-	// Set default provider name
+	// 设置默认 provider 名称
 	if v := os.Getenv("LLM_PROVIDER_DEFAULT"); v != "" {
 		cfg.ProviderDefault = v
 	} else if len(cfg.Models) > 0 {
-		// Default to the first model's name
+		// 默认使用第一个 model 的 name
 		cfg.ProviderDefault = cfg.Models[0].Name
 	}
 
 	return nil
 }
 
-// loadIndexedModelConfigs scans environment variables for LLM_MODEL_<INDEX>_* prefix
-// to build a slice of ModelConfig. This allows multi-model configuration without JSON.
+// loadIndexedModelConfigs 扫描环境变量中 LLM_MODEL_<INDEX>_* 前缀,
+// 构造一个 ModelConfig 切片。这样无需 JSON 即可配置多 model。
 //
-// Variables are grouped by integer index: LLM_MODEL_0_PROVIDER, LLM_MODEL_0_NAME, etc.
-// Index scanning stops at the first gap (e.g., if index 2 is missing, only 0 and 1 are loaded).
+// 变量按整数索引分组:LLM_MODEL_0_PROVIDER、LLM_MODEL_0_NAME 等。
+// 索引扫描在遇到第一个空缺时停止(例如索引 2 缺失,则只加载 0 和 1)。
 func loadIndexedModelConfigs() []ModelConfig {
 	var models []ModelConfig
 	for i := 0; ; i++ {
 		provider := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_PROVIDER", i))
 		if provider == "" {
-			break // stop at first gap
+			break // 遇到第一个空缺即停止
 		}
 		name := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_NAME", i))
 		if name == "" {
@@ -605,10 +601,10 @@ func loadIndexedModelConfigs() []ModelConfig {
 		endpoint := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_ENDPOINT", i))
 		apiKey := os.Getenv(fmt.Sprintf("LLM_MODEL_%d_API_KEY", i))
 		if endpoint == "" {
-			endpoint = os.Getenv("LLM_ENDPOINT") // fall back to default
+			endpoint = os.Getenv("LLM_ENDPOINT") // 回退到默认值
 		}
 		if apiKey == "" {
-			apiKey = os.Getenv("LLM_API_KEY") // fall back to default
+			apiKey = os.Getenv("LLM_API_KEY") // 回退到默认值
 		}
 		models = append(models, ModelConfig{
 			Name:     name,

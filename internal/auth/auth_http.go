@@ -1,15 +1,14 @@
-// auth_http.go — HTTP middleware, context helpers, and route handlers for API
-// key authentication.
+// auth_http.go — API key 认证相关的 HTTP middleware、context 辅助函数与路由 handler。
 //
-// # Auth Flow
+// # Auth 流程
 //
-//  1. Extract Bearer token from Authorization header
-//  2. Verify via APIKeyStore.Verify (prefix pre-filter + bcrypt)
-//  3. Inject user ID into request context via WithUserID
-//  4. Downstream handlers read user ID via UserIDFromContext
+//  1. 从 Authorization header 中提取 Bearer token
+//  2. 通过 APIKeyStore.Verify 校验(prefix 预过滤 + bcrypt)
+//  3. 通过 WithUserID 将用户 ID 注入到请求 context
+//  4. 下游 handler 通过 UserIDFromContext 读取用户 ID
 //
-// When REQUIRE_AUTH is false, the middleware still injects the seed user ID so
-// that API key management endpoints can function without an Authorization header.
+// 当 REQUIRE_AUTH 为 false 时,middleware 仍会注入 seed user ID,
+// 使得 API key 管理端点在没有 Authorization header 的情况下也能正常工作。
 package auth
 
 import (
@@ -22,42 +21,40 @@ import (
 	"time"
 )
 
-// contextKey is a private type for context value keys to avoid collisions.
+// contextKey 是用于 context value key 的私有类型,以避免 key 冲突。
 type contextKey string
 
 const userIDKey contextKey = "user_id"
 const roleKey contextKey = "role"
 
-// WithUserID injects a user ID into the context.
-// Used by the auth middleware after successful verification.
+// WithUserID 将用户 ID 注入到 context 中。
+// 由 auth middleware 在校验成功后使用。
 func WithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, userIDKey, userID)
 }
 
-// UserIDFromContext extracts the user ID from the request context.
-// Returns the user ID and true if present, otherwise ("", false).
+// UserIDFromContext 从请求 context 中提取用户 ID。
+// 如果存在则返回用户 ID 和 true,否则返回 ("", false)。
 func UserIDFromContext(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(userIDKey).(string)
 	return v, ok
 }
 
-// WithRole injects a role into the context. Used by the auth middleware after
-// resolving the authenticated user's record. Downstream RBAC helpers read the
-// role via RoleFromContext.
+// WithRole 将 role 注入到 context 中。由 auth middleware 在解析出已认证用户
+// 的记录后使用。下游 RBAC 辅助函数通过 RoleFromContext 读取 role。
 func WithRole(ctx context.Context, role Role) context.Context {
 	return context.WithValue(ctx, roleKey, role)
 }
 
-// RoleFromContext extracts the RBAC role from the request context.
-// Returns the Role and true if it has been injected; otherwise ("", false).
+// RoleFromContext 从请求 context 中提取 RBAC role。
+// 如果已注入则返回 Role 和 true,否则返回 ("", false)。
 func RoleFromContext(ctx context.Context) (Role, bool) {
 	v, ok := ctx.Value(roleKey).(Role)
 	return v, ok
 }
 
-// DefaultPublicRoutes returns GET routes that should remain public even when
-// REQUIRE_AUTH is enabled. These are typically health, metrics, and read-only
-// discovery endpoints.
+// DefaultPublicRoutes 返回即使在 REQUIRE_AUTH 启用时也应保持公开的 GET 路由。
+// 这些通常是健康检查、metrics 以及只读的发现类端点。
 func DefaultPublicRoutes() []string {
 	return []string{
 		"GET /healthz",
@@ -66,10 +63,10 @@ func DefaultPublicRoutes() []string {
 	}
 }
 
-// DefaultAdminRoutes returns the list of METHOD + path prefix combinations
-// that are restricted to admin users only. Format: "METHOD /path/prefix".
-// These routes perform privileged writes: mutating platform configuration,
-// managing users/agents/cases/tools, and installing marketplace packages.
+// DefaultAdminRoutes 返回仅限 admin 用户访问的 METHOD + path 前缀组合列表。
+// 格式:"METHOD /path/prefix"。
+// 这些路由执行特权写操作:修改平台配置、管理 users/agents/cases/tools,
+// 以及安装 marketplace 包。
 func DefaultAdminRoutes() []string {
 	return []string{
 		"POST /api/agents",
@@ -90,9 +87,9 @@ func DefaultAdminRoutes() []string {
 	}
 }
 
-// DefaultProtectedRoutes returns the list of METHOD + path prefix combinations
-// that require authentication when REQUIRE_AUTH is enabled.
-// Format: "METHOD /path/prefix" — e.g., "DELETE /api/sessions/"
+// DefaultProtectedRoutes 返回当 REQUIRE_AUTH 启用时需要认证的
+// METHOD + path 前缀组合列表。
+// 格式:"METHOD /path/prefix" — 例如 "DELETE /api/sessions/"
 func DefaultProtectedRoutes() []string {
 	return []string{
 		"GET /api/tasks",
@@ -135,31 +132,31 @@ func DefaultProtectedRoutes() []string {
 		"DELETE /api/tools",
 		"POST /api/auth/api-keys",
 		"DELETE /api/auth/api-keys/",
-		// Model price edits are runtime-only writes (overwrite ModelRegistry entry),
-		// so they require a Bearer token when REQUIRE_AUTH is enabled. GET is public-read.
+		// Model price 编辑属于运行时写操作(覆盖 ModelRegistry 条目),
+		// 因此在 REQUIRE_AUTH 启用时需要 Bearer token。GET 保持公开可读。
 		"PUT /api/models/prices/",
-		// Case mutations are writes; GET remains public-read.
+		// Case 的变更操作是写操作;GET 保持公开可读。
 		"POST /api/cases",
 		"PUT /api/cases/",
 		"DELETE /api/cases/",
 	}
 }
 
-// NewAuthMiddleware creates an HTTP middleware that enforces authentication
-// on protected routes. When requireAuth is false, all requests pass through with
-// the fallback user ID injected, so auth management endpoints still work.
+// NewAuthMiddleware 创建一个在受保护路由上强制认证的 HTTP middleware。
+// 当 requireAuth 为 false 时,所有请求都会放行并注入兜底用户 ID,
+// 因此 auth 管理端点仍能正常工作。
 //
-// Protected routes are matched by METHOD + path prefix. For example,
-// "DELETE /api/sessions/" matches DELETE requests to /api/sessions/anything.
-// Public routes listed in publicRoutes are always exempt from authentication.
+// 受保护路由通过 METHOD + path 前缀进行匹配。例如,
+// "DELETE /api/sessions/" 匹配所有对 /api/sessions/anything 的 DELETE 请求。
+// publicRoutes 中列出的公开路由始终豁免认证。
 func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth bool, protectedRoutes, publicRoutes []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// When auth is disabled, inject the fallback user and pass through.
+		// 当认证关闭时,注入兜底用户并放行。
 		if !requireAuth {
 			ctx := WithUserID(r.Context(), fallbackUserID)
 			ctx = injectRole(ctx, store, fallbackUserID)
-			// REQUIRE_AUTH 关闭时，如果 seed user 角色是 viewer，则仍然要阻止写操作；
-			// admin/user 继续放行，保持原有行为。
+			// REQUIRE_AUTH 关闭时,如果 seed user 角色是 viewer,则仍然要阻止写操作;
+			// admin/user 继续放行,保持原有行为。
 			if role, ok := RoleFromContext(ctx); ok && role == RoleViewer && isViewerWriteOperation(r.Method) {
 				writeJSONError(w, "forbidden: viewer role is read-only", http.StatusForbidden)
 				return
@@ -168,7 +165,7 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 			return
 		}
 
-		// Public routes are always allowed without authentication.
+		// 公开路由始终允许在无认证情况下访问。
 		if isPublicRoute(r.Method, r.URL.Path, publicRoutes) {
 			ctx := WithUserID(r.Context(), fallbackUserID)
 			ctx = injectRole(ctx, store, fallbackUserID)
@@ -176,17 +173,17 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 			return
 		}
 
-		// Check if this route requires authentication.
+		// 检查该路由是否需要认证。
 		requiresAuth := isProtectedRoute(r.Method, r.URL.Path, protectedRoutes)
 		if !requiresAuth {
-			// Unprotected non-public route — inject fallback user.
+			// 非受保护且非公开的路由 — 注入兜底用户。
 			ctx := WithUserID(r.Context(), fallbackUserID)
 			ctx = injectRole(ctx, store, fallbackUserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		// Protected route — verify the API key.
+		// 受保护路由 — 校验 API key。
 		userID, err := authenticateRequest(r, store)
 		if err != nil {
 			log.Printf("[Auth] authentication failed: %v (path=%s, method=%s)", err, r.URL.Path, r.Method)
@@ -202,10 +199,10 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 	})
 }
 
-// injectRole resolves the user's role and injects it into the context.
-// If the store cannot resolve the user, RoleViewer is used as a safe default
-// to avoid accidentally elevating a broken session to admin privileges.
-// The caller must have already validated that userID is non-empty.
+// injectRole 解析用户的 role 并将其注入到 context 中。
+// 如果 store 无法解析该用户,则使用 RoleViewer 作为安全默认值,
+// 以避免将一个损坏的 session 意外提升为 admin 权限。
+// 调用方必须已校验过 userID 非空。
 func injectRole(ctx context.Context, store APIKeyStore, userID string) context.Context {
 	if store == nil {
 		return WithRole(ctx, RoleViewer)
@@ -217,8 +214,8 @@ func injectRole(ctx context.Context, store APIKeyStore, userID string) context.C
 	return WithRole(ctx, user.Role)
 }
 
-// isViewerWriteOperation returns true for authenticated write requests made by
-// a viewer role. Viewers are restricted to read-only access across the API.
+// isViewerWriteOperation 在 viewer role 发起认证写请求时返回 true。
+// viewer 在整个 API 上被限制为只读访问。
 func isViewerWriteOperation(method string) bool {
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return false
@@ -226,10 +223,9 @@ func isViewerWriteOperation(method string) bool {
 	return true
 }
 
-// RequireRole is an HTTP middleware guard that responds with 403 Forbidden when
-// the context role is not in the allowed set. It should be placed after the
-// auth middleware so that role has already been injected. If role is missing,
-// it is treated as RoleViewer for safety.
+// RequireRole 是一个 HTTP middleware 守卫,当 context 中的 role 不在
+// 允许集合内时返回 403 Forbidden。它应放在 auth middleware 之后,
+// 以便 role 已被注入。如果 role 缺失,出于安全考虑会被视为 RoleViewer。
 func RequireRole(allowed ...Role) func(http.Handler) http.Handler {
 	allowedSet := make(map[Role]struct{}, len(allowed))
 	for _, r := range allowed {
@@ -250,9 +246,9 @@ func RequireRole(allowed ...Role) func(http.Handler) http.Handler {
 	}
 }
 
-// requireRoleForRequest is a convenience helper for handlers registered with
-// http.HandleFunc. It checks that the current request's role is in the allowed
-// set and writes a 403 JSON response if not. Returns true when access is granted.
+// requireRoleForRequest 是为通过 http.HandleFunc 注册的 handler 提供的便利辅助函数。
+// 它检查当前请求的 role 是否在允许集合内,如不在则写入 403 JSON 响应。
+// 访问被允许时返回 true。
 func requireRoleForRequest(w http.ResponseWriter, r *http.Request, allowed ...Role) bool {
 	role, _ := RoleFromContext(r.Context())
 	if role == "" {
@@ -267,17 +263,15 @@ func requireRoleForRequest(w http.ResponseWriter, r *http.Request, allowed ...Ro
 	return false
 }
 
-// RequireRoleFunc provides a direct handler-level check compatible with
-// http.HandleFunc closures. It is equivalent to requireRoleForRequest but
-// exported for use outside this package.
+// RequireRoleFunc 提供与 http.HandleFunc 闭包兼容的直接 handler 级别检查。
+// 它等价于 requireRoleForRequest,但已导出以供包外使用。
 func RequireRoleFunc(w http.ResponseWriter, r *http.Request, allowed ...Role) bool {
 	return requireRoleForRequest(w, r, allowed...)
 }
 
-// maskAPIKey returns a display-only form of a key prefix suitable for list
-// responses. It keeps the first 4 and last 4 characters of the prefix and
-// masks the middle with "****", so enumerating /api/auth/api-keys does not
-// expose the real credential prefix.
+// maskAPIKey 返回 key prefix 的仅用于展示的形式,适合用于列表响应。
+// 它保留 prefix 的前 4 个和后 4 个字符,中间用 "****" 遮蔽,
+// 因此枚举 /api/auth/api-keys 不会暴露真实的凭据 prefix。
 func maskAPIKey(prefix string) string {
 	if len(prefix) <= 8 {
 		return prefix[:min(len(prefix), 4)] + "****"
@@ -285,7 +279,7 @@ func maskAPIKey(prefix string) string {
 	return prefix[:4] + "****" + prefix[len(prefix)-4:]
 }
 
-// min returns the smaller of a and b.
+// min 返回 a 和 b 中较小的一个。
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -306,9 +300,8 @@ func isPublicRoute(method, path string, publicRoutes []string) bool {
 	return false
 }
 
-// isProtectedRoute checks if the given method+path matches any protected route.
-// A match occurs when the method equals the route's method AND the path starts
-// with the route's path prefix.
+// isProtectedRoute 检查给定的 method+path 是否匹配任一受保护路由。
+// 当 method 等于路由的 method 且 path 以路由的 path 前缀开头时,即视为匹配。
 func isProtectedRoute(method, path string, protectedRoutes []string) bool {
 	for _, route := range protectedRoutes {
 		parts := strings.SplitN(route, " ", 2)
@@ -323,15 +316,15 @@ func isProtectedRoute(method, path string, protectedRoutes []string) bool {
 	return false
 }
 
-// authenticateRequest extracts the Bearer token from the Authorization header,
-// verifies it against the store, and returns the associated user ID.
+// authenticateRequest 从 Authorization header 中提取 Bearer token,
+// 通过 store 校验后返回关联的用户 ID。
 func authenticateRequest(r *http.Request, store APIKeyStore) (string, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return "", ErrInvalidKey
 	}
 
-	// Expect "Bearer <key>"
+	// 期望格式为 "Bearer <key>"
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return "", ErrInvalidKey
 	}
@@ -353,8 +346,8 @@ func authenticateRequest(r *http.Request, store APIKeyStore) (string, error) {
 	return key.UserID, nil
 }
 
-// currentUserID extracts the user ID from the request context.
-// It returns the configured seed user ID when auth is disabled.
+// currentUserID 从请求 context 中提取用户 ID。
+// 当认证关闭时返回已配置的 seed user ID。
 func (a *AuthAPI) currentUserID(r *http.Request) string {
 	if userID, ok := UserIDFromContext(r.Context()); ok && userID != "" {
 		return userID
@@ -362,8 +355,8 @@ func (a *AuthAPI) currentUserID(r *http.Request) string {
 	return a.seedUserID
 }
 
-// SetSeedUserIDFromStore resolves and sets the seed user ID from the store.
-// Used at startup to establish a stable fallback user when REQUIRE_AUTH is off.
+// SetSeedUserIDFromStore 从 store 中解析并设置 seed user ID。
+// 启动时使用,用于在 REQUIRE_AUTH 关闭时建立稳定的兜底用户。
 func (a *AuthAPI) SetSeedUserIDFromStore(store APIKeyStore) {
 	if sqliteStore, ok := store.(*SqliteAPIKeyStore); ok {
 		if u, err := sqliteStore.GetFirstUser(); err == nil && u != nil {
@@ -372,14 +365,14 @@ func (a *AuthAPI) SetSeedUserIDFromStore(store APIKeyStore) {
 	}
 }
 
-// writeJSONError writes a JSON error response with the given status code.
+// writeJSONError 写入带有指定状态码的 JSON 错误响应。
 func writeJSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// handleAPIKeys handles GET (list) and POST (create) for /api/auth/api-keys
+// handleAPIKeys 处理 /api/auth/api-keys 的 GET(列表)和 POST(创建)请求
 func (a *AuthAPI) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -391,7 +384,7 @@ func (a *AuthAPI) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAPIKeyByID handles DELETE (revoke) for /api/auth/api-keys/{id}
+// handleAPIKeyByID 处理 /api/auth/api-keys/{id} 的 DELETE(吊销)请求
 func (a *AuthAPI) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/auth/api-keys/")
 	if id == "" || strings.Contains(id, "/") {
@@ -410,7 +403,7 @@ func (a *AuthAPI) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the key belongs to the current user before revoking.
+	// 在吊销前校验该 key 是否属于当前用户。
 	keys, err := a.store.List(userID)
 	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
@@ -444,7 +437,7 @@ func (a *AuthAPI) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleCreateAPIKey creates a new API key for the authenticated user.
+// handleCreateAPIKey 为已认证用户创建一个新的 API key。
 func (a *AuthAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
@@ -481,7 +474,7 @@ func (a *AuthAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleListAPIKeys returns the current user's API keys without exposing hashes.
+// handleListAPIKeys 返回当前用户的 API key,且不暴露哈希值。
 func (a *AuthAPI) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
@@ -522,7 +515,7 @@ func (a *AuthAPI) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// formatTime renders a time as RFC3339. Used to keep JSON responses uniform.
+// formatTime 将时间格式化为 RFC3339。用于保持 JSON 响应格式统一。
 func formatTime(t time.Time) string {
 	return t.Format(time.RFC3339)
 }

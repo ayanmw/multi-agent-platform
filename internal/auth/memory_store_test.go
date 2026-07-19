@@ -8,16 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// memoryAPIKeyStore is an in-memory implementation of APIKeyStore for tests.
+// memoryAPIKeyStore 是 APIKeyStore 的 in-memory 实现,用于测试。
 type memoryAPIKeyStore struct {
 	mu   sync.RWMutex
 	keys map[string]*APIKey
-	// rawKeys maps key ID to the raw key for verification in tests.
+	// rawKeys 将 key ID 映射到原始 key,用于测试中的校验。
 	rawKeys map[string]string
 	users   map[string]*User
 }
 
-// NewMemoryAPIKeyStore creates an in-memory API key store for testing.
+// NewMemoryAPIKeyStore 创建一个用于测试的 in-memory API key store。
 func NewMemoryAPIKeyStore() APIKeyStore {
 	return &memoryAPIKeyStore{
 		keys:    make(map[string]*APIKey),

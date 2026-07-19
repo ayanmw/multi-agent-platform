@@ -10,21 +10,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// SqliteAPIKeyStore is a SQLite-backed implementation of APIKeyStore.
-// It stores only bcrypt key hashes, never raw keys, and uses prefix-based
-// pre-filtering to avoid expensive password comparisons when possible.
+// SqliteAPIKeyStore 是 APIKeyStore 的 SQLite 实现。
+// 它只存储 bcrypt key 哈希,绝不存储原始 key,并使用基于 prefix 的
+// 预过滤以尽量避免昂贵的密码比较。
 type SqliteAPIKeyStore struct {
 	db *sql.DB
 }
 
-// NewSqliteAPIKeyStore returns a SQLite-backed API key store.
+// NewSqliteAPIKeyStore 返回一个基于 SQLite 的 API key store。
 func NewSqliteAPIKeyStore(db *sql.DB) *SqliteAPIKeyStore {
 	return &SqliteAPIKeyStore{db: db}
 }
 
-// Create generates and stores a new API key for the given user.
-// It returns the persisted APIKey record, the raw key (shown to the user
-// exactly once), and any error encountered.
+// Create 为指定用户生成并存储一个新的 API key。
+// 它返回持久化后的 APIKey 记录、原始 key(对用户只展示一次)
+// 以及遇到的任何 error。
 func (s *SqliteAPIKeyStore) Create(userID, name string) (*APIKey, string, error) {
 	if userID == "" {
 		return nil, "", errors.New("userID is required")
@@ -62,9 +62,9 @@ func (s *SqliteAPIKeyStore) Create(userID, name string) (*APIKey, string, error)
 	return apiKey, rawKey, nil
 }
 
-// List returns all API keys owned by the given user, including revoked keys.
-// The key_hash column is intentionally omitted so the list response never
-// carries even a hashed credential in memory/JSON.
+// List 返回指定用户拥有的所有 API key,包括已吊销的 key。
+// 故意省略 key_hash 列,使列表响应绝不会在内存 / JSON 中
+// 携带哪怕已哈希的凭据。
 func (s *SqliteAPIKeyStore) List(userID string) ([]APIKey, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, name, prefix, created_at, last_used_at, revoked_at
@@ -99,7 +99,7 @@ func (s *SqliteAPIKeyStore) List(userID string) ([]APIKey, error) {
 	return keys, rows.Err()
 }
 
-// Revoke marks the API key with the given ID as revoked.
+// Revoke 将指定 ID 的 API key 标记为已吊销。
 func (s *SqliteAPIKeyStore) Revoke(keyID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.Exec(`
@@ -119,9 +119,9 @@ func (s *SqliteAPIKeyStore) Revoke(keyID string) error {
 	return nil
 }
 
-// Verify checks a raw API key against stored hashes.
-// It first queries keys matching the raw key's prefix, uses MatchPrefix for a
-// fast pre-filter, then performs a bcrypt verification on the candidates.
+// Verify 用已存储的哈希校验原始 API key。
+// 它先查询 prefix 与原始 key 匹配的 key,用 MatchPrefix 做快速预过滤,
+// 然后对候选 key 执行 bcrypt 校验。
 func (s *SqliteAPIKeyStore) Verify(rawKey string) (*APIKey, error) {
 	if rawKey == "" {
 		return nil, ErrInvalidKey
@@ -171,10 +171,10 @@ func (s *SqliteAPIKeyStore) Verify(rawKey string) (*APIKey, error) {
 			continue
 		}
 
-		// Update last used timestamp on successful verification (best-effort).
+		// 校验成功时更新 last used 时间戳(尽力而为)。
 		now := time.Now().UTC().Format(time.RFC3339)
 		if _, updateErr := s.db.Exec(`UPDATE api_keys SET last_used_at = ? WHERE id = ?`, now, key.ID); updateErr != nil {
-			// Non-fatal; don't fail authentication.
+			// 非致命;不要因此让认证失败。
 		}
 
 		return key, nil
@@ -183,7 +183,7 @@ func (s *SqliteAPIKeyStore) Verify(rawKey string) (*APIKey, error) {
 	return nil, ErrInvalidKey
 }
 
-// AddUser creates a new user record with the given name and role.
+// AddUser 用指定的 name 和 role 创建一个新的用户记录。
 func (s *SqliteAPIKeyStore) AddUser(name string, role Role) (*User, error) {
 	if name == "" {
 		return nil, errors.New("name is required")
@@ -211,13 +211,13 @@ func (s *SqliteAPIKeyStore) AddUser(name string, role Role) (*User, error) {
 	}, nil
 }
 
-// GetUser wraps GetUserByID to satisfy the APIKeyStore interface.
-// It is the canonical way for the auth middleware to resolve a user's role.
+// GetUser 包装 GetUserByID 以满足 APIKeyStore 接口。
+// 它是 auth middleware 解析用户 role 的标准入口。
 func (s *SqliteAPIKeyStore) GetUser(userID string) (*User, error) {
 	return s.GetUserByID(userID)
 }
 
-// GetUserByID loads a user record by its ID.
+// GetUserByID 按 ID 加载用户记录。
 func (s *SqliteAPIKeyStore) GetUserByID(userID string) (*User, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, role, created_at FROM users WHERE id = ?
@@ -237,7 +237,7 @@ func (s *SqliteAPIKeyStore) GetUserByID(userID string) (*User, error) {
 	return &user, nil
 }
 
-// CountUsers returns the total number of users in the database.
+// CountUsers 返回数据库中的用户总数。
 func (s *SqliteAPIKeyStore) CountUsers() (int, error) {
 	row := s.db.QueryRow(`SELECT COUNT(*) FROM users`)
 	var count int
@@ -247,9 +247,9 @@ func (s *SqliteAPIKeyStore) CountUsers() (int, error) {
 	return count, nil
 }
 
-// GetFirstUser returns the first user record by creation order.
-// Used to establish a stable fallback user ID when REQUIRE_AUTH is disabled.
-// Returns an error if no users exist.
+// GetFirstUser 按创建顺序返回第一个用户记录。
+// 用于在 REQUIRE_AUTH 关闭时建立稳定的兜底用户 ID。
+// 如果不存在任何用户则返回错误。
 func (s *SqliteAPIKeyStore) GetFirstUser() (*User, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, role, created_at FROM users
@@ -269,9 +269,9 @@ func (s *SqliteAPIKeyStore) GetFirstUser() (*User, error) {
 	return &user, nil
 }
 
-// GetFirstAdmin returns the first admin-role user by creation order.
-// Used to establish a stable fallback user ID for admin operations.
-// Returns an error if no admin users exist.
+// GetFirstAdmin 按创建顺序返回第一个 admin role 的用户。
+// 用于为 admin 操作建立稳定的兜底用户 ID。
+// 如果不存在任何 admin 用户则返回错误。
 func (s *SqliteAPIKeyStore) GetFirstAdmin() (*User, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, role, created_at FROM users
@@ -292,7 +292,7 @@ func (s *SqliteAPIKeyStore) GetFirstAdmin() (*User, error) {
 	return &user, nil
 }
 
-// GetUserByName loads a user record by name. Returns an error if not found.
+// GetUserByName 按 name 加载用户记录。未找到则返回错误。
 func (s *SqliteAPIKeyStore) GetUserByName(name string) (*User, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, role, created_at FROM users WHERE name = ?
@@ -311,7 +311,7 @@ func (s *SqliteAPIKeyStore) GetUserByName(name string) (*User, error) {
 	return &user, nil
 }
 
-// parseTime parses an RFC3339 timestamp, returning zero time on error.
+// parseTime 解析 RFC3339 时间戳,出错时返回零值时间。
 func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
@@ -320,7 +320,7 @@ func parseTime(s string) time.Time {
 	return t.UTC()
 }
 
-// parseTimePtr parses an optional RFC3339 timestamp.
+// parseTimePtr 解析可选的 RFC3339 时间戳。
 func parseTimePtr(s *string) *time.Time {
 	if s == nil || *s == "" {
 		return nil
@@ -332,8 +332,8 @@ func parseTimePtr(s *string) *time.Time {
 	return &t
 }
 
-// Compile-time check that SqliteAPIKeyStore implements APIKeyStore.
+// 编译期检查 SqliteAPIKeyStore 实现了 APIKeyStore。
 var _ APIKeyStore = (*SqliteAPIKeyStore)(nil)
 
-// Ensure uuid import is used when helper functions above are referenced.
+// 确保 uuid import 在上述辅助函数被引用时仍被使用。
 var _ = uuid.New

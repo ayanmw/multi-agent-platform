@@ -1,9 +1,8 @@
-// auth_test.go — white-box unit tests for the auth package's pure logic.
+// auth_test.go — auth 包纯逻辑部分的白盒单元测试。
 //
-// Coverage focuses on the cryptographic / hashing helpers and value-type
-// methods that have no DB or HTTP dependency. bcrypt cost=12 makes each
-// HashPassword call ~100ms, so tests reuse hashes and keep bcrypt
-// invocations to a handful across the whole file.
+// 覆盖范围聚焦于加密 / 哈希辅助函数以及与 DB、HTTP 无依赖的值类型方法。
+// bcrypt cost=12 会让每次 HashPassword 调用约耗时 100ms,因此测试会复用
+// 哈希值,将整个文件中的 bcrypt 调用控制在少数几次。
 package auth
 
 import (
@@ -17,9 +16,9 @@ import (
 
 // --- GenerateAPIKey --------------------------------------------------------
 
-// TestGenerateAPIKeyFormat asserts the structural invariants of a freshly
-// generated key: "sk_" prefix, expected length (46 chars = 3 + 43 base64url),
-// and prefix == first 12 chars of the raw key.
+// TestGenerateAPIKeyFormat 断言一个新生成 key 的结构不变式:
+// "sk_" 前缀、预期长度(46 字符 = 3 + 43 base64url),
+// 以及 prefix == 原始 key 的前 12 个字符。
 func TestGenerateAPIKeyFormat(t *testing.T) {
 	raw, prefix, err := GenerateAPIKey()
 	if err != nil {
@@ -28,7 +27,7 @@ func TestGenerateAPIKeyFormat(t *testing.T) {
 	if !strings.HasPrefix(raw, "sk_") {
 		t.Errorf("raw key %q missing sk_ prefix", raw)
 	}
-	// 32 bytes -> base64url without padding = 43 chars; +3 for "sk_" = 46.
+	// 32 字节 -> base64url 无 padding = 43 字符;再加 "sk_" 的 3 字符 = 46。
 	if got := len(raw); got != 46 {
 		t.Errorf("raw key length = %d, want 46", got)
 	}
@@ -37,8 +36,8 @@ func TestGenerateAPIKeyFormat(t *testing.T) {
 	}
 }
 
-// TestGenerateAPIKeyUniqueness asserts two calls produce different keys,
-// proving crypto/rand entropy is wired up.
+// TestGenerateAPIKeyUniqueness 断言两次调用会生成不同的 key,
+// 从而证明 crypto/rand 的熵已被正确接入。
 func TestGenerateAPIKeyUniqueness(t *testing.T) {
 	raw1, _, err := GenerateAPIKey()
 	if err != nil {
@@ -53,8 +52,8 @@ func TestGenerateAPIKeyUniqueness(t *testing.T) {
 	}
 }
 
-// TestGenerateAPIKeyManySamples ensures uniqueness across a larger sample
-// and that every key meets the format contract.
+// TestGenerateAPIKeyManySamples 确保在更大样本量上的唯一性,
+// 且每个 key 都满足格式契约。
 func TestGenerateAPIKeyManySamples(t *testing.T) {
 	const n = 16
 	seen := make(map[string]struct{}, n)
@@ -75,10 +74,10 @@ func TestGenerateAPIKeyManySamples(t *testing.T) {
 
 // --- HashPassword + VerifyPassword -----------------------------------------
 
-// TestHashPasswordProducesBcryptHash verifies the returned hash is a non-empty
-// bcrypt digest distinct from the input and consumable by bcrypt directly.
+// TestHashPasswordProducesBcryptHash 验证返回的哈希是一个非空的
+// bcrypt 摘要,与输入不同,且能被 bcrypt 直接消费。
 func TestHashPasswordProducesBcryptHash(t *testing.T) {
-	// bcrypt cost=12, expected ~100ms/hash
+	// bcrypt cost=12,预期约 100ms/hash
 	raw := "sk_test_key_with_enough_entropy_to_be_reasonable"
 	hash, err := HashPassword(raw)
 	if err != nil {
@@ -90,16 +89,16 @@ func TestHashPasswordProducesBcryptHash(t *testing.T) {
 	if string(hash) == raw {
 		t.Fatal("hash equals raw input")
 	}
-	// bcrypt.CompareHashAndPassword returns nil on a match.
+	// bcrypt.CompareHashAndPassword 匹配时返回 nil。
 	if err := bcrypt.CompareHashAndPassword(hash, []byte(raw)); err != nil {
 		t.Errorf("bcrypt.CompareHashAndPassword: %v", err)
 	}
 }
 
-// TestVerifyPasswordRoundTrip verifies VerifyPassword succeeds for the
-// matching raw key and fails (with ErrInvalidKey identity) for a wrong one.
+// TestVerifyPasswordRoundTrip 验证 VerifyPassword 对匹配的原始 key 成功,
+// 对错误的 key 失败(且错误为 ErrInvalidKey 标识)。
 func TestVerifyPasswordRoundTrip(t *testing.T) {
-	// bcrypt cost=12, expected ~100ms/hash
+	// bcrypt cost=12,预期约 100ms/hash
 	raw := "sk_the_correct_key_value_here"
 	hash, err := HashPassword(raw)
 	if err != nil {
@@ -118,8 +117,8 @@ func TestVerifyPasswordRoundTrip(t *testing.T) {
 	}
 }
 
-// TestVerifyPasswordEmptyHash asserts an empty hash slice is rejected
-// (guard clause in VerifyPassword).
+// TestVerifyPasswordEmptyHash 断言空哈希切片会被拒绝
+// (VerifyPassword 中的守卫子句)。
 func TestVerifyPasswordEmptyHash(t *testing.T) {
 	if err := VerifyPassword("sk_anything", nil); err == nil {
 		t.Fatal("VerifyPassword with nil hash returned nil, want error")
@@ -129,11 +128,10 @@ func TestVerifyPasswordEmptyHash(t *testing.T) {
 	}
 }
 
-// TestVerifyPasswordErrorIdentityTable drives the error-identity check
-// across multiple wrong-key inputs to ensure we never leak bcrypt's
-// internal error type — callers must only see ErrInvalidKey.
+// TestVerifyPasswordErrorIdentityTable 用多个错误 key 输入驱动错误标识检查,
+// 确保我们绝不泄露 bcrypt 的内部错误类型 — 调用方只能看到 ErrInvalidKey。
 func TestVerifyPasswordErrorIdentityTable(t *testing.T) {
-	// bcrypt cost=12, expected ~100ms/hash (one hash, reused)
+	// bcrypt cost=12,预期约 100ms/hash(只生成一次哈希并复用)
 	raw := "sk_master_key_for_identity_tests"
 	hash, err := HashPassword(raw)
 	if err != nil {
@@ -158,11 +156,10 @@ func TestVerifyPasswordErrorIdentityTable(t *testing.T) {
 	}
 }
 
-// TestGenerateHashVerifyIntegration exercises the full key lifecycle used by
-// the SqliteAPIKeyStore: GenerateAPIKey -> HashPassword -> VerifyPassword,
-// ensuring every stage agrees.
+// TestGenerateHashVerifyIntegration 演练 SqliteAPIKeyStore 使用的完整 key 生命周期:
+// GenerateAPIKey -> HashPassword -> VerifyPassword,确保各阶段相互一致。
 func TestGenerateHashVerifyIntegration(t *testing.T) {
-	// bcrypt cost=12, expected ~100ms/hash
+	// bcrypt cost=12,预期约 100ms/hash
 	raw, prefix, err := GenerateAPIKey()
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
@@ -184,7 +181,7 @@ func TestGenerateHashVerifyIntegration(t *testing.T) {
 
 // --- MatchPrefix -----------------------------------------------------------
 
-// TestMatchPrefix table-drives the constant-time prefix comparison.
+// TestMatchPrefix 以表驱动方式测试恒定时间前缀比较。
 func TestMatchPrefix(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -213,7 +210,7 @@ func TestMatchPrefix(t *testing.T) {
 
 // --- StripPrefix -----------------------------------------------------------
 
-// TestStripPrefix table-drives the "sk_" prefix removal helper.
+// TestStripPrefix 以表驱动方式测试 "sk_" 前缀移除辅助函数。
 func TestStripPrefix(t *testing.T) {
 	tests := []struct {
 		name string
@@ -239,7 +236,7 @@ func TestStripPrefix(t *testing.T) {
 
 // --- Role.IsValid ----------------------------------------------------------
 
-// TestRoleIsValid table-drives Role.IsValid across valid and invalid roles.
+// TestRoleIsValid 以表驱动方式测试 Role.IsValid 在合法与非法 role 上的行为。
 func TestRoleIsValid(t *testing.T) {
 	tests := []struct {
 		name string
@@ -266,7 +263,7 @@ func TestRoleIsValid(t *testing.T) {
 
 // --- APIKey.IsRevoked ------------------------------------------------------
 
-// TestAPIKeyIsRevoked asserts IsRevoked reflects the RevokedAt pointer.
+// TestAPIKeyIsRevoked 断言 IsRevoked 反映 RevokedAt 指针的状态。
 func TestAPIKeyIsRevoked(t *testing.T) {
 	now := time.Now()
 	past := now.Add(-time.Hour)
@@ -280,7 +277,7 @@ func TestAPIKeyIsRevoked(t *testing.T) {
 	}{
 		{"nil_not_revoked", nil, false},
 		{"set_revoked", &past, true},
-		{"zero_time_set_revoked", &zero, true}, // non-nil pointer means revoked
+		{"zero_time_set_revoked", &zero, true}, // 非 nil 指针即视为已吊销
 		{"future_time_revoked", &future, true},
 	}
 	for _, tt := range tests {
@@ -293,9 +290,9 @@ func TestAPIKeyIsRevoked(t *testing.T) {
 	}
 }
 
-// --- ID generators ---------------------------------------------------------
+// --- ID 生成器 -------------------------------------------------------------
 
-// TestNewAPIKeyIDFormat asserts IDs carry the "ak_" namespace and are unique.
+// TestNewAPIKeyIDFormat 断言 ID 带有 "ak_" 命名空间前缀且彼此唯一。
 func TestNewAPIKeyIDFormat(t *testing.T) {
 	id := NewAPIKeyID()
 	if !strings.HasPrefix(id, "ak_") {
@@ -310,7 +307,7 @@ func TestNewAPIKeyIDFormat(t *testing.T) {
 	}
 }
 
-// TestNewUserIDFormat asserts IDs carry the "usr_" namespace and are unique.
+// TestNewUserIDFormat 断言 ID 带有 "usr_" 命名空间前缀且彼此唯一。
 func TestNewUserIDFormat(t *testing.T) {
 	id := NewUserID()
 	if !strings.HasPrefix(id, "usr_") {
@@ -325,8 +322,8 @@ func TestNewUserIDFormat(t *testing.T) {
 	}
 }
 
-// TestNewAPIKeyIDAndUserIDDistinctNamespaces ensures the two generators
-// don't accidentally share a prefix.
+// TestNewAPIKeyIDAndUserIDDistinctNamespaces 确保两个生成器
+// 不会意外共享同一个前缀。
 func TestNewAPIKeyIDAndUserIDDistinctNamespaces(t *testing.T) {
 	ak := NewAPIKeyID()
 	usr := NewUserID()
@@ -338,8 +335,8 @@ func TestNewAPIKeyIDAndUserIDDistinctNamespaces(t *testing.T) {
 	}
 }
 
-// TestMaskAPIKeyFormat verifies API key prefixes are masked in list responses
-// so that enumerating keys does not expose a usable credential prefix.
+// TestMaskAPIKeyFormat 验证 API key prefix 在列表响应中被遮蔽,
+// 从而枚举 key 时不会暴露可用的凭据 prefix。
 func TestMaskAPIKeyFormat(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -360,8 +357,8 @@ func TestMaskAPIKeyFormat(t *testing.T) {
 	}
 }
 
-// TestMemoryStoreGetUser checks the in-memory store returns the user created
-// implicitly by Create.
+// TestMemoryStoreGetUser 检查 in-memory store 会返回由 Create
+// 隐式创建的用户。
 func TestMemoryStoreGetUser(t *testing.T) {
 	store := NewMemoryAPIKeyStore()
 	userID := "usr_test_1"
@@ -383,9 +380,9 @@ func TestMemoryStoreGetUser(t *testing.T) {
 }
 
 
-// TestNewAuthAPIDefaults verifies the constructor wires the store and that
-// the seed-user-ID accessors behave as plain getters/setters. We pass a nil
-// store because these accessors never touch it.
+// TestNewAuthAPIDefaults 验证构造函数会正确接入 store,
+// 并且 seed-user-ID 的访问器表现为普通的 getter/setter。
+// 我们传入 nil store,因为这些访问器从不接触它。
 func TestNewAuthAPIDefaults(t *testing.T) {
 	a := NewAuthAPI(nil)
 	if a == nil {
