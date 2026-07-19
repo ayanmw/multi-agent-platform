@@ -1,12 +1,12 @@
 # Case 管理系统实现方案
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic worker 的工作指引：** 必备子技能：使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 来按 task 逐步实现本 plan。步骤使用 checkbox（`- [ ]`）语法进行跟踪。
 
-**Goal:** 构建一个可自定义 Case 的前后端完整方案：支持 Case CRUD、分类/Tag 筛选、Goal 目标定义，并在任务完成后用 LLM 判定结果是否符合目标；默认 Case 在 Case 库为空时自动插入；前端可按 Tag 筛选 Case 列表。
+**目标：** 构建一个可自定义 Case 的前后端完整方案：支持 Case CRUD、分类/Tag 筛选、Goal 目标定义，并在任务完成后用 LLM 判定结果是否符合目标；默认 Case 在 Case 库为空时自动插入；前端可按 Tag 筛选 Case 列表。
 
-**Architecture:** 后端新增 `cases` 与 `case_evaluations` 数据表，`internal/cases` 层统一合并内置 Case 与 DB 自定义 Case；`internal/harness` 增加 `llm_judge` 评估器并在 `runtime/engine` 任务完成后自动触发；前端使用 Pinia 风格的 `useCaseStore` 管理状态，提供过滤栏、Case 卡片和编辑表单。
+**架构：** 后端新增 `cases` 与 `case_evaluations` 数据表，`internal/cases` 层统一合并内置 Case 与 DB 自定义 Case；`internal/harness` 增加 `llm_judge` 评估器并在 `runtime/engine` 任务完成后自动触发；前端使用 Pinia 风格的 `useCaseStore` 管理状态，提供过滤栏、Case 卡片和编辑表单。
 
-**Tech Stack:** Go 1.25 + SQLite (modernc.org/sqlite) + Vue 3 + Vite + TypeScript + marked。
+**技术栈：** Go 1.25 + SQLite (modernc.org/sqlite) + Vue 3 + Vite + TypeScript + marked。
 
 ---
 

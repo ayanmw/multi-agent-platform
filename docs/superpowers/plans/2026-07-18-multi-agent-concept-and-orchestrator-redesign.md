@@ -1,10 +1,10 @@
 # 多 Agent 协作概念重构与主 Agent 调度规划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic worker 的工作指引：** 必备子技能：使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 来按 task 逐步实现本 plan。步骤使用 checkbox（`- [ ]`）语法进行跟踪。
 
-**Goal:** 明确 `Session / Task / SubTask / Agent / AgentBus / Workflow / Turn / Step` 的边界与层级关系，引入**主 Agent（Leader）调度**模型，解决当前多 Agent 共享 `task_id` 导致的事件/步骤/上下文窗口混乱问题，并给出分 Phase 实现路径。
+**目标：** 明确 `Session / Task / SubTask / Agent / AgentBus / Workflow / Turn / Step` 的边界与层级关系，引入**主 Agent（Leader）调度**模型，解决当前多 Agent 共享 `task_id` 导致的事件/步骤/上下文窗口混乱问题，并给出分 Phase 实现路径。
 
-**Status:** 规划文档，已审阅并细化权限模型。Task 7 由此升级为一个多 Phase 重构任务。
+**状态：** 规划文档，已审阅并细化权限模型。Task 7 由此升级为一个多 Phase 重构任务。
 
 ---
 
@@ -19,7 +19,7 @@
 | **Step** | Agent（SubTask）内部 ReAct Loop 的一次迭代 | `step_index`（SubTask 内唯一） | ✅ `steps` 表 | 在 SubTask 内部 |
 | **AgentBus** | Agent 之间的消息总线，一次消息传递产生可观测事件 | `from_agent_id` / `to_agent_id` | ✅ `agent_messages` 表 | 跨 SubTask |
 | **Workflow** | 主 Agent 对子 Agent 的调度策略与编排描述 | `workflow_id` / 内联 `strategy` | 配置 + 执行日志 | 在 Task 内部 |
-| **Turn** | 前端时间轴的“一轮用户输入 → 一次系统响应”单元 | 数组下标 | ❌ 纯前端 | 前端概念 |
+| **Turn** | 前端时间轴的"一轮用户输入 → 一次系统响应"单元 | 数组下标 | ❌ 纯前端 | 前端概念 |
 
 ### 1.1 核心原则
 
@@ -40,27 +40,27 @@
 
 - `orchestrator.go:346` 当前用 `subTaskID := rootTaskID + "_" + spec.AgentID` 生成子任务 ID。
 - 但 `EngineConfig.ParentTaskID` / `IsRoot` 已经存在，`SaveTaskMeta` 也支持 `parent_task_id`。
-- 前端事件仍然主要按 `task_id` 路由，`AgentTree` 靠 `agent_id` 分组，无法精确表达“主 Agent 的 SubTask”与“子 Agent 的 SubTask”。
+- 前端事件仍然主要按 `task_id` 路由，`AgentTree` 靠 `agent_id` 分组，无法精确表达"主 Agent 的 SubTask"与"子 Agent 的 SubTask"。
 - `ContextWindowPanel` 绑定的是 root `task_id`，多 Agent 下只能展示第一个 Agent 的快照。
 
 ### 2.2 Workflow 不是 Agent 行为
 
 - 当前 `WorkflowConfig` 由 `MultiAgentWorkflowEditor.vue` 编辑，直接通过 `/api/multi-agent` 提交给 orchestrator。
 - orchestrator 根据 `strategy` 直接创建并运行子 Agent。
-- **问题**：调度逻辑不可观测，用户看不到“为什么这样派生子 Agent”。
+- **问题**：调度逻辑不可观测，用户看不到"为什么这样派生子 Agent"。
 - 目标：把 Workflow 变成**主 Agent 的 ReAct Loop 内的决策产物**，调度过程本身产生 step 与 tool_call 事件。
 
 ### 2.3 缺少主/子 Agent 权限模型
 
-- 当前所有 Agent 平级，没有“谁能派生子 Agent”的约束。
-- `run_shell` / `write_file` 等工具已有 PolicyGate，但“派生子 Agent”还没有对应的权限门。
+- 当前所有 Agent 平级，没有"谁能派生子 Agent"的约束。
+- `run_shell` / `write_file` 等工具已有 PolicyGate，但"派生子 Agent"还没有对应的权限门。
 - 风险：子 Agent 理论上可能无限递归派生，导致任务爆炸。
 - **新增**：子 Agent 的危险工具审批希望由 Leader Agent 自主判定，而不是每次都需要用户介入，否则多 Agent 协作失去意义。
 
 ### 2.4 AgentBus 与 Step 的关系未显式表达
 
 - AgentBus 消息产生 `agent_message_sent` / `agent_message_received` 事件。
-- 但这些事件与 ReAct Step 是并行流，没有绑定到“哪个 SubTask 因为收到消息而进入下一步”。
+- 但这些事件与 ReAct Step 是并行流，没有绑定到"哪个 SubTask 因为收到消息而进入下一步"。
 - 目标：AgentBus 消息应作为目标 SubTask 的**输入事件**，触发或记录到该 SubTask 的 step 上下文里。
 
 ---
@@ -123,8 +123,8 @@ User Input
 
 **关键变化**：
 - `dispatch_sub_agent` 成为一个真实 Tool，出现在主 Agent 的 tool_call 事件里。
-- Orchestrator 不再是“车间主任”，而是**主 Agent 的调度工具**。
-- 前端可以看到 Leader 为“什么”、“怎么”派生子 Agent。
+- Orchestrator 不再是"车间主任"，而是**主 Agent 的调度工具**。
+- 前端可以看到 Leader 为"什么"、"怎么"派生子 Agent。
 
 ### 3.4 审批模型：Leader 作为子 Agent 动作审批者
 
@@ -256,9 +256,9 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 ### Phase B: 主 Agent 调度架构（中期）
 
-**目标**：把 Workflow 从 orchestrator 直接执行，改为“主 Agent 作为 Leader 通过 tool_call 触发”。
+**目标**：把 Workflow 从 orchestrator 直接执行，改为"主 Agent 作为 Leader 通过 tool_call 触发"。
 
-**Files：**
+**文件：**
 - `internal/tool/builtin.go`（新增 `dispatch_sub_agent` tool）
 - `internal/runtime/engine.go`
 - `internal/orchestrator/orchestrator.go`
@@ -307,15 +307,15 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 - [ ] **Step B.4: 主 Agent 默认 Workflow**
 
-  当用户开启 Multi-Agent 模式但没打开 Workflow Editor 时，默认让 Leader Agent 自己 decides whether to dispatch。
+  当用户开启 Multi-Agent 模式但没打开 Workflow Editor 时，默认让 Leader Agent 自己决定是否派生（decides whether to dispatch）。
 
-  若需要向后兼容“用户直接指定子 Agent”模式，保留 `/api/multi-agent` 原有入口，但它在内部也会先启动一个 Leader SubTask，由 Leader 调用 `dispatch_sub_agent`。
+  若需要向后兼容"用户直接指定子 Agent"模式，保留 `/api/multi-agent` 原有入口，但它在内部也会先启动一个 Leader SubTask，由 Leader 调用 `dispatch_sub_agent`。
 
 - [ ] **Step B.5: 前端 Workflow Editor 生成 Leader Prompt**
 
   Workflow Editor 保存的配置不再直接 POST 给 `/api/multi-agent`，而是作为**用户给主 Agent 的上下文提示**（或作为 Leader 的 system prompt 补充），让 Leader 在运行时决定如何 dispatch。
 
-  保留一个“强制按配置执行”的开关：若开启，Leader 直接按配置调用 `dispatch_sub_agent`。
+  保留一个"强制按配置执行"的开关：若开启，Leader 直接按配置调用 `dispatch_sub_agent`。
 
 - [ ] **Step B.6: 验证与提交**
 
@@ -331,7 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 **目标**：建立主/子 Agent 的权限边界，防止子 Agent 递归派生；并引入 Leader 作为子 Agent 动作审批者。
 
-**Files：**
+**文件：**
 - `internal/agent/agent.go`
 - `internal/runtime/engine.go`
 - `internal/runtime/approval.go`（新增或改造）
@@ -375,7 +375,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 - [ ] **Step C.3: Tool 层权限拦截**
 
   `dispatch_sub_agent` tool 执行时校验 `CanDispatchSubAgents`。
-  未来若子 Agent 可能获得“代理”能力，需显式授权并在 `allowedTools` 中列明。
+  未来若子 Agent 可能获得"代理"能力，需显式授权并在 `allowedTools` 中列明。
 
 - [ ] **Step C.4: Leader 审批子 Agent 动作**
 
@@ -402,7 +402,7 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 
 **目标**：让 AgentBus 消息作为 SubTask 的输入事件，可被 Step 序列追踪。
 
-**Files：**
+**文件：**
 - `internal/runtime/engine.go`
 - `internal/orchestrator/agentbus.go`
 - `pkg/db/database.go`
@@ -504,4 +504,4 @@ CREATE INDEX IF NOT EXISTS idx_sub_task_meta_task_id ON sub_task_meta(task_id);
 - `Phase 7-A` ~ `Phase 7-F`（已提交）为本规划奠定了基础：per-agent cancel/pause/resume、AgentBus 持久化、LLM 分解、Workflow Editor、AgentBus 可视化。
 - `Phase 7-G`（已合并到 main）完成了 SubTask 身份显式化与 Context Window 隔离。
 - `Phase 7-H` ~ `Phase 7-J` 为本规划要实现的后续任务。
-- Task 7 的 scope 从“补一个 context window 选择器”升级为“SubTask 身份显式化 + 主 Agent 调度 + 权限模型 + AgentBus 绑定”。
+- Task 7 的 scope 从"补一个 context window 选择器"升级为"SubTask 身份显式化 + 主 Agent 调度 + 权限模型 + AgentBus 绑定"。
