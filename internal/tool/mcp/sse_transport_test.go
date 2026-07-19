@@ -12,13 +12,13 @@ import (
 	"time"
 )
 
-// writeSSEEvent writes a formatted SSE event to w.
+// writeSSEEvent 向 w 写入一条格式化的 SSE 事件。
 func writeSSEEvent(w ioStringWriter, event, data string) {
 	fmt.Fprintf(w, "event: %s\n", event)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-// ioStringWriter matches the methods we need from http.ResponseWriter.
+// ioStringWriter 匹配我们从 http.ResponseWriter 所需的方法集合。
 type ioStringWriter interface {
 	WriteString(string) (int, error)
 	Write([]byte) (int, error)
@@ -41,7 +41,7 @@ func TestSSETransportEndpointDiscovery(t *testing.T) {
 				ioStringWriter
 			}{w.(ioStringWriter)}, "endpoint", postPath)
 			flusher.Flush()
-			// Keep connection open until test is done.
+			// 保持连接打开，直到测试结束。
 			<-r.Context().Done()
 			return
 		}
@@ -70,7 +70,7 @@ func TestSSETransportEndpointDiscovery(t *testing.T) {
 	}
 }
 
-// TestSSETransportRoundTrip verifies we can POST a request and receive a matching JSON-RPC response.
+// TestSSETransportRoundTrip 验证我们能 POST 一条请求并收到匹配的 JSON-RPC 响应。
 func TestSSETransportRoundTrip(t *testing.T) {
 	postPath := "/messages/session-abc"
 	type pending struct {
@@ -93,9 +93,9 @@ func TestSSETransportRoundTrip(t *testing.T) {
 			writeSSEEvent(w.(ioStringWriter), "endpoint", postPath)
 			flusher.Flush()
 
-			// Wait until a message is posted, then send response.
+			// 等到有消息被 POST 进来，再发送响应。
 			<-messageArrived
-			// Give a tiny window for the POST goroutine to start waiting.
+			// 给 POST goroutine 一点时间开始等待。
 			time.Sleep(20 * time.Millisecond)
 
 			mu.Lock()
@@ -157,7 +157,7 @@ func TestSSETransportRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSSETransportInitialize verifies the MCP Client can initialize over SSE.
+// TestSSETransportInitialize 验证 MCP Client 能通过 SSE 完成 initialize。
 func TestSSETransportInitialize(t *testing.T) {
 	postPath := "/messages/init"
 
@@ -195,8 +195,8 @@ func TestSSETransportInitialize(t *testing.T) {
 	client := NewClient(tr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// newTransport returns an uninitialized transport; the loader/manager call
-	// Start, but for unit tests we must start it before use.
+	// newTransport 返回的是一个未初始化的 transport；loader/manager 会
+	// 调用 Start，但单元测试必须在使用前手动 start。
 	if err := tr.Start(ctx); err != nil {
 		t.Fatalf("start transport: %v", err)
 	}

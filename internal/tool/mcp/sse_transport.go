@@ -14,20 +14,19 @@ import (
 	"time"
 )
 
-// sseTransport speaks MCP over HTTP Server-Sent Events.
+// sseTransport 通过 HTTP Server-Sent Events 承载 MCP 协议。
 //
-// The transport connects to a remote SSE endpoint, waits for an "endpoint"
-// event that tells us where to POST outgoing JSON-RPC messages, and then
-// routes incoming JSON-RPC responses (delivered as SSE "message" events)
-// back to the caller. Notifications without an id are ignored.
+// transport 连接到远端 SSE endpoint，等待一个 "endpoint" 事件——它告知我们
+// 要把发出的 JSON-RPC 消息 POST 到哪里——然后把到达的 JSON-RPC 响应（以 SSE
+// "message" 事件形式投递）路由回调用方。没有 id 的 notification 会被忽略。
 //
-// This implementation targets the 2024-11-05 MCP protocol over SSE.
+// 本实现面向 2024-11-05 MCP 协议 over SSE。
 type sseTransport struct {
 	cfg        ServerConfig
 	baseURL    *url.URL
 	httpClient *http.Client
 
-	// endpoint is the URL where outgoing JSON-RPC messages are POSTed.
+	// endpoint 是发出 JSON-RPC 消息时 POST 的目标 URL。
 	endpoint string
 
 	mu       sync.Mutex
@@ -36,10 +35,10 @@ type sseTransport struct {
 	body     io.ReadCloser
 	readerWg sync.WaitGroup
 
-	// responses carries JSON-RPC response lines returned by the server.
+	// responses 承载 server 返回的 JSON-RPC 响应行。
 	responses chan []byte
 
-	// initDone is closed once the endpoint URL has been received.
+	// initDone 在收到 endpoint URL 后被关闭。
 	initDone chan struct{}
 	initErr  error
 }
@@ -54,7 +53,7 @@ func newSSETransport(cfg ServerConfig) *sseTransport {
 	}
 }
 
-// Start opens the SSE stream and waits for the endpoint event.
+// Start 打开 SSE 流并等待 endpoint 事件。
 func (t *sseTransport) Start(ctx context.Context) error {
 	if t.cfg.Endpoint == "" {
 		return fmt.Errorf("sse transport requires endpoint")
@@ -92,7 +91,7 @@ func (t *sseTransport) Start(ctx context.Context) error {
 
 	t.body = resp.Body
 
-	// Read the first endpoint event to discover where to POST messages.
+	// 读取第一个 endpoint 事件以发现消息要 POST 到哪里。
 	if err := t.readEndpointEvent(ctx, resp.Body); err != nil {
 		resp.Body.Close()
 		return err
@@ -104,8 +103,8 @@ func (t *sseTransport) Start(ctx context.Context) error {
 	return nil
 }
 
-// readEndpointEvent reads SSE events until it finds an "endpoint" event whose
-// data contains the POST URL. The context deadline bounds the handshake.
+// readEndpointEvent 持续读取 SSE 事件，直到找到 data 中包含 POST URL 的
+// "endpoint" 事件。context 的 deadline 限制握手时长。
 func (t *sseTransport) readEndpointEvent(ctx context.Context, body io.Reader) error {
 	deadline, hasDeadline := ctx.Deadline()
 	scanTimeout := 30 * time.Second
@@ -163,7 +162,7 @@ func (t *sseTransport) readEndpointEvent(ctx context.Context, body io.Reader) er
 	return fmt.Errorf("sse stream closed before endpoint event")
 }
 
-// resolvePostEndpoint converts an endpoint event payload into an absolute URL.
+// resolvePostEndpoint 把 endpoint 事件 payload 转换为绝对 URL。
 func (t *sseTransport) resolvePostEndpoint(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -172,7 +171,7 @@ func (t *sseTransport) resolvePostEndpoint(raw string) (string, error) {
 	return t.baseURL.ResolveReference(u).String(), nil
 }
 
-// readLoop drains the SSE stream and forwards JSON-RPC response messages.
+// readLoop 排空 SSE 流并转发 JSON-RPC 响应消息。
 func (t *sseTransport) readLoop(body io.Reader) {
 	defer t.readerWg.Done()
 	scanner := bufio.NewScanner(body)
@@ -186,13 +185,12 @@ func (t *sseTransport) readLoop(body io.Reader) {
 		if dataStr == "" {
 			return
 		}
-		// Forward responses delivered as explicit "message" events or the
-		// default event type (no event field). Ignore other events such as
-		// "endpoint" which only occurs during handshake.
+		// 转发以显式 "message" 事件或默认事件类型（无 event 字段）投递的
+		// 响应。忽略其它事件，比如只在握手中出现的 "endpoint"。
 		if eventType != "" && eventType != "message" {
 			return
 		}
-		// Ignore notifications (no id) and invalid JSON.
+		// 忽略 notification（无 id）和无效 JSON。
 		var msg struct {
 			ID json.RawMessage `json:"id"`
 		}
@@ -239,7 +237,7 @@ func (t *sseTransport) readLoop(body io.Reader) {
 
 	flush()
 
-	// If the scanner exits because the body closed, signal any pending receive.
+	// 若 scanner 因 body 关闭而退出，则通知所有阻塞中的 receive。
 	select {
 	case <-t.closeCh:
 	default:
@@ -257,7 +255,7 @@ func (t *sseTransport) readLoop(body io.Reader) {
 	}
 }
 
-// Send POSTs a JSON-RPC message to the endpoint discovered during Start.
+// Send 把 JSON-RPC 消息 POST 到 Start 中发现的 endpoint。
 func (t *sseTransport) Send(message []byte) error {
 	<-t.initDone
 
@@ -296,9 +294,9 @@ func (t *sseTransport) Send(message []byte) error {
 	return nil
 }
 
-// Receive returns the next JSON-RPC response message delivered over SSE.
-// Notifications and response lines for other requests are filtered by the
-// caller (Client.request); this transport just supplies the next response line.
+// Receive 返回下一条通过 SSE 投递的 JSON-RPC 响应消息。
+// notification 以及针对其它请求的响应行由调用方（Client.request）负责过滤；
+// 本 transport 仅负责提供下一条响应行。
 func (t *sseTransport) Receive(timeout time.Duration) ([]byte, error) {
 	<-t.initDone
 
@@ -326,7 +324,7 @@ func (t *sseTransport) Receive(timeout time.Duration) ([]byte, error) {
 	}
 }
 
-// Close shuts down the SSE connection and reader goroutine.
+// Close 关闭 SSE 连接和 reader goroutine。
 func (t *sseTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -342,7 +340,7 @@ func (t *sseTransport) closeLocked() error {
 	if t.body != nil {
 		_ = t.body.Close()
 	}
-	// Ensure initDone is closed so blocked Send/Receive can return.
+	// 确保 initDone 已关闭，以便阻塞的 Send/Receive 能返回。
 	select {
 	case <-t.initDone:
 	default:

@@ -12,8 +12,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// findNode returns the absolute path to the node executable, or skips the test
-// if Node is not installed.
+// findNode 返回 node 可执行文件的绝对路径，若未安装 Node 则跳过测试。
 func findNode(t *testing.T) string {
 	t.Helper()
 	name := "node"
@@ -27,8 +26,8 @@ func findNode(t *testing.T) string {
 	return path
 }
 
-// TestManagerWithRealStdioTimeServer starts the Node.js time example and
-// verifies the Manager can load it and execute its tool.
+// TestManagerWithRealStdioTimeServer 启动 Node.js 的 time 示例，验证
+// Manager 能加载它并执行其 tool。
 func TestManagerWithRealStdioTimeServer(t *testing.T) {
 	node := findNode(t)
 
@@ -77,8 +76,8 @@ func TestManagerWithRealStdioTimeServer(t *testing.T) {
 	}
 }
 
-// TestManagerWithRealStdioCalcServer starts the Node.js calc example and runs
-// all four arithmetic tools.
+// TestManagerWithRealStdioCalcServer 启动 Node.js 的 calc 示例，并运行全部
+// 四个算术 tool。
 func TestManagerWithRealStdioCalcServer(t *testing.T) {
 	node := findNode(t)
 
@@ -130,8 +129,8 @@ func TestManagerWithRealStdioCalcServer(t *testing.T) {
 	}
 }
 
-// TestManagerReloadsDynamicServerFromDB verifies that a server persisted to
-// the SqliteRepository is reloaded by a fresh Manager instance.
+// TestManagerReloadsDynamicServerFromDB 验证被持久化到 SqliteRepository 的
+// server 能被一个全新的 Manager 实例重新加载。
 func TestManagerReloadsDynamicServerFromDB(t *testing.T) {
 	node := findNode(t)
 	script, err := filepath.Abs("../../../examples/mcp/calc/mcp-calc-server.js")
@@ -164,7 +163,7 @@ func TestManagerReloadsDynamicServerFromDB(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// First manager loads from DB.
+	// 第一个 manager 从 DB 加载。
 	reg1 := tool.NewRegistry()
 	mgr1 := NewManager(reg1, repo)
 	if err := mgr1.LoadDBServers(ctx); err != nil {
@@ -179,7 +178,7 @@ func TestManagerReloadsDynamicServerFromDB(t *testing.T) {
 	}
 	mgr1.Close()
 
-	// Second manager loads the same server from DB, proving persistence.
+	// 第二个 manager 从 DB 加载同一 server，证明持久化生效。
 	reg2 := tool.NewRegistry()
 	mgr2 := NewManager(reg2, repo)
 	defer mgr2.Close()

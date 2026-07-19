@@ -8,8 +8,8 @@ import (
     "testing"
 )
 
-// mockTransport is a test transport that replays a fixed set of responses for
-// every request. It validates that each outgoing message is newline terminated.
+// mockTransport 是一个仅用于测试的 transport，对每个请求都回放固定的一组
+// 响应。它同时校验每条发出消息都以换行结尾。
 type replayTransport struct {
     sent  *bytes.Buffer
     lines [][]byte
@@ -27,10 +27,10 @@ func newReplayTransport(lines []string) *replayTransport {
     return t
 }
 
-// WAIT: cannot embed sync.Mutex in struct defined inside function? Actually we
-// can, but to keep package builds simple we use a channel-based mock below.
+// WAIT: 无法在函数内定义的 struct 中嵌入 sync.Mutex？其实可以，
+// 但为了让包构建更简单，我们改用下方基于 channel 的 mock。
 
-// rewrite test using the same pipe pattern as transport_test.go.
+// 使用与 transport_test.go 相同的 pipe 模式重写测试。
 
 func TestProxyToolNameAndParameters(t *testing.T) {
     cfg := ServerConfig{Name: "time"}
@@ -62,7 +62,7 @@ func TestProxyToolExecute(t *testing.T) {
     tr := &stdioTransport{stdin: inW, stdout: outR, stderr: nil}
     client := NewClient(tr)
 
-    // Fake MCP server: read request, reply with matching id.
+    // Fake MCP server：读取请求，用匹配的 id 回复。
     go func() {
         defer outW.Close()
         dec := json.NewDecoder(inR)

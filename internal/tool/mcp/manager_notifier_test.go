@@ -9,9 +9,9 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// TestManagerChangeNotifier verifies that connect/disconnect/enable/disable
-// operations notify the registered change notifier with the correct action and
-// server ID, and that AddServer/RemoveServer do so as well.
+// TestManagerChangeNotifier 验证 connect/disconnect/enable/disable 操作会以
+// 正确的 action 与 server ID 通知已注册的 change notifier，并且
+// AddServer/RemoveServer 也会触发通知。
 func TestManagerChangeNotifier(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -37,27 +37,27 @@ func TestManagerChangeNotifier(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Add disabled server — should emit add but not connect.
+	// 添加 disabled server —— 应触发 add，但不应 connect。
 	if err := mgr.AddServer(ctx, ManagedServer{ID: "demo", Config: ServerConfig{Name: "demo", Transport: "stdio", Enabled: false}}); err != nil {
 		t.Fatalf("AddServer: %v", err)
 	}
 
-	// Manually load with fake transport so enable works.
+	// 用 fake transport 手动加载，以便 enable 能成功。
 	if err := mgr.loader.LoadServerWithTransport(ctx, ServerConfig{Name: "demo", Transport: "stdio", Enabled: true}, newRecordingTransport(ft)); err != nil {
 		t.Fatalf("LoadServerWithTransport: %v", err)
 	}
 
-	// Enable emits its own connect via Manager.connect.
+	// Enable 通过 Manager.connect 触发自身的 connect 事件。
 	if err := mgr.EnableServer(ctx, "demo"); err != nil {
 		t.Fatalf("EnableServer: %v", err)
 	}
 
-	// Disable emits disable.
+	// Disable 触发 disable。
 	if err := mgr.DisableServer(ctx, "demo"); err != nil {
 		t.Fatalf("DisableServer: %v", err)
 	}
 
-	// Remove emits delete.
+	// Remove 触发 delete。
 	if err := mgr.RemoveServer(ctx, "demo"); err != nil {
 		t.Fatalf("RemoveServer: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestManagerChangeNotifier(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Normalize events for assertion.
+	// 规范化事件以便断言。
 	want := []struct{ action, serverID string }{
 		{"add", "demo"},
 		{"connect", "demo"},

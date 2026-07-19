@@ -8,26 +8,25 @@ import (
     "time"
 )
 
-// Client implements a JSON-RPC MCP client on top of a pluggable Transport.
+// Client 实现了一个基于可插拔 Transport 的 JSON-RPC MCP 客户端。
 //
-// It handles the initialize handshake, incremental request IDs, response
-// demultiplexing (ignoring notifications), and high-level helpers for
-// listing and calling remote tools.
+// 它负责 initialize 握手、递增的请求 ID、响应分发（忽略 notification），
+// 以及列出和调用远端 tool 的高层辅助方法。
 type Client struct {
     transport Transport
 
     nextID int64
     mu     sync.Mutex
 
-    // capabilities holds the server capabilities returned by initialize.
+    // capabilities 保存 initialize 返回的 server capabilities。
     capabilities map[string]any
-    // serverInfo identifies the remote MCP server.
+    // serverInfo 标识远端 MCP server。
     serverInfo ServerInfo
-    // protocolVersion is the negotiated MCP protocol version.
+    // protocolVersion 是协商出的 MCP 协议版本。
     protocolVersion string
 }
 
-// NewClient creates an uninitialized MCP client.
+// NewClient 创建一个尚未初始化的 MCP 客户端。
 func NewClient(transport Transport) *Client {
     return &Client{
         transport: transport,
@@ -35,7 +34,7 @@ func NewClient(transport Transport) *Client {
     }
 }
 
-// jsonRPCRequest is the wire format for outgoing messages.
+// jsonRPCRequest 是传出消息的传输层格式。
 type jsonRPCRequest struct {
     JSONRPC string `json:"jsonrpc"`
     ID      int64  `json:"id"`
@@ -43,8 +42,8 @@ type jsonRPCRequest struct {
     Params  any    `json:"params,omitempty"`
 }
 
-// jsonRPCResponse is the wire format for incoming messages.
-// ID is kept raw because some servers echo ID as a string while we use ints.
+// jsonRPCResponse 是传入消息的传输层格式。
+// ID 保留原始 JSON，因为有些 server 会把 ID 以字符串形式回传，而我们用的是整数。
 type jsonRPCResponse struct {
     JSONRPC string          `json:"jsonrpc"`
     ID      json.RawMessage `json:"id"`
@@ -52,7 +51,7 @@ type jsonRPCResponse struct {
     Error   *jsonRPCError   `json:"error"`
 }
 
-// jsonRPCError represents a JSON-RPC 2.0 error object.
+// jsonRPCError 表示 JSON-RPC 2.0 的 error 对象。
 type jsonRPCError struct {
     Code    int    `json:"code"`
     Message string `json:"message"`
@@ -63,11 +62,10 @@ func (e *jsonRPCError) Error() string {
     return fmt.Sprintf("jsonrpc error %d: %s", e.Code, e.Message)
 }
 
-// Initialize performs the MCP initialize handshake and returns the negotiated
-// protocol version.
+// Initialize 执行 MCP initialize 握手并返回协商出的协议版本。
 //
-// The handshake also records server capabilities and serverInfo on the Client
-// for later routing decisions (e.g. only calling tools/list if supported).
+// 握手同时会把 server capabilities 和 serverInfo 记录在 Client 上，
+// 供后续路由决策使用（例如仅当 server 支持时才调用 tools/list）。
 func (c *Client) Initialize(ctx context.Context) (string, error) {
     params := map[string]any{
         "protocolVersion": "2024-11-05",
@@ -105,14 +103,14 @@ func (c *Client) Initialize(ctx context.Context) (string, error) {
     return initResult.ProtocolVersion, nil
 }
 
-// ServerInfo returns the server information received during initialization.
+// ServerInfo 返回初始化阶段收到的 server 信息。
 func (c *Client) ServerInfo() ServerInfo {
     c.mu.Lock()
     defer c.mu.Unlock()
     return c.serverInfo
 }
 
-// Capabilities returns the server capabilities received during initialization.
+// Capabilities 返回初始化阶段收到的 server capabilities。
 func (c *Client) Capabilities() map[string]any {
     c.mu.Lock()
     defer c.mu.Unlock()
@@ -123,12 +121,12 @@ func (c *Client) Capabilities() map[string]any {
     return cp
 }
 
-// listToolsResult matches the tools/list response shape.
+// listToolsResult 对应 tools/list 响应的结构。
 type listToolsResult struct {
     Tools []ToolDefinition `json:"tools"`
 }
 
-// ListTools sends tools/list and returns the tools declared by the server.
+// ListTools 发送 tools/list 并返回 server 声明的 tool 列表。
 func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
     resp, err := c.request(ctx, "tools/list", map[string]any{})
     if err != nil {
@@ -142,17 +140,16 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
     return result.Tools, nil
 }
 
-// ToolCallResult contains the parsed output of a tools/call invocation.
+// ToolCallResult 包含一次 tools/call 调用的解析输出。
 type ToolCallResult struct {
     Text    string
     Content []map[string]any
 }
 
-// CallTool invokes a remote tool by name with JSON arguments.
+// CallTool 通过名称和 JSON 参数调用远端 tool。
 //
-// It returns the concatenated text content of all returned content items,
-// plus the raw content slice for callers that need structured data such as
-// images or embedded resources.
+// 它返回所有 content 项中拼接后的文本内容，同时返回原始 content slice，
+// 供需要图片或内嵌资源等结构化数据的调用方使用。
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (*ToolCallResult, error) {
     params := map[string]any{
         "name":      name,
@@ -185,9 +182,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
     }, nil
 }
 
-// request sends a JSON-RPC method call and blocks until a response with the
-// matching ID is received. Notifications (messages without an id field) are
-// ignored so that concurrent server-to-client messages do not break polling.
+// request 发送一个 JSON-RPC 方法调用，并阻塞等待匹配 ID 的响应。
+// notification（没有 id 字段的消息）会被忽略，因此 server 并发推送给
+// client 的消息不会打断轮询。
 func (c *Client) request(ctx context.Context, method string, params any) (*jsonRPCResponse, error) {
     c.mu.Lock()
     id := c.nextID
@@ -227,12 +224,11 @@ func (c *Client) request(ctx context.Context, method string, params any) (*jsonR
 
         var resp jsonRPCResponse
         if err := json.Unmarshal(line, &resp); err != nil {
-            // If the server emitted non-JSON noise, keep reading until we find
-            // a valid message addressed to us.
+            // 如果 server 输出了非 JSON 噪声，继续读取直到找到发给我们的合法消息。
             continue
         }
 
-        // Notifications have no id field; ignore them and keep polling.
+        // notification 没有 id 字段；忽略并继续轮询。
         if len(resp.ID) == 0 {
             continue
         }
@@ -242,7 +238,7 @@ func (c *Client) request(ctx context.Context, method string, params any) (*jsonR
             return nil, fmt.Errorf("parse response id: %w", err)
         }
         if respID != id {
-            // Out-of-order response for a different request; keep reading.
+            // 来自其它请求的乱序响应；继续读取。
             continue
         }
 
@@ -254,7 +250,7 @@ func (c *Client) request(ctx context.Context, method string, params any) (*jsonR
     }
 }
 
-// sendNotification writes a one-way JSON-RPC notification (no id).
+// sendNotification 写入一条单向 JSON-RPC notification（无 id）。
 func (c *Client) sendNotification(ctx context.Context, method string, params any) error {
     req := map[string]any{
         "jsonrpc": "2.0",
@@ -268,17 +264,17 @@ func (c *Client) sendNotification(ctx context.Context, method string, params any
     return c.transport.Send(body)
 }
 
-// parseJSONRPCID handles JSON-RPC ids that may be numbers or strings.
+// parseJSONRPCID 处理可能是数字或字符串的 JSON-RPC id。
 func parseJSONRPCID(raw json.RawMessage) (int64, error) {
     if len(raw) == 0 {
         return 0, fmt.Errorf("empty id")
     }
-    // JSON number.
+    // JSON 数字。
     var num int64
     if err := json.Unmarshal(raw, &num); err == nil {
         return num, nil
     }
-    // JSON string: we generated numerically, so any string id is unexpected.
+    // JSON 字符串：我们生成的是数字 id，因此字符串 id 属于异常情况。
     var str string
     if err := json.Unmarshal(raw, &str); err == nil {
         return 0, fmt.Errorf("unexpected string id %q", str)
@@ -286,8 +282,8 @@ func parseJSONRPCID(raw json.RawMessage) (int64, error) {
     return 0, fmt.Errorf("unparseable id %s", raw)
 }
 
-// remainingTimeout converts the context deadline into a duration suitable for
-// transport.Receive. If no deadline is set, a conservative long timeout is used.
+// remainingTimeout 将 context 的 deadline 转换为适合 transport.Receive 使用的
+// duration。如果没有设置 deadline，则使用一个保守的较长超时。
 func remainingTimeout(ctx context.Context) (time.Duration, error) {
     deadline, ok := ctx.Deadline()
     if !ok {
@@ -300,7 +296,7 @@ func remainingTimeout(ctx context.Context) (time.Duration, error) {
     return d, nil
 }
 
-// joinTexts concatenates text content items with newline separators.
+// joinTexts 用换行符分隔拼接文本内容项。
 func joinTexts(parts []string) string {
     var out string
     for i, p := range parts {

@@ -11,7 +11,7 @@ import (
     "time"
 )
 
-// Transport abstracts the byte channel between the MCP client and a Server.
+// Transport 抽象 MCP client 与 Server 之间的字节通道。
 type Transport interface {
     Start(ctx context.Context) error
     Send(message []byte) error
@@ -19,8 +19,8 @@ type Transport interface {
     Close() error
 }
 
-// stdioTransport spawns a local child process and speaks newline-delimited
-// JSON-RPC over its stdin/stdout.
+// stdioTransport 启动本地子进程，并经其 stdin/stdout 传输换行分隔的
+// JSON-RPC 消息。
 type stdioTransport struct {
     cfg    ServerConfig
     cmd    *exec.Cmd
@@ -35,8 +35,7 @@ func newStdioTransport(cfg ServerConfig) *stdioTransport {
     return &stdioTransport{cfg: cfg}
 }
 
-// Start builds and starts the child process. The process is killed when Close
-// is called or when ctx is cancelled.
+// Start 构建并启动子进程。当 Close 被调用或 ctx 被取消时，子进程会被 kill。
 func (t *stdioTransport) Start(ctx context.Context) error {
     t.mu.Lock()
     defer t.mu.Unlock()
@@ -81,12 +80,12 @@ func (t *stdioTransport) Start(ctx context.Context) error {
     t.stdout = stdout
     t.stderr = stderr
 
-    // Drain stderr to prevent child from blocking on full pipe; discard for now.
+    // 排空 stderr，避免子进程因 pipe 满而阻塞；当前直接丢弃。
     go io.Copy(io.Discard, stderr)
     return nil
 }
 
-// Send writes a single JSON-RPC message terminated by a newline.
+// Send 写入一条以换行符结尾的 JSON-RPC 消息。
 func (t *stdioTransport) Send(message []byte) error {
     t.mu.Lock()
     defer t.mu.Unlock()
@@ -97,7 +96,7 @@ func (t *stdioTransport) Send(message []byte) error {
     return err
 }
 
-// Receive reads one newline-terminated line from stdout, respecting timeout.
+// Receive 从 stdout 读取一行换行符结尾的数据，并遵循 timeout。
 func (t *stdioTransport) Receive(timeout time.Duration) ([]byte, error) {
     t.mu.Lock()
     r := t.stdout
@@ -112,7 +111,7 @@ func (t *stdioTransport) Receive(timeout time.Duration) ([]byte, error) {
     go func() {
         defer close(done)
         scanner := bufio.NewScanner(r)
-        // Allow up to 4 MB per message.
+        // 每条消息最多 4 MB。
         scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
         if scanner.Scan() {
             line = scanner.Bytes()
@@ -136,7 +135,7 @@ func (t *stdioTransport) Receive(timeout time.Duration) ([]byte, error) {
     }
 }
 
-// Close terminates the child process if it is running.
+// Close 终止仍在运行的子进程。
 func (t *stdioTransport) Close() error {
     t.mu.Lock()
     defer t.mu.Unlock()

@@ -8,20 +8,19 @@ import (
     "github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// Loader bridges external MCP Servers with the shared tool.Registry.
+// Loader 将外部 MCP Server 与共享的 tool.Registry 桥接起来。
 //
-// For each ServerConfig it establishes a transport, performs the MCP handshake,
-// discovers tools, and registers proxy tools under the mcp__<server>__<tool>
-// namespace. The loader owns the lifecycle of these connections so they can be
-// closed gracefully without leaking child processes.
+// 对于每个 ServerConfig，它会建立 transport、完成 MCP 握手、发现 tool，
+// 并以 mcp__<server>__<tool> 命名空间注册 proxy tool。Loader 持有这些连接的
+// 生命周期，以便在不泄漏子进程的前提下优雅关闭。
 type Loader struct {
     registry *tool.Registry
     mu       sync.RWMutex
-    // connections tracks active servers by their configured name.
+    // connections 按配置名称跟踪处于活跃状态的 server。
     connections map[string]*serverConnection
 }
 
-// serverConnection holds the runtime state of one loaded MCP server.
+// serverConnection 保存一个已加载 MCP server 的运行时状态。
 type serverConnection struct {
     config    ServerConfig
     transport Transport
@@ -29,7 +28,7 @@ type serverConnection struct {
     tools     []ToolDefinition
 }
 
-// NewLoader creates a loader bound to the given registry.
+// NewLoader 创建一个绑定到指定 registry 的 loader。
 func NewLoader(registry *tool.Registry) *Loader {
     return &Loader{
         registry:    registry,
@@ -37,12 +36,11 @@ func NewLoader(registry *tool.Registry) *Loader {
     }
 }
 
-// LoadServer connects to a single MCP server, negotiates capabilities, lists
-// tools, and registers each discovered tool as a ProxyTool into the registry.
+// LoadServer 连接单个 MCP server，协商 capabilities、列出 tool，并将每个
+// 发现的 tool 作为 ProxyTool 注册到 registry。
 //
-// If a server with the same name was already loaded, the previous connection
-// is closed and the new tools replace the old registrations. Disabled servers
-// are skipped silently.
+// 如果同名 server 之前已加载，则会关闭旧连接并由新注册的 tool 覆盖旧的。
+// 处于 disabled 状态的 server 会被静默跳过。
 func (l *Loader) LoadServer(ctx context.Context, cfg ServerConfig) error {
     if !cfg.Enabled {
         return nil
@@ -55,13 +53,13 @@ func (l *Loader) LoadServer(ctx context.Context, cfg ServerConfig) error {
     return l.load(ctx, cfg, tr)
 }
 
-// LoadServerWithTransport is a test hook that injects a pre-built Transport.
+// LoadServerWithTransport 是一个测试钩子，用于注入预构建的 Transport。
 func (l *Loader) LoadServerWithTransport(ctx context.Context, cfg ServerConfig, tr Transport) error {
     return l.load(ctx, cfg, tr)
 }
 
 func (l *Loader) load(ctx context.Context, cfg ServerConfig, tr Transport) error {
-    // Close any previous connection for this server name.
+    // 关闭该 server 名称下任何已有的连接。
     _ = l.UnloadServer(cfg.Name)
 
     if err := tr.Start(ctx); err != nil {
@@ -100,7 +98,7 @@ func (l *Loader) load(ctx context.Context, cfg ServerConfig, tr Transport) error
     return nil
 }
 
-// LoadedServerNames returns the names of currently loaded MCP servers.
+// LoadedServerNames 返回当前已加载 MCP server 的名称列表。
 func (l *Loader) LoadedServerNames() []string {
     l.mu.RLock()
     defer l.mu.RUnlock()
@@ -111,8 +109,8 @@ func (l *Loader) LoadedServerNames() []string {
     return names
 }
 
-// UnloadServer closes the transport for the named server and removes its
-// proxy tools from the registry.
+// UnloadServer 关闭指定名称 server 的 transport，并从 registry 中移除其
+// proxy tool。
 func (l *Loader) UnloadServer(name string) error {
     l.mu.Lock()
     conn, ok := l.connections[name]
@@ -125,12 +123,11 @@ func (l *Loader) UnloadServer(name string) error {
         return fmt.Errorf("server not loaded: %s", name)
     }
 
-    // Unregister all tools advertised by this server.
+    // 注销该 server 公告的所有 tool。
     cfg := conn.config
     for _, def := range conn.tools {
         toolName := cfg.ToolName(def.Name)
-        // Ignore errors from unregistering tools that may have been removed
-        // already by dynamic APIs.
+        // 忽略注销时可能出现的错误：这些 tool 可能已被动态 API 提前移除。
         _ = l.registry.Unregister(toolName)
     }
 
@@ -140,7 +137,7 @@ func (l *Loader) UnloadServer(name string) error {
     return nil
 }
 
-// LoadedNames returns the names of currently loaded MCP servers.
+// LoadedNames 返回当前已加载 MCP server 的名称列表。
 func (l *Loader) LoadedNames() []string {
     l.mu.RLock()
     defer l.mu.RUnlock()
@@ -151,7 +148,7 @@ func (l *Loader) LoadedNames() []string {
     return names
 }
 
-// newTransport creates the appropriate Transport implementation for a config.
+// newTransport 根据配置创建对应的 Transport 实现。
 func newTransport(cfg ServerConfig) (Transport, error) {
     switch cfg.Transport {
     case "", "stdio":

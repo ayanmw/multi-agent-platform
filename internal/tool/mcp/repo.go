@@ -10,21 +10,20 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
-// SqliteRepository persists ManagedServer records in the mcp_servers table.
+// SqliteRepository 将 ManagedServer 记录持久化到 mcp_servers 表中。
 //
-// It implements the mcp.Repository interface and is the default persistence
-// backend for dynamic MCP servers. The zero value is not usable; use
-// NewSqliteRepository.
+// 它实现了 mcp.Repository 接口，是动态 MCP server 的默认持久化后端。
+// 零值不可用；请使用 NewSqliteRepository。
 type SqliteRepository struct {
 	db *sql.DB
 }
 
-// NewSqliteRepository creates a repository backed by db.DB.
+// NewSqliteRepository 创建一个由 db.DB 支持的 repository。
 func NewSqliteRepository(database *sql.DB) *SqliteRepository {
 	return &SqliteRepository{db: database}
 }
 
-// Save inserts or replaces a managed server row.
+// Save 插入或替换一行 managed server 记录。
 func (r *SqliteRepository) Save(ctx context.Context, ms ManagedServer) error {
 	if r.db == nil {
 		return fmt.Errorf("sqlite repository not initialized")
@@ -45,8 +44,8 @@ func (r *SqliteRepository) Save(ctx context.Context, ms ManagedServer) error {
 	if cp.UpdatedAt == "" {
 		cp.UpdatedAt = now
 	}
-	// Persist the top-level enabled flag into the config as well so the
-	// Loader can make consistent decisions when starting from a persisted row.
+	// 同时把顶层的 enabled 标志持久化进 config，以便 Loader 在从持久化行
+	// 启动时能做出一致的决策。
 	cp.Config.Enabled = cp.Enabled
 
 	_, err = r.db.ExecContext(ctx, `
@@ -71,7 +70,7 @@ func (r *SqliteRepository) Save(ctx context.Context, ms ManagedServer) error {
 	return nil
 }
 
-// Delete removes a server by ID.
+// Delete 按 ID 删除一个 server。
 func (r *SqliteRepository) Delete(ctx context.Context, id string) error {
 	if r.db == nil {
 		return fmt.Errorf("sqlite repository not initialized")
@@ -83,13 +82,13 @@ func (r *SqliteRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// ListEnabled returns servers with enabled = 1.
+// ListEnabled 返回 enabled = 1 的 server。
 func (r *SqliteRepository) ListEnabled(ctx context.Context) ([]ManagedServer, error) {
 	return r.list(ctx, `SELECT id, source, name, transport, command, args, endpoint, environment, enabled, created_at, updated_at
 		FROM mcp_servers WHERE enabled = 1`)
 }
 
-// ListAll returns every persisted server.
+// ListAll 返回所有已持久化的 server。
 func (r *SqliteRepository) ListAll(ctx context.Context) ([]ManagedServer, error) {
 	return r.list(ctx, `SELECT id, source, name, transport, command, args, endpoint, environment, enabled, created_at, updated_at
 		FROM mcp_servers ORDER BY created_at`)
@@ -124,8 +123,8 @@ func (r *SqliteRepository) list(ctx context.Context, query string) ([]ManagedSer
 		if err := json.Unmarshal(envJSON, &ms.Config.Environment); err != nil {
 			return nil, fmt.Errorf("unmarshal environment: %w", err)
 		}
-		// Keep the persisted top-level enabled flag in sync with the nested config
-		// so downstream consumers (especially the Loader) see one source of truth.
+		// 让持久化的顶层 enabled 标志与嵌套 config 保持同步，以便下游
+		// 消费者（尤其是 Loader）只看到唯一来源的真相。
 		ms.Config.Enabled = ms.Enabled
 		servers = append(servers, ms)
 	}
@@ -135,11 +134,11 @@ func (r *SqliteRepository) list(ctx context.Context, query string) ([]ManagedSer
 	return servers, nil
 }
 
-// Ensure SqliteRepository implements Repository.
+// 确保 SqliteRepository 实现了 Repository。
 var _ Repository = (*SqliteRepository)(nil)
 
-// EmptyRepository is a no-op Repository useful for tests and for deployments
-// that do not need DB persistence for MCP servers.
+// EmptyRepository 是一个空操作的 Repository，适用于测试以及不需要为 MCP
+// server 做 DB 持久化的部署场景。
 type EmptyRepository struct{}
 
 func (EmptyRepository) Save(ctx context.Context, ms ManagedServer) error { return nil }
@@ -149,11 +148,11 @@ func (EmptyRepository) ListEnabled(ctx context.Context) ([]ManagedServer, error)
 }
 func (EmptyRepository) ListAll(ctx context.Context) ([]ManagedServer, error) { return nil, nil }
 
-// Ensure EmptyRepository implements Repository.
+// 确保 EmptyRepository 实现了 Repository。
 var _ Repository = EmptyRepository{}
 
-// DefaultRepository returns the sqlite repository using the package-level db.DB.
-// If db.DB is nil it returns an EmptyRepository.
+// DefaultRepository 返回使用 package 级 db.DB 的 sqlite repository。
+// 若 db.DB 为 nil，则返回 EmptyRepository。
 func DefaultRepository() Repository {
 	if db.DB != nil {
 		return NewSqliteRepository(db.DB)

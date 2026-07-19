@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// mockTransport implements the Transport interface over an io.Pipe pair. The
-// server half reads requests from one pipe and writes responses to the other.
+// mockTransport 基于一对 io.Pipe 实现 Transport 接口。
+// server 端从一个 pipe 读请求，再向另一个 pipe 写响应。
 type mockTransport struct {
 	inR  *io.PipeReader
 	inW  *io.PipeWriter
@@ -93,13 +93,13 @@ func (m *mockTransport) Close() error {
 	return nil
 }
 
-// serverWriter gives tests direct access to the response pipe.
+// serverWriter 让测试直接访问响应 pipe。
 func (m *mockTransport) serverWriter() io.Writer { return m.outW }
 
-// requestReader gives tests direct access to the request pipe.
+// requestReader 让测试直接访问请求 pipe。
 func (m *mockTransport) requestReader() io.Reader { return m.inR }
 
-// readLine reads one JSON-RPC request from the server-side reader.
+// readLine 从 server 端 reader 读取一条 JSON-RPC 请求。
 func readLine(t *testing.T, r io.Reader) map[string]any {
 	t.Helper()
 	scanner := bufio.NewScanner(r)
@@ -116,7 +116,7 @@ func readLine(t *testing.T, r io.Reader) map[string]any {
 	return req
 }
 
-// writeResponse writes one JSON-RPC response to the client-side reader.
+// writeResponse 向 client 端 reader 写入一条 JSON-RPC 响应。
 func writeResponse(t *testing.T, w io.Writer, id any, result any) {
 	t.Helper()
 	resp := map[string]any{
@@ -154,7 +154,7 @@ func TestClientInitializeHandshake(t *testing.T) {
 			"capabilities": map[string]any{"tools": map[string]any{}},
 		})
 
-		// The client should send the initialized notification next.
+		// client 应在下一步发送 initialized notification。
 		notif := readLine(t, tr.requestReader())
 		if got := notif["method"]; got != "notifications/initialized" {
 			t.Errorf("expected notifications/initialized, got %v", got)

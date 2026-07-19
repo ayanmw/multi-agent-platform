@@ -6,14 +6,13 @@ import (
     "time"
 )
 
-// ProxyTool wraps a remote MCP tool so it can be registered in the shared
-// tool.Registry. From the runtime perspective it behaves like any other tool:
-// Name / Description / Parameters are advertised to the LLM, and Execute
-// forwards the call to the MCP server.
+// ProxyTool 包装一个远端 MCP tool，使其可被注册到共享 tool.Registry。
+// 从 runtime 视角看它与其他 tool 行为一致：Name / Description / Parameters
+// 会被公告给 LLM，Execute 则将调用转发给 MCP server。
 //
-// Tags and Aliases let the proxy participate in registry filtering and alias
-// resolution just like built-in tools. The "mcp" tag is always present so
-// callers can FilterByTag("mcp") to discover all MCP-provided tools.
+// Tags 和 Aliases 让 proxy 能像内置 tool 一样参与 registry 的过滤与别名
+// 解析。"mcp" tag 始终存在，调用方可通过 FilterByTag("mcp") 发现所有 MCP
+// 提供的 tool。
 type ProxyTool struct {
     serverName string
     def        ToolDefinition
@@ -21,10 +20,10 @@ type ProxyTool struct {
     timeout    time.Duration
 }
 
-// NewProxyTool creates a ProxyTool from a server-scoped tool definition.
+// NewProxyTool 根据 server 作用域下的 tool 定义创建一个 ProxyTool。
 //
-// serverName is used to build the registry-safe unique name. The remote method
-// name stays def.Name because that is what the MCP server expects in tools/call.
+// serverName 用于构造 registry 安全的唯一名称。远端方法名仍保持 def.Name，
+// 因为那是 MCP server 在 tools/call 中期望的值。
 func NewProxyTool(serverName string, def ToolDefinition, client *Client) *ProxyTool {
     return &ProxyTool{
         serverName: serverName,
@@ -34,9 +33,8 @@ func NewProxyTool(serverName string, def ToolDefinition, client *Client) *ProxyT
     }
 }
 
-// Namespace returns the MCP server namespace that scopes this tool.
-// The full namespace is "mcp__<server>" so proxy tools are grouped together
-// and do not collide with other namespaces.
+// Namespace 返回作用域化该 tool 的 MCP server 命名空间。
+// 完整命名空间为 "mcp__<server>"，使 proxy tool 被归到一起且不与其它命名空间冲突。
 func (t *ProxyTool) Namespace() string {
     if t.serverName == "" {
         return "mcp"
@@ -44,43 +42,43 @@ func (t *ProxyTool) Namespace() string {
     return "mcp__" + t.serverName
 }
 
-// FullName returns the globally unique registry name used by the engine:
-// mcp__<server>__<tool>.
+// FullName 返回 engine 使用的全局唯一 registry 名称：
+// mcp__<server>__<tool>。
 func (t *ProxyTool) FullName() string {
     return ServerConfig{Name: t.serverName}.ToolName(t.def.Name)
 }
 
-// Aliases returns alternative names for this proxy tool.
-// MCP proxy tools currently do not define aliases; future versions could expose
-// per-tool aliases from the server's capabilities response.
+// Aliases 返回该 proxy tool 的别名。
+// MCP proxy tool 目前不定义别名；未来版本可从 server capabilities 响应中
+// 暴露每个 tool 的别名。
 func (t *ProxyTool) Aliases() []string {
     return nil
 }
 
-// Tags returns discovery tags for the proxy tool.
-// The "mcp" tag is always present so callers can discover all MCP tools.
+// Tags 返回该 proxy tool 的发现用 tag。
+// "mcp" tag 始终存在，调用方可据此发现所有 MCP tool。
 func (t *ProxyTool) Tags() []string {
     return []string{"mcp"}
 }
 
-// Name returns the globally unique tool name in the form mcp__<server>__<tool>.
-// For registry compatibility Name equals FullName.
+// Name 返回形如 mcp__<server>__<tool> 的全局唯一 tool 名称。
+// 为兼容 registry，Name 等同于 FullName。
 func (t *ProxyTool) Name() string {
     return t.FullName()
 }
 
-// Description returns the remote tool's description.
+// Description 返回远端 tool 的描述。
 func (t *ProxyTool) Description() string {
     return t.def.Description
 }
 
-// Parameters returns the JSON Schema describing the tool's arguments.
+// Parameters 返回描述该 tool 参数的 JSON Schema。
 func (t *ProxyTool) Parameters() map[string]any {
     return t.def.InputSchema
 }
 
-// Execute forwards the invocation to the MCP server. The input is sent as the
-// tool arguments; the text content of the response is returned as a string.
+// Execute 把调用转发给 MCP server。input 作为 tool arguments 发送；
+// 响应中的文本内容以字符串形式返回。
 func (t *ProxyTool) Execute(input map[string]any) (any, error) {
     ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
     defer cancel()

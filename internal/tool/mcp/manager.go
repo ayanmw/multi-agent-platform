@@ -11,72 +11,68 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
-// ChangeNotifier is called with the action and affected server ID after the
-// set of loaded MCP servers (and therefore the set of registered proxy tools)
-// changes. It is used by cmd/server to broadcast an mcp_tools_changed WebSocket
-// event so the frontend can refresh available tools.
+// ChangeNotifier 会在已加载 MCP server 集合（因而也是已注册 proxy tool 集合）
+// 发生变化后，被传入动作类型和受影响的 server ID 调用。cmd/server 用它来
+// 广播 mcp_tools_changed WebSocket 事件，让前端刷新可用 tool。
 type ChangeNotifier func(action, serverID string)
 
-// Manager owns the lifecycle of all configured and dynamically added MCP servers.
+// Manager 持有所有已配置及动态新增 MCP server 的生命周期。
 //
-// It is the single integration point between static configuration, runtime API
-// additions, and future marketplace installs. Each managed server is uniquely
-// identified by ID; the manager binds its ServerConfig to a Transport, negotiates
-// capabilities via a Client, and registers discovered tools as ProxyTool instances
-// into the shared tool.Registry.
+// 它是静态配置、运行时 API 新增以及未来 marketplace 安装之间的唯一集成点。
+// 每个被管理的 server 由 ID 唯一标识；Manager 将其 ServerConfig 绑定到一个
+// Transport，通过 Client 协商 capabilities，并将发现的 tool 作为 ProxyTool
+// 注册到共享的 tool.Registry。
 //
-// Concurrency: Manager methods are safe for concurrent use. Loaded servers share
-// the registry by namespacing every tool as mcp__<server>__<tool>.
+// 并发：Manager 的方法可安全并发使用。已加载的 server 通过将每个 tool 命名为
+// mcp__<server>__<tool> 来共享 registry 而不冲突。
 type Manager struct {
 	registry *tool.Registry
 	loader   *Loader
 	repo     Repository
 
-	// markets wires optional marketplace providers. The manager can install a
-	// server from a market by resolving its package into a ServerConfig and
-	// adding it as a SourceDB server (Config comes from market but lifecycle is
-	// owned locally once installed).
+	// markets 接入可选的 marketplace provider。Manager 可以从 market 安装
+	// server，方式是将其 package 解析为 ServerConfig 并以 SourceDB server 的
+	// 形式添加（Config 来自 market，但安装后生命周期由本地接管）。
 	markets *marketplace.Registry
 
 	mu      sync.RWMutex
 	servers map[string]*managedServer
 
-	// StaticIDs records which server IDs originated from static config so that
-	// they are not accidentally removed by dynamic API deletes. Static entries
-	// can still be enabled/disabled at runtime, but their config is reloaded
-	// on the next process restart.
+	// StaticIDs 记录来自静态配置的 server ID，以免被动态 API 误删。
+	// 静态条目在运行时仍可被 enable/disable，但其配置会在下次进程重启时
+	// 重新加载。
 	staticIDs map[string]struct{}
 
-	// onChange is invoked whenever a server is connected or disconnected so the
-	// platform can broadcast an mcp_tools_changed event to WebSocket clients.
+	// onChange 在 server 连接或断开后被调用，以便平台向 WebSocket client
+	// 广播 mcp_tools_changed 事件。
 	onChange ChangeNotifier
 }
 
-// managedServer is the in-memory runtime state of one loaded MCP server.
+// managedServer 是一个已加载 MCP server 的内存运行时状态。
 type managedServer struct {
 	ms      ManagedServer
 	loaded  bool
 	loadErr error
 }
 
-// Repository persists ManagedServer records. The nil repository is valid and
-// simply means "no persistence"; all dynamic changes will be lost on restart.
+// Repository 持久化 ManagedServer 记录。nil repository 也是合法的，表示
+// "不做持久化"；所有动态变更在重启后会丢失。
 type Repository interface {
-	// Save stores or updates a managed server. The implementation decides the
-	// primary key (typically ms.ID).
+	// Save 存储或更新一个被管理的 server。实现自行决定主键
+	// （通常是 ms.ID）。
 	Save(ctx context.Context, ms ManagedServer) error
 
-	// Delete removes a managed server by ID.
+	// Delete 按 ID 删除一个被管理的 server。
 	Delete(ctx context.Context, id string) error
 
-	// ListEnabled returns all servers that should be loaded at startup.
+	// ListEnabled 返回所有应在启动时加载的 server。
 	ListEnabled(ctx context.Context) ([]ManagedServer, error)
 
-	// ListAll returns every persisted server, including disabled ones.
+	// ListAll 返回所有已持久化的 server，包括被禁用的。
 	ListAll(ctx context.Context) ([]ManagedServer, error)
 }
 
-// NewManager creates a Manager bound to registry. repo may be nil.
+// NewManager 创建一个绑定到 registry 的 Manager。repo 可以为 nil。
 func NewManager(registry *tool.Registry, repo Repository) *Manager {
 	return &Manager{
 		registry:  registry,
@@ -88,36 +84,35 @@ func NewManager(registry *tool.Registry, repo Repository) *Manager {
 	}
 }
 
-// RegisterMarket registers a marketplace provider.
+// RegisterMarket 注册一个 marketplace provider。
 //
-// Static market providers are typically registered at startup; runtime
-// discovery of new markets can be added later by Phase 7 adapters.
+// 静态 market provider 通常在启动时注册；后续可通过 Phase 7 适配器动态
+// 发现新 market。
 func (m *Manager) RegisterMarket(p marketplace.Provider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.markets.Register(p)
 }
 
-// Markets returns a snapshot of registered market providers.
+// Markets 返回已注册 market provider 的快照。
 func (m *Manager) Markets() []marketplace.Provider {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.markets.List()
 }
 
-// GetMarket returns a registered market provider by name.
+// GetMarket 按名称返回已注册的 market provider。
 func (m *Manager) GetMarket(name string) (marketplace.Provider, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.markets.Get(name)
 }
 
-// InstallFromMarket resolves a package from the named market and adds it as a
-// managed server. If enabled, the server is connected immediately.
+// InstallFromMarket 从指定名称的 market 解析一个 package，并作为被管理的
+// server 添加。若 enabled，则立即连接该 server。
 //
-// Installed market servers are persisted with SourceDB but remember their origin
-// via the "market" key in event data. The original package ID becomes the
-// ManagedServer.ID.
+// 安装自 market 的 server 以 SourceDB 持久化，但通过 event data 中的 "market"
+// key 记住其来源。原始 package ID 即作为 ManagedServer.ID。
 func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID string) (ManagedServer, error) {
 	m.mu.RLock()
 	provider, ok := m.markets.Get(marketName)
@@ -157,8 +152,8 @@ func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID strin
 	}
 
 	if err := m.AddServer(ctx, ms); err != nil {
-		// If connection failed but the server record exists, return the managed
-		// server so callers can inspect load_err and retry enable later.
+		// 如果连接失败但 server 记录已存在，则返回该被管理的 server，
+		// 让调用方检查 load_err 并在后续重新 enable。
 		if existing, getErr := m.GetServer(pkgID); getErr == nil {
 			m.notifyChange("add", pkgID)
 			return existing, nil
@@ -170,21 +165,20 @@ func (m *Manager) InstallFromMarket(ctx context.Context, marketName, pkgID strin
 	return m.GetServer(pkgID)
 }
 
-// InstallFromMarketIfMissing installs a market package only when no enabled
-// server with the same ID is currently loaded or persisted. It avoids repeated
-// installations and re-connections on every process restart.
+// InstallFromMarketIfMissing 仅当当前没有同 ID 的 enabled server（已加载或
+// 已持久化）时，才安装 market package。它避免每次进程重启都重复安装和
+// 重新连接。
 //
-// The check first consults the in-memory server list, then the repository (if
-// configured). A disabled but persisted server is treated as "existing" and is
-// not reinstalled; operators can enable it through the API instead.
+// 检查先查询内存中的 server 列表，再查询 repository（若已配置）。已被禁用但
+// 持久化的 server 视为 "已存在"，不会被重新安装；操作者可通过 API 来 enable。
 func (m *Manager) InstallFromMarketIfMissing(ctx context.Context, marketName, pkgID string) (ManagedServer, bool, error) {
-	// Fast path: already loaded in memory.
+	// 快速路径：已在内存中加载。
 	if existing, err := m.GetServer(pkgID); err == nil && existing.Enabled {
 		return existing, false, nil
 	}
 
-	// Persistence-aware check: include disabled servers so we don't recreate
-	// records that the operator intentionally disabled.
+	// 感知持久化的检查：把 disabled server 也算进来，避免重建操作者刻意
+	// 禁用的记录。
 	if m.repo != nil {
 		all, err := m.repo.ListAll(ctx)
 		if err != nil {
@@ -204,15 +198,15 @@ func (m *Manager) InstallFromMarketIfMissing(ctx context.Context, marketName, pk
 	return ms, true, nil
 }
 
-// SetChangeNotifier registers a callback invoked after any server load/unload.
-// It is typically called once by cmd/server after the WebSocket hub is ready.
+// SetChangeNotifier 注册一个在任何 server 加载/卸载后调用的回调。
+// 通常由 cmd/server 在 WebSocket hub 就绪后调用一次。
 func (m *Manager) SetChangeNotifier(fn ChangeNotifier) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onChange = fn
 }
 
-// notifyChange invokes the registered change notifier, if any.
+// notifyChange 调用已注册的 change notifier（若有）。
 func (m *Manager) notifyChange(action, serverID string) {
 	m.mu.RLock()
 	fn := m.onChange
@@ -222,11 +216,11 @@ func (m *Manager) notifyChange(action, serverID string) {
 	}
 }
 
-// LoadStaticServers loads servers from static configuration at startup.
+// LoadStaticServers 在启动时从静态配置加载 server。
 //
-// If a server is enabled and can be connected, its tools are registered into
-// the shared registry. Disabled servers are remembered but not connected.
-// Static servers are marked so they cannot be deleted by dynamic RemoveServer.
+// 若某个 server 处于 enabled 且可连接，则其 tool 会被注册到共享 registry。
+// disabled server 会被记录但不连接。静态 server 会被标记，因此不能被动态
+// RemoveServer 删除。
 func (m *Manager) LoadStaticServers(ctx context.Context, configs []ServerConfig) error {
 	for _, cfg := range configs {
 		if cfg.Name == "" {
@@ -245,19 +239,18 @@ func (m *Manager) LoadStaticServers(ctx context.Context, configs []ServerConfig)
 			continue
 		}
 		if err := m.connect(ctx, ms); err != nil {
-			// Log but do not fail startup; individual MCP servers may be unavailable.
-			// The server stays in the map with loadErr so callers can inspect it.
+			// 记录但不让启动失败；单个 MCP server 可能不可用。
+			// server 仍保留在 map 中并带 loadErr，调用方可以检查。
 			m.markLoadError(id, err)
 		}
 	}
 	return nil
 }
 
-// LoadDBServers loads enabled servers from the persistent repository.
+// LoadDBServers 从持久化 repository 中加载 enabled 的 server。
 //
-// This is typically called once at startup after LoadStaticServers. DB servers
-// take no precedence over static ones: if the same ID exists, the static
-// configuration wins because it was loaded first.
+// 通常在启动时、LoadStaticServers 之后调用一次。DB server 不会优先于静态
+// server：若同 ID 已存在，则静态配置胜出（因为它先被加载）。
 func (m *Manager) LoadDBServers(ctx context.Context) error {
 	if m.repo == nil {
 		return nil
@@ -281,11 +274,10 @@ func (m *Manager) LoadDBServers(ctx context.Context) error {
 	return nil
 }
 
-// AddServer adds a server dynamically, connects if enabled, and persists it.
+// AddServer 动态添加一个 server，若 enabled 则建立连接，并持久化记录。
 //
-// If a server with the same ID already exists and originated from static config,
-// AddServer returns an error; static config must be edited and the process
-// restarted to change those servers.
+// 若同 ID server 已存在且来自静态配置，则 AddServer 返回错误；要修改静态
+// server，必须编辑静态配置并重启进程。
 func (m *Manager) AddServer(ctx context.Context, ms ManagedServer) error {
 	if ms.ID == "" {
 		return fmt.Errorf("server id is required")
@@ -312,7 +304,7 @@ func (m *Manager) AddServer(ctx context.Context, ms ManagedServer) error {
 		}
 	}
 
-	// Disconnect any previous incarnation.
+	// 断开任何此前已存在的实例。
 	_ = m.DisconnectServer(ctx, ms.ID)
 
 	m.setServer(ms)
@@ -326,10 +318,9 @@ func (m *Manager) AddServer(ctx context.Context, ms ManagedServer) error {
 	return nil
 }
 
-// RemoveServer disconnects and deletes a dynamic server.
+// RemoveServer 断开并删除一个动态 server。
 //
-// Static servers cannot be removed at runtime; callers should disable them
-// instead.
+// 静态 server 无法在运行时删除；调用方应改为禁用它。
 func (m *Manager) RemoveServer(ctx context.Context, id string) error {
 	m.mu.Lock()
 	_, isStatic := m.staticIDs[id]
@@ -353,7 +344,7 @@ func (m *Manager) RemoveServer(ctx context.Context, id string) error {
 	return nil
 }
 
-// EnableServer enables and connects a previously disabled server.
+// EnableServer 启用并连接一个此前被禁用的 server。
 func (m *Manager) EnableServer(ctx context.Context, id string) error {
 	m.mu.Lock()
 	ms, ok := m.servers[id]
@@ -379,7 +370,7 @@ func (m *Manager) EnableServer(ctx context.Context, id string) error {
 	return nil
 }
 
-// DisableServer disconnects a server and marks it disabled.
+// DisableServer 断开一个 server 并将其标记为 disabled。
 func (m *Manager) DisableServer(ctx context.Context, id string) error {
 	m.mu.Lock()
 	ms, ok := m.servers[id]
@@ -393,8 +384,8 @@ func (m *Manager) DisableServer(ctx context.Context, id string) error {
 	wasLoaded := ms.loaded
 	m.mu.Unlock()
 
-	// Disconnect only if it was actually loaded; otherwise this is a no-op disable
-	// and unloading would return an error for a server that was never connected.
+	// 仅在确实已加载时才断开；否则这是一次空 disable，而对从未连接的
+	// server 执行 unload 会返回错误。
 	if wasLoaded {
 		if err := m.DisconnectServer(ctx, id); err != nil {
 			return err
@@ -410,8 +401,8 @@ func (m *Manager) DisableServer(ctx context.Context, id string) error {
 	return nil
 }
 
-// DisconnectServer closes the transport and unregisters tools for a server
-// without changing its enabled/disabled state.
+// DisconnectServer 关闭 transport 并注销该 server 的 tool，
+// 但不改变其 enabled/disabled 状态。
 func (m *Manager) DisconnectServer(ctx context.Context, id string) error {
 	_ = ctx
 	err := m.loader.UnloadServer(id)
@@ -425,7 +416,7 @@ func (m *Manager) DisconnectServer(ctx context.Context, id string) error {
 	return err
 }
 
-// ListServers returns the current state of all known servers.
+// ListServers 返回所有已知 server 的当前状态。
 func (m *Manager) ListServers() []ManagedServer {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -437,7 +428,7 @@ func (m *Manager) ListServers() []ManagedServer {
 	return out
 }
 
-// GetServer returns a single server by ID, or an error if not found.
+// GetServer 按 ID 返回单个 server，未找到时返回错误。
 func (m *Manager) GetServer(id string) (ManagedServer, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -449,7 +440,7 @@ func (m *Manager) GetServer(id string) (ManagedServer, error) {
 	return ms.ms, nil
 }
 
-// Close disconnects all loaded servers. It is safe to call multiple times.
+// Close 断开所有已加载的 server。可多次安全调用。
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.servers))
@@ -467,7 +458,7 @@ func (m *Manager) Close() error {
 	return firstErr
 }
 
-// connect asks the loader to establish a connection for ms.
+// connect 让 loader 为 ms 建立连接。
 func (m *Manager) connect(ctx context.Context, ms ManagedServer) error {
 	err := m.loader.LoadServer(ctx, ms.Config)
 	if err != nil {
@@ -498,14 +489,14 @@ func (m *Manager) setServer(ms ManagedServer) {
 	m.servers[ms.ID] = &managedServer{ms: ms}
 }
 
-// ServerStatus is a JSON-friendly snapshot returned by API endpoints.
+// ServerStatus 是 API 端点返回的 JSON 友好快照。
 type ServerStatus struct {
 	ManagedServer
 	Loaded  bool   `json:"loaded"`
 	LoadErr string `json:"load_err,omitempty"`
 }
 
-// ListServerStatuses returns snapshot states suitable for REST responses.
+// ListServerStatuses 返回适合 REST 响应的快照状态。
 func (m *Manager) ListServerStatuses() []ServerStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -524,8 +515,8 @@ func (m *Manager) ListServerStatuses() []ServerStatus {
 	return out
 }
 
-// CloneManagedServer returns a deep-ish copy of ms for repository storage.
-// It is exported so repository tests can reuse the same helpers.
+// CloneManagedServer 返回 ms 的"半深拷贝"，用于 repository 存储。
+// 它被导出以便 repository 测试可复用同一套辅助函数。
 func CloneManagedServer(ms ManagedServer) ManagedServer {
 	cp := ms
 	if ms.Config.Args != nil {

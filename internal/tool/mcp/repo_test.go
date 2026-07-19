@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// newTestDB creates a temporary SQLite database with the mcp_servers table.
+// newTestDB 创建一个带 mcp_servers 表的临时 SQLite 数据库。
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -41,7 +41,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestSqliteRepositoryRoundTrip verifies save, reload, and field preservation.
+// TestSqliteRepositoryRoundTrip 验证 save、reload 与字段保持。
 func TestSqliteRepositoryRoundTrip(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -95,7 +95,7 @@ func TestSqliteRepositoryRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSqliteRepositoryListEnabledOnly verifies ListEnabled filters disabled rows.
+// TestSqliteRepositoryListEnabledOnly 验证 ListEnabled 会过滤掉 disabled 行。
 func TestSqliteRepositoryListEnabledOnly(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -122,7 +122,7 @@ func TestSqliteRepositoryListEnabledOnly(t *testing.T) {
 	}
 }
 
-// TestSqliteRepositoryUpdate verifies that saving the same ID updates fields.
+// TestSqliteRepositoryUpdate 验证保存相同 ID 会更新字段。
 func TestSqliteRepositoryUpdate(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -155,7 +155,7 @@ func TestSqliteRepositoryUpdate(t *testing.T) {
 	}
 }
 
-// TestSqliteRepositoryDelete verifies Delete removes rows.
+// TestSqliteRepositoryDelete 验证 Delete 会删除行。
 func TestSqliteRepositoryDelete(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -179,7 +179,7 @@ func TestSqliteRepositoryDelete(t *testing.T) {
 	}
 }
 
-// TestSqliteRepositoryUninitialized verifies graceful errors when db is nil.
+// TestSqliteRepositoryUninitialized 验证 db 为 nil 时能优雅返回错误。
 func TestSqliteRepositoryUninitialized(t *testing.T) {
 	repo := NewSqliteRepository(nil)
 	ctx := context.Background()
@@ -193,7 +193,7 @@ func TestSqliteRepositoryUninitialized(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	// Some repository tests use modernc.org/sqlite which logs to stderr on
-	// certain pragmas. We don't care about those messages.
+	// 部分 repository 测试使用 modernc.org/sqlite，该库在某些 pragma 上会
+	// 向 stderr 输出日志。我们并不关心这些消息。
 	os.Exit(m.Run())
 }

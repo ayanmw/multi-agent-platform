@@ -10,7 +10,7 @@ import (
     "github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// fakeTransport is a test-only Transport that replays a scripted MCP server.
+// fakeTransport 是仅用于测试的 Transport，会回放一个脚本化的 MCP server。
 type fakeTransport struct {
     stdin  io.WriteCloser
     stdout io.ReadCloser
@@ -38,7 +38,7 @@ func startFakeMCP(t *testing.T, handlers map[string]func(id int64, params json.R
                 continue
             }
             if id := req.ID; id != 0 || req.Method == "notifications/initialized" {
-                // notifications don't have an id, but our handlers only return responses for calls.
+                // notification 没有 id，但我们的 handler 只对调用返回响应。
             }
             outW.Write(append(h(req.ID, req.Params), '\n'))
         }

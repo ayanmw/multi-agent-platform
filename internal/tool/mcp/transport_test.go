@@ -8,13 +8,13 @@ import (
 )
 
 func TestStdioTransportRoundTrip(t *testing.T) {
-    // Simulate a child process by piping stdin/stdout manually.
+    // 通过手动接通 stdin/stdout 来模拟一个子进程。
     inR, inW := io.Pipe()
     outR, outW := io.Pipe()
 
     tr := &stdioTransport{stdin: inW, stdout: outR, stderr: nil}
     go func() {
-        // Read request line, echo it back with newline framing.
+        // 读取请求行，加换行框架后回显。
         buf := make([]byte, 1024)
         n, _ := inR.Read(buf)
         outW.Write(buf[:n])

@@ -1,18 +1,17 @@
-// Package marketplace defines a pluggable abstraction for MCP server marketplaces.
+// Package marketplace 为 MCP server marketplace 定义了一个可插拔抽象。
 //
-// A market provider exposes a curated list of MCP server packages. The Manager
-// calls ListServers to show available packages, GetServer to inspect a package,
-// and ResolveConfig to obtain the concrete ServerConfig that should be installed.
+// market provider 暴露一份精选的 MCP server package 列表。Manager 调用
+// ListServers 展示可用 package，调用 GetServer 检视某个 package，调用
+// ResolveConfig 获取应被安装的具体 ServerConfig。
 //
-// Different marketplaces may have different APIs. This package intentionally only
-// defines the common denominator: ID, name, description, version, transport hint,
-// and the resolved install configuration. Future providers (OpenCode, OpenClaude,
-// npm, GitHub releases, ...) can implement this interface without changing the
-// Manager or the core mcp package.
+// 不同的 marketplace 可能拥有不同的 API。本包刻意只定义最小公约数：ID、
+// 名称、描述、版本、transport 提示，以及解析出的安装配置。未来的 provider
+// （OpenCode、OpenClaude、npm、GitHub releases 等）可在不改动 Manager 或
+// 核心 mcp 包的前提下实现该接口。
 //
-// Installation details are represented by InstallConfig instead of the core
-// ServerConfig type to avoid an import cycle: the manager imports marketplace,
-// and marketplace must remain independent of the core mcp package.
+// 安装细节由 InstallConfig 表达，而非核心 ServerConfig 类型，目的是避免
+// import cycle：manager 导入 marketplace，而 marketplace 必须独立于核心
+// mcp 包。
 package marketplace
 
 import (
@@ -93,59 +92,59 @@ func findRootFrom(dir string) string {
 //go:embed default.json
 var defaultCatalog []byte
 
-// DefaultStaticProvider returns the bundled static market provider.
+// DefaultStaticProvider 返回内置的静态 market provider。
 //
-// It embeds default.json from the same package so the server binary ships with
-// a ready-to-use example market even when no external marketplace is configured.
+// 它将同包下的 default.json 嵌入二进制，因此即使未配置任何外部 marketplace，
+// server 二进制也自带一个开箱即用的示例 market。
 func DefaultStaticProvider() (*StaticProvider, error) {
 	return NewStaticProvider(defaultCatalog)
 }
 
-// Provider is the common interface implemented by every MCP marketplace adapter.
+// Provider 是每个 MCP marketplace 适配器都实现的通用接口。
 type Provider interface {
-	// Name returns the short machine-readable market name, e.g. "default" or "opencode".
+	// Name 返回机器可读的简短 market 名称，例如 "default" 或 "opencode"。
 	Name() string
 
-	// DisplayName returns the human-readable market label shown in the UI.
+	// DisplayName 返回 UI 中展示的人类可读 market 标签。
 	DisplayName() string
 
-	// ListServers returns all packages available in this market.
+	// ListServers 返回该 market 中所有可用的 package。
 	ListServers(ctx context.Context) ([]Package, error)
 
-	// GetServer returns a single package by ID.
+	// GetServer 按 ID 返回单个 package。
 	GetServer(ctx context.Context, id string) (Package, error)
 }
 
-// ConfigResolver is implemented by providers that can fully resolve a package
-// into an InstallConfig suitable for local installation.
+// ConfigResolver 由能将 package 完整解析为适合本地安装的 InstallConfig 的
+// provider 实现。
 type ConfigResolver interface {
 	ResolveConfig(ctx context.Context, pkgID string) (InstallConfig, error)
 }
 
-// Package describes one installable MCP server in a marketplace.
+// Package 描述 marketplace 中一个可安装的 MCP server。
 type Package struct {
-	// ID is unique within the market. It becomes the ManagedServer.ID when installed.
+	// ID 在 market 内唯一。安装后它会成为 ManagedServer.ID。
 	ID string `json:"id"`
 
-	// Name is the human-readable server name.
+	// Name 是人类可读的 server 名称。
 	Name string `json:"name"`
 
-	// Description explains what the server does.
+	// Description 解释 server 的用途。
 	Description string `json:"description"`
 
-	// Version is the package version string, if available.
+	// Version 是 package 的版本字符串（若可用）。
 	Version string `json:"version,omitempty"`
 
-	// Transport is "stdio" or "sse".
+	// Transport 取值为 "stdio" 或 "sse"。
 	Transport string `json:"transport"`
 
-	// SourceURL points to the package homepage, npm url, or git repository.
+	// SourceURL 指向 package 主页、npm URL 或 git 仓库。
 	SourceURL string `json:"source_url,omitempty"`
 }
 
-// InstallConfig is the resolved, ready-to-install representation of a package.
-// It mirrors the fields required by the core mcp ServerConfig but lives in this
-// package to avoid an import cycle.
+// InstallConfig 是 package 解析后、可立即安装的表示。
+// 它与核心 mcp ServerConfig 的必需字段相对应，但放在本包中以避免
+// import cycle。
 type InstallConfig struct {
 	Name        string            `json:"name"`
 	Transport   string            `json:"transport"`
@@ -156,29 +155,29 @@ type InstallConfig struct {
 	Enabled     bool              `json:"enabled"`
 }
 
-// Registry keeps named market providers. It is used by cmd/server to expose
-// a stable set of markets and by Manager to install from a named market.
+// Registry 维护命名的 market provider。cmd/server 用它暴露一组稳定的
+// market，Manager 用它按名称安装 market。
 type Registry struct {
 	providers map[string]Provider
 }
 
-// NewRegistry creates an empty registry.
+// NewRegistry 创建一个空的 registry。
 func NewRegistry() *Registry {
 	return &Registry{providers: make(map[string]Provider)}
 }
 
-// Register adds a provider. Registering the same name twice overwrites.
+// Register 添加一个 provider。同名注册会覆盖原值。
 func (r *Registry) Register(p Provider) {
 	r.providers[p.Name()] = p
 }
 
-// Get returns a provider by name, or nil if not registered.
+// Get 按名称返回 provider，未注册则返回 nil。
 func (r *Registry) Get(name string) (Provider, bool) {
 	p, ok := r.providers[name]
 	return p, ok
 }
 
-// Names returns all registered market names.
+// Names 返回所有已注册的 market 名称。
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.providers))
 	for name := range r.providers {
@@ -187,7 +186,7 @@ func (r *Registry) Names() []string {
 	return out
 }
 
-// List returns a snapshot of all registered providers.
+// List 返回所有已注册 provider 的快照。
 func (r *Registry) List() []Provider {
 	out := make([]Provider, 0, len(r.providers))
 	for _, p := range r.providers {
@@ -196,7 +195,7 @@ func (r *Registry) List() []Provider {
 	return out
 }
 
-// StaticProvider reads packages from an embedded JSON catalog.
+// StaticProvider 从内置 JSON catalog 读取 package。
 type StaticProvider struct {
 	catalog catalog
 }
@@ -222,7 +221,7 @@ type entry struct {
 	Environment map[string]string `json:"environment,omitempty"`
 }
 
-// NewStaticProviderFromFS creates a provider by reading the given JSON file.
+// NewStaticProviderFromFS 通过读取给定 JSON 文件创建一个 provider。
 func NewStaticProviderFromFS(fsys embed.FS, path string) (*StaticProvider, error) {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
@@ -231,7 +230,7 @@ func NewStaticProviderFromFS(fsys embed.FS, path string) (*StaticProvider, error
 	return NewStaticProvider(data)
 }
 
-// NewStaticProvider parses an in-memory JSON catalog.
+// NewStaticProvider 解析内存中的 JSON catalog。
 func NewStaticProvider(data []byte) (*StaticProvider, error) {
 	var c catalog
 	if err := json.Unmarshal(data, &c); err != nil {
@@ -240,12 +239,12 @@ func NewStaticProvider(data []byte) (*StaticProvider, error) {
 	return &StaticProvider{catalog: c}, nil
 }
 
-// Name returns "default" for the bundled static market.
+// Name 对内置静态 market 返回 "default"。
 func (s *StaticProvider) Name() string {
 	return "default"
 }
 
-// DisplayName returns the human-readable market label from the catalog.
+// DisplayName 返回 catalog 中的人类可读 market 标签。
 func (s *StaticProvider) DisplayName() string {
 	for _, m := range s.catalog.Markets {
 		if m.Name == s.Name() {
@@ -255,7 +254,7 @@ func (s *StaticProvider) DisplayName() string {
 	return "内置示例市场"
 }
 
-// ListServers returns every package belonging to this static market.
+// ListServers 返回属于该静态 market 的所有 package。
 func (s *StaticProvider) ListServers(ctx context.Context) ([]Package, error) {
 	_ = ctx
 	out := make([]Package, 0, len(s.catalog.Servers))
@@ -267,7 +266,7 @@ func (s *StaticProvider) ListServers(ctx context.Context) ([]Package, error) {
 	return out, nil
 }
 
-// GetServer returns a single static package by ID.
+// GetServer 按 ID 返回单个静态 package。
 func (s *StaticProvider) GetServer(ctx context.Context, id string) (Package, error) {
 	_ = ctx
 	for _, e := range s.catalog.Servers {
@@ -278,8 +277,8 @@ func (s *StaticProvider) GetServer(ctx context.Context, id string) (Package, err
 	return Package{}, fmt.Errorf("market package not found: %s/%s", s.Name(), id)
 }
 
-// ResolveConfig implements ConfigResolver for the static market.
-// It returns the fully resolved InstallConfig, including command/args or endpoint.
+// ResolveConfig 为静态 market 实现 ConfigResolver。
+// 它返回完全解析好的 InstallConfig，包括 command/args 或 endpoint。
 //
 // 当 projectRoot 已注入时，args 中相对路径（不以 / 或盘符开头、且非绝对路径）
 // 会被拼接成基于 projectRoot 的绝对路径。这样无论 server 进程从哪个目录启动，
@@ -333,22 +332,22 @@ func resolveArg(a string) string {
 	return a
 }
 
-// MCPPreinstallEntry describes one preinstall market/package pair.
+// MCPPreinstallEntry 描述一对预安装的 market/package。
 type MCPPreinstallEntry struct {
 	Market  string `json:"market"`
 	Package string `json:"package"`
 }
 
-// String returns the shorthand "market/package" representation.
+// String 返回 "market/package" 形式的简写表示。
 func (e MCPPreinstallEntry) String() string { return e.Market + "/" + e.Package }
 
-// ParsePreinstallEntry parses a shorthand string into an MCPPreinstallEntry.
+// ParsePreinstallEntry 将简写字符串解析为 MCPPreinstallEntry。
 //
-// Supported formats:
-//   - "market/package" (e.g. "default/time-server")
-//   - "package" (defaults market to "default")
+// 支持的格式：
+//   - "market/package"（例如 "default/time-server"）
+//   - "package"（market 默认为 "default"）
 //
-// Empty input or entries without a package name return an error.
+// 空输入或缺少 package 名称的条目将返回错误。
 func ParsePreinstallEntry(s string) (MCPPreinstallEntry, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {

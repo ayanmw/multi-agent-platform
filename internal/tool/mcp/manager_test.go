@@ -10,8 +10,8 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// recordingTransport is a minimal Transport that delegates to a fakeTransport
-// but is distinct from it so tests don't accidentally share state.
+// recordingTransport 是一个最小化的 Transport，委托给 fakeTransport，
+// 但与 fakeTransport 保持独立类型，避免测试间意外共享状态。
 type recordingTransport struct {
 	*fakeTransport
 }
@@ -20,7 +20,7 @@ func newRecordingTransport(ft *fakeTransport) *recordingTransport {
 	return &recordingTransport{fakeTransport: ft}
 }
 
-// fakeMCPForManager returns a fake MCP server suitable for Manager tests.
+// fakeMCPForManager 返回一个适合 Manager 测试的 fake MCP server。
 func fakeMCPForManager(t *testing.T) *fakeTransport {
 	t.Helper()
 	return startFakeMCP(t, map[string]func(id int64, params json.RawMessage) []byte{
@@ -70,8 +70,8 @@ func fakeMCPForManager(t *testing.T) *fakeTransport {
 	})
 }
 
-// TestManagerLoadStaticServerEnabled verifies that an enabled static server
-// connects and registers its proxy tools.
+// TestManagerLoadStaticServerEnabled 验证一个 enabled 的静态 server 会连接
+// 并注册其 proxy tool。
 func TestManagerLoadStaticServerEnabled(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -88,7 +88,7 @@ func TestManagerLoadStaticServerEnabled(t *testing.T) {
 		t.Fatalf("LoadStaticServers: %v", err)
 	}
 
-	// Replace the real transport with the fake one.
+	// 用 fake transport 替换真实 transport。
 	if err := mgr.loader.LoadServerWithTransport(ctx, ServerConfig{Name: "demo", Transport: "stdio", Enabled: true}, newRecordingTransport(ft)); err != nil {
 		t.Fatalf("LoadServerWithTransport: %v", err)
 	}
@@ -110,8 +110,8 @@ func TestManagerLoadStaticServerEnabled(t *testing.T) {
 	}
 }
 
-// TestManagerLoadStaticServerDisabled verifies that disabled static servers
-// are tracked but do not register tools.
+// TestManagerLoadStaticServerDisabled 验证被禁用的静态 server 会被跟踪，
+// 但不会注册 tool。
 func TestManagerLoadStaticServerDisabled(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -139,7 +139,7 @@ func TestManagerLoadStaticServerDisabled(t *testing.T) {
 	}
 }
 
-// TestManagerAddAndRemoveServer verifies the dynamic Add/Remove lifecycle.
+// TestManagerAddAndRemoveServer 验证动态 Add/Remove 生命周期。
 func TestManagerAddAndRemoveServer(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -158,12 +158,12 @@ func TestManagerAddAndRemoveServer(t *testing.T) {
 	}
 
 	if err := mgr.AddServer(ctx, ms); err != nil {
-		// AddServer uses LoadServer which requires a real command. We expect
-		// connection failure here; the server should still be persisted in memory.
+		// AddServer 走的是 LoadServer，需要一个真实 command。这里预期连接
+		// 失败；但 server 仍应被持久化在内存中。
 		t.Logf("AddServer connect failed as expected for missing command: %v", err)
 	}
 
-	// Re-load with the fake transport so the tool is actually registered.
+	// 用 fake transport 重新加载，使 tool 真正被注册。
 	if err := mgr.loader.LoadServerWithTransport(ctx, ms.Config, newRecordingTransport(ft)); err != nil {
 		t.Fatalf("LoadServerWithTransport: %v", err)
 	}
@@ -182,8 +182,8 @@ func TestManagerAddAndRemoveServer(t *testing.T) {
 	}
 }
 
-// TestManagerDisableAndEnableServer verifies that disabling unregisters tools
-// and enabling reconnects them.
+// TestManagerDisableAndEnableServer 验证 disable 会注销 tool，而 enable
+// 会重新连接并注册。
 func TestManagerDisableAndEnableServer(t *testing.T) {
 	reg := tool.NewRegistry()
 	repo := &memRepository{}
@@ -195,7 +195,7 @@ func TestManagerDisableAndEnableServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Seed the manager through the repo.
+	// 通过 repo 初始化 manager。
 	if err := mgr.AddServer(ctx, ManagedServer{
 		ID:      "toggle",
 		Source:  SourceDB,
@@ -204,7 +204,7 @@ func TestManagerDisableAndEnableServer(t *testing.T) {
 	}); err != nil {
 		t.Logf("AddServer connect failed as expected: %v", err)
 	}
-	// Load via fake transport.
+	// 用 fake transport 加载。
 	if err := mgr.loader.LoadServerWithTransport(ctx, ServerConfig{Name: "toggle", Transport: "stdio", Enabled: true}, newRecordingTransport(ft)); err != nil {
 		t.Fatalf("LoadServerWithTransport: %v", err)
 	}
@@ -217,18 +217,18 @@ func TestManagerDisableAndEnableServer(t *testing.T) {
 		t.Fatalf("DisableServer: %v", err)
 	}
 
-	// Because the server was never actually loaded (AddServer failed to connect),
-	// DisableServer is a no-op and the tool is still registered from our manual
-	// LoadServerWithTransport above — unregister it to simulate disable semantics.
+	// 由于 server 实际从未被加载（AddServer 连接失败），DisableServer 是
+	// no-op，而 tool 仍因我们上方手动 LoadServerWithTransport 处于注册状态——
+	// 这里注销它以模拟 disable 语义。
 	if _, err := reg.Execute("mcp__toggle__echo", map[string]any{}); err == nil {
 		mgr.loader.UnloadServer("toggle")
 	}
 
-	// Create a fresh fake transport to avoid "closed pipe" from the previous one.
+	// 新建一个 fake transport，避免上一个的 "closed pipe"。
 	ft2 := fakeMCPForManager(t)
 
-	// EnableServer uses LoadServer with command, so it will fail unless we
-	// re-enable through a fake transport load.
+	// EnableServer 走 LoadServer 需要 command，因此除非通过 fake transport
+	// 重新加载，否则会失败。
 	if err := mgr.loader.LoadServerWithTransport(ctx, ServerConfig{Name: "toggle", Transport: "stdio", Enabled: true}, newRecordingTransport(ft2)); err != nil {
 		t.Fatalf("LoadServerWithTransport after enable: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestManagerDisableAndEnableServer(t *testing.T) {
 	}
 }
 
-// TestManagerStaticServerCannotBeRemoved ensures static servers are protected.
+// TestManagerStaticServerCannotBeRemoved 确保静态 server 受到保护。
 func TestManagerStaticServerCannotBeRemoved(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -262,7 +262,7 @@ func TestManagerStaticServerCannotBeRemoved(t *testing.T) {
 	}
 }
 
-// TestManagerListServerStatuses verifies the status snapshot format.
+// TestManagerListServerStatuses 验证 status 快照格式。
 func TestManagerListServerStatuses(t *testing.T) {
 	reg := tool.NewRegistry()
 	mgr := NewManager(reg, EmptyRepository{})
@@ -286,7 +286,7 @@ func TestManagerListServerStatuses(t *testing.T) {
 	}
 }
 
-// memRepository is a simple in-memory Repository for Manager tests.
+// memRepository 是一个用于 Manager 测试的简单内存 Repository。
 type memRepository struct {
 	mu      sync.Mutex
 	servers map[string]ManagedServer
