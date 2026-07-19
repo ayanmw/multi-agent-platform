@@ -1,75 +1,69 @@
-// Package runtime — AgentBus interface for inter-agent communication.
+// Package runtime — 用于 Agent 间通信的 AgentBus interface。
 //
-// # Design Rationale
+// # 设计理由
 //
-// The AgentBus interface allows agents to send messages to each other during
-// execution. It is defined in the runtime package (not orchestrator) to avoid
-// circular imports: orchestrator imports runtime, so runtime cannot import
-// orchestrator.
+// AgentBus interface 允许 agent 在执行期间互相发送消息。它定义在 runtime 包
+// （而非 orchestrator）以避免循环引用：orchestrator 引用 runtime，因此
+// runtime 不能引用 orchestrator。
 //
-// The orchestrator package provides the concrete implementation (AgentBus struct)
-// and an adapter that implements this interface, converting between the two
-// message types.
+// orchestrator 包提供具体实现（AgentBus struct）以及一个实现此 interface
+// 的 adapter，用于在两种 message 类型之间转换。
 //
-// # Communication Patterns
+// # 通信模式
 //
-// Agents can communicate via the AgentBus in several patterns:
-//   - Request/Response: Agent A sends a request to Agent B, B responds
-//   - Observation: Agent A sends an observation to Agent B for context
-//   - Broadcast: Agent A sends a message to all agents (ToAgentID empty)
-//   - Error: Agent A reports an error to Agent B
+// Agent 可以通过 AgentBus 以多种模式通信：
+//   - Request/Response：Agent A 向 Agent B 发送请求，B 作出响应
+//   - Observation：Agent A 向 Agent B 发送 observation 作为上下文
+//   - Broadcast：Agent A 向所有 agent 发送消息（ToAgentID 为空）
+//   - Error：Agent A 向 Agent B 报告错误
 //
-// # Integration with ReAct Loop
+// # 与 ReAct Loop 的集成
 //
-// When an Engine has an AgentBus, it starts a goroutine in Run() that listens
-// for incoming messages. When a message arrives, it is appended to the
-// conversation as a user message: "[Agent {from}]: {content}". The LLM sees
-// this as a new user input and can respond accordingly.
+// 当一个 Engine 持有 AgentBus 时，它会在 Run() 中启动一个 goroutine 监听
+// 到达的消息。消息到达后会被作为 user message 追加到对话中，格式为：
+// "[Agent {from}]: {content}"。LLM 会将其视为新的 user input 并据此响应。
 //
-// # SubTask-aware Routing (Phase 7-I)
+// # 感知 SubTask 的路由（Phase 7-I）
 //
-// Starting with Phase 7-I, messages can optionally carry a SubTaskID. This
-// allows the same agent ID to run multiple concurrent sub-tasks (e.g. the
-// leader agent orchestrating different groups of workers) and still receive
-// messages targeted at the correct sub-task. Implementations should deliver
-// messages to an (agentID, subTaskID) exact handler first, then fall back to
-// an agentID-only handler for backward compatibility.
+// 从 Phase 7-I 起，消息可选地携带 SubTaskID。这允许同一个 agent ID 并发
+// 运行多个子任务（例如 leader agent 编排不同的 worker 组），并仍能接收到
+// 发往正确子任务的消息。实现应优先将消息投递给 (agentID, subTaskID) 精确
+// 匹配的 handler，然后再回退到仅按 agentID 匹配的 handler 以保持向后兼容。
 package runtime
 
-// AgentMessage is a message sent between agents via the AgentBus.
-// It carries the sender's identity, the receiver identity, optional sub-task
-// routing fields, the message content, and optional metadata.
+// AgentMessage 是通过 AgentBus 在 agent 之间发送的消息。
+// 它携带发送方身份、接收方身份、可选的子任务路由字段、消息内容以及可选的元数据。
 type AgentMessage struct {
-	// FromAgentID is the agent that sent the message.
+	// FromAgentID 是发送该消息的 agent。
 	FromAgentID string `json:"from_agent_id"`
 
-	// ToAgentID is the target agent. If empty, the message is broadcast to all agents.
+	// ToAgentID 是目标 agent。若为空，则该消息会广播给所有 agent。
 	ToAgentID string `json:"to_agent_id"`
 
-	// SubTaskID is the target sub-task. When set, the AgentBus should prefer
-	// an exact (ToAgentID, SubTaskID) handler before falling back to a
-	// ToAgentID-only handler. Added in Phase 7-I.
+	// SubTaskID 是目标子任务。设置时，AgentBus 应优先匹配精确的
+	// (ToAgentID, SubTaskID) handler，再回退到仅 ToAgentID 的 handler。
+	// 于 Phase 7-I 引入。
 	SubTaskID string `json:"sub_task_id,omitempty"`
 
-	// FromSubTaskID is the sender's sub-task. Added in Phase 7-J so the
-	// persistence layer can record both ends of inter-agent communication.
+	// FromSubTaskID 是发送方所属的子任务。于 Phase 7-J 引入，以便
+	// 持久化层能同时记录 agent 间通信的两端。
 	FromSubTaskID string `json:"from_sub_task_id,omitempty"`
 
-	// Type describes the message type: "request", "response", "observation", "error"
+	// Type 描述消息类型："request"、"response"、"observation"、"error"
 	Type string `json:"type"`
 
-	// Content is the message body.
+	// Content 是消息主体。
 	Content string `json:"content"`
 
-	// Metadata carries arbitrary key-value pairs for context.
+	// Metadata 携带任意键值对作为上下文。
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// AgentBus is the inter-agent communication channel interface.
-// It allows agents to send messages to each other during execution.
-// The bus must be goroutine-safe.
+// AgentBus 是 agent 间通信通道的 interface。
+// 它允许 agent 在执行期间互相发送消息。
+// 该 bus 必须是 goroutine 安全的。
 //
-// # Usage
+// # 用法
 //
 //	// In the Engine:
 //	if e.agentBus != nil {
@@ -81,40 +75,39 @@ type AgentMessage struct {
 //	    })
 //	}
 //
-// # Implementation
+// # 实现
 //
-// The concrete implementation lives in internal/orchestrator (AgentBus struct).
-// An adapter (orchestrator.agentBusAdapter) bridges the two message types.
+// 具体实现位于 internal/orchestrator（AgentBus struct）。
+// 一个 adapter（orchestrator.agentBusAdapter）桥接两种 message 类型。
 type AgentBus interface {
-	// RegisterHandler registers a message handler for a specific agent.
-	// When a message arrives addressed to this agent, the handler is called.
-	// Only one handler per agent is allowed; calling RegisterHandler again
-	// replaces the previous handler.
+	// RegisterHandler 为指定 agent 注册一个 message handler。
+	// 当发给该 agent 的消息到达时，handler 会被调用。
+	// 每个 agent 仅允许一个 handler；再次调用 RegisterHandler 会替换
+	// 之前注册的 handler。
 	//
-	// Phase 7-I: implementations SHOULD also support subTaskID-aware
-	// registration, either by providing a separate RegisterHandlerBySubTask
-	// method or by accepting subTaskID as a parameter. The default signature
-	// keeps backward compatibility: subTaskID empty means "all sub-tasks".
+	// Phase 7-I：实现 SHOULD 也支持感知 subTaskID 的注册，可以通过提供
+	// 独立的 RegisterHandlerBySubTask 方法，或通过接受 subTaskID 参数。
+	// 默认签名保持向后兼容：subTaskID 为空表示"所有子任务"。
 	RegisterHandler(agentID string, handler func(AgentMessage))
 
-	// RegisterHandlerBySubTask registers a handler for a specific
-	// (agentID, subTaskID) pair. When SubTaskID is empty it must behave
-	// identically to RegisterHandler. Added in Phase 7-I.
+	// RegisterHandlerBySubTask 为特定的 (agentID, subTaskID) 对注册 handler。
+	// 当 SubTaskID 为空时，其行为必须与 RegisterHandler 完全一致。
+	// 于 Phase 7-I 引入。
 	RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage))
 
-	// UnregisterHandler removes the message handler for a specific agent.
+	// UnregisterHandler 移除指定 agent 的 message handler。
 	UnregisterHandler(agentID string)
 
-	// UnregisterHandlerBySubTask removes the handler for a specific
-	// (agentID, subTaskID) pair. Added in Phase 7-I.
+	// UnregisterHandlerBySubTask 移除特定 (agentID, subTaskID) 对的 handler。
+	// 于 Phase 7-I 引入。
 	UnregisterHandlerBySubTask(agentID, subTaskID string)
 
-	// SendMessage sends a message from one agent to another.
-	// If the target agent has a registered handler, the handler is called
-	// immediately. Otherwise, the message is queued for later delivery.
+	// SendMessage 从一个 agent 向另一个 agent 发送消息。
+	// 若目标 agent 已注册 handler，则该 handler 会被立即调用；
+	// 否则该消息会被入队以延迟投递。
 	//
-	// Phase 7-I: SendMessage MUST first look for an exact
-	// (ToAgentID, SubTaskID) handler, then fall back to a ToAgentID-only
-	// handler, so sub-task specific routing takes precedence.
+	// Phase 7-I：SendMessage MUST 先查找精确的 (ToAgentID, SubTaskID)
+	// handler，再回退到仅 ToAgentID 的 handler，以保证子任务专属路由
+	// 优先。
 	SendMessage(msg AgentMessage)
 }

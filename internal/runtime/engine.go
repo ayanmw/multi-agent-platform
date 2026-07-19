@@ -1,23 +1,22 @@
-// Package runtime implements the core Agent execution engine — the heart of the multi-agent
-// platform. It orchestrates the ReAct (Reasoning + Acting) loop that powers every agent.
+// Package runtime 实现多 Agent 平台的核心 Agent 执行引擎——整个平台的心脏。
+// 它编排驱动每个 agent 的 ReAct (Reasoning + Acting) loop。
 //
-// # Architecture Overview
+// # 架构概览
 //
-// The runtime package sits at the center of the system, connecting three key subsystems:
+// runtime 包位于系统中心，连接三个关键子系统：
 //
-//  1. LLM Client (internal/llm) — sends chat requests to the AI model, receives
-//     streaming SSE responses with text content and tool_call deltas.
-//  2. Tool Registry (internal/tool) — manages available tools; the engine builds
-//     tool definitions for the LLM and dispatches tool calls to the registry.
-//  3. Event Bus (pkg/event) — the real-time communication channel to the frontend
-//     via WebSocket. Every state transition (thinking, tool call, observation,
-//     completion, failure) is broadcast as a typed event so the UI can render
-//     the agent's internal state in real time.
+//  1. LLM Client (internal/llm) — 向 AI 模型发送 chat 请求，接收流式 SSE
+//     响应，包含文本内容和 tool_call delta。
+//  2. Tool Registry (internal/tool) — 管理可用 tool；engine 据此为 LLM 构建
+//     tool 定义，并把 tool call 派发给 registry。
+//  3. Event Bus (pkg/event) — 通过 WebSocket 与前端通信的实时通道。每个
+//     状态转换（thinking、tool call、observation、completion、failure）都
+//     作为类型化事件广播，UI 可实时渲染 agent 的内部状态。
 //
-// ## The ReAct Loop
+// ## ReAct Loop
 //
-// The ReAct (Reasoning + Acting) loop is the decision-making cycle that every agent
-// follows. It is a state machine with three phases:
+// ReAct (Reasoning + Acting) loop 是每个 agent 遵循的决策循环。它是一个
+// 包含三个阶段的状态机：
 //
 //	┌──────────────────────────────────────────────────┐
 //	│                   ReAct Loop                      │
@@ -33,57 +32,51 @@
 //	│  No tool_calls? → final answer → task_completed   │
 //	└──────────────────────────────────────────────────┘
 //
-// Phase 1 — THINK: The engine sends the conversation history (system prompt + user
-// messages + assistant responses + tool results) to the LLM. The LLM streams back
-// text tokens (shown to the user as typewriter effect) and may also emit tool_call
-// deltas. If the LLM returns only text with no tool_calls, that text is the final
-// answer — the task is complete.
+// Phase 1 — THINK：engine 把对话历史（system prompt + user message +
+// assistant response + tool result）发给 LLM。LLM 以流式方式返回文本 token
+// （以打字机效果展示给用户），并可能发出 tool_call delta。如果 LLM 只返回
+// 文本而没有 tool_calls，该文本就是最终答案——任务完成。
 //
-// Phase 2 — EXECUTE_TOOL: If the LLM requests one or more tool calls, the engine
-// dispatches each to the Tool Registry. The tool's result is formatted as JSON and
-// appended to the conversation as a "tool" role message. The engine emits
-// tool_call_started, tool_call_output, and observation events so the UI can render
-// tool execution progress.
+// Phase 2 — EXECUTE_TOOL：如果 LLM 请求一个或多个 tool call，engine 把
+// 它们逐个派发给 Tool Registry。tool 的结果被格式化为 JSON，并以 "tool"
+// 角色消息追加到对话中。engine 发出 tool_call_started、tool_call_output
+// 和 observation 事件，让 UI 渲染 tool 执行进度。
 //
-// Phase 3 — OBSERVE: The tool result is fed back into the conversation history.
-// The loop returns to Phase 1 (THINK), where the LLM sees the observation and
-// decides whether to call more tools or produce a final answer. This cycle repeats
-// until either the LLM produces a final answer or MaxSteps is exceeded.
+// Phase 3 — OBSERVE：tool 结果被回填到对话历史。loop 回到 Phase 1
+// (THINK)，LLM 看到 observation 后决定是继续调用 tool 还是给出最终答案。
+// 该循环重复，直到 LLM 产出最终答案或超过 MaxSteps。
 //
-// ## Event-Driven Transparency (白盒Agent)
+// # Event-Driven Transparency（白盒 Agent）
 //
-// The engine is designed for full observability — every internal state change is
-// emitted as an event. This is the "white-box" philosophy: the frontend can see
-// exactly what the agent is thinking, which tools it's calling, and what results
-// it's observing. Event types:
+// engine 面向完全可观测设计——每个内部状态变化都以事件形式发出。这就是
+// "白盒"哲学：前端可以清楚地看到 agent 在想什么、调用什么 tool、观察到
+// 什么结果。事件类型：
 //
-//	agent_ready          — agent is initialized and ready to process input
-//	step_started         — a new think or tool_call step has begun
-//	llm_thinking         — the LLM is processing (before tokens arrive)
-//	llm_delta            — a single token of text from the LLM (streamed)
-//	llm_message_complete — the LLM has finished generating for this step
-//	tool_call_started    — a tool execution has begun
-//	tool_call_output     — the tool's raw result
-//	tool_call_complete   — the tool execution finished successfully
-//	tool_call_failed     — the tool execution failed with an error
-//	observation          — the result being fed back to the LLM
-//	task_completed       — the agent produced a final answer
-//	task_failed          — the agent failed (error, cancellation, max steps)
-//	step_complete        — a think or tool_call step has finished
+//	agent_ready          — agent 初始化完成，可处理输入
+//	step_started         — 一个新的 think 或 tool_call step 已开始
+//	llm_thinking         — LLM 正在处理（token 到达前）
+//	llm_delta            — LLM 输出的单个文本 token（流式）
+//	llm_message_complete — LLM 已完成本轮生成
+//	tool_call_started    — 一次 tool 执行已开始
+//	tool_call_output     — tool 的原始结果
+//	tool_call_complete   — tool 执行成功结束
+//	tool_call_failed     — tool 执行失败
+//	observation          — 结果回填给 LLM
+//	task_completed       — agent 给出了最终答案
+//	task_failed          — agent 失败（错误、取消、超过最大步数）
+//	step_complete        — 一个 think 或 tool_call step 已结束
 //
-// ## Persistence (Optional)
+// # Persistence（可选）
 //
-// When a Persistence implementation is provided (e.g., SQLite-backed), the engine
-// saves task records, step records, and conversation messages after each phase.
-// When Persistence is nil, persistence is silently skipped — this is safe for
-// testing or ephemeral agent runs.
+// 当提供 Persistence 实现（如 SQLite 后端）时，engine 在每个阶段后保存
+// task 记录、step 记录和对话消息。当 Persistence 为 nil 时，持久化被静默
+// 跳过——这对测试或临时性 agent 运行是安全的。
 //
-// ## Multi-Agent Support
+// # Multi-Agent 支持
 //
-// Each Engine instance runs a single agent's ReAct loop. Multi-agent orchestration
-// happens at a higher layer (cmd/server) that creates multiple Engine instances
-// and coordinates their execution. The Engine is intentionally single-agent to
-// keep the ReAct loop simple and testable.
+// 每个 Engine 实例只运行单个 agent 的 ReAct loop。多 agent 编排在更高层
+// （cmd/server）完成，那里会创建多个 Engine 实例并协调其执行。Engine 有意
+// 保持单 agent，以使 ReAct loop 简单且可测试。
 package runtime
 
 import (
@@ -107,24 +100,22 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
-// regexpRequestID matches OpenAI-style request id tokens embedded in error
-// messages, e.g. "request id: 20260714033318937918881aclHY4az" or
-// "request_id: req_abc123". The leading "request" / "request_id" / "request-id"
-// prefix is captured so the replacement preserves the key while redacting the
-// volatile value. Used by normalizeErrorFingerprint to make repeating errors
-// compare equal across calls (see isRepeatingError).
+// regexpRequestID 匹配嵌入在错误信息中的 OpenAI 风格 request id token，例如
+// "request id: 20260714033318937918881aclHY4az" 或
+// "request_id: req_abc123"。前缀 "request" / "request_id" / "request-id"
+// 被捕获，使替换保留 key 同时对易变的 value 做脱敏。供 normalizeErrorFingerprint
+// 使用，使重复错误在多次调用间比较相等（见 isRepeatingError）。
 //
-// This is the fix for the Router-activation 403 death loop: the provider
-// returned "This token has no access to model deepseek-v4-flash (request id:
-// <opaque>)" with a fresh opaque id on every call, so isRepeatingError's exact
-// comparison never matched and the engine spun ~1347 iterations before the 90s
-// poll timeout. Redacting the id makes consecutive 403s compare equal so the
-// "feedback first, fail on repeat" policy terminates the loop on the 2nd try.
+// 这是 Router-activation 403 死循环的修复方案：provider 返回
+// "This token has no access to model deepseek-v4-flash (request id: <opaque>)"
+// 每次调用都带新的 opaque id，导致 isRepeatingError 的精确比较永远不匹配，
+// engine 在 90s 轮询超时前空转约 1347 次。脱敏 id 使连续 403 比较相等，
+// "feedback first, fail on repeat" 策略在第 2 次尝试时即可终止 loop。
 var regexpRequestID = regexp.MustCompile(`(?i)(request[-_ ]?id)[:=]\s*[A-Za-z0-9_-]+`)
 
-// resolveProvider looks up a provider by provider name, then by model name.
-// It mirrors the lookup order used by the Router path so the fallback path and
-// any other caller can share the same resolution logic without duplication.
+// resolveProvider 先按 provider 名查、再按 model 名查 provider。
+// 它与 Router 路径使用的查找顺序一致，使 fallback 路径和其他调用方可以
+// 共享同一套解析逻辑，避免重复。
 func resolveProvider(providers map[string]llm.Provider, providerName, modelName string) llm.Provider {
 	if providers == nil {
 		return nil
@@ -138,21 +129,20 @@ func resolveProvider(providers map[string]llm.Provider, providerName, modelName 
 	return nil
 }
 
-// EventBus is the real-time event transport layer that connects the Engine to the
-// frontend WebSocket clients. Every state change in the ReAct loop is published
-// through this interface so the UI can render agent thinking, tool execution, and
-// results in real time.
+// EventBus 是连接 Engine 与前端 WebSocket client 的实时事件传输层。
+// ReAct loop 中的每个状态变化都通过该 interface 发布，使 UI 能实时渲染
+// agent 思考、tool 执行和结果。
 //
-// The EventBus is intentionally a minimal interface with only SendEvent — this
-// allows the engine to work with any transport (WebSocket, gRPC stream, in-memory
-// channel for testing) without coupling to a specific protocol.
+// EventBus 有意被设计成只含 SendEvent 的最小 interface——这让 engine 可以
+// 与任何传输层（WebSocket、gRPC stream、测试用的内存 channel）协同工作，
+// 不与具体协议耦合。
 //
-// In the current architecture, the WebSocket hub (internal/ws) implements this
-// interface and broadcasts events to all connected frontend clients.
+// 当前架构中，WebSocket hub（internal/ws）实现该 interface，并把事件
+// 广播给所有已连接的前端 client。
 type EventBus interface {
-	// SendEvent publishes an event to all connected clients.
-	// Events are typed (see the event package for the full list) and carry
-	// task/agent/step metadata for the frontend to route to the correct UI panel.
+	// SendEvent 向所有已连接 client 发布一个事件。
+	// 事件是类型化的（完整列表见 event 包），携带 task/agent/step 元数据
+	// 供前端路由到正确的 UI 面板。
 	SendEvent(event.Event)
 }
 
@@ -165,193 +155,175 @@ const (
 	AgentRoleWorker AgentRole = "worker"
 )
 
-// EngineConfig holds all configuration needed to create and run an Engine.
-// It is the single source of truth for an agent's identity, model settings,
-// safety limits, and persistence backend.
+// EngineConfig 持有创建并运行一个 Engine 所需的全部配置。
+// 它是 agent 身份、模型设置、安全限制和持久化后端的唯一真理来源。
 //
-// Design rationale: All configuration is explicit and passed at construction time
-// rather than read from global state. This makes engines testable in isolation
-// and enables multi-agent setups where each agent has different configs.
+// 设计理由：所有配置都是显式的，在构造期传入，而非从全局状态读取。这使
+// engine 可以独立测试，并支持每个 agent 拥有不同配置的多 agent 场景。
 type EngineConfig struct {
-	// AgentID is the human-readable identifier for this agent (e.g., "code-reviewer").
-	// It appears in all events and is used by the frontend to label the agent.
+	// AgentID 是该 agent 的可读标识（例如 "code-reviewer"）。
+	// 它出现在所有事件中，前端用它给 agent 打标签。
 	AgentID string
 
-	// SystemPrompt is the system-level instruction that defines the agent's
-	// personality, capabilities, and constraints. It is sent as the first message
-	// in every conversation and is never trimmed from context.
+	// SystemPrompt 是定义 agent 性格、能力和约束的 system 级指令。
+	// 它作为每次对话的第一条消息发出，且永远不会从 context 中裁剪。
 	SystemPrompt string
 
-	// Model is the LLM model name (e.g., "deepseek-v4-flash"). It is passed
-	// directly to the API and must be a model supported by the configured endpoint.
+	// Model 是 LLM 模型名（例如 "deepseek-v4-flash"）。它被直接传给 API，
+	// 必须是配置 endpoint 所支持的模型。
 	Model string
 
-	// Endpoint is the base URL of the OpenAI-compatible API (e.g., "https://aicoding.dobest.com/v1").
-	// The Engine appends "/chat/completions" to this URL for chat requests.
+	// Endpoint 是 OpenAI-compatible API 的 base URL（例如
+	// "https://aicoding.dobest.com/v1"）。Engine 会在其后追加
+	// "/chat/completions" 用于 chat 请求。
 	Endpoint string
 
-	// APIKey is the Bearer token for authenticating with the LLM API.
-	// It is sent as the Authorization header on every request.
+	// APIKey 是用于向 LLM API 认证的 Bearer token。
+	// 每次请求都以 Authorization header 发送。
 	//
-	// Deprecated: Prefer using Provider instead. When Provider is nil, Endpoint and
-	// APIKey are used to create a default OpenAIProvider. In Phase 6+, these fields
-	// will be removed in favor of the Provider abstraction.
+	// Deprecated：优先使用 Provider。当 Provider 为 nil 时，Endpoint 和
+	// APIKey 用于创建默认的 OpenAIProvider。在 Phase 6+ 中，这些字段将
+	// 被 Provider 抽象取代。
 	APIKey string
 
-	// Provider is the LLM Provider implementation. When set, it takes precedence
-	// over Endpoint/APIKey/Model. This enables multi-provider support where
-	// different agents use different providers (OpenAI, Anthropic, DeepSeek, etc.).
-	// When nil, an OpenAIProvider is created from Endpoint, APIKey, and Model.
-	// Added in Phase 5.
+	// Provider 是 LLM Provider 实现。设置后优先于
+	// Endpoint/APIKey/Model。这支持多 provider 场景——不同 agent 使用不同
+	// provider（OpenAI、Anthropic、DeepSeek 等）。为 nil 时，会从 Endpoint、
+	// APIKey 和 Model 创建一个 OpenAIProvider。
+	// 于 Phase 5 引入。
 	Provider llm.Provider
 
-	// CaseID is an optional hint passed through to llm.ChatRequest. MockProvider
-	// uses it for deterministic script matching (exact case match first, then
-	// keyword fallback). Real providers ignore this field entirely.
-	// When empty, MockProvider falls back to keyword matching against user input.
-	// Added in Phase 6 mock integration.
+	// CaseID 是可选的提示，传递给 llm.ChatRequest。MockProvider 用它做
+	// 确定性脚本匹配（先精确匹配 case，再按关键字回退）。真实 provider
+	// 完全忽略此字段。为空时，MockProvider 回退到按 user input 做关键字
+	// 匹配。
+	// 于 Phase 6 mock 集成引入。
 	CaseID string
 
-	// Temperature controls the randomness of LLM output (0.0–2.0).
-	// Lower values produce more deterministic responses; higher values produce
-	// more creative/varied output. Defaults to 0.7 if not set.
+	// Temperature 控制 LLM 输出的随机性（0.0–2.0）。
+	// 值越低输出越确定性；值越高输出越有创造性/多样性。未设置时默认 0.7。
 	Temperature float32
 
-	// MaxTokens is the maximum number of tokens the LLM may generate per response.
-	// This acts as a safety limit to prevent runaway token consumption.
-	// Defaults to 4096 if not set.
+	// MaxTokens 是 LLM 单次响应最多可生成的 token 数。
+	// 作为安全限制防止 token 失控消耗。未设置时默认 4096。
 	MaxTokens int
 
-	// MaxSteps is the maximum number of ReAct loop iterations before the engine
-	// forcibly terminates. This prevents infinite loops where the LLM keeps
-	// calling tools without ever producing a final answer. Defaults to 10.
+	// MaxSteps 是 ReAct loop 迭代次数上限，超过即强制终止。这能防止 LLM
+	// 一直调用 tool 却从不给出最终答案的死循环。未设置时默认 10。
 	MaxSteps int
 
-	// Persistence is an optional backend for saving task/step/conversation records.
-	// When nil, persistence is silently skipped — useful for testing or ephemeral runs.
-	// When set (e.g., to a SQLite-backed implementation), every step and message
-	// is durably stored for later audit and replay.
+	// Persistence 是可选的 task/step/conversation 记录持久化后端。
+	// 为 nil 时静默跳过持久化——适合测试或临时性运行。
+	// 设置后（如 SQLite 后端），每条 step 和 message 都会持久存储，便于
+	// 后续审计和回放。
 	Persistence Persistence
 
-	// PolicyGate is the optional Harness policy enforcement layer. When set,
-	// every tool call is checked against the policy chain before execution.
-	// When nil, policy enforcement is skipped — all tool calls are allowed.
-	// See internal/harness for the full PolicyGate implementation.
+	// PolicyGate 是可选的 Harness policy 强制层。设置后，每次 tool call 在
+	// 执行前都会经过 policy chain 检查。为 nil 时跳过 policy 强制——所有
+	// tool call 都允许。完整 PolicyGate 实现见 internal/harness。
 	PolicyGate *harness.PolicyGate
 
-	// ProgressManager is the optional Harness progress tracking. When set,
-	// progress nodes are written at key milestones (tool calls, step completions,
-	// task completion) to an external progress file that survives crashes.
+	// ProgressManager 是可选的 Harness 进度跟踪。设置后，关键里程碑
+	// （tool call、step 完成、任务完成）会写入外部 progress 文件，跨崩溃
+	// 保留。
 	Progress *harness.ProgressManager
 
-	// TaskContract is the structured task definition that defines scope,
-	// permissions, budget, and acceptance criteria for this task.
-	// Used by PolicyGate for enforcement and Progress for tracking.
+	// TaskContract 是结构化的任务定义，定义本任务的作用域、权限、预算和
+	// 验收标准。供 PolicyGate 强制执行、Progress 跟踪使用。
 	Contract harness.TaskContract
 
-	// SessionID identifies the session this task belongs to.
-	// Empty for tasks not yet associated with a session.
+	// SessionID 标识本 task 所属的 session。
+	// 尚未关联到 session 的 task 为空。
 	SessionID string
 
-	// WorkspaceDir is the session-level workspace directory.
-	// It is injected into tool call inputs (as "workdir") when the user
-	// has not explicitly provided one, so that tools like run_shell
-	// execute with the correct CWD without requiring the LLM to pass it.
+	// WorkspaceDir 是 session 级的工作目录。
+	// 当用户未显式提供 workdir 时，它会被注入到 tool call 输入（作为
+	// "workdir"），使 run_shell 之类的 tool 无需 LLM 显式传递即可在正确
+	// CWD 下执行。
 	WorkspaceDir string `json:"-"`
 
-	// ParentTaskID identifies the parent task for sub-tasks spawned by agents.
-	// Empty for root tasks.
+	// ParentTaskID 标识由 agent 派生的子任务的父任务。
+	// root task 为空。
 	ParentTaskID string
 
-	// SubTaskID identifies this specific agent execution instance.
-	// For the leader agent, SubTaskID equals TaskID; child agents have their own
-	// SubTaskID derived from the root task plus the child agent ID. Events and
-	// context-window snapshots are keyed by SubTaskID so each agent instance is
-	// independently observable.
+	// SubTaskID 标识本 agent 的具体执行实例。
+	// leader agent 的 SubTaskID 等于 TaskID；子 agent 的 SubTaskID 由
+	// root task 加上子 agent ID 派生。事件和 context-window snapshot 以
+	// SubTaskID 为键，使每个 agent 实例都可独立观测。
 	SubTaskID string
 
-	// IsRoot indicates whether this task is the root task of its session.
-	// Root tasks represent the primary user request; child tasks represent
-	// sub-agent work delegated from the root.
+	// IsRoot 表示本 task 是否为其 session 的 root task。
+	// root task 代表主要的用户请求；child task 代表从 root 委派出去的
+	// 子 agent 工作。
 	IsRoot bool
 
-	// ApprovalHandler is the optional Harness approval handler. When set,
-	// the Engine can handle ErrApprovalRequired errors from the PolicyGate
-	// by sending approval requests to the frontend and waiting for user decisions.
-	// When nil, ErrApprovalRequired errors cause immediate task failure.
-	// See internal/harness for the ApprovalHandler interface.
-	// Added in Phase 5.
+	// ApprovalHandler 是可选的 Harness 审批 handler。设置后，Engine 可以
+	// 处理来自 PolicyGate 的 ErrApprovalRequired 错误——向前端发送审批
+	// 请求并等待用户决定。为 nil 时，ErrApprovalRequired 错误立即导致
+	// 任务失败。ApprovalHandler interface 见 internal/harness。
+	// 于 Phase 5 引入。
 	ApprovalHandler harness.ApprovalHandler
 
-	// WorkingMemory is optional context from prior tasks, injected into the
-	// system prompt before the agent starts. It is built by MemoryRecall
-	// (internal/harness/recall.go) before engine creation. When set, it is
-	// prepended to the system prompt so the agent has access to past
-	// experiences and stable semantic rules without the user repeating them.
+	// WorkingMemory 是来自先前任务的可选上下文，在 agent 启动前注入到
+	// system prompt 中。它由 MemoryRecall（internal/harness/recall.go）
+	// 在 engine 创建前构建。设置后会前置到 system prompt 中，使 agent
+	// 无需用户重复即可访问过往经验和稳定的语义规则。
 	WorkingMemory string
 
-	// AgentBus is the inter-agent communication channel. When set, the agent can
-	// send messages to other agents and receive messages from them during the
-	// ReAct loop. When nil, agent-to-agent communication is disabled.
+	// AgentBus 是 agent 间通信通道。设置后，agent 可以在 ReAct loop 期间
+	// 向其他 agent 发送消息或接收消息。为 nil 时禁用 agent 间通信。
 	//
-	// The AgentBus must be goroutine-safe. The concrete implementation lives in
-	// internal/orchestrator; the interface is defined in runtime/agentbus.go to
-	// avoid circular imports.
+	// AgentBus 必须是 goroutine 安全的。具体实现位于
+	// internal/orchestrator；interface 定义在 runtime/agentbus.go 以避免
+	// 循环引用。
 	//
-	// Added in Phase 5.
+	// 于 Phase 5 引入。
 	AgentBus AgentBus
 
-	// CheckpointManager is the optional checkpoint/recovery manager. When set,
-	// the engine saves a checkpoint at the end of each ReAct loop iteration (after
-	// tool execution), enabling task recovery after crashes. When nil, checkpointing
-	// is skipped.
+	// CheckpointManager 是可选的 checkpoint/recovery 管理器。设置后，
+	// engine 在每次 ReAct loop 迭代结束（tool 执行后）保存一个 checkpoint，
+	// 支持崩溃后恢复任务。为 nil 时跳过 checkpointing。
 	//
-	// Added in Phase 5.
+	// 于 Phase 5 引入。
 	CheckpointManager *CheckpointManager
 
-	// SessionMessageWriter is called whenever a new message is added to the
-	// conversation. When set, every message (system/user/assistant/tool) is
-	// persisted to the session_messages table for multi-turn conversation history.
-	// When nil, session message persistence is skipped.
+	// SessionMessageWriter 在对话新增一条消息时被调用。设置后，每条消息
+	// （system/user/assistant/tool）都会被持久化到 session_messages 表，
+	// 支持多轮对话历史。为 nil 时跳过 session message 持久化。
 	//
-	// This is a best-effort persistence layer — errors from the writer are logged
-	// but do not interrupt the engine's execution. The TurnIndex field in the
-	// EngineConfig controls which turn the messages belong to.
+	// 这是一个 best-effort 持久化层——writer 返回的错误只会被记录，不会
+	// 中断 engine 执行。EngineConfig 中的 TurnIndex 字段控制消息归属的
+	// turn。
 	SessionMessageWriter func(msg SessionMessageRecord) error
 
-	// TurnIndex is the current turn index within the session (0-based).
-	// It is used to tag session_messages with the turn they belong to.
-	// The caller should increment this between user turns (e.g., after each
-	// call to Engine.Run() completes).
+	// TurnIndex 是 session 内的当前 turn 序号（0-based）。
+	// 用来给 session_messages 打上所属 turn 的标签。调用方应在 user turn
+	// 之间递增该值（例如每次 Engine.Run() 返回后）。
 	TurnIndex int
 
-	// Router is the optional LLM model router. When set, the Engine uses it
-	// to select the best model for each think step based on the user's intent
-	// and task context. The Router classifies the request, maps it to a model
-	// tier, and selects the primary model with a fallback. When nil, the Engine
-	// uses cfg.Model directly (legacy behavior).
-	// Added in Phase 6.
+	// Router 是可选的 LLM 模型路由器。设置后，Engine 在每个 think step
+	// 根据用户意图和任务上下文选择最佳模型。Router 会分类请求、映射到
+	// 模型层级、并选出主模型加 fallback。为 nil 时，Engine 直接使用
+	// cfg.Model（旧行为）。
+	// 于 Phase 6 引入。
 	Router *llm.Router
 
-	// Registry is the optional model registry. Required when Router is set —
-	// the Router queries the registry to select models by tier and capability.
-	// When Router is nil, this field is ignored.
-	// Added in Phase 6.
+	// Registry 是可选的模型注册表。Router 设置时必填——Router 通过
+	// registry 按层级和能力选择模型。Router 为 nil 时此字段被忽略。
+	// 于 Phase 6 引入。
 	Registry *llm.ModelRegistry
 
-	// Providers is the map of provider name → Provider instance, used by the
-	// Router to look up the correct provider for a selected model profile.
-	// When Router is set, this must include entries for the models the Router
-	// might select. When Router is nil, this field is ignored.
-	// Added in Phase 6.
+	// Providers 是 provider 名 → Provider 实例的 map，Router 用它查找
+	// 所选模型 profile 对应的 provider。Router 设置时，必须包含 Router
+	// 可能选中的所有模型的条目。Router 为 nil 时此字段被忽略。
+	// 于 Phase 6 引入。
 	Providers map[string]llm.Provider
 
-	// Timeout is the optional per-task execution deadline. When non-zero, the
-	// caller (cmd/server) creates a context.WithTimeout from this value; when
-	// zero, no deadline is applied. The Engine consumes the timeout indirectly
-	// through the provided context and does not enforce its own deadline.
-	// If the context expires, the Engine returns context.DeadlineExceeded and
-	// the caller emits a task_timeout failure event.
+	// Timeout 是可选的单任务执行截止时间。非零时，调用方（cmd/server）
+	// 据此创建 context.WithTimeout；为零时不设截止时间。Engine 通过传入
+	// 的 context 间接消费 timeout，不自行强制截止。若 context 到期，
+	// Engine 返回 context.DeadlineExceeded，调用方发出 task_timeout 失败
+	// 事件。
 	Timeout time.Duration
 
 	// Role 表示当前 Engine 运行的是 leader 还是 worker。
@@ -387,8 +359,8 @@ type EngineConfig struct {
 	// Added in Phase 7-I.
 	SupervisorDecisionHandler ApprovalDelegationHandler
 
-	// Tracer produces dependency-free trace spans for every think/tool/llm step.
-	// When nil, tracing is skipped.
+	// Tracer 为每个 think/tool/llm step 生成无依赖的 trace span。
+	// 为 nil 时跳过 tracing。
 	Tracer interface {
 		StartRoot(taskID, operation string) *observability.TraceContext
 		StartChild(parent *observability.TraceContext, operation string) *observability.TraceContext
@@ -396,121 +368,113 @@ type EngineConfig struct {
 		FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
 	}
 
-	// RootTraceCtx is the root span context for the task. Tracer uses it to
-	// parent all child spans emitted by this engine.
+	// RootTraceCtx 是该 task 的 root span context。Tracer 用它作为本 engine
+	// 发出的所有 child span 的父级。
 	RootTraceCtx *observability.TraceContext
 
-	// LLMLatencyRecorder is called after each LLM call with the observed latency.
+	// LLMLatencyRecorder 在每次 LLM 调用后以观测到的延迟被调用。
 	LLMLatencyRecorder func(latency time.Duration)
 
-	// ToolLatencyRecorder is called after each tool execution with the observed latency.
+	// ToolLatencyRecorder 在每次 tool 执行后以观测到的延迟被调用。
 	ToolLatencyRecorder func(latency time.Duration)
 
-	// OnLLMUsage is an optional callback invoked after every successful LLM call
-	// in the ReAct loop. It receives the actual model selected (which may differ
-	// from cfg.Model when Router is active), the resolved ModelProfile, and the
-	// API-reported Usage. This callback is used by the cost tracker and metrics
-	// collector in Phase 6-D without coupling the Engine to those subsystems.
+	// OnLLMUsage 是可选回调，在 ReAct loop 中每次成功 LLM 调用后被调用。
+	// 它接收实际选中的模型（Router 启用时可能与 cfg.Model 不同）、解析得到
+	// 的 ModelProfile 和 API 返回的 Usage。该回调在 Phase 6-D 中由 cost
+	// tracker 和 metrics collector 使用，且不把 Engine 与这些子系统耦合。
 	//
-	// The callback is best-effort: panics are recovered and logged, and errors
-	// from the callback do not interrupt the ReAct loop.
+	// 该回调是 best-effort 的：panic 会被 recover 并记录；回调返回的错误
+	// 不会中断 ReAct loop。
 	OnLLMUsage OnLLMUsage
 
-	// EvaluationRepository is an optional cases.Repository used to persist the
-	// acceptance evaluation result when a task completes. When nil, evaluation
-	// results are still broadcast via task_evaluated events but are not durably
-	// stored.
+	// EvaluationRepository 是可选的 cases.Repository，用于在任务完成时
+	// 持久化验收评估结果。为 nil 时，评估结果仍会通过 task_evaluated 事件
+	// 广播，但不会被持久存储。
 	EvaluationRepository EvaluationRepository
 
-	// SkillRegistry is the optional skill registry. When set with ActiveSkills,
-	// the Engine injects rendered skill prompts into the system prompt.
+	// SkillRegistry 是可选的 skill 注册表。与 ActiveSkills 一起设置时，
+	// Engine 会把渲染后的 skill prompt 注入到 system prompt。
 	SkillRegistry *skill.Registry
 
-	// ActiveSkills is the list of skill IDs whose prompts should be injected
-	// into the system prompt.
+	// ActiveSkills 是待注入到 system prompt 的 skill ID 列表。
 	ActiveSkills []string
 
-	// SkillVariables provides the variable values used to render skill templates.
+	// SkillVariables 提供用于渲染 skill 模板的变量值。
 	SkillVariables map[string]any
 }
 
-// OnLLMUsage is the callback type invoked after every successful LLM call.
+// OnLLMUsage 是每次成功 LLM 调用后被调用的回调类型。
 type OnLLMUsage func(model string, profile *llm.ModelProfile, usage llm.Usage)
 
-// EvaluationRepository is an optional cases.Repository used to persist the
-// acceptance evaluation result when a task completes. When nil, evaluation
-// results are still broadcast via task_evaluated events but are not durably
-// stored.
+// EvaluationRepository 是可选的 cases.Repository，用于在任务完成时持久化
+// 验收评估结果。为 nil 时，评估结果仍会通过 task_evaluated 事件广播，但
+// 不会被持久存储。
 type EvaluationRepository interface {
 	SaveEvaluation(eval cases.CaseEvaluation) error
 }
 
-// CaseEvaluator evaluates a task result against its case acceptance criteria.
-// It is defined as an interface to avoid direct coupling between runtime and
-// the cases package implementation details.
+// CaseEvaluator 根据某个 case 的验收标准评估任务结果。
+// 以 interface 形式定义，以避免 runtime 直接耦合 cases 包的实现细节。
 type CaseEvaluator interface {
 	Evaluate(taskID string, input string, result string) (cases.CaseEvaluation, error)
 }
 
-// Engine executes the ReAct (Reasoning + Acting) loop for a single agent.
+// Engine 为单个 agent 执行 ReAct (Reasoning + Acting) loop。
 //
-// # Lifecycle
+// # 生命周期
 //
-// An Engine is created via NewEngine, then Run() is called once with user input.
-// The engine processes the input through the ReAct loop and returns the final
-// answer (or an error). After Run() returns, the Engine should not be reused —
-// create a new Engine for each task.
+// Engine 通过 NewEngine 创建，随后调用一次 Run() 传入 user input。engine
+// 通过 ReAct loop 处理输入并返回最终答案（或错误）。Run() 返回后，
+// Engine 不应被复用——每个任务都应新建 Engine。
 //
-// # State
+// # 状态
 //
-// The Engine maintains the full conversation history as a slice of llm.Message.
-// This includes:
-//   - system: the agent's system prompt (set once at creation)
-//   - user: the initial user input + any intermediate user messages
-//   - assistant: LLM responses (text content + tool calls)
-//   - tool: tool execution results (JSON-serialized)
+// Engine 以 []llm.Message 维护完整对话历史。包括：
+//   - system：agent 的 system prompt（创建时一次性设置）
+//   - user：初始 user input + 任何中间 user message
+//   - assistant：LLM 响应（文本内容 + tool call）
+//   - tool：tool 执行结果（JSON 序列化）
 //
-// The stepIdx counter tracks the current ReAct loop iteration. It starts at 0
-// and increments after each tool execution. The engine terminates when stepIdx
-// reaches MaxSteps or the LLM produces a final answer.
+// stepIdx 计数器追踪当前 ReAct loop 迭代。从 0 开始，每次 tool 执行后
+// 递增。当 stepIdx 达到 MaxSteps 或 LLM 产出最终答案时，engine 终止。
 //
-// # Event Flow
+// # 事件流
 //
-// Every significant state change is emitted as an event through the EventBus:
+// 每个重要状态变化都以事件形式通过 EventBus 发出：
 //
 //	agent_ready           → step_started → llm_thinking → llm_delta* →
 //	llm_message_complete  → step_complete → [tool_call_started → tool_call_output →
 //	tool_call_complete → observation → step_complete]* → task_completed
 //
-// The * suffix indicates events that may repeat multiple times (streaming tokens,
-// multiple tool calls, multiple loop iterations).
+// * 后缀表示可能多次重复的事件（流式 token、多个 tool call、多轮 loop
+// 迭代）。
 type Engine struct {
-	cfg               EngineConfig                     // immutable configuration set at creation
-	llm               llm.Provider                     // LLM Provider interface (abstracts API protocol)
-	tools             *tool.Registry                   // the tool registry shared across agents
-	bus               EventBus                         // event transport for real-time frontend updates
-	persist           Persistence                      // optional persistence backend (nil = no persistence)
-	gate              *harness.PolicyGate              // optional policy enforcement (nil = allow all)
-	progress          *harness.ProgressManager         // optional progress tracking (nil = skip)
-	taskProgress      *harness.TaskProgress            // current progress state (nil if progress is nil)
-	taskID            string                           // unique task identifier for correlation
-	messages          []llm.Message                    // full conversation history (system + user + assistant + tool)
-	stepIdx           int                              // current ReAct loop iteration (0-based)
-	totalTokens       int                              // cumulative total tokens across all LLM calls
-	tokenUsage        llm.Usage                        // cumulative detailed token usage (input/cache/output)
-	startTime         time.Time                        // task start time for duration tracking
-	durationMs        int64                            // total task duration in milliseconds
-	approvalHandler   harness.ApprovalHandler          // optional approval handler for ErrApprovalRequired
-	agentBus          AgentBus                         // optional inter-agent communication channel (nil = disabled)
-	checkpoint        *CheckpointManager               // optional checkpoint manager for crash recovery (nil = disabled)
-	sessionMsgWriter  func(SessionMessageRecord) error // optional session message writer (nil = skip)
-	turnIndex         int                              // current turn index within the session (0-based)
-	caseID            string                           // optional case ID hint for MockProvider script matching
-	providers         map[string]llm.Provider          // provider lookup map for Router decision (empty = not using Router)
-	selectedModel     string                           // model chosen by the Router for the current think step (empty = e.cfg.Model)
-	lastError         string                           // normalized fingerprint of the most recent recoverable error fed back to the LLM
-	consecutiveErrors int                              // how many times the same recoverable error has occurred in a row
-	rootTraceCtx      *observability.TraceContext      // root span context for the task
+	cfg               EngineConfig                     // 创建时设置的不可变配置
+	llm               llm.Provider                     // LLM Provider interface（抽象 API 协议）
+	tools             *tool.Registry                   // 跨 agent 共享的 tool 注册表
+	bus               EventBus                         // 用于实时前端更新的事件传输层
+	persist           Persistence                      // 可选持久化后端（nil = 不持久化）
+	gate              *harness.PolicyGate              // 可选 policy 强制（nil = 全部允许）
+	progress          *harness.ProgressManager         // 可选进度跟踪（nil = 跳过）
+	taskProgress      *harness.TaskProgress            // 当前进度状态（progress 为 nil 时为 nil）
+	taskID            string                           // 用于关联的唯一 task 标识
+	messages          []llm.Message                    // 完整对话历史（system + user + assistant + tool）
+	stepIdx           int                              // 当前 ReAct loop 迭代号（0-based）
+	totalTokens       int                              // 所有 LLM 调用累计的 token 数
+	tokenUsage        llm.Usage                        // 累计的详细 token 用量（input/cache/output）
+	startTime         time.Time                        // 任务起始时间，用于耗时跟踪
+	durationMs        int64                            // 任务总耗时（毫秒）
+	approvalHandler   harness.ApprovalHandler          // 可选的 ErrApprovalRequired 审批 handler
+	agentBus          AgentBus                         // 可选的 agent 间通信通道（nil = 禁用）
+	checkpoint        *CheckpointManager               // 可选的崩溃恢复 checkpoint 管理器（nil = 禁用）
+	sessionMsgWriter  func(SessionMessageRecord) error // 可选的 session message writer（nil = 跳过）
+	turnIndex         int                              // session 内的当前 turn 序号（0-based）
+	caseID            string                           // 可选的 case ID 提示，供 MockProvider 脚本匹配
+	providers         map[string]llm.Provider          // Router 决策用的 provider 查找 map（空 = 未启用 Router）
+	selectedModel     string                           // Router 为当前 think step 选中的模型（空 = e.cfg.Model）
+	lastError         string                           // 最近一次回喂给 LLM 的可恢复错误的归一化指纹
+	consecutiveErrors int                              // 同一个可恢复错误连续出现的次数
+	rootTraceCtx      *observability.TraceContext      // 该 task 的 root span context
 
 	// Pause/Resume 控件（Phase 7-A）：让前端可以在不取消 context 的情况下暂停 agent。
 	// paused 是一个 atomic.Bool，Run loop 每轮检查一次；resumeCh 用来唤醒阻塞中的 loop。
@@ -521,23 +485,23 @@ type Engine struct {
 	resumeMu sync.Mutex
 }
 
-// NewEngine creates a new Engine with the given configuration, tool registry,
-// event bus, and task ID.
+// NewEngine 根据给定配置、tool 注册表、event bus 和 task ID 创建一个
+// 新的 Engine。
 //
-// Defaults applied:
-//   - MaxSteps defaults to 10 (prevents infinite loops)
-//   - Temperature defaults to 0.7 (balanced creativity vs. determinism)
-//   - MaxTokens defaults to 4096 (reasonable safety limit for most models)
+// 应用的默认值：
+//   - MaxSteps 默认 10（防止死循环）
+//   - Temperature 默认 0.7（平衡创造性与确定性）
+//   - MaxTokens 默认 4096（多数模型的合理安全上限）
 //
-// The engine initializes the conversation with the system prompt as the first
-// message. The user's input will be appended when Run() is called.
+// engine 初始化时把 system prompt 作为第一条消息加入对话。user input 会在
+// Run() 调用时追加。
 //
-// The LLM provider is created per-engine (not shared) so that each agent can use
-// a different endpoint, API key, or model — this is essential for multi-agent
-// setups where different agents may talk to different LLM providers.
+// LLM provider 按 engine 单独创建（不共享），使每个 agent 可以使用不同的
+// endpoint、API key 或模型——这对不同 agent 可能对接不同 LLM provider 的
+// 多 agent 场景至关重要。
 //
-// If cfg.Provider is set, it is used directly (enabling custom providers).
-// Otherwise, an OpenAIProvider is created from cfg.Endpoint, cfg.APIKey, cfg.Model.
+// 若 cfg.Provider 已设置，则直接使用（启用自定义 provider）。否则从
+// cfg.Endpoint、cfg.APIKey、cfg.Model 创建一个 OpenAIProvider。
 func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID string) *Engine {
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = 30
@@ -552,28 +516,26 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		cfg.MaxTokens = 4096
 	}
 
-	// Resolve the LLM Provider: use the explicit Provider if set, otherwise
-	// create a default OpenAIProvider from the legacy Endpoint/APIKey/Model fields.
+	// 解析 LLM Provider：若显式设置了 Provider 则直接用，否则从旧的
+	// Endpoint/APIKey/Model 字段创建一个默认 OpenAIProvider。
 	provider := cfg.Provider
 	if provider == nil {
 		provider = llm.NewOpenAIProvider("openai", cfg.Endpoint, cfg.APIKey, cfg.Model)
 	}
 
-	// Resolve the system prompt. If WorkingMemory is provided (built by
-	// MemoryRecall before engine creation), prepend it so the agent has
-	// access to past experiences and stable semantic rules.
+	// 解析 system prompt。如果提供了 WorkingMemory（由 MemoryRecall 在
+	// engine 创建前构建），就前置到 system prompt 中，使 agent 能访问过往
+	// 经验和稳定的语义规则。
 	systemPrompt := cfg.SystemPrompt
 	if cfg.WorkingMemory != "" {
 		systemPrompt = cfg.WorkingMemory + "\n\n" + cfg.SystemPrompt
 	}
 
-	// Inject working directory guidance into the system prompt when the
-	// session has a bound workspace. This tells the LLM to use relative
-	// paths for all file operations — files are naturally resolved against
-	// this directory, so the LLM can write `snake_game.html` instead of
-	// needing to know an absolute path. No tool mechanics change; this
-	// is purely a prompt-level hint. If WorkspaceDir is empty (legacy
-	// behavior), nothing is appended.
+	// 当 session 绑定了 workspace 时，向 system prompt 注入工作目录指引。
+	// 这告诉 LLM 所有文件操作使用相对路径——文件天然基于该目录解析，所以
+	// LLM 可以直接写 `snake_game.html` 而无需知道绝对路径。这不改变任何
+	// tool 机制，仅是 prompt 层面的提示。WorkspaceDir 为空（旧行为）时
+	// 不追加任何内容。
 	if cfg.WorkspaceDir != "" {
 		systemPrompt += "\n\n## Working Directory\n"
 		systemPrompt += "Your working directory for all file operations is: " + cfg.WorkspaceDir + "\n"
@@ -582,11 +544,10 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		systemPrompt += "absolute paths — the system resolves all relative paths against this working directory.\n"
 	}
 
-	// Inject rendered skill prompts into the system prompt when a skill
-	// registry and active skills are configured. Only templates named
-	// "system_prompt" or "task_prompt" are appended, rendered with the
-	// configured SkillVariables. This lets agents dynamically extend their
-	// instructions without changing the base system prompt.
+	// 当配置了 skill 注册表和激活的 skill 时，把渲染后的 skill prompt
+	// 注入 system prompt。仅追加名为 "system_prompt" 或 "task_prompt" 的
+	// 模板，使用配置的 SkillVariables 渲染。这让 agent 无需修改 base
+	// system prompt 即可动态扩展其指令。
 	if cfg.SkillRegistry != nil && len(cfg.ActiveSkills) > 0 {
 		renderer := skill.NewRenderer()
 		var rendered []string
@@ -611,15 +572,15 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		tools:            tools,
 		bus:              bus,
 		persist:          cfg.Persistence,
-		gate:             cfg.PolicyGate,           // nil = no policy enforcement
-		progress:         cfg.Progress,             // nil = no progress tracking
-		agentBus:         cfg.AgentBus,             // nil = no inter-agent communication
-		checkpoint:       cfg.CheckpointManager,    // nil = no checkpoint/recovery
-		sessionMsgWriter: cfg.SessionMessageWriter, // nil = skip session message persistence
-		turnIndex:        cfg.TurnIndex,            // turn index within the session
-		caseID:           cfg.CaseID,               // case ID hint for mock script matching
+		gate:             cfg.PolicyGate,           // nil = 不强制 policy
+		progress:         cfg.Progress,             // nil = 不跟踪进度
+		agentBus:         cfg.AgentBus,             // nil = 无 agent 间通信
+		checkpoint:       cfg.CheckpointManager,    // nil = 无 checkpoint/recovery
+		sessionMsgWriter: cfg.SessionMessageWriter, // nil = 跳过 session message 持久化
+		turnIndex:        cfg.TurnIndex,            // session 内的 turn 序号
+		caseID:           cfg.CaseID,               // mock 脚本匹配用的 case ID 提示
 		taskID:           taskID,
-		rootTraceCtx:     cfg.RootTraceCtx, // root span context for the task
+		rootTraceCtx:     cfg.RootTraceCtx, // 该 task 的 root span context
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -628,81 +589,79 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		tokenUsage:        llm.Usage{},
 		startTime:         time.Now(),
 		durationMs:        0,
-		approvalHandler:   cfg.ApprovalHandler, // nil = approval not supported
-		providers:         cfg.Providers,       // provider lookup map for Router decisions
+		approvalHandler:   cfg.ApprovalHandler, // nil = 不支持审批
+		providers:         cfg.Providers,       // Router 决策用的 provider 查找 map
 		lastError:         "",
 		consecutiveErrors: 0,
 		resumeCh:          make(chan struct{}),
 	}
 }
 
-// Run executes the ReAct loop for the given user input and returns the final
-// answer, total tokens consumed, and any error.
+// Run 对给定 user input 执行 ReAct loop，返回最终答案、总 token 消耗和
+// 错误。
 //
-// # The ReAct Loop (step-by-step)
+// # ReAct Loop（分步说明）
 //
-// The loop runs until one of three termination conditions is met:
-//  1. The LLM returns a response with no tool_calls → final answer (success)
-//  2. stepIdx reaches MaxSteps → forced termination (failure)
-//  3. The context is cancelled → graceful shutdown (failure)
-//  4. A panic is recovered → emergency shutdown (failure)
+// 该 loop 直到满足以下三种终止条件之一才退出：
+//  1. LLM 返回不含 tool_calls 的响应 → 最终答案（成功）
+//  2. stepIdx 达到 MaxSteps → 强制终止（失败）
+//  3. context 被取消 → 优雅关闭（失败）
+//  4. recover 到一个 panic → 紧急关闭（失败）
 //
-// Between each iteration, the context is checked for cancellation. This allows
-// the caller to cancel a long-running agent (e.g., user clicks "stop" in the UI).
+// 每次迭代之间都会检查 context 是否被取消。这让调用方可以取消长时间运行
+// 的 agent（例如用户在 UI 中点击 "stop"）。
 //
 // # Panic Recovery
 //
-// The engine includes a defer recover() at the top of Run() to catch panics
-// from any layer (LLM client, tool execution, event bus, persistence). When a
-// panic is caught, the engine emits a task_failed event with the panic details
-// so the frontend can display the error, then re-panics to preserve the stack
-// trace for debugging. This ensures that a single buggy tool or nil pointer
-// doesn't silently kill the agent — the frontend always knows what happened.
+// engine 在 Run() 顶部通过 defer recover() 捕获来自任意层（LLM client、
+// tool 执行、event bus、持久化）的 panic。捕获到 panic 时，engine 发出
+// 带 panic 详情的 task_failed 事件，让前端能展示错误，然后重新 panic 以
+// 保留堆栈供调试。这确保了单个有 bug 的 tool 或 nil 指针不会静默杀掉
+// agent——前端总是知道发生了什么。
 //
-// # Return Values
+// # 返回值
 //
-//   - content: the final answer text from the LLM (empty on failure)
-//   - totalTokens: total tokens consumed across all LLM calls (0 on failure)
-//   - error: nil on success, descriptive error on failure
+//   - content：LLM 给出的最终答案文本（失败时为空）
+//   - totalTokens：所有 LLM 调用累计的 token 数（失败时为 0）
+//   - error：成功时为 nil，失败时为描述性错误
 func (e *Engine) Run(ctx context.Context, userInput string) (content string, totalTokens int, err error) {
-	// Panic recovery: catch any panic from the LLM client, tool execution, event
-	// bus, or persistence layer. Emit a task_failed event so the frontend knows
-	// the agent crashed, then re-panic to preserve the stack trace.
+	// Panic recovery：捕获来自 LLM client、tool 执行、event bus 或持久化层
+	// 的任何 panic。发出 task_failed 事件让前端知道 agent 崩溃，然后重新
+	// panic 以保留堆栈。
 	defer func() {
 		if r := recover(); r != nil {
-			// Emit task_failed with the panic details so the UI can display the error.
-			// The event is sent on a best-effort basis — if the event bus itself
-			// panicked, this send may also fail, but we try anyway.
+			// 发出带 panic 详情的 task_failed 事件，让 UI 能展示错误。
+			// 该事件以 best-effort 方式发送——若 event bus 自身 panic 了，
+			// 这次发送也可能失败，但我们仍然尝试。
 			e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "panic",
 				"error":  fmt.Sprintf("%v", r),
 			}))
-			// Persist the failure status so the task history shows it as failed.
+			// 持久化失败状态，使任务历史显示为 failed。
 			e.updateTask("failed", "", e.totalTokens)
 			// 任务失败后清理内存中的上下文窗口快照，避免内存无限累积。
 			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
-			// Re-panic to preserve the original stack trace for server-side logging.
-			// The panic will be caught by the HTTP server's recovery middleware
-			// or the caller's deferred recovery.
+			// 重新 panic 以保留原始堆栈供服务端日志记录。
+			// 该 panic 会被 HTTP server 的 recovery 中间件或调用方的
+			// deferred recovery 捕获。
 			panic(r)
 		}
 	}()
 
-	// Append the user's input to the conversation history. This is the starting
-	// point for the ReAct loop — the LLM will see the system prompt followed by
-	// this user message.
+	// 把用户输入追加到对话历史。这是 ReAct loop 的起点——LLM 会看到
+	// system prompt 后跟这条 user message。
 	e.messages = append(e.messages, llm.Message{Role: "user", Content: userInput})
 
-	// Persist the user message for audit trail and conversation replay.
+	// 持久化 user message 以便审计链路和对话回放。
 	e.saveConversation("user", userInput)
 
-	// Write the system prompt and user message to session_messages for multi-turn
-	// conversation history. The system prompt is always the first message in e.messages.
-	// These writes are best-effort — failures are logged but do not interrupt the engine.
+	// 把 system prompt 和 user message 写入 session_messages 以支持多轮
+	// 对话历史。system prompt 总是 e.messages 中的第一条消息。
+	// 这些写入是 best-effort 的——失败只会被记录，不会中断 engine。
 	e.writeSessionMessage("system", e.messages[0].Content, "", "", 0)
 	e.writeSessionMessage("user", userInput, "", "", 0)
 
-	// Init Harness progress tracking if configured
+	// 若配置了 Harness progress 跟踪则初始化
 	if e.progress != nil {
 		tp, err := e.progress.Init(e.taskID, e.cfg.Contract)
 		if err != nil {
@@ -712,8 +671,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		}
 	}
 
-	// Notify the frontend that the agent is initialized and ready to process.
-	// The UI uses this event to show the agent's name, model, and limits.
+	// 通知前端 agent 已初始化完成、可处理输入。UI 用此事件展示 agent
+	// 名称、模型和限制。
 	e.bus.SendEvent(event.NewEventWithSubTask("agent_ready", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, 0, map[string]any{
 		"agent_name": e.cfg.AgentID,
 		"model":      e.cfg.Model,
@@ -722,10 +681,9 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		"is_root":    e.cfg.IsRoot,
 	}))
 
-	// Start the AgentBus listener goroutine if an AgentBus is configured.
-	// This goroutine listens for incoming messages from other agents and appends
-	// them to the conversation as user messages. It runs concurrently with the
-	// ReAct loop and is stopped when the context is cancelled.
+	// 若配置了 AgentBus，启动 AgentBus listener goroutine。
+	// 该 goroutine 监听来自其他 agent 的到达消息，并把它作为 user message
+	// 追加到对话中。它与 ReAct loop 并发运行，在 context 取消时停止。
 	agentMsgCh := make(chan AgentMessage, 10)
 	agentBusDone := make(chan struct{})
 	if e.agentBus != nil {
@@ -733,12 +691,11 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			select {
 			case agentMsgCh <- msg:
 			default:
-				// Channel full — drop the message to avoid blocking the sender.
-				// This is a safety measure; in practice, the channel should be
-				// large enough to handle bursts.
+				// channel 已满——丢弃消息以免阻塞发送方。
+				// 这是一个安全措施；实际上 channel 应该足够大以应对突发。
 			}
 		}
-		// Phase 7-J: leader 必须使用按 SubTaskID 注册，才能收到子 agent 发给
+		// Phase 7-J：leader 必须使用按 SubTaskID 注册，才能收到子 agent 发给
 		// (leader, rootTaskID) 的消息。子 agent 保持 agentID-only 兼容旧行为。
 		if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
 			e.agentBus.RegisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID, agentBusHandler)
@@ -750,7 +707,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			for {
 				select {
 				case <-ctx.Done():
-					// Context cancelled — stop listening.
+					// context 取消——停止监听。
 					if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
 						e.agentBus.UnregisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID)
 					} else {
@@ -761,7 +718,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					if !ok {
 						return
 					}
-					// Phase 7-J: 把 AgentBus 输入当作一个独立 step，让前端时间线
+					// Phase 7-J：把 AgentBus 输入当作一个独立 step，让前端时间线
 					// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
 					// 最后发射 step_complete 并持久化该 step。
 					e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -774,15 +731,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						"content":          msg.Content,
 					}))
 
-					// Append the incoming message to the conversation as a user
-					// message. The LLM will see it as a new input from another agent.
+					// 把到达消息作为 user message 追加到对话。LLM 会把它视为
+					// 来自其他 agent 的新输入。
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
 					e.messages = append(e.messages, llm.Message{Role: "user", Content: formatted})
 					e.saveConversation("user", formatted)
 					e.writeSessionMessage("user", formatted, "", "", 0)
 
-					// Emit a system_info event so the frontend can show the
-					// inter-agent communication in the UI.
+					// 发出 system_info 事件，让前端可以在 UI 中展示 agent 间通信。
 					// Phase 7-J 注：保留此事件以兼容旧前端监听器，但 step 事件才是
 					// 推荐的白盒展示方式（system_info 已标记为 deprecated）。
 					e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
@@ -808,15 +764,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// =========================================================================
 	// REACT LOOP: THINK → TOOL_CALL → OBSERVE → (repeat)
 	// =========================================================================
-	// Each iteration of this loop is one "step" in the agent's reasoning chain.
-	// The loop terminates when the LLM produces a final answer (no tool calls),
-	// when MaxSteps is reached, or when the context is cancelled.
+	// 该 loop 的每次迭代是 agent 推理链中的一个 "step"。loop 在 LLM 产出
+	// 最终答案（无 tool call）、达到 MaxSteps 或 context 取消时终止。
 	//
-	// The stepIdx counter is NOT incremented during the think phase — it is
-	// incremented only after a tool is executed. This means stepIdx reflects
-	// the number of tool execution rounds, not the number of LLM calls.
-	// The final answer (think phase with no tool calls) uses the current stepIdx
-	// without incrementing it.
+	// stepIdx 计数器在 think 阶段不递增——仅在 tool 执行后递增。这意味着
+	// stepIdx 反映的是 tool 执行轮数，而非 LLM 调用次数。最终答案
+	// （无 tool call 的 think 阶段）使用当前 stepIdx，不会递增。
 	for e.stepIdx < e.cfg.MaxSteps {
 		// Phase 7-A：暂停检查。
 		// 如果用户从前端触发了 Pause，paused 会被原子地置为 true，
@@ -839,15 +792,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}
 		}
 
-		// Check context cancellation before each iteration. This allows the
-		// HTTP handler to cancel the agent when the client disconnects or the
-		// user clicks "stop". Without this check, the engine would continue
-		// processing even after the frontend has given up.
+		// 每次迭代前检查 context 是否取消。这让 HTTP handler 可以在 client
+		// 断开或用户点击 "stop" 时取消 agent。若不检查，engine 会在前端
+		// 已放弃后仍继续处理。
 		select {
 		case <-ctx.Done():
-			// Context was cancelled — emit failure and return immediately.
-			// The frontend can distinguish "cancelled" from "llm_error" and
-			// "max_steps_exceeded" by the reason field in the event data.
+			// context 被取消——发出失败事件并立即返回。
+			// 前端可凭事件数据中的 reason 字段区分 "cancelled"、
+			// "llm_error" 和 "max_steps_exceeded"。
 			e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "cancelled",
 			}))
@@ -858,24 +810,24 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 			return "", e.totalTokens, ctx.Err()
 		default:
-			// Context is still valid — continue to the think phase.
+			// context 仍然有效——继续进入 think 阶段。
 		}
 
 		// =====================================================================
-		// PHASE 1: THINK — Send the conversation to the LLM and get the response.
+		// PHASE 1: THINK — 把对话发给 LLM 并获取响应。
 		// =====================================================================
-		// The LLM receives the full conversation history (system + user +
-		// assistant + tool messages) and returns either:
-		//   a) Text content with no tool calls → this is the final answer
-		//   b) Text content with tool calls → the LLM wants to use a tool
+		// LLM 接收完整对话历史（system + user + assistant + tool message），
+		// 并返回：
+		//   a) 文本内容且无 tool call → 这就是最终答案
+		//   b) 文本内容且有 tool call → LLM 想用某个 tool
 		//
-		// During this phase, text tokens are streamed to the frontend via the
-		// llm_delta event, creating a typewriter effect in the UI.
+		// 在该阶段，文本 token 通过 llm_delta 事件流式发送到前端，在 UI 中
+		// 形成打字机效果。
 		content, usage, toolCalls, err := e.think(ctx)
 		if err != nil {
-			// Distinguish cancellation from genuine LLM errors. If the context was
-			// cancelled (e.g. user clicked stop) the loop header has already emitted
-			// the cancelled reason; just return without overwriting it as llm_error.
+			// 区分取消与真正的 LLM 错误。如果 context 已被取消（例如用户点击
+			// 了 stop），loop 头部已经发出过 cancelled reason；此处直接返回
+			// 不覆盖为 llm_error。
 			select {
 			case <-ctx.Done():
 				return "", e.totalTokens, ctx.Err()
@@ -883,18 +835,17 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}
 
 			// -----------------------------------------------------------------
-			// ERROR-HANDLING POLICY: feedback first, fail on repeat.
+			// 错误处理策略：feedback first, fail on repeat。
 			//
-			// Any system-level error (LLM call failure, network issue, etc.) is
-			// first fed back to the LLM as an observation. This gives the agent a
-			// chance to self-correct and continue working. Only when the exact
-			// same error fingerprint occurs twice in a row do we treat it as
-			// non-recoverable and escalate to human intervention.
+			// 任何系统级错误（LLM 调用失败、网络问题等）都会先作为 observation
+			// 回喂给 LLM。这给 agent 一次自我修正并继续工作的机会。只有当
+			// 同一错误指纹连续出现两次时，我们才视为不可恢复并升级到人工
+			// 介入。
 			//
-			// The fingerprint is normalized (normalizeErrorFingerprint) so volatile
-			// per-request ids in provider error messages (e.g. 403 "request id:
-			// <opaque>") don't mask genuine repetition — otherwise a persistent 403
-			// would spin until the poll timeout instead of failing fast.
+			// 指纹经过归一化（normalizeErrorFingerprint），使 provider 错误
+			// 信息中易变的 per-request id（如 403 "request id: <opaque>"）
+			// 不会掩盖真正的重复——否则持续的 403 会一直空转到轮询超时，而
+			// 不是快速失败。
 			// -----------------------------------------------------------------
 			obsContent := fmt.Sprintf("[LLM ERROR] %s", normalizeErrorFingerprint(err.Error()))
 			if e.isRepeatingError(obsContent) {
@@ -911,13 +862,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			}
 			e.recordFeedbackError(obsContent)
 
-			// Feed the error back into the conversation so the next think step
-			// can react to it. Persist it as a user message for auditability.
+			// 把错误回填到对话，使下一个 think step 能据此反应。作为
+			// user message 持久化以便审计。
 			e.messages = append(e.messages, llm.Message{Role: "user", Content: obsContent})
 			e.saveConversation("user", obsContent)
 			e.writeSessionMessage("user", obsContent, "", "", 0)
 
-			// Emit a system_info event so the frontend can surface the retry.
+			// 发出 system_info 事件，让前端可以展示这次重试。
 			e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"type":    "llm_error_feedback",
 				"content": obsContent,
@@ -925,7 +876,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			continue
 		}
 
-		// Accumulate token usage for budget tracking (TokenBudgetRule — Phase 4)
+		// 累计 token 用量以做预算跟踪（TokenBudgetRule — Phase 4）
 		e.totalTokens += usage.TotalTokens
 		e.tokenUsage.PromptTokens += usage.PromptTokens
 		e.tokenUsage.PromptCacheHitTokens += usage.PromptCacheHitTokens
@@ -933,14 +884,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 		e.tokenUsage.CompletionTokens += usage.CompletionTokens
 		e.tokenUsage.TotalTokens += usage.TotalTokens
 
-		// Update the PolicyGate with the latest token usage so TokenBudgetRule
-		// can enforce the budget before the next tool execution.
+		// 把最新 token 用量同步给 PolicyGate，使 TokenBudgetRule 能在下一次
+		// tool 执行前强制预算。
 		if e.gate != nil {
 			e.gate.SetTokenUsage(e.totalTokens)
 		}
 
-		// Emit an agent_status event so the frontend can display real-time
-		// token consumption detail (input / cache / output) and progress.
+		// 发出 agent_status 事件，让前端展示实时 token 消耗详情
+		// （input / cache / output）和进度。
 		e.bus.SendEvent(event.NewEventWithSubTask("agent_status", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"prompt_tokens":            e.tokenUsage.PromptTokens,
 			"prompt_cache_hit_tokens":  e.tokenUsage.PromptCacheHitTokens,
@@ -951,10 +902,10 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			"current_step":             e.stepIdx,
 		}))
 
-		// Phase 6-D: Report cost and observability metrics for this LLM call.
-		// The Engine remains cost-agnostic; the callback is supplied by cmd/server
-		// and wired to the CostTracker + MetricsCollector. Panics in the callback
-		// are recovered so observability bugs cannot crash the agent loop.
+		// Phase 6-D：上报本次 LLM 调用的成本与可观测性指标。
+		// Engine 本身与成本无关；回调由 cmd/server 提供并接到
+		// CostTracker + MetricsCollector。回调中的 panic 会被 recover，
+		// 这样可观测性 bug 不会让 agent loop 崩溃。
 		//
 		// R4 修复：reporting 用的 model 名取 think() 顶部 Router 选中的
 		// selectedModel（若 Router 未启用则为 e.cfg.Model）。此前固定传
@@ -992,12 +943,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.stepIdx, len(content), len(toolCalls), reportModel, usage)
 
 		// =====================================================================
-		// CHECK: Did the LLM produce a final answer or request tool calls?
+		// CHECK：LLM 是给出了最终答案还是请求 tool call？
 		// =====================================================================
-		// If there are no tool calls, the LLM's text content is the final answer.
-		// This is the normal termination path for a successful agent run.
+		// 如果没有 tool call，LLM 的文本内容就是最终答案。
+		// 这是 agent 成功运行的正常终止路径。
 		if len(toolCalls) == 0 {
-			// Persist the final step for audit trail.
+			// 持久化最终 step 以便审计链路。
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 				Type: "think", Status: "completed", Content: content, TokenUsed: e.totalTokens,
@@ -1005,9 +956,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.saveConversation("assistant", content)
 			e.writeSessionMessage("assistant", content, "", "", e.totalTokens)
 
-			// Emit the final observation — the complete answer text along with
-			// token usage statistics. The frontend uses this to display the
-			// final answer and token cost summary.
+			// 发出最终 observation——完整答案文本及 token 用量统计。前端用
+			// 它展示最终答案和 token 成本汇总。
 			e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content":                  content,
 				"total_tokens":             e.totalTokens,
@@ -1017,16 +967,15 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				"completion_tokens":        e.tokenUsage.CompletionTokens,
 			}))
 
-			// Persist the final observation step for historical replay.
+			// 持久化最终 observation step 以支持历史回放。
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 				Type: "observation", Status: "completed",
 				Content: content, TokenUsed: e.totalTokens,
 			})
 
-			// Emit task_completed — this tells the frontend that the agent
-			// has finished successfully. Include the cumulative token breakdown
-			// so the frontend can display accurate token metrics.
+			// 发出 task_completed——告诉前端 agent 已成功完成。包含累计
+			// token 分解，使前端能展示准确的 token 指标。
 			e.bus.SendEvent(event.NewEventWithSubTask("task_completed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"result":                   content,
 				"total_tokens":             e.totalTokens,
@@ -1037,57 +986,54 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				"completion_tokens":        e.tokenUsage.CompletionTokens,
 			}))
 
-			// Persist the completed status. Pass the cumulative total (e.totalTokens)
-			// and elapsed duration so the DB record reflects the full cost and time.
+			// 持久化 completed 状态。传入累计 total (e.totalTokens) 与已耗
+			// 时长，使 DB 记录反映完整成本与时间。
 			e.durationMs = time.Since(e.startTime).Milliseconds()
 			e.updateTask("completed", content, e.totalTokens)
 			e.updateTaskDuration()
 			// 任务成功完成后清理内存中的上下文窗口快照，避免已完成任务长期占用内存。
 			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
 
-			// Task 4: If this run is associated with a case, evaluate the acceptance
-			// criteria and broadcast a task_evaluated event. Errors here are logged
-			// but do not change the task's successful status.
+			// Task 4：若本次运行关联了某个 case，则评估验收标准并广播
+			// task_evaluated 事件。此处错误只记录，不改变任务成功状态。
 			e.evaluateAndBroadcast(userInput, content)
 
 			return content, e.totalTokens, nil
 		}
 
 		// =====================================================================
-		// PHASE 2: EXECUTE_TOOL — Run each tool call requested by the LLM.
+		// PHASE 2: EXECUTE_TOOL — 执行 LLM 请求的每个 tool call。
 		// =====================================================================
-		// The LLM may request multiple tool calls in a single response. Each
-		// tool call is executed sequentially — the result of tool N is available
-		// to the LLM when it processes tool N+1's result on the next think phase.
+		// LLM 可能在单次响应中请求多个 tool call。每个 tool call 顺序执行
+		// ——tool N 的结果在下一 think 阶段处理 tool N+1 的结果时对 LLM
+		// 可见。
 		//
-		// After all tool calls are executed, the loop returns to PHASE 1 (THINK)
-		// where the LLM sees the tool results and decides what to do next.
+		// 所有 tool call 执行完毕后，loop 回到 PHASE 1 (THINK)，LLM 看到
+		// tool 结果后决定下一步。
 		for _, tc := range toolCalls {
-			// Persist the think step BEFORE executing the tool. This ensures
-			// that even if the tool execution crashes, the audit trail shows
-			// what the LLM was thinking when it decided to call the tool.
+			// 在执行 tool 前持久化 think step。这确保即使 tool 执行崩溃，
+			// 审计链路也能展示 LLM 决定调用 tool 时的思考内容。
 			e.saveStep(StepRecord{
 				TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 				Type: "think", Status: "completed", Content: content, TokenUsed: e.totalTokens,
 			})
 			e.saveConversation("assistant", content)
-			// Serialize tool calls to JSON for session_messages persistence.
+			// 把 tool call 序列化为 JSON 以便 session_messages 持久化。
 			tcJSON, _ := json.Marshal(toolCalls)
 			e.writeSessionMessage("assistant", content, "", string(tcJSON), usage.TotalTokens)
 
-			// Execute the tool. The engine dispatches the tool call to the
-			// Tool Registry, which looks up the tool by name and invokes its
-			// Execute method. The result is a JSON-serializable value.
+			// 执行 tool。engine 把 tool call 派发给 Tool Registry，后者按
+			// 名查找 tool 并调用其 Execute 方法。结果是一个可 JSON 序列化
+			// 的值。
 			//
-			// stepIdx is incremented INSIDE executeTool (not here) because
-			// executeTool manages the step lifecycle events (started/completed).
+			// stepIdx 在 executeTool 内部递增（不在此处），因为 executeTool
+			// 管理 step 生命周期事件（started/completed）。
 			result, toolErr := e.executeTool(tc)
 			if toolErr != nil {
-				// Tool execution failed. Instead of terminating immediately, we
-				// feed the error back to the LLM as an observation so the agent
-				// can self-correct on the next think iteration. This follows the
-				// platform's error-handling principle: first error → guide the AI,
-				// consecutive identical error → escalate to human.
+				// tool 执行失败。我们不立即终止，而是把错误作为 observation
+				// 回喂给 LLM，让 agent 在下一 think 迭代中自我修正。这符合
+				// 平台的错误处理原则：首次错误 → 引导 AI；连续相同错误 →
+				// 升级到人工。
 				obsContent := e.formatToolErrorObservation(tc.Function.Name, toolErr)
 				if e.isRepeatingError(obsContent) {
 					e.durationMs = time.Since(e.startTime).Milliseconds()
@@ -1097,13 +1043,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				}
 				e.recordFeedbackError(obsContent)
 
-				// Persist the error observation so the chat history and audit trail
-				// contain the failure the LLM sees on the next loop.
+				// 持久化错误 observation，使对话历史和审计链路包含 LLM 在
+				// 下一轮看到的失败。
 				e.saveConversation("tool", obsContent)
 				e.writeSessionMessage("tool", obsContent, tc.ID, "", 0)
 
-				// Emit the observation event so the frontend shows the error as
-				// feedback to the LLM, not as a terminal task failure.
+				// 发出 observation 事件，让前端把错误展示为对 LLM 的反馈，
+				// 而非终态任务失败。
 				e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"content": obsContent,
 				}))
@@ -1113,17 +1059,15 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					Content: obsContent,
 				})
 
-				// Append the assistant message (with the failed tool_call) and the
-				// error observation to the conversation history. The next think
-				// iteration will see both and can decide to retry or try a different
-				// tool.
+				// 把 assistant message（含失败的 tool_call）和错误 observation
+				// 追加到对话历史。下一 think 迭代会同时看到两者，可以决定
+				// 重试或换一个 tool。
 				//
-				// IMPORTANT: if tc.Function.Arguments is malformed JSON, serializing
-				// the raw string back into the next API request triggers a 400
-				// BadRequestError because the provider parses the nested JSON inside
-				// arguments. We sanitize every tool_call before appending it to
-				// conversation history; the actual error is preserved in the tool
-				// result observation.
+				// IMPORTANT：若 tc.Function.Arguments 是 malformed JSON，把
+				// 原始字符串序列化回下一次 API 请求会触发 400
+				// BadRequestError，因为 provider 会解析 arguments 内的嵌套
+				// JSON。我们在追加到对话历史前对每个 tool_call 做清洗；
+				// 真正的错误仍保留在 tool result observation 中。
 				sanitizedTC := sanitizeToolCallArguments(tc)
 				e.messages = append(e.messages, llm.Message{
 					Role:      "assistant",
@@ -1136,30 +1080,28 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					Content:    obsContent,
 				})
 
-				// Continue the ReAct loop — let the LLM decide how to recover.
+				// 继续 ReAct loop——让 LLM 决定如何恢复。
 				continue
 			}
 
-			// Persist the tool result for audit trail.
+			// 持久化 tool result 以便审计链路。
 			e.saveConversation("tool", result)
 			e.writeSessionMessage("tool", result, tc.ID, "", 0)
 
 			// =================================================================
-			// PHASE 3: OBSERVE — Feed the tool result back into the conversation.
+			// PHASE 3: OBSERVE — 把 tool result 回填到对话。
 			// =================================================================
-			// The assistant message (with the tool_call) and the tool result
-			// message are appended to the conversation history. On the next
-			// loop iteration, the LLM will see these messages and can use the
-			// tool result to inform its next response.
+			// assistant message（含 tool_call）和 tool result message 被追加
+			// 到对话历史。下一次 loop 迭代中，LLM 会看到这些消息，并可以
+			// 用 tool result 来指导其下一个响应。
 			//
-			// This is what makes the ReAct loop work: the LLM sees the
-			// consequences of its actions and adapts accordingly.
+			// 这正是 ReAct loop 工作的关键：LLM 能看到自己行为的后果并据此
+			// 调整。
 			//
-			// IMPORTANT: successful tool calls can still carry malformed
-			// arguments in rare cases (e.g. the LLM produced invalid JSON but
-			// executeTool repaired it locally). Always sanitize the arguments
-			// before appending to conversation history to avoid 400 errors on
-			// the next think step.
+			// IMPORTANT：成功的 tool call 在少见情况下也可能携带 malformed
+			// arguments（例如 LLM 产出了无效 JSON 但 executeTool 在本地修复
+			// 了）。在追加到对话历史前务必清洗 arguments，避免下一次 think
+			// step 出现 400 错误。
 			e.messages = append(e.messages, llm.Message{
 				Role:      "assistant",
 				Content:   content,
@@ -1171,21 +1113,19 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				Content:    result,
 			})
 		}
-		// Loop back to PHASE 1 (THINK) — the LLM will now see the tool results
-		// and decide whether to call more tools or produce a final answer.
+		// 回到 PHASE 1 (THINK)——LLM 现在会看到 tool 结果，决定是继续调用
+		// tool 还是给出最终答案。
 
-		// Save a checkpoint at the end of each ReAct loop iteration (after tool
-		// execution). This enables task recovery if the process crashes — the
-		// task can be resumed from the last checkpoint.
-		// Checkpointing is skipped when CheckpointManager is nil.
+		// 在每次 ReAct loop 迭代结束（tool 执行后）保存 checkpoint。这支持
+		// 进程崩溃后的任务恢复——可从最近 checkpoint 续跑。
+		// CheckpointManager 为 nil 时跳过 checkpointing。
 		e.saveCheckpoint()
 	}
 
 	// =========================================================================
-	// MaxSteps exceeded — the agent did not produce a final answer within the
-	// allowed number of iterations. This is a safety mechanism to prevent
-	// infinite loops (e.g., the LLM keeps calling the same tool with the same
-	// arguments without making progress).
+	// 超过 MaxSteps——agent 在允许的迭代次数内未产出最终答案。这是一个
+	// 安全机制，防止死循环（例如 LLM 用相同参数反复调用同一 tool 而不
+	// 取得进展）。
 	e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"reason":       "max_steps_exceeded",
 		"max_steps":    e.cfg.MaxSteps,
@@ -1200,16 +1140,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	return "", e.totalTokens, fmt.Errorf("max steps (%d) exceeded", e.cfg.MaxSteps)
 }
 
-// saveConversation persists a conversation message to the storage backend.
+// saveConversation 把一条对话消息持久化到存储后端。
 //
-// This is a no-op when persistence is nil (e.g., in tests or ephemeral runs).
-// Errors are logged but not returned — persistence failures are non-fatal to
-// the agent's execution. The agent continues processing even if the database
-// is unavailable, because the primary goal is to complete the user's task.
+// 持久化为 nil 时（例如测试或临时性运行）为 no-op。错误只记录不返回——
+// 持久化失败对 agent 执行是非致命的。即使数据库不可用，agent 仍会继续
+// 处理，因为首要目标是完成用户任务。
 //
-// Design rationale: persistence is a cross-cutting concern that should not
-// interrupt the agent's core loop. If the database is down, we log the error
-// and move on — the task still completes, just without an audit trail.
+// 设计理由：持久化是横切关注点，不应中断 agent 的核心 loop。数据库不可用
+// 时，我们记录错误并继续——任务仍会完成，只是没有审计链路。
 func (e *Engine) saveConversation(role, content string) {
 	if e.persist == nil {
 		return
@@ -1221,13 +1159,13 @@ func (e *Engine) saveConversation(role, content string) {
 	}
 }
 
-// writeSessionMessage writes a message to the session_messages table via the
-// SessionMessageWriter callback. This is a best-effort operation — failures
-// are logged but never interrupt the engine's execution.
+// writeSessionMessage 通过 SessionMessageWriter 回调把一条消息写入
+// session_messages 表。这是一个 best-effort 操作——失败只会被记录，绝不
+// 会中断 engine 的执行。
 //
-// The SessionMessageWriter is configured in EngineConfig and typically wraps
-// db.InsertSessionMessage. When nil (e.g., in tests or when session persistence
-// is not needed), this is a no-op.
+// SessionMessageWriter 在 EngineConfig 中配置，通常包装
+// db.InsertSessionMessage。为 nil 时（例如测试或不需要 session 持久化时），
+// 本函数为 no-op。
 func (e *Engine) writeSessionMessage(role, content string, toolCallID string, toolCallsJSON string, tokenCount int) {
 	if e.sessionMsgWriter == nil {
 		return
@@ -1245,11 +1183,11 @@ func (e *Engine) writeSessionMessage(role, content string, toolCallID string, to
 	}
 }
 
-// saveStep persists a step record to the storage backend.
+// saveStep 把一条 step 记录持久化到存储后端。
 //
-// Each step represents one phase of the ReAct loop (think or tool_call).
-// Steps are persisted with their status (completed/failed), content, and
-// token usage for cost tracking and audit.
+// 每个 step 代表 ReAct loop 的一个阶段（think 或 tool_call）。step 连同
+// 其状态（completed/failed）、内容和 token 用量被持久化，用于成本跟踪
+// 和审计。
 //
 // Like saveConversation, this is a no-op when persistence is nil and errors
 // are logged but not returned — persistence failures do not interrupt the agent.
@@ -1262,13 +1200,12 @@ func (e *Engine) saveStep(s StepRecord) {
 	}
 }
 
-// updateTask persists the final task status to the storage backend.
+// updateTask 把最终任务状态持久化到存储后端。
 //
-// Called when the task reaches a terminal state (completed or failed).
-// The status, final result text, and total token count are written to the
-// task record so the task history UI can display task outcomes and costs.
+// 在任务达到终态（completed 或 failed）时调用。status、最终结果文本和
+// 总 token 数被写入 task 记录，使任务历史 UI 可以展示任务结果和成本。
 //
-// Like saveConversation and saveStep, this is a no-op when persistence is nil.
+// 与 saveConversation 和 saveStep 一样，持久化为 nil 时为 no-op。
 func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
 	if e.persist == nil {
 		return
@@ -1287,12 +1224,11 @@ func (e *Engine) updateTaskDuration() {
 	}
 }
 
-// evaluateAndBroadcast runs the AcceptanceEvaluator when the engine is
-// associated with a case and broadcasts a task_evaluated event with the result.
+// evaluateAndBroadcast 在 engine 关联到某个 case 时运行
+// AcceptanceEvaluator，并广播带结果的 task_evaluated 事件。
 //
-// It is called after task_completed has been emitted and the task status has been
-// persisted. Evaluation failures are logged and emitted in the event but do NOT
-// flip the task to failed; evaluation is observational, not a hard gate.
+// 它在 task_completed 已发出、任务状态已持久化后调用。评估失败会被记录
+// 并写入事件，但不会把任务翻转为 failed；评估是观测性的，不是硬性闸门。
 func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	if e.caseID == "" {
 		return
@@ -1317,9 +1253,8 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	}
 	evaluator := harness.NewAcceptanceEvaluator(scope)
 
-	// Collect recent tool outputs from the conversation history. We keep the last
-	// 10 "tool" role messages; older ones are unlikely to be relevant to the final
-	// evaluation and keeping the context small improves judge latency/cost.
+	// 从对话历史中收集最近的 tool 输出。我们保留最后 10 条 "tool" 角色消息；
+	// 更早的输出通常与最终评估无关，且保持上下文较小能改善 judge 延迟和成本。
 	var toolOutputs []string
 	for i := len(e.messages) - 1; i >= 0 && len(toolOutputs) < 10; i-- {
 		if e.messages[i].Role == "tool" {
@@ -1332,8 +1267,8 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		evaluator.SetLLMJudge(judge)
 	}
 
-	// Provide the judge with the runtime context so the semantic prompt
-	// includes the real goal, user input, agent answer, and tool evidence.
+	// 把运行时上下文提供给 judge，使语义化 prompt 包含真实的 goal、user
+	// input、agent 答案和 tool 证据。
 	evaluator.SetEvaluationContext(e.cfg.Contract.Goal, userInput, finalAnswer, toolOutputs)
 
 	report, err := evaluator.Evaluate(e.cfg.Contract.AcceptanceCriteria)
@@ -1348,7 +1283,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		passed = report.AllPassed
 		reason = report.Summary
 		if !passed && len(report.Results) > 0 {
-			// Surface the first failure reason to aid debugging.
+			// 把第一条失败原因呈现出来以辅助调试。
 			for _, r := range report.Results {
 				if !r.Passed {
 					reason = r.Message
@@ -1357,11 +1292,10 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 			}
 		}
 
-		// Compute an aggregate score. LLMJudge criteria contribute their returned
-		// scores; when no judge criteria are present but other criteria exist, the
-		// score is 1.0 only if all criteria passed, otherwise 0.0. This keeps the
-		// score meaningful for deterministic-only contracts while preserving the
-		// original judge-average behavior for semantic contracts.
+		// 计算汇总分数。LLMJudge 标准贡献其返回的分数；当没有 judge 标准
+		// 而存在其他标准时，仅当所有标准都通过时分数为 1.0，否则为 0.0。
+		// 这使得对纯确定性 contract 的分数有意义，同时保留语义化 contract
+		// 原本的 judge 平均行为。
 		if len(report.Results) > 0 {
 			var judgeScoreSum float64
 			var judgeCount int
@@ -1386,7 +1320,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 		}
 	}
 
-	// Persist the evaluation to the case_evaluations table.
+	// 把评估结果持久化到 case_evaluations 表。
 	if e.cfg.EvaluationRepository != nil {
 		saveErr := e.cfg.EvaluationRepository.SaveEvaluation(cases.CaseEvaluation{
 			TaskID: e.taskID,
@@ -1409,38 +1343,35 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	}))
 }
 
-// formatToolErrorObservation produces a concise, stable fingerprint of a tool
-// execution failure. The content is fed back to the LLM as a tool result so it
-// can self-correct. Keeping the format stable lets isRepeatingError detect
-// consecutive identical failures.
+// formatToolErrorObservation 生成一个简洁、稳定的 tool 执行失败指纹。
+// 该内容作为 tool result 回喂给 LLM 以便其自我修正。保持格式稳定可让
+// isRepeatingError 检测到连续相同的失败。
 func (e *Engine) formatToolErrorObservation(toolName string, err error) string {
 	return fmt.Sprintf("[TOOL ERROR] %s failed: %s", toolName, normalizeErrorFingerprint(err.Error()))
 }
 
-// normalizeErrorFingerprint strips volatile substrings from an error message so
-// two failures of the same kind compare equal. The Router-activation post-mortem
-// showed that 403 "no access to model" errors embed a per-request id
-// ("request id: 20260714033318937918881aclHY4az") that changes on every call;
-// without normalization isRepeatingError never matched and the engine spun in a
-// 1347-iteration/90s death loop until the poll timeout. We collapse:
+// normalizeErrorFingerprint 去除错误信息中易变的子串，使两次同类失败比较
+// 相等。Router-activation 事后分析显示：403 "no access to model" 错误中
+// 嵌入了 per-request id（"request id: 20260714033318937918881aclHY4az"），
+// 每次调用都不同；不归一化的话 isRepeatingError 永远匹配不上，engine 在
+// 90s 轮询超时前空转 1347 次，陷入死循环。我们做如下折叠：
 //   - "request id: <opaque>"   → "request id: <redacted>"
 //   - "request_id: <opaque>"   → "request_id: <redacted>"
 //
-// The normalized string is used BOTH for the fingerprint comparison and for the
-// observation fed back to the LLM, so the LLM also sees a cleaner error signal.
+// 归一化后的字符串同时用于指纹比较和回喂给 LLM 的 observation，因此 LLM
+// 也看到更干净的错误信号。
 func normalizeErrorFingerprint(msg string) string {
-	// Strip OpenAI-style "request id: <opaque>" / "request_id: <opaque>".
-	// Keep the captured "request id" / "request_id" key, redact the volatile id.
+	// 去除 OpenAI 风格的 "request id: <opaque>" / "request_id: <opaque>"。
+	// 保留捕获到的 "request id" / "request_id" key，对易变 id 做脱敏。
 	return regexpRequestID.ReplaceAllString(msg, "$1: <redacted>")
 }
 
-// isRepeatingError returns true if the same recoverable error just occurred
-// consecutively. Per the platform's error-handling principle, a single error
-// is fed back to the LLM for self-correction; two identical (normalized) errors
-// in a row are considered a loop and escalate to human intervention.
+// isRepeatingError 返回 true 表示同一个可恢复错误刚刚连续发生。按照
+// 平台的错误处理原则，单个错误会回喂给 LLM 自我修正；连续两次相同
+// （归一化后）的错误被视为死循环并升级到人工介入。
 //
-// Comparison uses normalizeErrorFingerprint so volatile tokens (per-request ids)
-// don't mask genuine repetition. See normalizeErrorFingerprint for the rationale.
+// 比较使用 normalizeErrorFingerprint，使易变 token（per-request id）
+// 不会掩盖真正的重复。理由详见 normalizeErrorFingerprint。
 func (e *Engine) isRepeatingError(errFingerprint string) bool {
 	if e.consecutiveErrors == 0 {
 		return false
@@ -1449,11 +1380,10 @@ func (e *Engine) isRepeatingError(errFingerprint string) bool {
 	return e.lastError != "" && e.lastError == norm
 }
 
-// recordFeedbackError updates the engine's error-tracking state after a
-// recoverable error has been fed back to the LLM. It increments the counter
-// when the same (normalized) error repeats, otherwise resets it for a new
-// error pattern. The stored lastError is the normalized form so subsequent
-// isRepeatingError comparisons are against the same normalized baseline.
+// recordFeedbackError 在一个可恢复错误已回喂给 LLM 后更新 engine 的错误
+// 跟踪状态。若同一个（归一化的）错误重复出现则递增计数器，否则重置以
+// 跟踪新的错误模式。存储的 lastError 是归一化形式，使后续 isRepeatingError
+// 比较都基于同一个归一化基线。
 func (e *Engine) recordFeedbackError(errFingerprint string) {
 	norm := normalizeErrorFingerprint(errFingerprint)
 	if e.lastError != "" && e.lastError == norm {
@@ -1464,61 +1394,53 @@ func (e *Engine) recordFeedbackError(errFingerprint string) {
 	}
 }
 
-// think sends the current conversation history to the LLM and returns the
-//  2. Builds the tool definitions from the Tool Registry — these tell the LLM
-//     what tools are available, their descriptions, and their parameter schemas.
-//     The LLM uses this to decide whether and how to call tools.
-//  3. Constructs a ChatRequest with the full conversation history, tool
-//     definitions, model, temperature, and max tokens.
-//  4. Calls llm.Provider.ChatStream with a streaming callback. Each text delta
-//     from the LLM is forwarded to the frontend as an llm_delta event, creating
-//     the typewriter effect in the UI.
-//  5. After the stream completes, emits llm_message_complete and step_complete
-//     events so the UI knows this think phase is done.
+// think 把当前对话历史发给 LLM 并返回
+//  2. 从 Tool Registry 构建 tool 定义——告诉 LLM 有哪些 tool 可用、
+//     其描述和参数 schema。LLM 据此决定是否以及如何调用 tool。
+//  3. 构造 ChatRequest，包含完整对话历史、tool 定义、model、temperature
+//     和 max tokens。
+//  4. 以流式回调调用 llm.Provider.ChatStream。LLM 的每个文本 delta 都
+//     作为 llm_delta 事件转发到前端，在 UI 中形成打字机效果。
+//  5. 流结束后发出 llm_message_complete 和 step_complete 事件，让 UI 知道
+//     think 阶段已结束。
 //
-// # Why streaming?
+// # 为什么用流式？
 //
-// Streaming is essential for user experience — without it, the user would stare
-// at a blank screen for seconds while the LLM generates the full response.
-// With streaming, each token appears as it's generated, giving instant feedback
-// and making the agent feel responsive. The streaming callback is also the
-// mechanism that enables the "white-box" philosophy: every token the LLM
-// generates is visible to the user in real time.
+// 流式对用户体验至关重要——没有流式，用户会在 LLM 生成完整响应的几秒
+// 内对着空白屏幕发呆。有了流式，每个 token 生成时即时出现，给用户即时
+// 反馈，让 agent 显得灵敏。流式回调也是实现"白盒"哲学的机制：LLM 生成
+// 的每个 token 都对用户实时可见。
 //
-// # Tool call handling
+// # Tool call 处理
 //
-// The LLM may return tool calls alongside or instead of text content. The
-// ChatStream method accumulates tool call deltas across SSE chunks and returns
-// the fully assembled tool calls. The engine then decides whether to execute
-// tools (continue the loop) or return the text as the final answer.
+// LLM 可能在文本内容之外或代替文本内容返回 tool call。ChatStream 方法
+// 跨 SSE chunk 累积 tool call delta，并返回完整拼装好的 tool call。engine
+// 据此决定是执行 tool（继续 loop）还是把文本作为最终答案返回。
 func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, error) {
-	// Emit step_started: the UI transitions this step to "running" state.
+	// 发出 step_started：UI 把该 step 切换到 "running" 状态。
 	e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type": "think",
 	}))
 
-	// Phase 7-C: start a child trace span for the think step.
+	// Phase 7-C：为 think step 启动一个 child trace span。
 	var traceCtx *observability.TraceContext
 	if e.cfg.Tracer != nil && e.rootTraceCtx != nil {
 		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, "think")
 	}
 
-	// Emit llm_thinking: the UI shows a "Thinking..." indicator. This is sent
-	// BEFORE the HTTP request so the user sees immediate feedback, even if the
-	// LLM API takes several seconds to respond.
+	// 发出 llm_thinking：UI 展示 "Thinking..." 指示。这在 HTTP 请求发出
+	// 前就发送，让用户看到即时反馈，即使 LLM API 需要几秒才响应。
 	e.bus.SendEvent(event.NewEventWithSubTask("llm_thinking", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": "Thinking...",
 	}))
 
-	// Build the tool definitions from the registry. Each tool's name, description,
-	// and JSON Schema parameters are sent to the LLM so it can decide which tools
-	// to call and with what arguments. If the registry is empty, the LLM will
-	// operate in pure text mode (no tool calls possible).
+	// 从 registry 构建 tool 定义。每个 tool 的名字、描述和 JSON Schema
+	// 参数都发给 LLM，让它决定调用哪个 tool、传什么参数。若 registry 为
+	// 空，LLM 会以纯文本模式工作（无法调用 tool）。
 	//
-	// Phase 7-I: If TaskContract.AllowedTools is specified, only advertise those
-	// tools to the LLM. This prevents the agent from reasoning about tooling it is
-	// not permitted to execute and keeps the prompt small. An empty AllowedTools
-	// list retains backward compatibility (all tools visible).
+	// Phase 7-I：若 TaskContract.AllowedTools 已指定，只向 LLM 暴露这些
+	// tool。这阻止 agent 推理它无权执行的 tool，并使 prompt 保持精简。
+	// AllowedTools 为空时保留旧行为（所有 tool 可见）。
 	toolDefs := make([]llm.ToolDef, 0)
 	allowed := make(map[string]struct{}, len(e.cfg.Contract.AllowedTools))
 	for _, name := range e.cfg.Contract.AllowedTools {
@@ -1541,31 +1463,30 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	}
 
 	// =========================================================================
-	// Phase 6 Router: dynamic model selection
+	// Phase 6 Router：动态模型选择
 	// =========================================================================
-	// If Router and Registry are configured, classify the user's intent and
-	// select the best model tier before each LLM call. This enables cost-
-	// efficient routing: simple chat uses cheap models, complex reasoning uses
-	// premium models.
+	// 若配置了 Router 和 Registry，则在每次 LLM 调用前先分类用户意图并
+	// 选择最佳模型层级。这支持成本高效的路由：简单 chat 用便宜模型，
+	// 复杂推理用高端模型。
 	var (
 		selectedModel    string
 		selectedProvider llm.Provider
 		routeDecision    *llm.RouteDecision
 	)
 
-	// Default to cfg.Model / e.llm
+	// 默认使用 cfg.Model / e.llm
 	selectedModel = e.cfg.Model
 	selectedProvider = e.llm
-	// Cache the Router's pick on the engine so the OnLLMUsage callback (Run loop)
-	// reports cost against the model actually called, not e.cfg.Model. Reset each
-	// think() so a failed-then-retried step doesn't leak a stale selection.
+	// 把 Router 的选择缓存到 engine 上，使 OnLLMUsage 回调（Run loop 中）
+	// 按实际调用的模型上报成本，而不是 e.cfg.Model。每次 think() 都重置，
+	// 避免失败后重试的 step 残留上次的选择。
 	e.selectedModel = selectedModel
 
 	if e.cfg.Router != nil && e.cfg.Registry != nil {
-		// Estimate context length from conversation history.
+		// 从对话历史估算上下文长度。
 		contextLen := 0
 		for _, msg := range e.messages {
-			contextLen += len(msg.Content) / 4 // rough: 4 chars ~ 1 token
+			contextLen += len(msg.Content) / 4 // 粗略：4 字符 ~ 1 token
 		}
 		userInput := ""
 		if len(e.messages) > 0 {
@@ -1586,27 +1507,25 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			selectedModel = routeDecision.Primary.Name
 			e.selectedModel = selectedModel //供 OnLLMUsage 上报真实调用模型
 
-			// Resolve the provider for the selected model from the providers map.
-			// Keys can be provider name (e.g., "deepseek") or model name.
+			// 从 providers map 解析所选模型对应的 provider。键可以是
+			// provider 名（如 "deepseek"）或模型名。
 			selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
 
 			if selectedProvider == nil {
-				// Last-resort fallback: build a fresh OpenAI-compatible provider
-				// from the engine's default endpoint/key, anchored to the
-				// router-selected model name. This keeps the routed model in
-				// effect even when the caller didn't pre-register a provider
-				// for it in the Providers map.
+				// 最后兜底：从 engine 的默认 endpoint/key 构建一个全新的
+				// OpenAI-compatible provider，并以 router 选中模型名锚定。
+				// 即使调用方未在 Providers map 中为该模型预注册 provider，
+				// 仍能让被路由的模型生效。
 				selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
 					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
 			}
-			// Note: when a pre-registered provider is found above, we do NOT
-			// re-anchor its model — the ChatRequest.Model field (set to
-			// selectedModel below) takes precedence in OpenAIProvider.ChatStream,
-			// so the routed model is honored regardless of the provider's
-			// default model.
+			// 注意：当上面找到预注册 provider 时，我们不会重新锚定其模型——
+			// ChatRequest.Model 字段（下方设为 selectedModel）在
+			// OpenAIProvider.ChatStream 中优先，因此无论 provider 的默认
+			// 模型是什么，被路由的模型都会被尊重。
 
-			// model_routed event includes fallback info so the frontend can
-			// pre-display the fallback target model (white-box transparency).
+			// model_routed 事件包含 fallback 信息，让前端可以预先展示
+			// fallback 目标模型（白盒透明）。
 			e.bus.SendEvent(event.NewEventWithSubTask("model_routed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":    selectedModel,
 				"intent":   routeDecision.Intent,
@@ -1621,20 +1540,20 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	}
 
 	// =====================================================================
-	// Context window snapshot (white-box observability)
+	// Context window snapshot（白盒可观测）
 	// =====================================================================
-	// Emit a snapshot of the current conversation before every LLM call so the
-	// frontend can visualize how full the context window is and inspect every
-	// system/user/assistant/tool message that will be sent to the model.
+	// 在每次 LLM 调用前发出当前对话的 snapshot，让前端可视化上下文窗口
+	// 的占用情况，并检查每条将发给模型的 system/user/assistant/tool
+	// 消息。
 	//
-	// The token counts are *estimates* (see internal/llm/token_estimate.go)
-	// because most APIs do not provide per-message token usage. The ratio is
-	// accurate enough for proportion visualizations and capacity warnings.
+	// token 计数是*估算*（见 internal/llm/token_estimate.go），因为大多
+	// API 不提供 per-message token 用量。该比例足够准确，可用于占比
+	// 可视化和容量预警。
 	maxContextTokens := llm.EstimateModelContextWindow(e.cfg.Registry, selectedModel)
 	snapshot := llm.BuildContextWindowSnapshot(selectedModel, maxContextTokens, e.messages)
 
-	// Cache the snapshot so the REST API can return the live context window
-	// on demand without running another LLM call.
+	// 缓存 snapshot，使 REST API 可以按需返回 live 上下文窗口而无需再
+	// 触发 LLM 调用。
 	RecordTaskContextSnapshot(e.cfg.SubTaskID, snapshot)
 
 	// 为了与 REST API（encodeContextWindowSnapshot）保持字段一致，
@@ -1654,13 +1573,13 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		CaseID:      e.caseID,
 	}
 
-	// Phase 7-C: measure LLM call latency and record via callback.
+	// Phase 7-C：测量 LLM 调用延迟并通过回调记录。
 	llmStart := time.Now()
-	// Call the LLM with streaming. The onChunk callback is invoked for each SSE
-	// chunk. Each text delta is forwarded to the frontend as an llm_delta event
-	// so the UI can render tokens in real time (typewriter effect).
+	// 以流式方式调用 LLM。onChunk 回调对每个 SSE chunk 调用。每个文本
+	// delta 都作为 llm_delta 事件转发到前端，让 UI 实时渲染 token
+	// （打字机效果）。
 	content, usage, toolCalls, err := selectedProvider.ChatStream(req, func(chunk llm.StreamChunk) error {
-		// Stream each delta to the frontend
+		// 把每个 delta 流式转发到前端
 		if chunk.Delta.Content != "" {
 			e.bus.SendEvent(event.NewEventWithSubTask("llm_delta", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"content": chunk.Delta.Content,
@@ -1684,7 +1603,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		return nil
 	})
 
-	// Fallback retry: if primary model failed and a fallback is configured, retry.
+	// Fallback 重试：若主模型失败且配置了 fallback，则重试。
 	if err != nil && routeDecision != nil && routeDecision.Fallback != nil {
 		log.Printf("[Engine] Primary model %s failed (%v), trying fallback %s",
 			selectedModel, err, routeDecision.Fallback.Name)
@@ -1704,10 +1623,9 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			"reason":   err.Error(),
 		}))
 
-		// Fallback should respect a cancellation signal; if the task is
-		// cancelled while the fallback model is streaming, we must propagate
-		// that cancellation into the HTTP request. Create a child context so
-		// the goroutine is reaped when the parent is done (prevents leak).
+		// Fallback 应尊重取消信号；若 fallback 模型流式过程中任务被取消，
+		// 必须把该取消传播到 HTTP 请求。创建一个 child context，使 goroutine
+		// 在父 context 结束时被回收（防止泄漏）。
 		fallbackCtx := ctx
 		if ctx != nil {
 			var cancel context.CancelFunc
@@ -1766,58 +1684,51 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	return content, usage, toolCalls, nil
 }
 
-// executeTool runs a single tool call requested by the LLM and returns the
-// JSON-serialized result.
+// executeTool 执行 LLM 请求的单个 tool call，返回 JSON 序列化的结果。
 //
-// # How it works
+// # 工作原理
 //
-//  1. Increments stepIdx — each tool execution is a new step in the ReAct loop.
-//  2. Parses the tool call arguments from JSON string to map[string]any.
-//     If parsing fails, falls back to an empty map (the tool may still work
-//     with default parameters).
-//  3. Emits step_started and tool_call_started events so the UI can show the
-//     tool name, arguments, and a loading indicator.
-//  4. Dispatches the tool call to the Tool Registry, measuring execution time.
-//  5. On success: emits tool_call_output, tool_call_complete, and observation
-//     events. The observation event is particularly important — it tells the
-//     UI what data is being fed back to the LLM.
-//  6. On failure: emits tool_call_failed and step_complete events, then returns
-//     the error.
+//  1. 递增 stepIdx——每次 tool 执行都是 ReAct loop 中的一个新 step。
+//  2. 把 tool call arguments 从 JSON 字符串解析为 map[string]any。
+//     若解析失败，回退到空 map（tool 可能仍能以默认参数工作）。
+//  3. 发出 step_started 和 tool_call_started 事件，让 UI 可以展示 tool
+//     名、参数和 loading 指示。
+//  4. 把 tool call 派发给 Tool Registry，并测量执行时间。
+//  5. 成功：发出 tool_call_output、tool_call_complete 和 observation 事件。
+//     observation 事件尤其关键——它告诉 UI 什么数据被回喂给 LLM。
+//  6. 失败：发出 tool_call_failed 和 step_complete 事件，然后返回错误。
 //
-// # Why measure duration?
+// # 为什么要测量 duration？
 //
-// Tool execution time is critical for debugging and cost optimization. A tool
-// that takes 30 seconds to run is a bottleneck — the duration_ms metric helps
-// identify slow tools. The frontend can display execution time in the tool call
-// card, giving users visibility into where time is spent.
+// tool 执行时间对调试和成本优化至关重要。一个跑 30 秒的 tool 是瓶颈——
+// duration_ms 指标能帮我们识别慢 tool。前端可以在 tool call 卡片中展示
+// 执行时间，让用户看到时间花在哪里。
 //
-// # Why increment stepIdx here?
+// # 为什么在这里递增 stepIdx？
 //
-// The stepIdx is incremented inside executeTool (not in the Run loop) because
-// executeTool manages the full step lifecycle (started → executing → completed).
-// Each tool execution is a distinct step with its own events, and the stepIdx
-// must be correct when those events are emitted.
+// stepIdx 在 executeTool 内部递增（而非在 Run loop 中），因为 executeTool
+// 管理完整的 step 生命周期（started → executing → completed）。每次 tool
+// 执行都是一个有独立事件的独立 step，stepIdx 在这些事件发出时必须正确。
 //
-// # Phase 5: Approval Handling
+// # Phase 5：审批处理
 //
-// When the PolicyGate returns ErrApprovalRequired (from ApprovalRule), the engine
-// catches this error and routes it to handleApprovalRequired. This method emits
-// a system_info event to the frontend and waits for the user to approve or deny
-// the high-risk operation. If approved, the tool is executed directly (bypassing
-// the PolicyGate). If denied, the task fails with an approval_denied error.
+// 当 PolicyGate 返回 ErrApprovalRequired（来自 ApprovalRule）时，engine
+// 捕获该错误并交给 handleApprovalRequired 处理。该方法向前端发出
+// system_info 事件，等待用户批准或拒绝该高风险操作。若批准，直接执行
+// tool（绕过 PolicyGate）。若拒绝，任务以 approval_denied 错误失败。
 func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
-	// Increment stepIdx — each tool execution is a new step. This is done here
-	// (not in the caller) so that the step_started and tool_call_started events
-	// carry the correct step index.
+	// 递增 stepIdx——每次 tool 执行都是一个新 step。放在这里（而不是
+	// 调用方）是为了让 step_started 和 tool_call_started 事件携带正确的
+	// step 序号。
 	e.stepIdx++
 
-	// Parse the tool call arguments from JSON. The LLM returns arguments as a
-	// JSON string (not an object) because it streams them incrementally.
-	// If parsing fails (e.g., the LLM produced malformed JSON), we first try a
-	// best-effort repair for the common "unterminated string/object" case (see
-	// repairToolArgumentsJSON). If repair also fails, we return a clear error so
-	// the ReAct loop can feed it back to the LLM without poisoning the next API
-	// request with malformed JSON.
+	// 从 JSON 解析 tool call arguments。LLM 以 JSON 字符串（而非对象）
+	// 形式返回 arguments，因为它以增量方式流式产出。
+	// 若解析失败（例如 LLM 产出了 malformed JSON），我们先尝试对常见的
+	// "未终止 string/object" 情况做 best-effort 修复（见
+	// repairToolArgumentsJSON）。若修复也失败，则返回清晰错误，让
+	// ReAct loop 能把错误回喂给 LLM，而不会用 malformed JSON 污染下一次
+	// API 请求。
 	var args map[string]any
 	if parseErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); parseErr != nil {
 		repaired, repairErr := repairToolArgumentsJSON(tc.Function.Arguments)
@@ -1847,21 +1758,20 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		}
 	}
 
-	// Inject the session workspace_dir into the tool input if the user (LLM)
-	// has not explicitly provided a workdir. This allows tools like run_shell
-	// to execute with the correct CWD without the LLM having to pass it every time.
+	// 若用户（LLM）未显式提供 workdir，把 session 的 workspace_dir 注入到
+	// tool 输入中。这让 run_shell 之类的 tool 能在正确 CWD 下执行，而无需
+	// LLM 每次都传递。
 	if e.cfg.WorkspaceDir != "" {
 		if _, hasWorkdir := args["workdir"]; !hasWorkdir {
 			args["workdir"] = e.cfg.WorkspaceDir
 		}
 	}
 
-	// Emit step and tool call lifecycle events. The UI uses these to show:
-	//   - step_started: this step is now "running" in the step list
-	//   - tool_call_started: the tool name and arguments in a card
-	// We enrich tool_call_started with authoritative registry metadata
-	// (namespace, description, tags) so the frontend can render risk
-	// indicators and namespace badges without guessing.
+	// 发出 step 和 tool call 生命周期事件。UI 用这些事件展示：
+	//   - step_started：该 step 在 step 列表中变为 "running"
+	//   - tool_call_started：在卡片中展示 tool 名和参数
+	// 我们用 registry 中的权威元数据（namespace、description、tags）丰富
+	// tool_call_started，使前端无需猜测即可渲染风险指示和 namespace 徽章。
 	toolName := tc.Function.Name
 	namespace, description, tags, _ := "", "", []string{}, false
 	if e.tools != nil {
@@ -1878,14 +1788,13 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		"args":        args,
 	}))
 
-	// Execute the tool and measure its duration. The duration is tracked
-	// for performance monitoring and debugging — slow tools are bottlenecks
-	// that hurt user experience.
+	// 执行 tool 并测量耗时。duration 用于性能监控和调试——慢 tool 是
+	// 影响用户体验的瓶颈。
 	// DEBUG log.Printf("[Engine] executeTool %s with parsed args: %+v", tc.Function.Name, args)
 	start := time.Now()
-	// Route through PolicyGate if configured; otherwise execute directly.
-	// The PolicyGate checks the tool call against the policy chain (FileScopeRule,
-	// PathTraversalRule, etc.) before allowing the tool to execute.
+	// 若配置了 PolicyGate 则经由它；否则直接执行。PolicyGate 在允许
+	// tool 执行前会按 policy chain（FileScopeRule、PathTraversalRule 等）
+	// 检查 tool call。
 	var result any
 	var execErr error
 	if e.gate != nil {
@@ -1953,10 +1862,9 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			return reason, nil
 		}
 
-		// Tool execution failed — emit failure events and return the error.
-		// The UI will show the tool name, error message, and duration.
-		// The step is still marked as "complete" (not "running") because the
-		// tool call phase is over — it just ended in failure.
+		// tool 执行失败——发出失败事件并返回错误。UI 会展示 tool 名、错误
+		// 消息和 duration。step 仍被标记为 "complete"（而非 "running"），
+		// 因为 tool call 阶段已结束——只是以失败告终。
 		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       execErr.Error(),
@@ -1967,7 +1875,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			"type": "tool_call",
 		}))
 
-		// Persist the failed tool_call step so historical replay can show it.
+		// 持久化失败的 tool_call step，以便历史回放可以展示它。
 		e.saveStep(StepRecord{
 			TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 			Type: "tool_call", Status: "failed",
@@ -1981,18 +1889,17 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// DEBUG
 	log.Printf("[Engine] executeTool %s succeeded, result type=%T", tc.Function.Name, result)
 
-	// Serialize the tool result to JSON for the LLM conversation. The LLM
-	// expects tool results as JSON strings so it can parse the structured data.
-	// If serialization fails (unlikely for a well-behaved tool), we still have
-	// the raw result object — but the LLM will receive an empty string.
+	// 把 tool result 序列化为 JSON 以供 LLM 对话。LLM 期望 tool result 是
+	// JSON 字符串以便解析结构化数据。若序列化失败（行为良好的 tool 极少
+	// 出现），我们仍有原始 result 对象——但 LLM 会收到空字符串。
 	resultJSON, _ := json.Marshal(result)
 	resultStr := string(resultJSON)
 
-	// Emit tool execution events. The UI uses these to show:
-	//   - tool_call_output: the raw tool result (collapsible JSON in the UI)
-	//   - tool_call_complete: the tool finished successfully with duration
-	//   - observation: the data being fed back to the LLM (the "observe" phase)
-	//   - step_complete: this step is now "completed" in the step list
+	// 发出 tool 执行事件。UI 用这些事件展示：
+	//   - tool_call_output：原始 tool result（UI 中可折叠的 JSON）
+	//   - tool_call_complete：tool 成功完成及其 duration
+	//   - observation：回喂给 LLM 的数据（"observe" 阶段）
+	//   - step_complete：该 step 在 step 列表中变为 "completed"
 	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":   tc.Function.Name,
 		"result": result,
@@ -2002,25 +1909,24 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		"duration_ms": duration,
 	}))
 
-	// Persist the tool_call step so historical replay via GET /api/tasks?id=xxx
-	// can restore tool_call steps correctly (not all as "think").
+	// 持久化 tool_call step，使 GET /api/tasks?id=xxx 的历史回放能正确
+	// 还原 tool_call step（不会全部被当作 "think"）。
 	e.saveStep(StepRecord{
 		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 		Type: "tool_call", Status: "completed",
 		ToolName: tc.Function.Name, ToolInput: args, ToolOutput: resultStr,
 		DurationMs: int(duration),
-		TokenUsed:  0, // tool call itself doesn't consume LLM tokens
+		TokenUsed:  0, // tool call 本身不消耗 LLM token
 	})
 
-	// Emit observation — this is the key event that connects the tool execution
-	// back to the ReAct loop. The frontend shows this as the "observation" phase
-	// in the Agent Tree visualization, making it clear what data the LLM will
-	// see on the next think iteration.
+	// 发出 observation——这是把 tool 执行接回 ReAct loop 的关键事件。
+	// 前端在 Agent Tree 可视化中把它展示为 "observation" 阶段，清晰说明
+	// LLM 在下一次 think 迭代中会看到什么数据。
 	e.bus.SendEvent(event.NewEventWithSubTask("observation", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"content": resultStr,
 	}))
 
-	// Persist the observation step so the historical replay shows it too.
+	// 持久化 observation step，使历史回放也能看到它。
 	e.saveStep(StepRecord{
 		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 		Type: "observation", Status: "completed",
@@ -2194,7 +2100,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 		"type": "tool_call",
 	}))
 
-	// Persist the approved tool_call step so historical replay works.
+	// 持久化已批准的 tool_call step，以便历史回放正常工作。
 	e.saveStep(StepRecord{
 		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 		Type: "tool_call", Status: "completed",
@@ -2202,7 +2108,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 		DurationMs: int(execDuration),
 	})
 
-	// Persist the observation step too.
+	// 同时持久化 observation step。
 	e.saveStep(StepRecord{
 		TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 		Type: "observation", Status: "completed",
@@ -2212,24 +2118,23 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	return resultStr, nil
 }
 
-// sendAgentMessage sends a message to another agent via the AgentBus.
-// It creates a runtime.AgentMessage from the current agent, sends it via the
-// AgentBus, and emits a system_info event so the frontend can display the
-// inter-agent communication.
+// sendAgentMessage 通过 AgentBus 向另一个 agent 发送消息。
+// 它用当前 agent 的信息构造 runtime.AgentMessage，通过 AgentBus 发出，
+// 并发出 system_info 事件让前端展示 agent 间通信。
 //
-// The TaskID is embedded in Metadata["task_id"] so downstream persistence
-// (the orchestrator.AgentBus persistFn) can route the message to the correct
-// row in the agent_messages table.
+// TaskID 被嵌入到 Metadata["task_id"]，使下游持久化
+// （orchestrator.AgentBus 的 persistFn）可以把消息路由到 agent_messages
+// 表中正确的行。
 //
-// If the AgentBus is nil, this is a no-op - agent-to-agent communication is disabled.
+// AgentBus 为 nil 时为 no-op——agent 间通信被禁用。
 func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
 	e.sendAgentMessageWithSubTask(toAgentID, msgType, content)
 }
 
-// SendAgentMessage is the public variant of sendAgentMessage used by external
-// callers (cmd/server) to inject an AgentBus message into this Engine's
-// listener. The toSubTaskID parameter is optional; when empty the message is
-// routed to the agentID handler. Added in Phase 7-I.
+// SendAgentMessage 是 sendAgentMessage 的公开变体，供外部调用方
+// （cmd/server）把 AgentBus 消息注入到本 Engine 的 listener。
+// toSubTaskID 参数可选；为空时消息路由给 agentID handler。
+// 于 Phase 7-I 引入。
 func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
 	if e.agentBus == nil {
 		return
@@ -2253,9 +2158,9 @@ func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
 	e.agentBus.SendMessage(msg)
 }
 
-// sendAgentMessageWithSubTask sends a message to another agent via the AgentBus,
-// optionally targeting a specific subTaskID. If subTaskID is empty, the message
-// is routed to the agent's default handler. Added in Phase 7-I.
+// sendAgentMessageWithSubTask 通过 AgentBus 向另一个 agent 发送消息，可选
+// 指定目标 subTaskID。subTaskID 为空时，消息路由给 agent 的默认 handler。
+// 于 Phase 7-I 引入。
 func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content string) {
 	if e.agentBus == nil {
 		return
@@ -2277,7 +2182,7 @@ func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content strin
 
 	e.agentBus.SendMessage(msg)
 
-	// Emit a system_info event so the frontend can show the message in the UI.
+	// 发出 system_info 事件，让前端可以在 UI 中展示该消息。
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":           "agent_message_sent",
 		"from_agent":     e.cfg.AgentID,
@@ -2288,23 +2193,21 @@ func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content strin
 	}))
 }
 
-// repairToolArgumentsJSON attempts a best-effort repair of malformed tool
-// arguments produced by the LLM. The most common failure mode observed in
-// production is an unterminated JSON string or object at the end of a long
-// content payload (e.g., write_file streaming a large HTML file and truncating
-// the closing quote/brace). Adding the missing terminator(s) often yields a
-// parseable object and avoids an extra LLM round-trip.
+// repairToolArgumentsJSON 尝试对 LLM 产出的 malformed tool arguments 做
+// best-effort 修复。生产环境中最常见的失败模式是长内容 payload 末尾的
+// JSON string 或 object 未终止（例如 write_file 流式输出一个大 HTML 文件
+// 时截断了闭合引号/大括号）。补上缺失的终止符通常就能得到可解析的对象，
+// 避免一次额外的 LLM 往返。
 //
-// This is intentionally conservative: it only appends missing closing tokens
-// and gives up if the result is still invalid. It is not a general JSON
-// fixer, but it covers the high-frequency case cheaply.
+// 此函数有意保持保守：只追加缺失的闭合 token，若结果仍非法就放弃。它不是
+// 通用 JSON 修复器，但廉价地覆盖了高频场景。
 func repairToolArgumentsJSON(raw string) (map[string]any, error) {
-	// Sequence of repairs to try, from least to most invasive.
+	// 按从轻到重的顺序尝试修复候选。
 	candidates := []string{
-		raw + "\"",     // unterminated string value
-		raw + "\" }",   // unterminated string value + close object
-		raw + "}",      // unterminated object
-		raw + "\" } }", // nested unterminated string/object
+		raw + "\"",     // 未终止的 string value
+		raw + "\" }",   // 未终止的 string value + 闭合 object
+		raw + "}",      // 未终止的 object
+		raw + "\" } }", // 嵌套的未终止 string/object
 	}
 
 	for _, candidate := range candidates {
@@ -2316,11 +2219,10 @@ func repairToolArgumentsJSON(raw string) (map[string]any, error) {
 	return nil, fmt.Errorf("unable to repair arguments JSON")
 }
 
-// sanitizeToolCallArguments returns a copy of tc with syntactically valid JSON
-// in Function.Arguments. If the raw arguments string is already valid JSON, the
-// original value is preserved. Otherwise it is replaced with a minimal valid
-// object that records the original error, preventing malformed nested JSON from
-// poisoning the next LLM API request with 400 BadRequestError.
+// sanitizeToolCallArguments 返回 tc 的副本，保证 Function.Arguments 是
+// 语法合法的 JSON。若原始 arguments 字符串已是合法 JSON，则保留原值；
+// 否则替换为一个最小合法对象以记录原始错误，避免 malformed 嵌套 JSON
+// 通过 400 BadRequestError 污染下一次 LLM API 请求。
 func sanitizeToolCallArguments(tc llm.ToolCall) llm.ToolCall {
 	sanitized := tc
 	if !isValidToolArgumentsJSON(tc.Function.Arguments) {
@@ -2329,27 +2231,27 @@ func sanitizeToolCallArguments(tc llm.ToolCall) llm.ToolCall {
 	return sanitized
 }
 
-// isValidToolArgumentsJSON reports whether s is syntactically valid JSON.
-// It is used when appending tool_calls back into conversation history so
-// that malformed arguments (e.g. unterminated strings from streaming)
-// do not poison the next LLM request with 400 BadRequestError.
+// isValidToolArgumentsJSON 返回 s 是否为语法合法的 JSON。
+// 在把 tool_calls 追加回对话历史时使用，使 malformed arguments（例如
+// 流式产生的未终止字符串）不会通过 400 BadRequestError 污染下一次 LLM
+// 请求。
 func isValidToolArgumentsJSON(s string) bool {
 	var dummy map[string]any
 	return json.Unmarshal([]byte(s), &dummy) == nil
 }
 
-// saveCheckpoint persists the current engine state as a checkpoint for crash recovery.
-// This is called at the end of each ReAct loop iteration (after tool execution).
-// If the CheckpointManager is nil, this is a no-op.
+// saveCheckpoint 把当前 engine 状态作为 checkpoint 持久化以支持崩溃恢复。
+// 在每次 ReAct loop 迭代结束（tool 执行后）调用。CheckpointManager 为 nil
+// 时为 no-op。
 //
-// The checkpoint saves:
-//   - The current step index
-//   - The cumulative token count
-//   - The full conversation history (messages)
-//   - The current task progress (if available)
+// checkpoint 保存：
+//   - 当前 step 序号
+//   - 累计 token 数
+//   - 完整对话历史（messages）
+//   - 当前任务进度（若可用）
 //
-// On recovery, RecoverFromCheckpoint can restore the engine to this state
-// and continue execution from where it left off.
+// 恢复时，RecoverFromCheckpoint 可把 engine 还原到此状态，并从中断处继续
+// 执行。
 func (e *Engine) saveCheckpoint() {
 	if e.checkpoint == nil {
 		return

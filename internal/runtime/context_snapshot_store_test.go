@@ -8,7 +8,7 @@ import (
 
 func TestRecordAndGetSnapshot(t *testing.T) {
 	taskID := "task_snapshot_001"
-	// Clean up to avoid interference with parallel runs.
+	// 清理一下，避免与并行测试相互干扰。
 	DeleteTaskContextSnapshot(taskID)
 	defer DeleteTaskContextSnapshot(taskID)
 

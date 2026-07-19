@@ -1,7 +1,7 @@
 package runtime
 
-// Persistence is the interface for saving task/step/conversation records.
-// Implementations include db.Persistence or in-memory stores for testing.
+// Persistence 是保存 task/step/conversation 记录的 interface。
+// 实现包括 db.Persistence 或测试用的内存存储。
 type Persistence interface {
 	SaveTask(taskID string, userInput string, agentIDs []string) error
 	SaveTaskMeta(taskID string, sessionID string, parentTaskID string, isRoot bool) error
@@ -9,22 +9,19 @@ type Persistence interface {
 	UpdateTaskDuration(taskID string, durationMs int) error
 	SaveStep(step StepRecord) error
 	SaveConversation(conv ConversationRecord) error
-	// QueryTaskSessionID returns the session_id for a task, or empty string if
-	// the task is not known or persistence is unavailable. It is a read-only
-	// helper used by orchestration layers that only hold a root task ID and
-	// need to propagate the session ID to child tasks.
+	// QueryTaskSessionID 返回某个 task 的 session_id；若该 task 未知或
+	// 持久化不可用，则返回空字符串。这是一个只读 helper，供只持有 root task ID
+	// 的编排层使用，以便把 session ID 传播给子任务。
 	QueryTaskSessionID(taskID string) string
-	// SaveAgentMessage persists a single inter-agent message routed through
-	// the AgentBus. The TaskID is required so the message can later be
-	// retrieved by GET /api/tasks/:id/agent-messages.
+	// SaveAgentMessage 持久化一条经 AgentBus 路由的 agent 间消息。
+	// TaskID 为必填，便于后续通过 GET /api/tasks/:id/agent-messages 取回。
 	SaveAgentMessage(msg AgentBusMessage) error
-	// LoadAgentMessages returns every AgentBus message for a task, ordered
-	// oldest first. Returns an empty slice (not nil) if the task has no
-	// messages.
+	// LoadAgentMessages 返回某个 task 的所有 AgentBus 消息，按时间从旧到新
+	// 排序。若该 task 没有消息，返回空 slice（而非 nil）。
 	LoadAgentMessages(taskID string) ([]AgentBusMessage, error)
 }
 
-// StepRecord is a step to be persisted
+// StepRecord 是待持久化的一个 step
 type StepRecord struct {
 	TaskID     string
 	AgentID    string
@@ -39,35 +36,33 @@ type StepRecord struct {
 	TokenUsed  int
 }
 
-// ConversationRecord is a conversation message to be persisted
+// ConversationRecord 是待持久化的一条对话消息
 type ConversationRecord struct {
 	TaskID  string
 	Role    string
 	Content string
 }
 
-// SessionMessageRecord is a message to be persisted to the session_messages table.
-// It is used by the Engine's SessionMessageWriter callback to write every message
-// (system/user/assistant/tool) generated during the ReAct loop to the session_messages
-// table, enabling multi-turn conversation history.
+// SessionMessageRecord 是待持久化到 session_messages 表的消息。
+// 它被 Engine 的 SessionMessageWriter 回调使用，把 ReAct loop 期间产生的
+// 每条消息（system/user/assistant/tool）写入 session_messages 表，从而支持
+// 多轮对话历史。
 type SessionMessageRecord struct {
-	TaskID     string // the task this message belongs to
-	TurnIndex  int    // the turn index within the session (0-based)
-	Role       string // system, user, assistant, or tool
-	Content    string // the message content
-	ToolCallID string // the tool call ID (for tool role messages)
-	ToolCalls  string // JSON-serialized tool calls (for assistant messages)
-	TokenCount int    // token count for this message (assistant messages only)
+	TaskID     string // 该消息所属的 task
+	TurnIndex  int    // 会话内的 turn 序号（0-based）
+	Role       string // system、user、assistant 或 tool
+	Content    string // 消息内容
+	ToolCallID string // tool role 消息的 tool call ID
+	ToolCalls  string // assistant 消息的 JSON 序列化 tool calls
+	TokenCount int    // 该消息的 token 计数（仅 assistant 消息）
 }
 
-// AgentBusMessage is the persistence-layer representation of an AgentBus
-// inter-agent message. It is intentionally distinct from AgentMessage (the
-// runtime/in-memory type) so that persistence storage details (timestamp,
-// metadata serialisation, future schema columns) don't leak into the
-// engine's API surface.
+// AgentBusMessage 是 AgentBus agent 间消息在持久化层的表示。
+// 它有意与 AgentMessage（runtime 内存中的类型）区分开，以避免持久化存储
+// 细节（时间戳、metadata 序列化、未来 schema 列）泄漏到 Engine 的 API 表面。
 //
-// TaskID is mandatory: persistence uses it as the primary lookup key when
-// the frontend requests GET /api/tasks/:id/agent-messages.
+// TaskID 为必填：当前端请求 GET /api/tasks/:id/agent-messages 时，持久化
+// 以它作为主查询键。
 type AgentBusMessage struct {
 	TaskID        string
 	FromAgentID   string

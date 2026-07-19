@@ -17,7 +17,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
-// recordingBus is a test EventBus that captures every event sent.
+// recordingBus 是一个测试用 EventBus，捕获每一条发送的事件。
 type recordingBus struct {
 	events []event.Event
 }
@@ -26,8 +26,8 @@ func (b *recordingBus) SendEvent(e event.Event) {
 	b.events = append(b.events, e)
 }
 
-// fakeJudgeProvider is a minimal llm.Provider implementation that always
-// returns a canned judge response for non-streaming Chat calls.
+// fakeJudgeProvider 是一个最小化的 llm.Provider 实现，对非流式 Chat 调用
+// 总是返回一个预设好的 judge 响应。
 type fakeJudgeProvider struct {
 	resp string
 }
@@ -50,7 +50,7 @@ func (p *fakeJudgeProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.Str
 	return p.resp, llm.Usage{TotalTokens: 10}, nil, nil
 }
 
-// memoryEvalRepository records saved evaluations.
+// memoryEvalRepository 记录已保存的评估。
 type memoryEvalRepository struct {
 	evals []cases.CaseEvaluation
 }
@@ -60,8 +60,8 @@ func (r *memoryEvalRepository) SaveEvaluation(eval cases.CaseEvaluation) error {
 	return nil
 }
 
-// newTestEngine creates an Engine configured with the given provider, bus,
-// caseID and acceptance criteria, suitable for testing evaluateAndBroadcast.
+// newTestEngine 创建一个 Engine，配置给定的 provider、bus、caseID 和
+// 验收标准，便于测试 evaluateAndBroadcast。
 func newTestEngine(t *testing.T, provider llm.Provider, bus EventBus, caseID string, criteria []harness.AcceptanceCriterion, evalRepo EvaluationRepository) *Engine {
 	t.Helper()
 	tools := tool.NewRegistry()
@@ -87,7 +87,7 @@ func TestEvaluateAndBroadcast_LLMJudge(t *testing.T) {
 	e := newTestEngine(t, provider, bus, "test-case", criteria, nil)
 	e.evaluateAndBroadcast("user input", "final answer")
 
-	// The judge must be invoked and produce a task_evaluated event.
+	// judge 必须被调用并产生一个 task_evaluated 事件。
 	if len(bus.events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(bus.events))
 	}
@@ -144,7 +144,7 @@ func TestEvaluateAndBroadcast_LLMJudge_PersistedWhenRepositoryProvided(t *testin
 
 func TestEvaluateAndBroadcast_DeterministicCriteriaScore(t *testing.T) {
 	bus := &recordingBus{}
-	// No judge provider is needed for deterministic criteria.
+	// 确定性标准不需要 judge provider。
 	criteria := []harness.AcceptanceCriterion{
 		{Type: harness.AcceptFileExists, Target: "nonexistent_file_for_test.txt", Description: "missing file"},
 	}
@@ -167,7 +167,7 @@ func TestEvaluateAndBroadcast_DeterministicCriteriaScore(t *testing.T) {
 
 func TestEvaluateAndBroadcast_DeterministicAllPassedScore(t *testing.T) {
 	bus := &recordingBus{}
-	// Shell criteria currently soft-pass in harness.go.
+	// shell 标准目前在 harness.go 中是 soft-pass。
 	criteria := []harness.AcceptanceCriterion{
 		{Type: harness.AcceptShellExitZero, Target: "true", Description: "shell soft-pass"},
 	}
@@ -322,8 +322,8 @@ func TestEnginePauseResumeConcurrent(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 }
 
-// fakeAgentBus is a test AgentBus implementation that captures the registered
-// handler so a test can directly invoke it.
+// fakeAgentBus 是一个测试用 AgentBus 实现，捕获注册的 handler，
+// 以便测试可以直接调用它。
 type fakeAgentBus struct {
 	registerFunc    func(agentID string, handler func(AgentMessage))
 	registerSubFunc func(agentID, subTaskID string, handler func(AgentMessage))
@@ -343,13 +343,13 @@ func (b *fakeAgentBus) UnregisterHandler(agentID string)                     {}
 func (b *fakeAgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {}
 func (b *fakeAgentBus) SendMessage(msg AgentMessage)                         {}
 
-// Ensure fakeAgentBus implements runtime.AgentBus at compile time.
+// 编译期保证 fakeAgentBus 实现了 runtime.AgentBus。
 var _ AgentBus = (*fakeAgentBus)(nil)
 
-// TestAgentBusMessageCreatesInputStep verifies that an incoming AgentBus message
-// is treated as a step: step_started(type=agent_message_input), appended to the
-// conversation, system_info(type=agent_message_received), step_complete, and a
-// persisted agent_message_input step.
+// TestAgentBusMessageCreatesInputStep 验证一条到达的 AgentBus 消息会被
+// 当作一个 step 处理：step_started(type=agent_message_input)、追加到对话、
+// system_info(type=agent_message_received)、step_complete，以及一个被
+// 持久化的 agent_message_input step。
 func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 	bus := &recordingBus{}
 	sent := AgentMessage{
@@ -435,7 +435,7 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 		t.Fatalf("expected system_info(type=agent_message_received) for backward compatibility, got %d", receivedCount)
 	}
 
-	// The injected message should have been appended as a user message.
+	// 注入的消息应已作为 user message 被追加到对话中。
 	found := false
 	wantContent := "[Agent agent_child]: child result"
 	for _, m := range engine.messages {
@@ -449,8 +449,8 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 	}
 }
 
-// capturingProvider is a test LLM Provider that records the ChatRequest so the
-// test can inspect the tool definitions passed to the model.
+// capturingProvider 是一个测试用 LLM Provider，记录 ChatRequest 以便测试
+// 检查传给模型的 tool 定义。
 type capturingProvider struct {
 	captured *llm.ChatRequest
 }
@@ -466,17 +466,16 @@ func (p *capturingProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.Str
 	return "final answer", llm.Usage{TotalTokens: 7}, nil, nil
 }
 
-// TestEngine_AllowedToolsFiltersToolDefinitions verifies that when
-// TaskContract.AllowedTools is set, the think() step only advertises the
-// allowed tools to the LLM. This is the runtime complement to the
-// ToolWhitelistRule enforcement at execution time.
+// TestEngine_AllowedToolsFiltersToolDefinitions 验证：当设置了
+// TaskContract.AllowedTools 时，think() step 只向 LLM 暴露允许的 tool。
+// 这是运行时对执行期 ToolWhitelistRule 强制约束的补充。
 func TestEngine_AllowedToolsFiltersToolDefinitions(t *testing.T) {
-	// Build a registry with three tools: run_shell and two MCP proxies.
+	// 用三个 tool 构建一个 registry：run_shell 和两个 MCP proxy。
 	registry := tool.NewRegistry()
 	tool.RegisterBuiltins(registry)
 
-	// Use a minimal fake MCP transport so the proxy tool can be constructed
-	// without starting a real child process.
+	// 使用一个最小化的 fake MCP transport，这样无需启动真实子进程
+	// 即可构造 proxy tool。
 	fakeMCPTransport := &fakeMCPTransport{}
 	registry.Register(mcp.NewProxyTool("time", mcp.ToolDefinition{
 		Name:        "now",
@@ -504,8 +503,8 @@ func TestEngine_AllowedToolsFiltersToolDefinitions(t *testing.T) {
 	bus := &recordingBus{}
 	engine := NewEngine(cfg, registry, bus, "task-filter-test")
 
-	// Stop after one think step by using a short timeout. The mock provider
-	// returns a final answer immediately, so this finishes naturally.
+	// 通过短超时在一个 think step 后停止。mock provider 立即返回
+	// 最终答案，所以会自然结束。
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -546,9 +545,8 @@ func TestEngine_AllowedToolsFiltersToolDefinitions(t *testing.T) {
 	}
 }
 
-// fakeMCPTransport is a minimal mcp.Transport implementation for use in tests
-// where the proxy tool only needs to advertise metadata and never actually
-// executes a remote call.
+// fakeMCPTransport 是一个最小化的 mcp.Transport 实现，用于测试场景：
+// proxy tool 只需暴露元数据，永远不会真正发起远程调用。
 type fakeMCPTransport struct{}
 
 func (fakeMCPTransport) Start(ctx context.Context) error { return nil }
