@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// CohereEmbeddingProvider implements EmbeddingProvider for Cohere /v1/embed.
+// CohereEmbeddingProvider 为 Cohere /v1/embed 实现 EmbeddingProvider。
 type CohereEmbeddingProvider struct {
 	endpoint   string
 	apiKey     string

@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-// SqliteMockScriptStore persists mock scripts in SQLite.
+// SqliteMockScriptStore 将 mock 脚本持久化到 SQLite。
 type SqliteMockScriptStore struct {
 	db *sql.DB
 }
 
-// NewSqliteMockScriptStore creates a SQLite-backed mock script store.
+// NewSqliteMockScriptStore 创建一个 SQLite 后端的 mock 脚本 store。
 func NewSqliteMockScriptStore(db *sql.DB) *SqliteMockScriptStore {
 	return &SqliteMockScriptStore{db: db}
 }
 
-// List returns all stored mock scripts.
+// List 返回所有已存储的 mock 脚本。
 func (s *SqliteMockScriptStore) List() ([]MockScript, error) {
 	rows, err := s.db.Query(`SELECT id, case_id, priority, match_input, responses, created_at, updated_at FROM mock_scripts ORDER BY priority DESC, updated_at DESC`)
 	if err != nil {
@@ -43,7 +43,7 @@ func (s *SqliteMockScriptStore) List() ([]MockScript, error) {
 	return list, rows.Err()
 }
 
-// Get returns a single script by ID.
+// Get 按 ID 返回单个脚本。
 func (s *SqliteMockScriptStore) Get(id string) (MockScript, error) {
 	row := s.db.QueryRow(`SELECT id, case_id, priority, match_input, responses, created_at, updated_at FROM mock_scripts WHERE id = ?`, id)
 	var script MockScript
@@ -63,7 +63,7 @@ func (s *SqliteMockScriptStore) Get(id string) (MockScript, error) {
 	return script, nil
 }
 
-// Save persists a script, assigning a random ID if empty.
+// Save 持久化一个脚本，ID 为空时分配随机 ID。
 func (s *SqliteMockScriptStore) Save(script MockScript) (MockScript, error) {
 	if script.ID == "" {
 		script.ID = fmt.Sprintf("mock_%d", time.Now().UnixNano())
@@ -93,7 +93,7 @@ func (s *SqliteMockScriptStore) Save(script MockScript) (MockScript, error) {
 	return script, nil
 }
 
-// Delete removes a script by ID.
+// Delete 按 ID 删除脚本。
 func (s *SqliteMockScriptStore) Delete(id string) error {
 	res, err := s.db.Exec(`DELETE FROM mock_scripts WHERE id = ?`, id)
 	if err != nil {
@@ -106,7 +106,7 @@ func (s *SqliteMockScriptStore) Delete(id string) error {
 	return nil
 }
 
-// LoadBuiltin seeds the store with built-in scripts.
+// LoadBuiltin 用内置脚本初始化 store。
 func (s *SqliteMockScriptStore) LoadBuiltin(scripts []MockScript) error {
 	for _, script := range scripts {
 		if _, err := s.Save(script); err != nil {

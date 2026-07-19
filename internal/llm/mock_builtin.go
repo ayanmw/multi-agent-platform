@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 )
 
-// BuiltinMockScripts returns the built-in mock scripts used when no dynamic script matches.
-// Each script simulates a common agent task shape and can be selected by case_id or keyword.
+// BuiltinMockScripts 返回无动态脚本匹配时使用的内置 mock 脚本。
+// 每个脚本模拟一种常见 agent 任务形态，可通过 case_id 或关键字选中。
 func BuiltinMockScripts() []MockScript {
 	return []MockScript{
 		{
@@ -157,7 +157,7 @@ func BuiltinMockScripts() []MockScript {
 	}
 }
 
-// mustJSON marshals v to JSON and panics on error. Used for built-in script literals.
+// mustJSON 将 v 序列化为 JSON，出错则 panic。用于内置脚本字面量。
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {

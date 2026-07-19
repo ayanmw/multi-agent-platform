@@ -1,26 +1,25 @@
-// Package llm — Router for intent classification and model selection.
+// Package llm —— Router，用于 intent 分类与 model 选择。
 //
-// # Design Rationale
+// # 设计理由
 //
-// The Router is the decision-making component that selects the best model for
-// a given task. It uses a two-phase approach:
+// Router 是决策组件，为给定任务选择最合适的 model。它采用两阶段策略：
 //
-//  1. Rule-based filtering (zero cost, zero latency): eliminate models that
-//     don't meet hard requirements (context length, required capabilities).
-//  2. Intent classification (cheap model, ~100 tokens, < $0.001): classify the
-//     user's request into a category, then select the appropriate tier.
+//  1. 基于规则过滤（零成本、零延迟）：剔除不满足硬性要求
+//     （上下文长度、必要能力）的 model。
+//  2. Intent 分类（便宜 model，约 100 token，< $0.001）：将用户请求
+//     归入某个类别，再选择合适的层级。
 //
-// This design keeps routing costs negligible while ensuring complex tasks
-// get the powerful models they need and simple tasks use cheap models.
+// 该设计让路由成本几乎可忽略，同时保证复杂任务拿到所需强 model，
+// 简单任务用便宜 model。
 //
-// # Intent Categories
+// # Intent 类别
 //
-//	simple_chat       — simple Q&A, chitchat, information lookup, format conversion
-//	code_generation   — code writing, debugging, refactoring, code review
-//	complex_reasoning — multi-step reasoning, math, logic, architecture design
-//	multi_step        — requires multiple tool calls, multi-stage execution
+//	simple_chat       —— 简单问答、闲聊、信息查询、格式转换
+//	code_generation   —— 代码编写、调试、重构、代码评审
+//	complex_reasoning —— 多步推理、数学、逻辑、架构设计
+//	multi_step        —— 需要多次 tool call、多阶段执行
 //
-// # Usage
+// # 用法
 //
 //	router := llm.NewRouter(registry, classifierProvider)
 //	decision, err := router.Select(&llm.RouteRequest{
@@ -28,7 +27,7 @@
 //	    RequiredCaps: []llm.ModelCapability{llm.CapToolCalling},
 //	})
 //
-// See doc/chapters/10-multi-model-layered-design.html for the full design.
+// 完整设计参见 doc/chapters/10-multi-model-layered-design.html。
 package llm
 
 import (
@@ -38,9 +37,8 @@ import (
 	"time"
 )
 
-// IntentClassifierPrompt is the system prompt used by the Router's classifier
-// to categorize user requests. The classifier is expected to respond with
-// exactly one category name and nothing else.
+// IntentClassifierPrompt 是 Router 分类器使用的 system prompt，
+// 用于对用户请求分类。分类器应仅回复一个类别名，不返回其他内容。
 const IntentClassifierPrompt = `You are a request classifier. Classify the user's request into exactly one category.
 Respond with ONLY the category name, nothing else.
 
@@ -53,76 +51,73 @@ Categories:
 Request: %s
 Category:`
 
-// RouteRequest is the input to the Router's Select method.
-// It describes the task characteristics that influence model selection.
+// RouteRequest 是 Router Select 方法的输入。
+// 它描述影响 model 选择的任务特征。
 type RouteRequest struct {
-	// UserInput is the user's raw request text.
+	// UserInput 是用户原始请求文本。
 	UserInput string
 
-	// ContextLen is the estimated input token count. Used to filter models
-	// whose context window is too small.
+	// ContextLen 是估算的输入 token 数。用于过滤上下文窗口过小的 model。
 	ContextLen int
 
-	// RequiredCaps lists capabilities the selected model MUST have.
-	// E.g., if the task requires tool calling, only models with CapToolCalling
-	// will be considered.
+	// RequiredCaps 列出所选 model 必须具备的能力。
+	// 例如任务需要 tool calling 时，只考虑带 CapToolCalling 的 model。
 	RequiredCaps []ModelCapability
 
-	// BudgetUSD is an optional cost ceiling. If set, the Router will only
-	// consider models whose estimated cost is within this budget.
+	// BudgetUSD 是可选的成本上限。若设置，Router 只考虑
+	// 估算成本在预算内的 model。
 	BudgetUSD float64
 
-	// LatencyReq is an optional latency requirement. If set, the Router will
-	// prefer models with AvgLatencyMs below this threshold.
+	// LatencyReq 是可选的延迟要求。若设置，Router 倾向
+	// AvgLatencyMs 低于该阈值的 model。
 	LatencyReq time.Duration
 
-	// PreferredTier is an optional tier preference. If set, the Router will
-	// prefer models in this tier (but may fall back to adjacent tiers).
+	// PreferredTier 是可选的层级偏好。若设置，Router 倾向
+	// 该层级的 model（但可能回退到相邻层级）。
 	PreferredTier ModelTier
 }
 
-// RouteDecision is the output of the Router's Select method.
-// It describes which model was selected and why.
+// RouteDecision 是 Router Select 方法的输出。
+// 它描述选中了哪个 model 以及原因。
 type RouteDecision struct {
-	// Primary is the selected model profile.
+	// Primary 是选中的 model profile。
 	Primary *ModelProfile
 
-	// Fallback is the backup model to use if the primary fails.
-	// May be nil if no fallback is configured.
+	// Fallback 是 primary 失败时的备用 model。
+	// 未配置 fallback 时可能为 nil。
 	Fallback *ModelProfile
 
-	// Intent is the classified intent category.
+	// Intent 是分类得到的 intent 类别。
 	Intent string
 
-	// Reason is a human-readable explanation of the routing decision.
-	// This is displayed in the frontend for "white-box" transparency.
+	// Reason 是人类可读的路由决策说明。
+	// 它会显示在前端，体现"白盒"透明度。
 	Reason string
 
-	// Tier is the selected model tier.
+	// Tier 是选中的 model 层级。
 	Tier ModelTier
 }
 
-// Router selects the best model for a given task request.
+// Router 为给定任务请求选择最合适的 model。
 //
-// The Router uses a cheap classifier model (typically Haiku or DeepSeek Flash)
-// to categorize user requests, then selects the appropriate model tier.
-// Rule-based filtering is applied first to eliminate models that don't meet
-// hard requirements.
+// Router 用一个便宜的分类 model（通常是 Haiku 或 DeepSeek Flash）
+// 对用户请求分类，再选择合适的 model 层级。
+// 先做基于规则的过滤，剔除不满足硬性要求的 model。
 //
-// # Thread Safety
+// # 线程安全
 //
-// Router is safe for concurrent use — the registry is goroutine-safe and
-// each Select call is independent.
+// Router 可安全并发使用 —— registry 是 goroutine 安全的，
+// 每次 Select 调用相互独立。
 type Router struct {
 	registry   *ModelRegistry
-	classifier Provider // cheap model for intent classification
+	classifier Provider // 用于 intent 分类的便宜 model
 }
 
-// NewRouter creates a new Router with the given model registry and classifier.
+// NewRouter 以给定的 model registry 与分类器创建新的 Router。
 //
-// The classifier should be a cheap, fast model (e.g., Haiku or DeepSeek Flash)
-// since it's called on every request. The classifier's cost should be < $0.001
-// per classification to keep routing overhead negligible.
+// 分类器应是便宜快速的 model（例如 Haiku 或 DeepSeek Flash），
+// 因为每个请求都会调用它。单次分类成本应 < $0.001，
+// 以保持路由开销可忽略。
 func NewRouter(registry *ModelRegistry, classifier Provider) *Router {
 	return &Router{
 		registry:   registry,
@@ -130,38 +125,37 @@ func NewRouter(registry *ModelRegistry, classifier Provider) *Router {
 	}
 }
 
-// Select chooses the best model for the given request.
+// Select 为给定请求选择最合适的 model。
 //
-// The selection process:
-//  1. Classify the user's intent using the cheap classifier model
-//  2. Map the intent to a target model tier
-//  3. Filter models by hard requirements (context length, capabilities)
-//  4. Select the best matching model from the target tier
-//  5. Resolve the fallback model
+// 选择流程：
+//  1. 用便宜分类 model 对用户 intent 分类
+//  2. 把 intent 映射到目标 model 层级
+//  3. 按硬性要求过滤 model（上下文长度、能力）
+//  4. 从目标层级中选择最佳匹配 model
+//  5. 解析 fallback model
 //
-// If the classifier call fails, it falls back to rule-based classification
-// (keyword matching) so the system remains functional even if the classifier
-// is unavailable.
+// 若分类器调用失败，则回退到基于规则的关键字分类，
+// 即使分类器不可用系统仍可用。
 func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision, error) {
-	// Step 1: Classify intent (with fallback to rule-based)
+	// Step 1：分类 intent（失败回退到基于规则）
 	intent, err := r.classifyIntent(ctx, req.UserInput)
 	if err != nil {
-		// Classifier failed — fall back to keyword-based classification
+		// 分类器失败 —— 回退到基于关键字的分类
 		intent = r.keywordClassify(req.UserInput)
 	}
 
-	// Step 2: Map intent to target tier
+	// Step 2：把 intent 映射到目标层级
 	targetTier := max(r.intentToTier(intent), req.PreferredTier)
 
-	// Step 3: Filter candidates by hard requirements
+	// Step 3：按硬性要求过滤候选
 	candidates := r.filterCandidates(req, targetTier)
 
-	// Step 4: Select the best candidate
+	// Step 4：选择最佳候选
 	var primary *ModelProfile
 	if len(candidates) > 0 {
 		primary = candidates[0]
 	} else {
-		// No candidates in target tier — try any tier
+		// 目标层级无候选 —— 任意层级都试一遍
 		allModels := r.registry.List()
 		for _, m := range allModels {
 			if r.meetsRequirements(m, req) {
@@ -175,7 +169,7 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 		return nil, fmt.Errorf("no suitable model found for request")
 	}
 
-	// Step 5: Resolve fallback
+	// Step 5：解析 fallback
 	fallback := r.registry.GetFallback(primary.Name)
 
 	return &RouteDecision{
@@ -187,22 +181,20 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 	}, nil
 }
 
-// classifyIntent uses the cheap classifier model to categorize the user's request.
-// Returns the intent category string, or an error if the classifier call fails.
+// classifyIntent 用便宜分类 model 对用户请求分类。
+// 返回 intent 类别字符串；分类器调用失败则返回 error。
 func (r *Router) classifyIntent(_ context.Context, userInput string) (string, error) {
 	prompt := fmt.Sprintf(IntentClassifierPrompt, userInput)
 
 	req := ChatRequest{
-		Model:       "", // use the classifier's default model
+		Model:       "", // 使用分类器的默认 model
 		Messages:    []Message{{Role: "user", Content: prompt}},
-		Temperature: 0, // deterministic classification
-		// NOTE: reasoning-mode models (DeepSeek R1/V4, Step-3.x) burn the whole
-		// token budget on chain-of-thought before emitting a final answer. With
-		// a tiny budget (e.g. 10) Content stays empty and the classifier would
-		// always fall back. 512 is enough for the reasoning to converge and the
-		// model to emit the single category token in Content; it's still < $0.001
-		// per call on Flash-tier models so the "negligible routing cost" design
-		// goal is preserved.
+		Temperature: 0, // 确定性分类
+		// NOTE：推理型 model（DeepSeek R1/V4、Step-3.x）会在思维链上烧光
+		// 整个 token 预算，然后才给出最终答案。预算很小（例如 10）时
+		// Content 一直为空，分类器总是回退。512 足以让推理收敛并让 model
+		// 在 Content 中吐出单个类别 token；在 Flash 层级 model 上单次
+		// 仍 < $0.001，符合"路由成本可忽略"的设计目标。
 		MaxTokens: 512,
 		Stream:    false,
 	}
@@ -216,40 +208,38 @@ func (r *Router) classifyIntent(_ context.Context, userInput string) (string, er
 		return "", fmt.Errorf("classifier returned empty response")
 	}
 
-	// Normalize the response. Some reasoning-mode models (DeepSeek R1/V4,
-	// Step-3.x) put their output in Message.Reasoning and leave Content empty
-	// when max_tokens is small (the reasoning eats the whole budget before a
-	// final answer is produced). Fall back to Reasoning so classifyIntent
-	// still extracts a category token in that case; if neither field carries a
-	// known category the default branch below maps it to simple_chat.
+	// 归一化响应。部分推理型 model（DeepSeek R1/V4、Step-3.x）在
+	// max_tokens 很小时把输出放在 Message.Reasoning 中，Content 为空
+	//（推理耗尽预算，没产出 final answer）。回退到 Reasoning 让
+	// classifyIntent 仍能提取出类别 token；若两字段都没有已知类别，
+	// 下面的 default 分支会映射到 simple_chat。
 	intent := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if intent == "" {
 		intent = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
 	}
 	intent = strings.ToLower(intent)
 
-	// Validate against known categories. The classifier may wrap the category
-	// in punctuation or trailing prose ("simple_chat.", "category: code_generation"),
-	// so scan for the first known category substring rather than requiring an
-	// exact match. This keeps routing robust without weakening the contract
-	// (an unrecognized blob still defaults to simple_chat below).
+	// 对已知类别做校验。分类器可能给类别加上标点或尾巴
+	//（"simple_chat."、"category: code_generation"），
+	// 因此扫描首个已知类别子串而非要求精确匹配。这样既保持路由稳健，
+	// 又不削弱契约（无法识别的文本仍会走下面的 simple_chat 默认）。
 	for _, cat := range []string{"simple_chat", "code_generation", "complex_reasoning", "multi_step"} {
 		if strings.Contains(intent, cat) {
 			return cat, nil
 		}
 	}
 
-	// Unknown category — default to simple_chat so routing degrades gracefully
-	// (cheapest tier) rather than failing the whole task.
+	// 未知类别 —— 默认 simple_chat，让路由优雅降级
+	//（最便宜层级），而不是让整个任务失败。
 	return "simple_chat", nil
 }
 
-// keywordClassify is a fallback classification method that uses keyword matching.
-// It's used when the classifier model is unavailable (network error, rate limit, etc.).
+// keywordClassify 是基于关键字匹配的回退分类方法。
+// 在分类 model 不可用时（网络错误、限流等）使用。
 func (r *Router) keywordClassify(userInput string) string {
 	lower := strings.ToLower(userInput)
 
-	// Multi-step indicators
+	// multi_step 指示词
 	multiStepKeywords := []string{
 		"multi-step", "multi step", "pipeline", "orchestrate",
 		"first", "then", "after that", "finally",
@@ -261,7 +251,7 @@ func (r *Router) keywordClassify(userInput string) string {
 		}
 	}
 
-	// Code generation indicators
+	// code_generation 指示词
 	codeKeywords := []string{
 		"write code", "implement", "function", "class", "debug",
 		"refactor", "test case", "unit test", "api endpoint",
@@ -273,7 +263,7 @@ func (r *Router) keywordClassify(userInput string) string {
 		}
 	}
 
-	// Complex reasoning indicators
+	// complex_reasoning 指示词
 	reasoningKeywords := []string{
 		"analyze", "architecture", "design pattern", "explain why",
 		"compare", "evaluate", "optimize", "trade-off", "tradeoff",
@@ -285,17 +275,17 @@ func (r *Router) keywordClassify(userInput string) string {
 		}
 	}
 
-	// Default: simple chat
+	// 默认：simple chat
 	return "simple_chat"
 }
 
-// intentToTier maps an intent category to a model tier.
+// intentToTier 将 intent 类别映射到 model 层级。
 //
-// Mapping rationale:
-//   - simple_chat → TierEfficient: trivial tasks, use cheapest model
-//   - code_generation → TierStandard: needs reliable tool calling and code quality
-//   - complex_reasoning → TierPremium: needs deep reasoning capabilities
-//   - multi_step → TierStandard: needs reliable tool calling across multiple steps
+// 映射理由：
+//   - simple_chat → TierEfficient：琐碎任务，用最便宜 model
+//   - code_generation → TierStandard：需要可靠的 tool calling 与代码质量
+//   - complex_reasoning → TierPremium：需要深度推理能力
+//   - multi_step → TierStandard：跨多步需要可靠 tool calling
 func (r *Router) intentToTier(intent string) ModelTier {
 	switch intent {
 	case "simple_chat":
@@ -311,13 +301,13 @@ func (r *Router) intentToTier(intent string) ModelTier {
 	}
 }
 
-// filterCandidates returns models that meet all hard requirements, sorted by
-// preference (target tier first, then by cost within tier).
+// filterCandidates 返回满足所有硬性要求的 model，按偏好排序
+//（目标层级在前，层级内按成本）。
 func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*ModelProfile {
-	// Get models from the target tier first, then fall back to adjacent tiers
+	// 先取目标层级的 model，再回退到相邻层级
 	tiers := []ModelTier{targetTier}
 
-	// Add adjacent tiers as fallback
+	// 加入相邻层级作为 fallback
 	for t := ModelTier(0); t <= TierPremium; t++ {
 		if t != targetTier {
 			tiers = append(tiers, t)
@@ -343,30 +333,30 @@ func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*Mo
 	return candidates
 }
 
-// meetsRequirements checks whether a model satisfies all hard requirements.
+// meetsRequirements 检查 model 是否满足所有硬性要求。
 func (r *Router) meetsRequirements(m *ModelProfile, req *RouteRequest) bool {
-	// Check context window
+	// 检查上下文窗口
 	if req.ContextLen > 0 && !m.SupportsContextLen(req.ContextLen) {
 		return false
 	}
 
-	// Check required capabilities
+	// 检查必要能力
 	for _, cap := range req.RequiredCaps {
 		if !m.HasCapability(cap) {
 			return false
 		}
 	}
 
-	// Check budget ceiling (USD per 1M tokens).
-	// BudgetUSD is compared against InputPrice as a conservative proxy for
-	// per-request cost — if the input price alone exceeds the budget, the model
-	// is rejected. Models with no price set (zero) are always accepted.
+	// 检查预算上限（USD per 1M tokens）。
+	// BudgetUSD 与 InputPrice 比较作为单次请求成本的保守代理 ——
+	// 若仅输入价就超过预算，则拒绝该 model。
+	// 未设价格（0）的 model 一律接受。
 	if req.BudgetUSD > 0 && m.InputPrice > 0 && m.InputPrice > req.BudgetUSD {
 		return false
 	}
 
-	// Check latency requirement.
-	// If the model's average latency exceeds the requested maximum, reject it.
+	// 检查延迟要求。
+	// 若 model 平均延迟超过所请求的最大值，则拒绝。
 	if req.LatencyReq > 0 && m.AvgLatencyMs > int(req.LatencyReq.Milliseconds()) {
 		return false
 	}
@@ -374,7 +364,7 @@ func (r *Router) meetsRequirements(m *ModelProfile, req *RouteRequest) bool {
 	return true
 }
 
-// buildReason constructs a human-readable explanation of the routing decision.
+// buildReason 构造人类可读的路由决策说明。
 func (r *Router) buildReason(intent string, primary *ModelProfile, targetTier ModelTier) string {
 	return fmt.Sprintf(
 		"Intent: %s → Tier: %s → Model: %s (%s, $%.2f/$%.2f per 1M tokens)",
@@ -387,8 +377,8 @@ func (r *Router) buildReason(intent string, primary *ModelProfile, targetTier Mo
 	)
 }
 
-// SelectModel is a convenience method that returns just the selected model name.
-// This is useful when the caller only needs the model name, not the full decision.
+// SelectModel 是便捷方法，仅返回选中的 model 名。
+// 调用方只需要 model 名而不需要完整决策时很有用。
 func (r *Router) SelectModel(ctx context.Context, req *RouteRequest) (string, error) {
 	decision, err := r.Select(ctx, req)
 	if err != nil {

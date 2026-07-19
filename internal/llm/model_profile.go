@@ -1,28 +1,28 @@
-// Package llm — ModelProfile and ModelRegistry for multi-model management.
+// Package llm —— ModelProfile 与 ModelRegistry，用于多 model 管理。
 //
-// # Design Rationale
+// # 设计理由
 //
-// ModelProfile describes a model's complete profile — capabilities, cost, limits,
-// and fallback path. The ModelRegistry is the central catalog that the Router
-// queries to select the best model for a given task.
+// ModelProfile 描述一个 model 的完整画像 —— 能力、成本、限制
+// 以及 fallback 路径。ModelRegistry 是中央目录，Router 查询它来
+// 为给定任务选择最合适的 model。
 //
-// # Model Tiers
+// # Model 分层
 //
-// Models are organized into 6 tiers based on cost and capability:
+// Model 按成本与能力划分为 6 个层级：
 //
-//	TierFree       — free/local models for development and cold backup
-//	TierEfficient  — low-cost, high-throughput models for bulk tasks
-//	TierLightweight — fast, cheap models for classification and routing
-//	TierStandard   — primary workhorse models for general agent execution
-//	TierPremium    — top-tier models for complex reasoning and planning
+//	TierFree       —— 免费/本地 model，用于开发与冷备
+//	TierEfficient  —— 低成本高吞吐 model，用于批量任务
+//	TierLightweight —— 快速便宜的 model，用于分类与路由
+//	TierStandard   —— 主力 workhorse model，用于通用 agent 执行
+//	TierPremium    —— 顶级 model，用于复杂推理与规划
 //
-// # Usage
+// # 用法
 //
 //	registry := llm.NewModelRegistry()
 //	registry.Register(llm.ModelProfile{...})
 //	models := registry.FilterByCapability(llm.CapToolCalling)
 //
-// See doc/chapters/10-multi-model-layered-design.html for the full design.
+// 完整设计参见 doc/chapters/10-multi-model-layered-design.html。
 package llm
 
 import (
@@ -31,33 +31,33 @@ import (
 	"sync"
 )
 
-// ModelTier represents the capability/cost tier of a model.
-// Lower values = cheaper/faster; higher values = more capable/expensive.
+// ModelTier 表示 model 的能力/成本层级。
+// 值越小越便宜/越快；值越大越强/越贵。
 type ModelTier int
 
 const (
-	// TierFree represents free or locally-hosted models.
-	// Used for development, testing, and cold backup.
+	// TierFree 表示免费或本地托管的 model。
+	// 用于开发、测试与冷备。
 	TierFree ModelTier = iota
 
-	// TierEfficient represents low-cost, high-throughput models.
-	// Used for bulk analysis, data cleaning, result validation.
+	// TierEfficient 表示低成本高吞吐的 model。
+	// 用于批量分析、数据清洗、结果校验。
 	TierEfficient
 
-	// TierLightweight represents fast, cheap models for routing/classification.
-	// Used for intent classification, simple Q&A, format conversion.
+	// TierLightweight 表示用于路由/分类的快速便宜 model。
+	// 用于 intent 分类、简单问答、格式转换。
 	TierLightweight
 
-	// TierStandard represents primary workhorse models.
-	// Used for general agent execution, code generation, tool calling.
+	// TierStandard 表示主力 workhorse model。
+	// 用于通用 agent 执行、代码生成、tool calling。
 	TierStandard
 
-	// TierPremium represents top-tier reasoning models.
-	// Used for complex multi-step reasoning, architecture design, planning.
+	// TierPremium 表示顶级推理 model。
+	// 用于复杂多步推理、架构设计、规划。
 	TierPremium
 )
 
-// String returns the human-readable tier name.
+// String 返回人类可读的层级名。
 func (t ModelTier) String() string {
 	switch t {
 	case TierFree:
@@ -75,93 +75,92 @@ func (t ModelTier) String() string {
 	}
 }
 
-// ModelCapability describes a specific capability a model may or may not support.
-// The Router uses capabilities to filter models that can handle a given task.
+// ModelCapability 描述一个 model 可能支持或不支持的具体能力。
+// Router 用能力过滤能处理给定任务的 model。
 type ModelCapability string
 
 const (
-	// CapToolCalling indicates the model supports function/tool calling.
+	// CapToolCalling 表示 model 支持 function/tool calling。
 	CapToolCalling ModelCapability = "tool_calling"
 
-	// CapStreaming indicates the model supports SSE streaming responses.
+	// CapStreaming 表示 model 支持 SSE streaming 响应。
 	CapStreaming ModelCapability = "streaming"
 
-	// CapVision indicates the model supports image/video input.
+	// CapVision 表示 model 支持图像/视频输入。
 	CapVision ModelCapability = "vision"
 
-	// CapReasoning indicates the model supports deep reasoning / chain-of-thought.
+	// CapReasoning 表示 model 支持深度推理 / 思维链。
 	CapReasoning ModelCapability = "reasoning"
 
-	// CapJSONMode indicates the model supports structured JSON output mode.
+	// CapJSONMode 表示 model 支持结构化 JSON 输出模式。
 	CapJSONMode ModelCapability = "json_mode"
 )
 
-// ModelProfile describes a model's complete profile for routing decisions.
+// ModelProfile 描述一个 model 的完整画像，用于路由决策。
 //
-// Each profile captures the model's identity, capabilities, cost structure,
-// technical limits, and fallback path. The Router uses this information to
-// select the best model for a given task.
+// 每个 profile 记录 model 的身份、能力、成本结构、技术限制
+// 与 fallback 路径。Router 用这些信息为给定任务选择最合适的 model。
 type ModelProfile struct {
-	// Name is the model identifier (e.g., "deepseek-v4-flash", "claude-sonnet-4-6").
+	// Name 是 model 标识（例如 "deepseek-v4-flash"、"claude-sonnet-4-6"）。
 	Name string
 
-	// Provider identifies the API provider (e.g., "openai", "anthropic", "deepseek").
+	// Provider 标识 API provider（例如 "openai"、"anthropic"、"deepseek"）。
 	Provider string
 
-	// Tier is the model's capability/cost tier.
+	// Tier 是 model 的能力/成本层级。
 	Tier ModelTier
 
-	// Capabilities lists the model's supported features.
+	// Capabilities 列出 model 支持的功能。
 	Capabilities []ModelCapability
 
-	// InputPrice is the cost per 1M input tokens (USD).
+	// InputPrice 是每 1M 输入 token 的成本（USD）。
 	InputPrice float64
 
-	// OutputPrice is the cost per 1M output tokens (USD).
+	// OutputPrice 是每 1M 输出 token 的成本（USD）。
 	OutputPrice float64
 
-	// MaxContextWindow is the maximum context length in tokens.
+	// MaxContextWindow 是最大上下文长度（以 token 计）。
 	MaxContextWindow int
 
-	// MaxOutputTokens is the maximum output length in tokens.
+	// MaxOutputTokens 是最大输出长度（以 token 计）。
 	MaxOutputTokens int
 
-	// RateLimitRPM is the maximum requests per minute.
+	// RateLimitRPM 是每分钟最大请求数。
 	RateLimitRPM int
 
-	// FallbackModel is the model to use when this one is unavailable.
-	// Empty string means no fallback is configured.
+	// FallbackModel 是该 model 不可用时的回退 model。
+	// 空字符串表示未配置 fallback。
 	FallbackModel string
 
-	// AvgLatencyMs is the average response latency in milliseconds.
+	// AvgLatencyMs 是平均响应延迟（毫秒）。
 	AvgLatencyMs int
 }
 
-// HasCapability checks whether the model supports a specific capability.
+// HasCapability 检查 model 是否支持某个具体能力。
 func (mp *ModelProfile) HasCapability(cap ModelCapability) bool {
 	return slices.Contains(mp.Capabilities, cap)
 }
 
-// SupportsContextLen checks whether the model can handle a given context length.
+// SupportsContextLen 检查 model 能否处理给定的上下文长度。
 func (mp *ModelProfile) SupportsContextLen(tokens int) bool {
 	return tokens <= mp.MaxContextWindow
 }
 
-// ModelRegistry is the central catalog of available model profiles.
+// ModelRegistry 是可用 model profile 的中央目录。
 //
-// It supports registration, lookup by name, filtering by tier/capability/context length,
-// and fallback resolution. The registry is goroutine-safe and can be updated at runtime
-// (e.g., when new models are added or rate limits change).
+// 它支持注册、按名查找、按层级/能力/上下文长度过滤，
+// 以及 fallback 解析。registry 是 goroutine 安全的，可在运行时更新
+//（例如新增 model 或 rate limit 变化时）。
 //
-// In Phase 5, the registry is populated from configuration at startup. In Phase 6,
-// it will be loadable from the database for dynamic updates.
+// Phase 5 中，registry 在启动时从配置加载；Phase 6 中
+// 将支持从数据库加载以实现动态更新。
 type ModelRegistry struct {
 	mu       sync.RWMutex
 	profiles map[string]*ModelProfile // name → profile
 	byTier   map[ModelTier][]string   // tier → model names
 }
 
-// NewModelRegistry creates an empty model registry.
+// NewModelRegistry 创建一个空的 model registry。
 func NewModelRegistry() *ModelRegistry {
 	return &ModelRegistry{
 		profiles: make(map[string]*ModelProfile),
@@ -169,8 +168,8 @@ func NewModelRegistry() *ModelRegistry {
 	}
 }
 
-// Register adds or updates a model profile in the registry.
-// If a profile with the same name already exists, it is overwritten.
+// Register 在 registry 中添加或更新一个 model profile。
+// 若同名 profile 已存在，则会被覆盖。
 func (r *ModelRegistry) Register(profile *ModelProfile) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -179,14 +178,14 @@ func (r *ModelRegistry) Register(profile *ModelProfile) {
 	r.byTier[profile.Tier] = append(r.byTier[profile.Tier], profile.Name)
 }
 
-// Get returns a model profile by name, or nil if not found.
+// Get 按名返回 model profile，未找到则返回 nil。
 func (r *ModelRegistry) Get(name string) *ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.profiles[name]
 }
 
-// GetByTier returns all model profiles in a given tier.
+// GetByTier 返回指定层级内的所有 model profile。
 func (r *ModelRegistry) GetByTier(tier ModelTier) []*ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -201,8 +200,8 @@ func (r *ModelRegistry) GetByTier(tier ModelTier) []*ModelProfile {
 	return profiles
 }
 
-// FilterByCapability returns all models that support a specific capability,
-// sorted by tier (cheapest first).
+// FilterByCapability 返回支持指定能力的所有 model，
+// 按层级排序（最便宜的在前）。
 func (r *ModelRegistry) FilterByCapability(cap ModelCapability) []*ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -219,8 +218,8 @@ func (r *ModelRegistry) FilterByCapability(cap ModelCapability) []*ModelProfile 
 	return result
 }
 
-// FilterByContextLen returns all models that can handle a given context length,
-// sorted by tier (cheapest first).
+// FilterByContextLen 返回能处理给定上下文长度的所有 model，
+// 按层级排序（最便宜的在前）。
 func (r *ModelRegistry) FilterByContextLen(minTokens int) []*ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -237,8 +236,8 @@ func (r *ModelRegistry) FilterByContextLen(minTokens int) []*ModelProfile {
 	return result
 }
 
-// GetFallback returns the fallback model for a given model name.
-// Returns nil if no fallback is configured or the model is not found.
+// GetFallback 返回给定 model 名对应的 fallback model。
+// 若未配置 fallback 或该 model 不存在，则返回 nil。
 func (r *ModelRegistry) GetFallback(name string) *ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -250,7 +249,7 @@ func (r *ModelRegistry) GetFallback(name string) *ModelProfile {
 	return r.profiles[p.FallbackModel]
 }
 
-// List returns all registered model profiles, sorted by tier.
+// List 返回所有已注册的 model profile，按层级排序。
 func (r *ModelRegistry) List() []*ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -265,9 +264,8 @@ func (r *ModelRegistry) List() []*ModelProfile {
 	return result
 }
 
-// DefaultProfiles returns a set of sensible default model profiles.
-// These are used when no configuration is provided, ensuring the system
-// works out of the box with commonly available models.
+// DefaultProfiles 返回一组合理的默认 model profile。
+// 在未提供配置时使用，保证系统对常见可用 model 开箱即用。
 //
 // 价格来源（核实过的官方价，USD per 1M tokens）：
 //   - deepseek-v4-flash: Input $0.14, Output $0.28

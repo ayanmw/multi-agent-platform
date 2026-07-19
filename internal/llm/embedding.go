@@ -1,21 +1,21 @@
-// Package llm — EmbeddingProvider interface for text embedding models.
+// Package llm —— EmbeddingProvider 接口，用于文本 embedding model。
 //
-// An EmbeddingProvider converts text into dense vector representations (embeddings)
-// suitable for semantic search, clustering, and similarity comparison.
+// EmbeddingProvider 将文本转换为稠密向量表示（embedding），
+// 适用于语义搜索、聚类和相似度比较。
 //
-// # Design Rationale
+// # 设计理由
 //
-// The interface supports single-text and batch operations, allowing callers to
-// embed individual queries or bulk-process documents. The Dimensions() method
-// lets callers validate vector size before storage or comparison.
+// 该接口支持单文本和批量操作，调用方可以嵌入单条 query，
+// 也可以批量处理文档。Dimensions() 方法让调用方在存储或比较前
+// 校验向量尺寸。
 //
-// Implementations may use:
-//   - Local models (e.g., sentence-transformers, Ollama embeddings)
-//   - Remote APIs (e.g., OpenAI text-embedding-3-small, Cohere embed)
-//   - Lightweight local schemes (e.g., TF-IDF / one-hot hashing for prototyping)
+// 实现可使用：
+//   - 本地模型（例如 sentence-transformers、Ollama embeddings）
+//   - 远程 API（例如 OpenAI text-embedding-3-small、Cohere embed）
+//   - 轻量本地方案（例如用于原型的 TF-IDF / one-hot hashing）
 //
-// The Phase 6 RAG pipeline uses this interface to embed documents and queries
-// before storing/searching the vector store.
+// Phase 6 的 RAG 流水线使用该接口，在存储/检索 vector store 之前
+// 对文档与 query 进行 embedding。
 package llm
 
 import (
@@ -27,53 +27,51 @@ import (
 	"unicode"
 )
 
-// EmbeddingProvider defines the interface for text embedding models.
+// EmbeddingProvider 定义文本 embedding model 的接口。
 //
-// Implementations convert text into floating-point vectors (embeddings)
-// that capture semantic meaning for similarity-based search.
+// 实现将文本转换为浮点向量（embedding），捕获语义信息以用于基于相似度的搜索。
 type EmbeddingProvider interface {
-	// Embed converts a single text string into a dense vector.
-	// Returns an error if the text is empty or the provider is unavailable.
+	// Embed 将单个文本字符串转换为稠密向量。
+	// 若文本为空或 provider 不可用则返回 error。
 	Embed(text string) ([]float32, error)
 
-	// EmbedBatch converts multiple text strings into dense vectors in one call.
-	// Typically more efficient than calling Embed() repeatedly for large corpora.
-	// The returned slice has the same length as the input slice.
+	// EmbedBatch 在一次调用中将多个文本字符串转换为稠密向量。
+	// 对大型语料通常比反复调用 Embed() 更高效。
+	// 返回 slice 的长度与输入 slice 相同。
 	EmbedBatch(texts []string) ([][]float32, error)
 
-	// Dimensions returns the fixed dimensionality of the embedding vectors
-	// produced by this provider (e.g., 384, 768, 1536).
+	// Dimensions 返回该 provider 产出的 embedding 向量的固定维度
+	//（例如 384、768、1536）。
 	Dimensions() int
 }
 
-// LocalEmbeddingProvider is a zero-dependency, local embedding implementation
-// based on a fixed-size hashed vocabulary.
+// LocalEmbeddingProvider 是一个零依赖的本地 embedding 实现，
+// 基于固定大小的哈希词表。
 //
-// It tokenizes input text, maps each token to a deterministic vocabulary slot
-// using FNV-1a hashing, and produces a sparse one-hot / term-frequency vector.
-// The output is L2-normalized so that cosine similarity equals dot product.
+// 它对输入文本做分词，用 FNV-1a 哈希将每个 token 映射到确定性的词表槽位，
+// 产出稀疏的 one-hot / 词频向量。输出做 L2 归一化，因此 cosine 相似度
+// 等于点积。
 //
-// This is intentionally simple and requires no external model or vector DB.
-// It is suitable for Phase 6 RAG prototyping, where exact semantic quality is
-// less important than observability, zero setup, and deterministic behavior.
+// 该实现刻意简单，不需要外部 model 或 vector DB。
+// 适用于 Phase 6 RAG 原型阶段 —— 此时精确的语义质量不如
+// 可观测性、零配置与确定性行为重要。
 //
-// # How it works
+// # 工作原理
 //
-//  1. Tokenize: lower-case, strip punctuation, drop short tokens and stop words.
-//  2. Hash: each token is hashed to a slot in [0, vocabSize).
-//  3. Accumulate: each occurrence of a token increments its slot (term frequency).
-//  4. Normalize: the final vector is scaled to unit L2 norm.
+//  1. 分词：转小写、去标点、丢弃短 token 与 stop word。
+//  2. 哈希：每个 token 被哈希到 [0, vocabSize) 中的某个槽位。
+//  3. 累积：每次出现某 token 就让其槽位计数 +1（词频）。
+//  4. 归一化：最终向量被缩放到单位 L2 范数。
 //
-// Trade-offs: vocabulary collisions are possible when vocabSize is small; use
-// a larger vocabSize (e.g., 2048 or 4096) for denser, lower-collision vectors.
+// 取舍：当 vocabSize 较小时可能出现词表碰撞；使用更大的 vocabSize
+//（例如 2048 或 4096）可获得更稠密、碰撞更少的向量。
 type LocalEmbeddingProvider struct {
 	vocabSize int
 	stopWords map[string]bool
 }
 
-// localEmbeddingDefaultStopWords is a small English stop-word list used when
-// no custom list is provided. Removing these common words reduces noise in
-// sparse vectors.
+// localEmbeddingDefaultStopWords 是未提供自定义列表时使用的小型英文 stop word 列表。
+// 移除这些常见词可以降低稀疏向量中的噪声。
 var localEmbeddingDefaultStopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "is": true, "are": true, "was": true,
 	"were": true, "be": true, "been": true, "being": true, "have": true,
@@ -100,14 +98,14 @@ var localEmbeddingDefaultStopWords = map[string]bool{
 	"other": true, "some": true, "one": true, "two": true, "three": true,
 }
 
-// ErrEmptyText is returned when Embed is called with empty or whitespace-only text.
+// ErrEmptyText 在 Embed 被空文本或仅空白字符的文本调用时返回。
 var ErrEmptyText = errors.New("embedding provider: text is empty")
 
-// NewLocalEmbeddingProvider creates a LocalEmbeddingProvider with the given
-// vocabulary size. A larger vocabSize reduces hash collisions; 2048 is a
-// reasonable default for short texts, while 4096 yields better differentiation.
+// NewLocalEmbeddingProvider 以给定词表大小创建 LocalEmbeddingProvider。
+// 更大的 vocabSize 可降低哈希碰撞；对短文本 2048 是一个合理默认值，
+// 而 4096 可提供更好的区分度。
 //
-// The returned provider shares no mutable state and is safe for concurrent use.
+// 返回的 provider 无可变共享状态，可安全并发使用。
 func NewLocalEmbeddingProvider(vocabSize int) *LocalEmbeddingProvider {
 	if vocabSize <= 0 {
 		vocabSize = 2048
@@ -118,14 +116,14 @@ func NewLocalEmbeddingProvider(vocabSize int) *LocalEmbeddingProvider {
 	}
 }
 
-// Embed converts a single text string into a normalized sparse vector.
+// Embed 将单个文本字符串转换为归一化的稀疏向量。
 //
-// The vector length equals Dimensions(). Each token in the text increments
-// the frequency count at its hashed vocabulary slot. The resulting vector is
-// L2-normalized so callers can use cosine similarity or dot product directly.
+// 向量长度等于 Dimensions()。文本中每个 token 在其哈希词表槽位处
+// 递增词频计数。结果向量做 L2 归一化，调用方可直接用 cosine 相似度
+// 或点积。
 //
-// Returns ErrEmptyText if the text contains no meaningful tokens after
-// stop-word and punctuation filtering.
+// 若文本在 stop word 与标点过滤后不含任何有意义的 token，
+// 则返回 ErrEmptyText。
 func (p *LocalEmbeddingProvider) Embed(text string) ([]float32, error) {
 	tokens := p.tokenize(text)
 	if len(tokens) == 0 {
@@ -141,11 +139,11 @@ func (p *LocalEmbeddingProvider) Embed(text string) ([]float32, error) {
 	return normalizeVector(vec), nil
 }
 
-// EmbedBatch converts multiple texts into normalized sparse vectors.
+// EmbedBatch 将多个文本转换为归一化的稀疏向量。
 //
-// Batch embedding reuses the same tokenization and hashing pipeline as Embed.
-// Errors for individual texts are collected and returned as a single error;
-// nil slices are returned in the result for those positions.
+// 批量 embedding 复用与 Embed 相同的分词与哈希流水线。
+// 各文本的错误会被收集并以单个 error 形式返回；
+// 对应位置在结果中返回 nil slice。
 func (p *LocalEmbeddingProvider) EmbedBatch(texts []string) ([][]float32, error) {
 	results := make([][]float32, len(texts))
 	var errs []error
@@ -162,13 +160,13 @@ func (p *LocalEmbeddingProvider) EmbedBatch(texts []string) ([][]float32, error)
 	return results, nil
 }
 
-// Dimensions returns the fixed vocabulary size used by this provider.
+// Dimensions 返回该 provider 使用的固定词表大小。
 func (p *LocalEmbeddingProvider) Dimensions() int {
 	return p.vocabSize
 }
 
-// normalizeVector scales a vector to unit length (L2 norm = 1.0).
-// Local copy avoids an import cycle with the memory package.
+// normalizeVector 将向量缩放为单位长度（L2 norm = 1.0）。
+// 本地拷贝以避免与 memory 包产生 import 循环。
 func normalizeVector(v []float32) []float32 {
 	var sumSquares float64
 	for _, f := range v {
@@ -186,13 +184,13 @@ func normalizeVector(v []float32) []float32 {
 	return normalized
 }
 
-// tokenize splits text into normalized word tokens.
+// tokenize 将文本切分为归一化的 word token。
 //
-// Steps:
-//  1. Convert to lower case.
-//  2. Split on Unicode whitespace.
-//  3. Trim punctuation from each token.
-//  4. Drop stop words and tokens shorter than 2 characters.
+// 步骤：
+//  1. 转小写。
+//  2. 按 Unicode 空白切分。
+//  3. 去除每个 token 的首尾标点。
+//  4. 丢弃 stop word 以及短于 2 个字符的 token。
 func (p *LocalEmbeddingProvider) tokenize(text string) []string {
 	fields := strings.Fields(strings.ToLower(text))
 	tokens := make([]string, 0, len(fields))
@@ -211,8 +209,8 @@ func (p *LocalEmbeddingProvider) tokenize(text string) []string {
 	return tokens
 }
 
-// hashToken maps a token to a deterministic vocabulary slot in [0, vocabSize).
-// Uses FNV-1a 32-bit hashing; collisions are possible but deterministic.
+// hashToken 将 token 映射到 [0, vocabSize) 中的确定性词表槽位。
+// 使用 FNV-1a 32 位哈希；可能发生碰撞但结果确定性。
 func (p *LocalEmbeddingProvider) hashToken(token string) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(token))

@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// TestSelectScriptCaseIDMatch verifies that selectScript (exercised via Chat)
-// picks the script whose CaseID equals ChatRequest.CaseID. Builtins are omitted
-// so this isolates case_id matching from priority/keyword scoring.
+// TestSelectScriptCaseIDMatch 验证 selectScript（通过 Chat 触发）会选中
+// CaseID 等于 ChatRequest.CaseID 的脚本。此处不加载 builtin，
+// 以隔离 case_id 匹配，不受 priority/keyword 评分影响。
 func TestSelectScriptCaseIDMatch(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	scripts := []MockScript{
@@ -42,14 +42,14 @@ func TestSelectScriptCaseIDMatch(t *testing.T) {
 	}
 }
 
-// TestSelectScriptKeywordFallback verifies that when CaseID is empty but the
-// user message contains a script's MatchInput keyword, the script is selected.
+// TestSelectScriptKeywordFallback 验证当 CaseID 为空、但 user 消息
+// 含某脚本的 MatchInput 关键字时，该脚本会被选中。
 func TestSelectScriptKeywordFallback(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	scripts := []MockScript{
 		{
 			ID:         "kw-weather",
-			CaseID:     "weather", // CaseID present, but request.CaseID is empty
+			CaseID:     "weather", // CaseID 存在，但 request.CaseID 为空
 			MatchInput: []string{"weather"},
 			Responses: []MockResponse{
 				{Type: MockResponseText, Content: "sunny"},
@@ -72,15 +72,15 @@ func TestSelectScriptKeywordFallback(t *testing.T) {
 	}
 }
 
-// TestDynamicScriptOverridesBuiltin verifies that a dynamic script with the
-// same CaseID as a builtin but higher Priority wins (dynamic scripts are
-// appended before builtins in selectScript, and priority is added to the score).
+// TestDynamicScriptOverridesBuiltin 验证：与某 builtin 同 CaseID 但
+// Priority 更高的动态脚本会胜出（selectScript 中动态脚本先于 builtin 追加，
+// 且 priority 计入评分）。
 func TestDynamicScriptOverridesBuiltin(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	dyn := MockScript{
 		ID:       "dyn:dialogue",
 		CaseID:   "dialogue",
-		Priority: 500, // higher than builtin's 100
+		Priority: 500, // 高于 builtin 的 100
 		Responses: []MockResponse{
 			{Type: MockResponseText, Content: "dynamic-wins"},
 		},
@@ -102,9 +102,8 @@ func TestDynamicScriptOverridesBuiltin(t *testing.T) {
 	}
 }
 
-// TestResponseSequenceProgression verifies that two consecutive ChatStream
-// calls on the same case return responses[0] then responses[1], and that a
-// third call clamps to the last response.
+// TestResponseSequenceProgression 验证对同一 case 连续两次 ChatStream
+// 会依次返回 responses[0]、responses[1]，第三次调用会 clamp 到最后一条响应。
 func TestResponseSequenceProgression(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -124,7 +123,7 @@ func TestResponseSequenceProgression(t *testing.T) {
 		Messages: []Message{{Role: "user", Content: "go"}},
 	}
 
-	// First call: tool_call response.
+	// 第一次调用：tool_call 响应。
 	content, _, toolCalls, err := p.ChatStream(req, nil)
 	if err != nil {
 		t.Fatalf("call 1: %v", err)
@@ -133,7 +132,7 @@ func TestResponseSequenceProgression(t *testing.T) {
 		t.Fatalf("call 1: expected tool_call c1, got content=%q toolCalls=%v", content, toolCalls)
 	}
 
-	// Second call: text response.
+	// 第二次调用：text 响应。
 	content, _, toolCalls, err = p.ChatStream(req, nil)
 	if err != nil {
 		t.Fatalf("call 2: %v", err)
@@ -142,7 +141,7 @@ func TestResponseSequenceProgression(t *testing.T) {
 		t.Fatalf("call 2: expected final-text, got content=%q toolCalls=%v", content, toolCalls)
 	}
 
-	// Third call: clamps to last response (text).
+	// 第三次调用：clamp 到最后一条响应（text）。
 	content, _, toolCalls, err = p.ChatStream(req, nil)
 	if err != nil {
 		t.Fatalf("call 3: %v", err)
@@ -152,7 +151,7 @@ func TestResponseSequenceProgression(t *testing.T) {
 	}
 }
 
-// TestUsageCalculation verifies the Usage fields for text and tool_call responses.
+// TestUsageCalculation 验证 text 与 tool_call 响应的 Usage 字段。
 func TestUsageCalculation(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	textContent := "abc"
@@ -169,7 +168,7 @@ func TestUsageCalculation(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Tool-call script with known ToolCalls string representation.
+	// 已知 ToolCalls 字符串表示的 tool-call 脚本。
 	tc := []ToolCall{{Idx: 0, ID: "x", Type: "function", Function: FunctionCall{Name: "run_shell", Arguments: "{}"}}}
 	toolCallScript := MockScript{
 		ID:       "usage-tc",
@@ -185,7 +184,7 @@ func TestUsageCalculation(t *testing.T) {
 
 	p := NewMockProvider("mock", store, nil)
 
-	// Text response: PromptTokens = len(userInput), CompletionTokens = len(content).
+	// Text 响应：PromptTokens = len(userInput)，CompletionTokens = len(content)。
 	_, usage, _, err := p.ChatStream(ChatRequest{
 		CaseID:   "usage-text",
 		Messages: []Message{{Role: "user", Content: userInput}},
@@ -203,7 +202,7 @@ func TestUsageCalculation(t *testing.T) {
 		t.Errorf("text TotalTokens: got %d want %d", usage.TotalTokens, usage.PromptTokens+usage.CompletionTokens)
 	}
 
-	// Tool-call response: CompletionTokens = len(fmt.Sprintf("%v", ToolCalls)).
+	// Tool-call 响应：CompletionTokens = len(fmt.Sprintf("%v", ToolCalls))。
 	_, usage, _, err = p.ChatStream(ChatRequest{
 		CaseID:   "usage-tc",
 		Messages: []Message{{Role: "user", Content: userInput}},
@@ -223,11 +222,10 @@ func TestUsageCalculation(t *testing.T) {
 	}
 }
 
-// TestNoMatchingScriptReturnsError verifies that an empty store with no
-// keyword-matching input and empty CaseID yields an error mentioning
-// "no matching mock script".
+// TestNoMatchingScriptReturnsError 验证：store 为空、输入无关键字命中、
+// CaseID 为空时，会返回包含 "no matching mock script" 的 error。
 func TestNoMatchingScriptReturnsError(t *testing.T) {
-	store := NewInMemoryMockScriptStore() // empty
+	store := NewInMemoryMockScriptStore() // 空
 	p := NewMockProvider("mock", store, nil)
 
 	_, err := p.Chat(ChatRequest{
@@ -241,7 +239,7 @@ func TestNoMatchingScriptReturnsError(t *testing.T) {
 	}
 }
 
-// TestDelayMsZeroFastPath verifies that DelayMs=0 does not block.
+// TestDelayMsZeroFastPath 验证 DelayMs=0 时不会阻塞。
 func TestDelayMsZeroFastPath(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -274,8 +272,7 @@ func TestDelayMsZeroFastPath(t *testing.T) {
 	}
 }
 
-// TestDelayMsHonorsContextCancel verifies that a positive DelayMs respects
-// context cancellation.
+// TestDelayMsHonorsContextCancel 验证正 DelayMs 会响应 context 取消。
 func TestDelayMsHonorsContextCancel(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -306,7 +303,7 @@ func TestDelayMsHonorsContextCancel(t *testing.T) {
 	}
 }
 
-// TestInMemoryMockScriptStoreCRUD covers Save/Get/List/Delete and LoadBuiltin.
+// TestInMemoryMockScriptStoreCRUD 覆盖 Save/Get/List/Delete 与 LoadBuiltin。
 func TestInMemoryMockScriptStoreCRUD(t *testing.T) {
 	t.Run("Save_assigns_ID_and_timestamps", func(t *testing.T) {
 		s := NewInMemoryMockScriptStore()
@@ -422,14 +419,14 @@ func TestInMemoryMockScriptStoreCRUD(t *testing.T) {
 	})
 }
 
-// TestMockProviderImplementsProvider is a compile-time check that MockProvider
-// satisfies the exported Provider interface (white-box access to the interface).
+// TestMockProviderImplementsProvider 是编译期检查，确保 MockProvider
+// 满足导出的 Provider 接口（白盒访问该接口）。
 func TestMockProviderImplementsProvider(t *testing.T) {
 	var _ Provider = (*MockProvider)(nil)
 	var _ Provider = NewMockProvider("mock", NewInMemoryMockScriptStore(), nil)
 }
 
-// TestBuiltinMockScriptsShape sanity-checks the built-in script set.
+// TestBuiltinMockScriptsShape 对内置脚本集做 sanity check。
 func TestBuiltinMockScriptsShape(t *testing.T) {
 	scripts := BuiltinMockScripts()
 	if len(scripts) != 6 {
@@ -455,8 +452,8 @@ func TestBuiltinMockScriptsShape(t *testing.T) {
 	}
 }
 
-// TestChatStreamOnChunk verifies the onChunk callback is invoked with the
-// scripted delta for both text and tool_call response types.
+// TestChatStreamOnChunk 验证 onChunk 回调会被以脚本化 delta 调用，
+// 对 text 与 tool_call 两种响应类型都有效。
 func TestChatStreamOnChunk(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -487,7 +484,7 @@ func TestChatStreamOnChunk(t *testing.T) {
 	}
 }
 
-// TestChatStreamOnChunkError verifies that an onChunk error aborts the stream.
+// TestChatStreamOnChunkError 验证 onChunk 返回的 error 会中止 stream。
 func TestChatStreamOnChunkError(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -513,8 +510,8 @@ func TestChatStreamOnChunkError(t *testing.T) {
 	}
 }
 
-// TestEmptyResponsesReturnsError verifies that a script with no responses
-// yields a descriptive error rather than panicking.
+// TestEmptyResponsesReturnsError 验证 responses 为空的脚本会返回
+// 一个有意义的 error，而不是 panic。
 func TestEmptyResponsesReturnsError(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	script := MockScript{
@@ -538,7 +535,7 @@ func TestEmptyResponsesReturnsError(t *testing.T) {
 	}
 }
 
-// TestName verifies the Name accessor.
+// TestName 验证 Name 访问器。
 func TestName(t *testing.T) {
 	p := NewMockProvider("my-mock", NewInMemoryMockScriptStore(), nil)
 	if p.Name() != "my-mock" {
@@ -546,8 +543,8 @@ func TestName(t *testing.T) {
 	}
 }
 
-// TestChatResponseFinishReason verifies finish_reason is "tool_calls" when the
-// scripted response carries tool calls and "stop" otherwise.
+// TestChatResponseFinishReason 验证脚本响应携带 tool call 时
+// finish_reason 为 "tool_calls"，否则为 "stop"。
 func TestChatResponseFinishReason(t *testing.T) {
 	store := NewInMemoryMockScriptStore()
 	store.Save(MockScript{

@@ -1,30 +1,29 @@
-// Package llm — Provider factory for creating LLM provider instances.
+// Package llm —— Provider 工厂，用于创建 LLM provider 实例。
 //
-// # Design Rationale
+// # 设计理由
 //
-// The Provider factory centralizes provider instantiation, decoupling the Server
-// and Engine from concrete provider types. Instead of calling NewOpenAIProvider
-// directly, callers use NewProvider with a ProviderConfig, and the factory selects
-// the correct implementation based on the provider name.
+// Provider 工厂集中 provider 实例化，将 Server 与 Engine 与具体 provider 类型解耦。
+// 调用方不再直接调用 NewOpenAIProvider，而是用 NewProvider 配合 ProviderConfig，
+// 由工厂根据 provider 名选择正确的实现。
 //
-// This design enables:
-//   - Clean addition of new providers without changing the Server or Engine code
-//   - Automatic fallback: unknown provider names default to OpenAI-compatible
-//   - Configuration-driven provider selection (loaded from Config.Models)
+// 该设计支持：
+//   - 无需改动 Server 或 Engine 代码即可新增 provider
+//   - 自动 fallback：未识别的 provider 名默认走 OpenAI-compatible
+//   - 基于配置的 provider 选择（从 Config.Models 加载）
 //
-// # Provider Mapping
+// # Provider 映射
 //
-//   - "openai"    → OpenAIProvider  — direct implementation of OpenAI-compatible API
-//   - "deepseek"  → OpenAIProvider  — DeepSeek's API is fully OpenAI-compatible
-//        (same /chat/completions endpoint, same request/response format)
-//   - "anthropic" → AnthropicProvider — Claude's Messages API (Phase 6)
-//        Different endpoint (/v1/messages), auth (x-api-key), and streaming format.
-//   - "mock"      → MockProvider — deterministic scripted responses for tests/demos.
-//   - default     → OpenAIProvider  — any unrecognized name falls back to
-//        OpenAI-compatible, since most providers (Groq, Together, Fireworks, etc.)
-//        share this protocol.
+//   - "openai"    → OpenAIProvider  —— OpenAI-compatible API 的直接实现
+//   - "deepseek"  → OpenAIProvider  —— DeepSeek 的 API 完全 OpenAI-compatible
+//        （同样的 /chat/completions endpoint，同样的请求/响应格式）
+//   - "anthropic" → AnthropicProvider —— Claude 的 Messages API（Phase 6）
+//        不同的 endpoint（/v1/messages）、认证（x-api-key）与 streaming 格式。
+//   - "mock"      → MockProvider —— 用于测试/演示的确定性脚本响应。
+//   - default     → OpenAIProvider  —— 任何未识别的名称都回退到
+//        OpenAI-compatible，因为多数 provider（Groq、Together、Fireworks 等）
+//        都使用该协议。
 //
-// # Usage
+// # 用法
 //
 //	provider, err := llm.NewProvider(llm.ProviderConfig{
 //	    Name:     "deepseek",
@@ -36,40 +35,39 @@ package llm
 
 import "github.com/anmingwei/multi-agent-platform/internal/config"
 
-// ProviderConfig holds the configuration parameters for creating a Provider instance.
-// It mirrors the fields needed by all provider constructors, providing a uniform
-// interface regardless of the underlying provider type.
+// ProviderConfig 持有创建 Provider 实例所需的配置参数。
+// 它对齐所有 provider 构造器所需字段，无论底层 provider 类型如何，
+// 都提供统一接口。
 type ProviderConfig struct {
-	// Name is the provider identifier ("openai", "deepseek", "anthropic", "mock", etc.)
+	// Name 是 provider 标识（"openai"、"deepseek"、"anthropic"、"mock" 等）
 	Name string
 
-	// Endpoint is the API base URL (e.g., "https://api.openai.com/v1")
+	// Endpoint 是 API 基础 URL（例如 "https://api.openai.com/v1"）
 	Endpoint string
 
-	// APIKey is the authentication token (Bearer token for OpenAI-compatible APIs)
+	// APIKey 是认证 token（OpenAI-compatible API 用 Bearer token）
 	APIKey string
 
-	// Model is the default model name for this provider (e.g., "deepseek-v4-flash")
+	// Model 是该 provider 的默认 model 名（例如 "deepseek-v4-flash"）
 	Model string
 
-	// CaseID is an optional hint used by MockProvider to select a mock script.
+	// CaseID 是可选 hint，供 MockProvider 选择 mock 脚本。
 	CaseID string
 
-	// MockStore is the optional mock script store for creating MockProvider.
+	// MockStore 是创建 MockProvider 时使用的可选 mock 脚本 store。
 	MockStore MockScriptStore
 }
 
-// NewProvider creates a Provider instance based on the provider name in cfg.
+// NewProvider 根据 cfg 中的 provider 名创建 Provider 实例。
 //
-// Supported provider names:
-//   - "openai"   → OpenAIProvider (OpenAI-compatible API)
-//   - "deepseek" → OpenAIProvider (DeepSeek's API is OpenAI-compatible)
-//   - "anthropic" → AnthropicProvider (Claude Messages API, Phase 6)
-//   - "mock"   → MockProvider (deterministic scripted responses)
-//   - anything else → OpenAIProvider (safe fallback for OpenAI-compatible providers)
+// 支持的 provider 名：
+//   - "openai"   → OpenAIProvider（OpenAI-compatible API）
+//   - "deepseek" → OpenAIProvider（DeepSeek 的 API 兼容 OpenAI）
+//   - "anthropic" → AnthropicProvider（Claude Messages API，Phase 6）
+//   - "mock"   → MockProvider（确定性脚本响应）
+//   - 其他 → OpenAIProvider（对 OpenAI-compatible provider 的安全回退）
 //
-// Returns an error only if the provider name is recognized but the underlying
-// constructor fails (e.g., missing API key).
+// 仅当 provider 名被识别但底层构造器失败（例如缺 API key）时返回 error。
 func NewProvider(cfg ProviderConfig) (Provider, error) {
 	if cfg.Name == "mock" {
 		model := cfg.Model
@@ -81,39 +79,39 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 
 	switch cfg.Name {
 	case "openai":
-		// OpenAIProvider directly implements OpenAI's Chat Completions API.
+		// OpenAIProvider 直接实现 OpenAI 的 Chat Completions API。
 		return NewOpenAIProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 
 	case "deepseek":
-		// DeepSeek's API is fully OpenAI-compatible — it uses /chat/completions
-		// with the same request/response format, Bearer token auth, and SSE streaming.
-		// The only difference is reasoning_content in deltas for R1/V4, which will
-		// be handled by a DeepSeekProvider extension in a later Phase.
-		// For now, reuse OpenAIProvider which works correctly.
+		// DeepSeek 的 API 完全 OpenAI-compatible —— 它使用 /chat/completions
+		// 与相同的请求/响应格式、Bearer token 认证、SSE streaming。
+		// 唯一差异是 R1/V4 delta 中的 reasoning_content，后续 Phase 将由
+		// DeepSeekProvider 扩展处理。
+		// 目前直接复用 OpenAIProvider 即可正常工作。
 		return NewOpenAIProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 
 	case "anthropic":
-		// AnthropicProvider implements Claude's Messages API with proper format
-		// conversion (system prompt, input_schema, x-api-key header, etc.).
+		// AnthropicProvider 实现 Claude 的 Messages API，含完整格式转换
+		//（system prompt、input_schema、x-api-key header 等）。
 		return NewAnthropicProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 
 	default:
-		// Safe fallback: most LLM providers (Groq, Together, Fireworks, etc.)
-		// implement OpenAI's Chat Completions API, so default to OpenAIProvider.
-		// This allows the system to work with new providers without code changes.
+		// 安全回退：多数 LLM provider（Groq、Together、Fireworks 等）
+		// 都实现 OpenAI 的 Chat Completions API，故默认走 OpenAIProvider。
+		// 这样新 provider 无需改代码即可接入。
 		return NewOpenAIProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 	}
 }
 
-// CreateProviderFromConfig creates a Provider from the global configuration,
-// selecting MockProvider or a real provider based on cfg.ShouldMock.
+// CreateProviderFromConfig 根据全局配置创建 Provider，
+// 依据 cfg.ShouldMock 选择 MockProvider 或真实 provider。
 //
-// If mock mode is selected, the provider name is "mock" with Model set to
-// "mock/<caseID>" so cost/metrics pipelines can identify mock calls.
+// 若选择 mock 模式，provider 名为 "mock"、Model 为
+// "mock/<caseID>"，以便成本/metrics 流水线识别 mock 调用。
 //
-// For real providers, it looks up modelName in cfg.Models. If no matching model
-// configuration is found, it falls back to cfg.LLMEndpoint and cfg.LLMModel as
-// an OpenAI-compatible provider.
+// 对于真实 provider，它会在 cfg.Models 中查找 modelName。若未找到匹配的
+// model 配置，则回退到 cfg.LLMEndpoint 与 cfg.LLMModel，
+// 作为 OpenAI-compatible provider 使用。
 func CreateProviderFromConfig(cfg *config.Config, modelName string, caseID string) (Provider, error) {
 	if cfg.ShouldMock(caseID, "") {
 		return NewProvider(ProviderConfig{
@@ -124,7 +122,7 @@ func CreateProviderFromConfig(cfg *config.Config, modelName string, caseID strin
 		})
 	}
 
-	// Find model configuration by name; fallback to default fields.
+	// 按名查找 model 配置；未找到则回退到默认字段。
 	var mc config.ModelConfig
 	found := false
 	for _, m := range cfg.Models {

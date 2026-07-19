@@ -1,20 +1,20 @@
-// Package llm — AnthropicProvider: Anthropic Claude Messages API implementation.
+// Package llm — AnthropicProvider：Anthropic Claude Messages API 实现。
 //
-// Anthropic's protocol differs significantly from OpenAI-compatible APIs:
-//   - Endpoint: POST /v1/messages (not /v1/chat/completions)
-//   - System prompt: top-level "system" field (not a "system" role message)
-//   - Tool schema: "input_schema" (not "parameters")
-//   - Tool choice: object {"type": "..."} (not string "auto"/"none")
-//   - max_tokens: REQUIRED (not optional)
-//   - Auth: x-api-key header (not Bearer token)
-//   - Streaming: double-layer SSE with "event:" type indicator
-//   - Tool use streaming: content_block_start / content_block_delta with partial_json
-//   - Token counting: input_tokens in message_start, output_tokens in message_delta
+// Anthropic 的协议与 OpenAI-compatible API 差异显著：
+//   - Endpoint：POST /v1/messages（不是 /v1/chat/completions）
+//   - System prompt：顶层 "system" 字段（不是 "system" role 消息）
+//   - Tool schema："input_schema"（不是 "parameters"）
+//   - Tool choice：对象 {"type": "..."}（不是字符串 "auto"/"none"）
+//   - max_tokens：必填（不是可选）
+//   - Auth：x-api-key header（不是 Bearer token）
+//   - Streaming：双层 SSE，带 "event:" 类型指示
+//   - Tool use streaming：content_block_start / content_block_delta 配合 partial_json
+//   - Token 计数：input_tokens 在 message_start，output_tokens 在 message_delta
 //
-// # Thread Safety
+// # 线程安全
 //
-// AnthropicProvider is safe for concurrent use — each call creates its own
-// HTTP request and response. The underlying http.Client is goroutine-safe.
+// AnthropicProvider 可安全并发使用 —— 每次调用都会创建各自的
+// HTTP request 与 response。底层 http.Client 是 goroutine 安全的。
 package llm
 
 import (
@@ -30,20 +30,20 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Anthropic-specific request/response types (not exported — internal conversion)
+// Anthropic 专用的请求/响应类型（未导出 —— 仅用于内部转换）
 // ---------------------------------------------------------------------------
 
-// anthropicMessage represents a single message in Anthropic's Messages API.
-// Roles are: "user", "assistant". "system" is extracted to the top-level field.
+// anthropicMessage 表示 Anthropic Messages API 中的单条消息。
+// Role 取值："user"、"assistant"。"system" 被提取到顶层字段。
 type anthropicMessage struct {
 	Role    string             `json:"role"`
 	Content []anthropicContent `json:"content"`
 }
 
-// anthropicContent is a polymorphic content block within a message.
-// It can be plain text or a tool use block.
+// anthropicContent 是消息内的多态 content block。
+// 可以是纯文本，也可以是 tool use block。
 type anthropicContent struct {
-	Type string `json:"type"` // "text" or "tool_use"
+	Type string `json:"type"` // "text" 或 "tool_use"
 
 	// For text blocks:
 	Text string `json:"text,omitempty"`
@@ -58,10 +58,10 @@ type anthropicContent struct {
 	Content   string `json:"content,omitempty"`
 }
 
-// anthropicChatRequest is the request body for POST /v1/messages.
+// anthropicChatRequest 是 POST /v1/messages 的请求体。
 type anthropicChatRequest struct {
 	Model       string               `json:"model"`
-	MaxTokens   int                  `json:"max_tokens"` // REQUIRED by Anthropic
+	MaxTokens   int                  `json:"max_tokens"` // Anthropic 必填
 	System      string               `json:"system,omitempty"`
 	Messages    []anthropicMessage   `json:"messages"`
 	Tools       []anthropicToolDef   `json:"tools,omitempty"`
@@ -70,32 +70,32 @@ type anthropicChatRequest struct {
 	Stream      bool                 `json:"stream"`
 }
 
-// anthropicToolDef defines a tool in Anthropic's format.
-// Key difference: "input_schema" instead of "parameters".
+// anthropicToolDef 以 Anthropic 格式定义一个 tool。
+// 关键差异：使用 "input_schema" 而非 "parameters"。
 type anthropicToolDef struct {
-	Type        string                 `json:"type"` // always "function"
+	Type        string                 `json:"type"` // 始终为 "function"
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
-	InputSchema map[string]interface{} `json:"input_schema"` // JSON Schema (not "parameters")
+	InputSchema map[string]interface{} `json:"input_schema"` // JSON Schema（不是 "parameters"）
 }
 
-// anthropicToolChoice specifies tool selection behavior in Anthropic's object format.
+// anthropicToolChoice 以 Anthropic 的对象格式指定 tool 选择行为。
 type anthropicToolChoice struct {
-	Type string `json:"type"`           // "auto", "any", "tool", "none"
-	Name string `json:"name,omitempty"` // used when Type == "tool"
+	Type string `json:"type"`           // "auto"、"any"、"tool"、"none"
+	Name string `json:"name,omitempty"` // 仅在 Type == "tool" 时使用
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic streaming response types
+// Anthropic streaming 响应类型
 // ---------------------------------------------------------------------------
 
-// anthropicStreamEvent is the top-level SSE envelope for Anthropic.
-// The event type is in the "event:" line, not in the JSON data.
+// anthropicStreamEvent 是 Anthropic 的顶层 SSE 信封。
+// 事件类型位于 "event:" 行，不在 JSON data 中。
 type anthropicStreamEvent struct {
-	Type string `json:"type"` // message_start, content_block_start, content_block_delta, etc.
+	Type string `json:"type"` // message_start、content_block_start、content_block_delta 等
 }
 
-// messageStartEvent carries initial message metadata including usage.
+// messageStartEvent 携带初始消息元数据，包括 usage。
 type messageStartEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
@@ -104,73 +104,73 @@ type messageStartEvent struct {
 	} `json:"usage"`
 }
 
-// contentBlockStartEvent signals the beginning of a content block.
+// contentBlockStartEvent 标记一个 content block 的开始。
 type contentBlockStartEvent struct {
 	Type         string                      `json:"type"`
 	Index        int                         `json:"index"`
 	ContentBlock anthropicStreamContentBlock `json:"content_block"`
 }
 
-// anthropicStreamContentBlock is an initialized content block in streaming.
+// anthropicStreamContentBlock 是 streaming 中已初始化的 content block。
 type anthropicStreamContentBlock struct {
-	Type  string   `json:"type"` // "text" or "tool_use"
+	Type  string   `json:"type"` // "text" 或 "tool_use"
 	Text  string   `json:"text,omitempty"`
 	ID    string   `json:"id,omitempty"`
 	Name  string   `json:"name,omitempty"`
-	Input struct{} `json:"input,omitempty"` // empty — input comes via deltas
+	Input struct{} `json:"input,omitempty"` // 空对象 —— input 通过 delta 到达
 }
 
-// contentBlockDeltaEvent carries an incremental delta for the current content block.
+// contentBlockDeltaEvent 携带当前 content block 的增量 delta。
 type contentBlockDeltaEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
 	Delta struct {
-		Type string `json:"type"` // "text_delta" or "input_json_delta"
+		Type string `json:"type"` // "text_delta" 或 "input_json_delta"
 		Text string `json:"text,omitempty"`
-		// PartialJSON is the incremental JSON fragment for tool_use argument streaming.
+		// PartialJSON 是 tool_use 参数 streaming 的增量 JSON 片段。
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta"`
 }
 
-// messageDeltaEvent signals the end of the message with final usage and stop reason.
+// messageDeltaEvent 标记消息结束，携带最终 usage 和 stop reason。
 type messageDeltaEvent struct {
 	Type  string `json:"type"`
 	Delta struct {
-		StopReason string `json:"stop_reason"` // "end_turn", "tool_use", "max_tokens"
+		StopReason string `json:"stop_reason"` // "end_turn"、"tool_use"、"max_tokens"
 	} `json:"delta"`
 	Usage struct {
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
 }
 
-// messageStopEvent marks the end of the stream.
+// messageStopEvent 标记 stream 结束。
 type messageStopEvent struct {
 	Type string `json:"type"`
 }
 
 // ---------------------------------------------------------------------------
-// AnthropicProvider — implementation of the Provider interface
+// AnthropicProvider —— Provider 接口实现
 // ---------------------------------------------------------------------------
 
-// AnthropicProvider implements the Provider interface for Anthropic's Claude Messages API.
+// AnthropicProvider 为 Anthropic 的 Claude Messages API 实现 Provider 接口。
 //
-// All Anthropic-specific format conversion happens behind this provider — the Engine
-// sees only the unified ChatRequest/StreamChunk/Usage/ToolCall types.
+// 所有 Anthropic 专用的格式转换都隐藏在该 provider 之内 —— Engine
+// 只看到统一的 ChatRequest/StreamChunk/Usage/ToolCall 类型。
 type AnthropicProvider struct {
-	name     string       // provider identifier, e.g. "anthropic"
-	endpoint string       // base URL, e.g. "https://api.anthropic.com" (no /v1)
-	apiKey   string       // Anthropic API key (x-api-key)
-	model    string       // default model, e.g. "claude-sonnet-4-20250514"
-	http     *http.Client // goroutine-safe
+	name     string       // provider 标识，例如 "anthropic"
+	endpoint string       // 基础 URL，例如 "https://api.anthropic.com"（不含 /v1）
+	apiKey   string       // Anthropic API key（x-api-key）
+	model    string       // 默认 model，例如 "claude-sonnet-4-20250514"
+	http     *http.Client // goroutine 安全
 }
 
-// NewAnthropicProvider creates a new AnthropicProvider.
+// NewAnthropicProvider 创建一个新的 AnthropicProvider。
 //
-// The endpoint should be the base URL (e.g. "https://api.anthropic.com") —
-// the provider appends "/v1/messages" internally.
+// endpoint 应为基础 URL（例如 "https://api.anthropic.com"）——
+// provider 内部会自动追加 "/v1/messages"。
 func NewAnthropicProvider(name, endpoint, apiKey, model string) *AnthropicProvider {
 	endpoint = strings.TrimRight(endpoint, "/")
-	// Strip trailing /v1 if provided so we can append it consistently.
+	// 若调用方传入了 /v1 则先剥离，以便后续统一追加。
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	return &AnthropicProvider{
 		name:     name,
@@ -181,23 +181,23 @@ func NewAnthropicProvider(name, endpoint, apiKey, model string) *AnthropicProvid
 	}
 }
 
-// Name returns the provider identifier.
+// Name 返回 provider 标识。
 func (p *AnthropicProvider) Name() string {
 	return p.name
 }
 
 // ---------------------------------------------------------------------------
-// Chat — non-streaming request and response
+// Chat —— 非流式请求与响应
 // ---------------------------------------------------------------------------
 
-// Chat sends a non-streaming chat request to the Anthropic Messages API
-// and returns the fully parsed response.
+// Chat 向 Anthropic Messages API 发送非流式 chat 请求，
+// 并返回完整解析后的响应。
 //
-// Format conversion:
-//   - Extracts "system" role messages to the top-level "system" field
-//   - Converts tool schemas: function.parameters → input_schema
-//   - Converts tool_choice: string → {"type": "..."} object
-//   - Sets max_tokens to 4096 if not already set (Anthropic requires it)
+// 格式转换：
+//   - 将 "system" role 消息提取到顶层 "system" 字段
+//   - 转换 tool schema：function.parameters → input_schema
+//   - 转换 tool_choice：字符串 → {"type": "..."} 对象
+//   - 若 max_tokens 未设置则置为 4096（Anthropic 必填）
 func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
 	anthropicReq, err := p.buildAnthropicReq(req)
@@ -232,7 +232,7 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	// Parse Anthropic's non-streaming response into unified ChatResponse.
 	var anthropicResp struct {
 		Content []struct {
-			Type  string                 `json:"type"` // "text" or "tool_use"
+			Type  string                 `json:"type"` // "text" 或 "tool_use"
 			Text  string                 `json:"text,omitempty"`
 			ID    string                 `json:"id,omitempty"`
 			Name  string                 `json:"name,omitempty"`
@@ -248,7 +248,7 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Convert Anthropic content blocks to unified Response.
+	// 将 Anthropic content blocks 转换为统一 Response。
 	chatResp := &ChatResponse{
 		ID: "anthropic-response",
 		Choices: []Choice{{
@@ -265,7 +265,7 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		},
 	}
 
-	// Reconstruct message content from content blocks.
+	// 从 content blocks 重建 message 内容。
 	var textContent strings.Builder
 	var toolCalls []ToolCall
 	for _, block := range anthropicResp.Content {
@@ -273,7 +273,7 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		case "text":
 			textContent.WriteString(block.Text)
 		case "tool_use":
-			// Serialize input_map to JSON for the unified ToolCall.Arguments field.
+			// 将 input_map 序列化为 JSON，填入统一 ToolCall.Arguments 字段。
 			argsJSON, _ := json.Marshal(block.Input)
 			toolCalls = append(toolCalls, ToolCall{
 				Type: "function",
@@ -291,27 +291,27 @@ func (p *AnthropicProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 }
 
 // ---------------------------------------------------------------------------
-// ChatStream — streaming request with double-layer SSE parsing
+// ChatStream —— streaming 请求，解析双层 SSE
 // ---------------------------------------------------------------------------
 
-// ChatStream sends a streaming chat request to the Anthropic Messages API
-// and calls onChunk for each SSE event.
+// ChatStream 向 Anthropic Messages API 发送 streaming chat 请求，
+// 并对每个 SSE 事件调用 onChunk。
 //
-// Anthropic's SSE format uses TWO separate header lines:
+// Anthropic 的 SSE 格式使用两行独立的 header：
 //
 //	event: <event_type>
 //	data: {"type": "<event_type>", ...}
 //
-// Event flow:
-//  1. message_start        — extract input_tokens
-//  2. content_block_start  — initialize text or tool_use block
-//  3. content_block_delta  — accumulate text_delta or input_json_delta
-//  4. message_delta        — extract output_tokens and stop_reason
-//  5. message_stop         — stream complete
+// 事件流程：
+//  1. message_start        —— 提取 input_tokens
+//  2. content_block_start  —— 初始化 text 或 tool_use block
+//  3. content_block_delta  —— 累积 text_delta 或 input_json_delta
+//  4. message_delta        —— 提取 output_tokens 与 stop_reason
+//  5. message_stop         —— stream 结束
 //
-// Tool use arguments arrive as incremental JSON fragments (partial_json),
-// not as complete JSON objects, so we accumulate them in a strings.Builder
-// per content block index and parse only at the end.
+// Tool use 参数以增量 JSON 片段（partial_json）形式到达，
+// 而非完整 JSON 对象，因此我们按 content block index 用 strings.Builder
+// 累积它们，仅在结束时解析。
 func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	anthropicReq, err := p.buildAnthropicReq(req)
 	if err != nil {
@@ -345,73 +345,73 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 	var (
 		contentBuilder strings.Builder
 		usage          Usage
-		// Track the content block index that each tool call belongs to.
-		// Anthropic sends deltas with an "index" field identifying the content block.
+		// 跟踪每个 tool call 所属的 content block index。
+		// Anthropic 在 delta 中用 "index" 字段标识对应的 content block。
 		toolCallMap = make(map[int]*ToolCall)
-		// Accumulate partial_json for tool_use blocks until block is complete.
+		// 为 tool_use block 累积 partial_json，直到 block 完成。
 		toolArgBuilder = make(map[int]*strings.Builder)
-		// Track which content blocks are tool_use (vs text).
+		// 跟踪哪些 content block 是 tool_use（相对 text）。
 		isToolBlock = make(map[int]bool)
-		// Track tool name and ID for each tool_use block.
+		// 跟踪每个 tool_use block 的 tool 名称与 ID。
 		toolBlockMeta = make(map[int]struct{ name, id string })
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	// Anthropic's SSE uses two-line events: "event: <type>\n data: {...}\n"
-	// We need to buffer the event type between lines.
+	// Anthropic 的 SSE 使用两行事件："event: <type>\n data: {...}\n"
+	// 需要在两行之间缓存 event type。
 	var currentEventType string
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Empty line separates SSE events — reset event type.
+		// 空行分隔 SSE 事件 —— 重置 event type。
 		if line == "" {
 			currentEventType = ""
 			continue
 		}
 
-		// Skip comments.
+		// 跳过注释。
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 
-		// "event: <type>" line — capture the event type for the next data line.
+		// "event: <type>" 行 —— 捕获 event type 以便下一行 data 使用。
 		if strings.HasPrefix(line, "event: ") {
 			currentEventType = strings.TrimPrefix(line, "event: ")
 			continue
 		}
 
-		// "data: {...}" line — process according to currentEventType.
+		// "data: {...}" 行 —— 根据 currentEventType 进行处理。
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
 
-		// Parse the data as a generic envelope to get the type field.
+		// 将 data 当作通用信封解析以获取 type 字段。
 		var envelope struct {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
-			continue // skip malformed chunks
+			continue // 跳过格式错误 chunk
 		}
 
 		switch currentEventType {
 		case "message_start":
-			// Extract input_tokens from usage.
+			// 从 usage 提取 input_tokens。
 			var ev messageStartEvent
 			if err := json.Unmarshal([]byte(data), &ev); err == nil {
 				usage.PromptTokens = ev.Usage.InputTokens
 			}
 
 		case "content_block_start":
-			// A new content block begins — record its type and metadata.
+			// 一个新的 content block 开始 —— 记录其类型与元数据。
 			var ev contentBlockStartEvent
 			if err := json.Unmarshal([]byte(data), &ev); err == nil {
 				switch ev.ContentBlock.Type {
 				case "text":
-					// Text block — no special setup needed.
+					// Text block —— 无需特殊初始化。
 				case "tool_use":
 					isToolBlock[ev.Index] = true
 					toolBlockMeta[ev.Index] = struct{ name, id string }{
@@ -419,7 +419,7 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 						id:   ev.ContentBlock.ID,
 					}
 					toolArgBuilder[ev.Index] = &strings.Builder{}
-					// Initialize tool call on first block start.
+					// 在 block 首次开始时初始化 tool call。
 					if _, exists := toolCallMap[ev.Index]; !exists {
 						toolCallMap[ev.Index] = &ToolCall{
 							Type: "function",
@@ -433,14 +433,14 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 			}
 
 		case "content_block_delta":
-			// Incremental delta for the current content block.
+			// 当前 content block 的增量 delta。
 			var ev contentBlockDeltaEvent
 			if err := json.Unmarshal([]byte(data), &ev); err == nil {
 				switch ev.Delta.Type {
 				case "text_delta":
 					contentBuilder.WriteString(ev.Delta.Text)
 				case "input_json_delta":
-					// Accumulate partial JSON for tool_use arguments.
+					// 为 tool_use 参数累积 partial JSON。
 					if idx, ok := toolArgBuilder[ev.Index]; ok {
 						idx.WriteString(ev.Delta.PartialJSON)
 					}
@@ -448,13 +448,13 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 			}
 
 		case "message_delta":
-			// Extract output_tokens and stop reason.
+			// 提取 output_tokens 与 stop reason。
 			var ev messageDeltaEvent
 			if err := json.Unmarshal([]byte(data), &ev); err == nil {
 				usage.CompletionTokens = ev.Usage.OutputTokens
-				// Finalize tool call arguments from accumulated partial_json.
+				// 从累积的 partial_json 完成 tool call 参数组装。
 				p.finalizeToolCalls(toolCallMap, toolArgBuilder, isToolBlock)
-				// Emit the final StreamChunk so the Engine sees the finish reason.
+				// 发出最终 StreamChunk，让 Engine 看到 finish reason。
 				if onChunk != nil {
 					sc := StreamChunk{
 						FinishReason: mapAnthropicStopReason(ev.Delta.StopReason),
@@ -466,15 +466,15 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 			}
 
 		case "message_stop":
-			// Stream ended — compute total tokens.
+			// Stream 结束 —— 计算总 token 数。
 			if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
 				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 			}
-			// Finalize tool calls one last time (safety fallback).
+			// 最后再做一次 tool call 收尾（安全兜底）。
 			p.finalizeToolCalls(toolCallMap, toolArgBuilder, isToolBlock)
 
 		case "error":
-			// Handle error events.
+			// 处理 error 事件。
 			var errEv struct {
 				Error struct {
 					Type    string `json:"type"`
@@ -492,23 +492,22 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 		return contentBuilder.String(), usage, nil, fmt.Errorf("scan stream: %w", err)
 	}
 
-	// Assemble tool calls from the map in index order.
+	// 按 index 顺序从 map 组装 tool calls。
 	//
-	// Important: Anthropic content block indices are shared between text and
-	// tool_use blocks. If the model emits text at index 0 and tool_use at
-	// index 1, toolCallMap only contains key 1. A naive loop over
-	// [0, len(toolCallMap)) would miss index 1. We therefore collect all keys,
-	// sort them, and append the corresponding tool calls.
+	// 重要：Anthropic 的 content block index 在 text 与 tool_use block 之间共享。
+	// 若 model 在 index 0 输出 text、在 index 1 输出 tool_use，
+	// toolCallMap 只包含 key 1。若仅遍历 [0, len(toolCallMap)) 会漏掉 index 1。
+	// 因此我们收集所有 key 排序后追加对应的 tool call。
 	var toolCalls []ToolCall
 	if len(toolCallMap) > 0 {
 		indices := make([]int, 0, len(toolCallMap))
 		for idx := range toolCallMap {
 			indices = append(indices, idx)
 		}
-		// sort.Ints is deterministic and cheap for a small number of tool calls.
+		// sort.Ints 对少量 tool call 而言是确定性且开销很小的。
 		sort.Ints(indices)
 		for _, idx := range indices {
-			// Defensive: only emit content blocks that were actually tool_use.
+			// 防御性：只输出实际为 tool_use 的 content block。
 			if tc, ok := toolCallMap[idx]; ok && isToolBlock[idx] {
 				toolCalls = append(toolCalls, *tc)
 			}
@@ -519,23 +518,23 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 }
 
 // ---------------------------------------------------------------------------
-// Helper: request building
+// Helper：请求构建
 // ---------------------------------------------------------------------------
 
-// buildAnthropicReq converts a unified ChatRequest into Anthropic's request format.
-// It handles:
-//   - Extracting system messages to top-level system field
-//   - Converting tool definitions (input_schema)
-//   - Converting tool_choice to object format
-//   - Setting default max_tokens
+// buildAnthropicReq 将统一 ChatRequest 转换为 Anthropic 的请求格式。
+// 它负责：
+//   - 将 system 消息提取到顶层 system 字段
+//   - 转换 tool 定义（input_schema）
+//   - 转换 tool_choice 为对象格式
+//   - 设置默认 max_tokens
 func (p *AnthropicProvider) buildAnthropicReq(req ChatRequest) (anthropicChatRequest, error) {
-	// Set default max_tokens if not provided (REQUIRED by Anthropic).
+	// 若未提供 max_tokens 则设置默认值（Anthropic 必填）。
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 4096
 	}
 
-	// Build system field from messages with Role == "system".
+	// 从 Role == "system" 的消息构建 system 字段。
 	var systemPrompt strings.Builder
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
@@ -546,16 +545,16 @@ func (p *AnthropicProvider) buildAnthropicReq(req ChatRequest) (anthropicChatReq
 		}
 	}
 
-	// Convert messages, filtering out system messages (already extracted).
+	// 转换消息，过滤掉 system 消息（已提取）。
 	messages, err := convertMessages(req.Messages)
 	if err != nil {
 		return anthropicChatRequest{}, fmt.Errorf("convert messages: %w", err)
 	}
 
-	// Convert tool definitions.
+	// 转换 tool 定义。
 	tools := convertTools(req.Tools)
 
-	// Convert tool_choice.
+	// 转换 tool_choice。
 	var toolChoice *anthropicToolChoice
 	if req.ToolChoice != "" {
 		toolChoice = convertToolChoice(req.ToolChoice, req.Tools)
@@ -574,11 +573,11 @@ func (p *AnthropicProvider) buildAnthropicReq(req ChatRequest) (anthropicChatReq
 }
 
 // ---------------------------------------------------------------------------
-// Helper: tool definition conversion
+// Helper：tool 定义转换
 // ---------------------------------------------------------------------------
 
-// convertTools converts unified ToolDef slice to Anthropic's tool format.
-// Key mapping: function.parameters → input_schema
+// convertTools 将统一 ToolDef slice 转换为 Anthropic 的 tool 格式。
+// 关键映射：function.parameters → input_schema
 func convertTools(tools []ToolDef) []anthropicToolDef {
 	result := make([]anthropicToolDef, len(tools))
 	for i, tool := range tools {
@@ -593,51 +592,50 @@ func convertTools(tools []ToolDef) []anthropicToolDef {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: message conversion
+// Helper：消息转换
 // ---------------------------------------------------------------------------
 
-// convertMessages converts unified Message slice to Anthropic's message format.
+// convertMessages 将统一 Message slice 转换为 Anthropic 的消息格式。
 //
-// Key conversions:
-//   - "system" role messages: excluded (extracted to top-level system field by caller)
-//   - "user" role messages: content becomes a single "text" block
-//   - "assistant" role messages with tool_calls: content_blocks with type "tool_use"
-//   - "tool" role messages: merged into the previous "user" message as
-//     content_blocks of type "tool_result" with tool_use_id.
+// 关键转换：
+//   - "system" role 消息：排除（由调用方提取到顶层 system 字段）
+//   - "user" role 消息：content 变成单个 "text" block
+//   - 带 tool_calls 的 "assistant" role 消息：转换为 type 为 "tool_use" 的 content_blocks
+//   - "tool" role 消息：合并到前一条 "user" 消息中，作为
+//     type 为 "tool_result" 的 content_blocks，并带 tool_use_id。
 //
-// Anthropic's Messages API requires that all tool_result blocks for a single
-// assistant tool_use turn be placed together in ONE "user" message with multiple
-// content blocks. Therefore consecutive "tool" role messages are coalesced
-// into the preceding user message (creating one if necessary) rather than
-// emitted as separate messages.
+// Anthropic 的 Messages API 要求：一次 assistant tool_use turn 的所有
+// tool_result block 必须放在同一条 "user" 消息中（多个 content block）。
+// 因此连续的 "tool" role 消息会被合并到前一条 user 消息里
+//（必要时创建一条），而不是各自独立成消息。
 func convertMessages(messages []Message) ([]anthropicMessage, error) {
 	result := make([]anthropicMessage, 0, len(messages))
 
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
-			// Skip — handled via top-level system field.
+			// 跳过 —— 由顶层 system 字段处理。
 			continue
 
 		case "user":
-			// Plain user message — single text content block.
+			// 普通 user 消息 —— 单个 text content block。
 			am := anthropicMessage{
 				Role: "user",
 				Content: []anthropicContent{
 					{Type: "text", Text: msg.Content},
 				},
 			}
-			// Handle multi-part user content (file uploads, images) if Content
-			// contains structured data. For now we treat everything as text.
+			// 若 Content 含结构化数据则处理多段 user 内容（文件上传、图像）。
+			// 目前我们一律按 text 处理。
 			result = append(result, am)
 
 		case "assistant":
 			am := anthropicMessage{Role: "assistant"}
-			// If the message has tool_calls, output tool_use blocks.
+			// 若消息含 tool_calls，则输出 tool_use block。
 			if len(msg.ToolCalls) > 0 {
 				am.Content = make([]anthropicContent, len(msg.ToolCalls))
 				for i, tc := range msg.ToolCalls {
-					// Parse the JSON arguments into a map for Anthropic's input field.
+					// 将 JSON arguments 解析为 map，用于 Anthropic 的 input 字段。
 					var argsMap map[string]interface{}
 					_ = json.Unmarshal([]byte(tc.Function.Arguments), &argsMap)
 					am.Content[i] = anthropicContent{
@@ -648,7 +646,7 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 					}
 				}
 			} else if msg.Content != "" {
-				// Plain text assistant message.
+				// 普通 text assistant 消息。
 				am.Content = []anthropicContent{
 					{Type: "text", Text: msg.Content},
 				}
@@ -656,11 +654,10 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 			result = append(result, am)
 
 		case "tool":
-			// Tool results must be role "user" with tool_result content blocks.
-			// Anthropic requires all results for one assistant tool_use turn to live
-			// in a SINGLE user message with multiple content blocks. If the previous
-			// result was already merged into the last user message, append to it;
-			// otherwise create a new user message and fold into it.
+			// Tool 结果必须为 role "user" 且含 tool_result content block。
+			// Anthropic 要求一次 assistant tool_use turn 的所有结果都在
+			// 同一条 user 消息中（多个 content block）。若上一条结果
+			// 已合并到最近一条 user 消息，则追加；否则新建一条 user 消息并折叠进去。
 			block := anthropicContent{
 				Type:      "tool_result",
 				ToolUseID: msg.ToolCallID,
@@ -668,9 +665,9 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 			}
 			if len(result) > 0 && result[len(result)-1].Role == "user" {
 				last := &result[len(result)-1]
-				// If the previous user message was a plain text prompt, convert it to
-				// a composite message by appending the tool_result block. Mixing text
-				// and tool_result in one user turn is unusual but allowed by Anthropic.
+				// 若上一条 user 消息是普通 text prompt，则通过追加 tool_result block
+				// 将其转换为复合消息。在同一条 user turn 里混合 text 与 tool_result
+				// 并不常见，但 Anthropic 允许这样做。
 				last.Content = append(last.Content, block)
 			} else {
 				result = append(result, anthropicMessage{
@@ -685,12 +682,12 @@ func convertMessages(messages []Message) ([]anthropicMessage, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: tool_choice conversion
+// Helper：tool_choice 转换
 // ---------------------------------------------------------------------------
 
-// convertToolChoice converts the unified string tool_choice to Anthropic's
-// object format. OpenAI uses strings like "auto", "none", or a tool name.
-// Anthropic uses: {"type": "auto"} | {"type": "any"} | {"type": "tool", "name": "..."}
+// convertToolChoice 将统一字符串 tool_choice 转换为 Anthropic 的
+// 对象格式。OpenAI 使用字符串如 "auto"、"none" 或 tool 名。
+// Anthropic 使用：{"type": "auto"} | {"type": "any"} | {"type": "tool", "name": "..."}
 func convertToolChoice(choice string, availableTools []ToolDef) *anthropicToolChoice {
 	switch choice {
 	case "auto":
@@ -698,24 +695,24 @@ func convertToolChoice(choice string, availableTools []ToolDef) *anthropicToolCh
 	case "none":
 		return &anthropicToolChoice{Type: "none"}
 	default:
-		// If it matches a tool name, use {"type": "tool", "name": "..."}.
+		// 若与某个 tool 名匹配，则使用 {"type": "tool", "name": "..."}。
 		for _, tool := range availableTools {
 			if tool.Function.Name == choice {
 				return &anthropicToolChoice{Type: "tool", Name: choice}
 			}
 		}
-		// Fallback to auto.
+		// 回退到 auto。
 		return &anthropicToolChoice{Type: "auto"}
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Helper: stream parsing
+// Helper：stream 解析
 // ---------------------------------------------------------------------------
 
-// finalizeToolCalls completes tool call argument assembly from accumulated
-// partial_json deltas. Called at message_delta and message_stop to ensure
-// all tool arguments are fully parsed before returning to the Engine.
+// finalizeToolCalls 从累积的 partial_json delta 完成 tool call 参数组装。
+// 在 message_delta 与 message_stop 时调用，确保所有 tool 参数在
+// 返回 Engine 之前已完整解析。
 func (p *AnthropicProvider) finalizeToolCalls(
 	toolCallMap map[int]*ToolCall,
 	toolArgBuilder map[int]*strings.Builder,
@@ -726,22 +723,22 @@ func (p *AnthropicProvider) finalizeToolCalls(
 			continue
 		}
 		if tc, ok := toolCallMap[idx]; ok && isToolBlock[idx] {
-			// The accumulated partial_json should be valid JSON.
+			// 累积的 partial_json 应为合法 JSON。
 			argsJSON := builder.String()
-			// Validate by attempting to parse — if it fails, store raw string.
+			// 尝试解析以校验 —— 失败则原样保存为字符串。
 			var test map[string]interface{}
 			if err := json.Unmarshal([]byte(argsJSON), &test); err == nil {
 				tc.Function.Arguments = argsJSON
 			} else if argsJSON != "" {
-				// Wrap in a content field if not a valid JSON object.
+				// 若不是合法 JSON 对象，则包裹在 content 字段中。
 				tc.Function.Arguments = fmt.Sprintf(`{"content": %s}`, argsJSON)
 			}
 		}
 	}
 }
 
-// mapAnthropicStopReason converts Anthropic's stop reason strings to
-// the unified finish reason format used across providers.
+// mapAnthropicStopReason 将 Anthropic 的 stop reason 字符串转换为
+// 跨 provider 使用的统一 finish reason 格式。
 func mapAnthropicStopReason(reason string) string {
 	switch reason {
 	case "end_turn":
@@ -757,7 +754,7 @@ func mapAnthropicStopReason(reason string) string {
 	}
 }
 
-// firstNonEmpty returns the first non-empty string from the provided values.
+// firstNonEmpty 返回传入值中第一个非空字符串。
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {

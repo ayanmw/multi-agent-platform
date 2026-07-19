@@ -1,23 +1,23 @@
-// Package llm — OpenAIProvider: baseline implementation of the Provider interface.
+// Package llm —— OpenAIProvider：Provider 接口的基线实现。
 //
-// OpenAIProvider wraps the existing Client and implements the Provider interface.
-// It supports all OpenAI-compatible APIs including DeepSeek, Groq, Together, etc.
+// OpenAIProvider 包装现有 Client 并实现 Provider 接口。
+// 它支持所有 OpenAI-compatible API，包括 DeepSeek、Groq、Together 等。
 //
-// This is the baseline implementation — other providers (Anthropic, DeepSeek with
-// reasoning_content) will be added in Phase 6.
+// 这是基线实现 —— 其他 provider（Anthropic、带 reasoning_content 的 DeepSeek）
+// 将在 Phase 6 中加入。
 //
-// # Protocol Notes
+// # 协议说明
 //
-// OpenAI-compatible APIs share a common protocol:
-//   - POST /chat/completions for both streaming and non-streaming
+// OpenAI-compatible API 共享同一协议：
+//   - 流式与非流式都通过 POST /chat/completions
 //   - Authorization: Bearer <api_key> header
-//   - SSE streaming with "data: {...}" format and "data: [DONE]" termination
-//   - Tool calls embedded in the assistant message as function_call/tool_calls
-//   - Usage reported in the final SSE chunk (or in the response body for non-streaming)
+//   - SSE streaming 使用 "data: {...}" 格式，以 "data: [DONE]" 终止
+//   - Tool call 作为 function_call/tool_calls 嵌入 assistant 消息
+//   - Usage 在最后一个 SSE chunk 中上报（非流式则在响应体中）
 //
-// DeepSeek's API is fully OpenAI-compatible, so it works with this provider.
-// The only extension is reasoning_content in the delta (for R1/V4 reasoning),
-// which will be handled by a DeepSeekProvider extending this one in Phase 6.
+// DeepSeek 的 API 完全 OpenAI-compatible，因此可直接用本 provider。
+// 唯一扩展是 delta 中的 reasoning_content（R1/V4 推理用），
+// Phase 6 将由扩展本实现的 DeepSeekProvider 处理。
 package llm
 
 import (
@@ -32,30 +32,29 @@ import (
 	"time"
 )
 
-// OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.
+// OpenAIProvider 为 OpenAI-compatible API 实现 Provider 接口。
 //
-// It wraps the existing Client's HTTP logic but exposes it through the Provider
-// interface. The Engine now uses a Provider instead of a *Client directly, enabling
-// future multi-provider support.
+// 它包装现有 Client 的 HTTP 逻辑，但通过 Provider 接口暴露。
+// Engine 现在使用 Provider 而非直接使用 *Client，为后续
+// 多 provider 支持铺路。
 //
-// # Thread Safety
+// # 线程安全
 //
-// OpenAIProvider is safe for concurrent use — each call to ChatStream creates
-// its own HTTP request and response. The underlying http.Client is also
-// goroutine-safe.
+// OpenAIProvider 可安全并发使用 —— 每次调用 ChatStream 都会创建
+// 自己的 HTTP request 与 response。底层 http.Client 也是
+// goroutine 安全的。
 type OpenAIProvider struct {
-	name     string       // provider name (e.g., "openai", "deepseek")
-	endpoint string       // base URL (e.g., "https://api.openai.com/v1")
+	name     string       // provider 名（例如 "openai"、"deepseek"）
+	endpoint string       // 基础 URL（例如 "https://api.openai.com/v1"）
 	apiKey   string       // Bearer token
-	model    string       // model name (e.g., "gpt-4o", "deepseek-v4-flash")
-	http     *http.Client // configured with 120s timeout
+	model    string       // model 名（例如 "gpt-4o"、"deepseek-v4-flash"）
+	http     *http.Client // 已配置 120s timeout
 }
 
-// NewOpenAIProvider creates a new OpenAI-compatible provider.
+// NewOpenAIProvider 创建新的 OpenAI-compatible provider。
 //
-// The endpoint is trimmed of trailing slashes for consistent URL construction.
-// The model is the default model for this provider — it can be overridden per-request
-// by setting ChatRequest.Model.
+// endpoint 会去除尾部斜杠以保证 URL 拼接一致。
+// model 是该 provider 的默认 model —— 可通过 ChatRequest.Model 按请求覆盖。
 func NewOpenAIProvider(name, endpoint, apiKey, model string) *OpenAIProvider {
 	return &OpenAIProvider{
 		name:     name,
@@ -66,17 +65,16 @@ func NewOpenAIProvider(name, endpoint, apiKey, model string) *OpenAIProvider {
 	}
 }
 
-// Name returns the provider identifier.
+// Name 返回 provider 标识。
 func (p *OpenAIProvider) Name() string {
 	return p.name
 }
 
-// Chat sends a non-streaming chat request and returns the full response.
+// Chat 发送非流式 chat 请求并返回完整响应。
 func (p *OpenAIProvider) Chat(req ChatRequest) (*ChatResponse, error) {
-	// Fall back to the provider's default model when the caller leaves Model
-	// empty. The Router's intent classifier intentionally sets Model="" so the
-	// classifier provider's configured default is used; without this fallback
-	// the API would receive "model":"" and reject the request.
+	// 当调用方未填 Model 时回退到 provider 的默认 model。
+	// Router 的 intent classifier 特意把 Model 置空，以便使用分类器 provider
+	// 配置的默认 model；不回退则 API 会收到 "model":"" 而拒绝请求。
 	if req.Model == "" {
 		req.Model = p.model
 	}
@@ -111,25 +109,24 @@ func (p *OpenAIProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	return &chatResp, nil
 }
 
-// ChatStream sends a streaming chat request and calls onChunk for each SSE event.
+// ChatStream 发送 streaming chat 请求，并对每个 SSE 事件调用 onChunk。
 //
-// # SSE Parsing Strategy
+// # SSE 解析策略
 //
-//  1. Read lines with bufio.Scanner (supports up to 1MB lines).
-//  2. Skip empty lines, comments (:), and non-data lines.
-//  3. Parse each "data: {...}" line as a JSON chunk.
-//  4. Accumulate content in a strings.Builder for full text.
-//  5. Accumulate ToolCall deltas in a map[int]*ToolCall (deltas may arrive
-//     out of order — the index/ID arrives first, then name, then arguments).
-//  6. Extract Usage from the final chunk (which carries the full usage object).
+//  1. 用 bufio.Scanner 逐行读取（支持最大 1MB 的行）。
+//  2. 跳过空行、注释（:）以及非 data 行。
+//  3. 将每行 "data: {...}" 解析为 JSON chunk。
+//  4. 用 strings.Builder 累积 content 形成完整文本。
+//  5. 用 map[int]*ToolCall 累积 ToolCall delta（delta 可能乱序到达 ——
+//     index/ID 先到，然后是 name，最后是 arguments）。
+//  6. 从最后一个 chunk 提取 Usage（它携带完整 usage 对象）。
 //
-// The onChunk callback is called for each parsed chunk, enabling the Engine
-// to forward text deltas to the frontend in real time.
+// 每解析出一个 chunk 都会调用 onChunk 回调，让 Engine
+// 实时把 text delta 转发给前端。
 func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
-	// Fall back to the provider's default model when the caller leaves Model
-	// empty (mirrors Chat). The Engine normally sets ChatRequest.Model to the
-	// routed model, but legacy callers that rely on the provider's default
-	// still work through this fallback.
+	// 当调用方未填 Model 时回退到 provider 的默认 model（与 Chat 对齐）。
+	// Engine 通常会把 ChatRequest.Model 设为路由后的 model，但依赖
+	// provider 默认值的旧调用方通过此回退仍能正常工作。
 	if req.Model == "" {
 		req.Model = p.model
 	}
@@ -208,27 +205,26 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 		}
 		choice := chunk.Choices[0]
 
-		// Handle finish_reason semantics. The SSE transport layer signals the end
-		// of the stream with "data: [DONE]", but the semantic layer uses
-		// choices[0].finish_reason to tell us WHY generation stopped. We log
-		// unexpected reasons so operators can detect protocol drift or model
-		// behavior changes.
+		// 处理 finish_reason 语义。SSE 传输层用 "data: [DONE]" 标记
+		// stream 结束，但语义层用 choices[0].finish_reason 告诉我们
+		// 为什么停止生成。我们记录非预期 reason，便于运维发现协议漂移或
+		// model 行为变化。
 		switch choice.FinishReason {
 		case "":
-			// Still generating — no action needed.
+			// 仍在生成 —— 无需处理。
 		case "stop":
-			// Natural text completion.
+			// 自然文本结束。
 		case "tool_calls":
-			// Tool call generation finished; accumulated toolCalls will be returned.
+			// Tool call 生成结束；累积的 toolCalls 将被返回。
 		case "length":
-			// Hit max_tokens limit. The response is truncated; log it because this
-			// can produce incomplete tool arguments that fail json.Unmarshal later.
+			// 触及 max_tokens 上限。响应被截断；记录日志，因为这可能产生
+			// 不完整的 tool 参数，导致后续 json.Unmarshal 失败。
 			log.Printf("[OpenAIProvider] ChatStream finished due to length limit (model=%s)", req.Model)
 		case "content_filter":
 			log.Printf("[OpenAIProvider] ChatStream finished due to content filter (model=%s)", req.Model)
 		default:
-			// Unknown finish_reason — log loudly so we can discover new enum values
-			// introduced by providers (e.g., "function_call" legacy value).
+			// 未知 finish_reason —— 高亮记录，便于发现 provider 新引入的
+			// 枚举值（例如旧版的 "function_call"）。
 			log.Printf("[OpenAIProvider] ChatStream finished with unexpected reason %q (model=%s)",
 				choice.FinishReason, req.Model)
 		}
@@ -237,12 +233,11 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 			contentBuilder.WriteString(choice.Delta.Content)
 		}
 
-		// Accumulate reasoning content (chain-of-thought) from DeepSeek R1/V4
-		// models and Step-3.x / vLLM deployments. DeepSeek's protocol uses
-		// "reasoning_content"; Step-3.x exposes the same stream as "reasoning".
-		// Both are merged into the full text accumulation so the Engine's think
-		// phase sees the model's actual output instead of an empty content
-		// (which would prematurely end the ReAct loop as a "final answer").
+		// 累积来自 DeepSeek R1/V4 model 与 Step-3.x / vLLM 部署的
+		// reasoning content（思维链）。DeepSeek 协议用 "reasoning_content"；
+		// Step-3.x 把同一条流以 "reasoning" 暴露。
+		// 两者都并入完整文本累积，让 Engine 的 think 阶段能看到 model 的
+		// 实际输出，而非空 content（否则会提前以"final answer"结束 ReAct loop）。
 		if choice.Delta.ReasoningContent != "" {
 			contentBuilder.WriteString(choice.Delta.ReasoningContent)
 		}

@@ -84,7 +84,7 @@ func TestBuildContextWindowSnapshot(t *testing.T) {
 		t.Fatalf("len(messages)=%d, want %d", len(snapshot.Messages), len(msgs))
 	}
 
-	// Verify per-message ratio sums roughly to 1.0
+	// 验证每条消息的 ratio 之和约为 1.0
 	totalRatio := 0.0
 	for _, m := range snapshot.Messages {
 		totalRatio += m.UsageRatio

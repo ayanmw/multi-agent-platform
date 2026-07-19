@@ -9,19 +9,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// stubClassifier — a deterministic Provider that returns a fixed intent string
+// stubClassifier —— 一个确定性 Provider，返回固定的 intent 字符串
 // ---------------------------------------------------------------------------
 
-// stubClassifier is a minimal Provider implementation used to drive the Router's
-// classifyIntent path without any network access. It ignores the request and
-// returns a pre-configured ChatResponse whose first choice carries the scripted
-// intent string. The number of Chat calls is recorded for assertion.
+// stubClassifier 是一个最小化的 Provider 实现，用于在无网络访问的情况下
+// 驱动 Router 的 classifyIntent 路径。它忽略请求并返回预设的 ChatResponse，
+// 其第一个 choice 携带脚本化的 intent 字符串。Chat 调用次数会被记录以供断言。
 //
-// stubClassifier intentionally implements only the two Provider methods (Chat and
-// ChatStream). Name() returns "stub-classifier".
+// stubClassifier 刻意只实现 Provider 的两个方法（Chat 与 ChatStream）。
+// Name() 返回 "stub-classifier"。
 type stubClassifier struct {
-	intent      string // content returned in the scripted response
-	chatErr     error  // if non-nil, Chat returns this error
+	intent      string // 脚本响应中返回的 content
+	chatErr     error  // 非 nil 时 Chat 返回该 error
 	chatCalls   int
 	streamCalls int
 }
@@ -52,14 +51,14 @@ func (s *stubClassifier) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 	return s.intent, Usage{}, nil, nil
 }
 
-// Compile-time assertion that stubClassifier satisfies the Provider interface.
+// 编译期断言：stubClassifier 满足 Provider 接口。
 var _ Provider = (*stubClassifier)(nil)
 
 // ---------------------------------------------------------------------------
-// helpers for building registries with a few model profiles
+// 构建带若干 model profile 的 registry 的 helper
 // ---------------------------------------------------------------------------
 
-// newRegistryWith returns a ModelRegistry pre-populated with the given profiles.
+// newRegistryWith 返回一个预填充给定 profile 的 ModelRegistry。
 func newRegistryWith(profiles ...*ModelProfile) *ModelRegistry {
 	r := NewModelRegistry()
 	for _, p := range profiles {
@@ -68,8 +67,8 @@ func newRegistryWith(profiles ...*ModelProfile) *ModelRegistry {
 	return r
 }
 
-// profileFor is a small builder for ModelProfile with sensible defaults so test
-// cases only specify the fields they care about.
+// profileFor 是一个轻量 ModelProfile builder，带合理默认值，
+// 让测试用例只需指定关心的字段。
 func profileFor(name string, tier ModelTier, caps []ModelCapability, ctxWindow int, fallback string) *ModelProfile {
 	return &ModelProfile{
 		Name:             name,
@@ -87,21 +86,20 @@ func profileFor(name string, tier ModelTier, caps []ModelCapability, ctxWindow i
 }
 
 // ---------------------------------------------------------------------------
-// keywordClassify (Router fallback path)
+// keywordClassify（Router fallback 路径）
 // ---------------------------------------------------------------------------
 
-// TestKeywordClassify exercises the rule-based fallback classifier that runs
-// when the classifier Provider is unavailable. Each row asserts that the given
-// input is classified into the expected intent category via keyword matching.
+// TestKeywordClassify 测试分类 Provider 不可用时的基于规则的回退分类器。
+// 每一行断言给定输入会通过关键字匹配被归入期望的 intent 类别。
 func TestKeywordClassify(t *testing.T) {
-	r := &Router{} // keywordClassify does not use registry or classifier
+	r := &Router{} // keywordClassify 不使用 registry 或 classifier
 	tests := []struct {
 		name  string
 		input string
 		want  string
 	}{
-		// multi_step indicators (checked first, so a phrase that also matches
-		// a code keyword still wins as multi_step)
+		// multi_step 指示词（最先检查，因此即便短语也命中 code 关键字，
+		// 仍按 multi_step 胜出）
 		{"multi-step-hyphen", "run a multi-step pipeline", "multi_step"},
 		{"multi-step-space", "do this in multi step fashion", "multi_step"},
 		{"orchestrate", "orchestrate multiple agents", "multi_step"},
@@ -109,7 +107,7 @@ func TestKeywordClassify(t *testing.T) {
 		{"subtask", "decompose into subtasks", "multi_step"},
 		{"pipeline-keyword", "build a pipeline for ETL", "multi_step"},
 
-		// code_generation indicators
+		// code_generation 指示词
 		{"write-code", "please write code to sort a list", "code_generation"},
 		{"implement", "implement a new function", "code_generation"},
 		{"debug", "help me debug this error", "code_generation"},
@@ -118,14 +116,14 @@ func TestKeywordClassify(t *testing.T) {
 		{"api-endpoint", "add a new api endpoint", "code_generation"},
 		{"fix-bug", "fix bug in parser", "code_generation"},
 
-		// complex_reasoning indicators
+		// complex_reasoning 指示词
 		{"analyze", "analyze this dataset", "complex_reasoning"},
 		{"architecture", "design the architecture for X", "complex_reasoning"},
 		{"compare", "compare options A and B", "complex_reasoning"},
 		{"trade-off", "evaluate the trade-off", "complex_reasoning"},
 		{"math", "prove this mathematical theorem using logic", "complex_reasoning"},
 
-		// simple_chat default
+		// simple_chat 默认
 		{"greeting", "hello there", "simple_chat"},
 		{"empty", "", "simple_chat"},
 		{"chitchat", "how are you today", "simple_chat"},
@@ -141,8 +139,8 @@ func TestKeywordClassify(t *testing.T) {
 	}
 }
 
-// TestKeywordClassifyCaseInsensitive verifies the keyword matcher is
-// case-insensitive (it lowercases the input before matching).
+// TestKeywordClassifyCaseInsensitive 验证关键字匹配器大小写不敏感
+//（匹配前会把输入转小写）。
 func TestKeywordClassifyCaseInsensitive(t *testing.T) {
 	r := &Router{}
 	if got := r.keywordClassify("IMPLEMENT a function"); got != "code_generation" {
@@ -157,8 +155,8 @@ func TestKeywordClassifyCaseInsensitive(t *testing.T) {
 // intentToTier
 // ---------------------------------------------------------------------------
 
-// TestIntentToTier verifies the intent-to-tier mapping and that unknown intents
-// fall back to the cheapest tier (TierEfficient).
+// TestIntentToTier 验证 intent 到层级的映射，以及未知 intent 回退到
+// 最便宜层级（TierEfficient）。
 func TestIntentToTier(t *testing.T) {
 	r := &Router{}
 	tests := []struct {
@@ -169,9 +167,9 @@ func TestIntentToTier(t *testing.T) {
 		{"code_generation", TierStandard},
 		{"complex_reasoning", TierPremium},
 		{"multi_step", TierStandard},
-		{"unknown_intent", TierEfficient}, // default
+		{"unknown_intent", TierEfficient}, // 默认
 		{"", TierEfficient},
-		{"SIMPLE_CHAT", TierEfficient}, // not matched (case-sensitive), defaults
+		{"SIMPLE_CHAT", TierEfficient}, // 大小写敏感不匹配，走默认
 	}
 	for _, tc := range tests {
 		t.Run(tc.intent, func(t *testing.T) {
@@ -184,12 +182,11 @@ func TestIntentToTier(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// classifyIntent (uses classifier Provider)
+// classifyIntent（使用分类 Provider）
 // ---------------------------------------------------------------------------
 
-// TestClassifyIntentValidCategories verifies that when the classifier returns a
-// known category, classifyIntent passes it through. Table-driven across all
-// four valid categories.
+// TestClassifyIntentValidCategories 验证分类器返回已知类别时，
+// classifyIntent 会将其透传。对四个合法类别做表驱动测试。
 func TestClassifyIntentValidCategories(t *testing.T) {
 	for _, intent := range []string{"simple_chat", "code_generation", "complex_reasoning", "multi_step"} {
 		t.Run(intent, func(t *testing.T) {
@@ -205,8 +202,8 @@ func TestClassifyIntentValidCategories(t *testing.T) {
 	}
 }
 
-// TestClassifyIntentCaseInsensitive verifies that the classifier normalizes its
-// response to lowercase before matching against known categories.
+// TestClassifyIntentCaseInsensitive 验证分类器在匹配已知类别前
+// 会把响应归一化为小写。
 func TestClassifyIntentCaseInsensitive(t *testing.T) {
 	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "Code_Generation"})
 	got, err := r.classifyIntent(context.Background(), "x")
@@ -218,8 +215,8 @@ func TestClassifyIntentCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestClassifyIntentTrimsWhitespace verifies that surrounding whitespace in the
-// classifier's response is stripped before matching.
+// TestClassifyIntentTrimsWhitespace 验证分类器响应中的首尾空白
+// 会在匹配前被剥离。
 func TestClassifyIntentTrimsWhitespace(t *testing.T) {
 	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "  multi_step  "})
 	got, err := r.classifyIntent(context.Background(), "x")
@@ -231,8 +228,8 @@ func TestClassifyIntentTrimsWhitespace(t *testing.T) {
 	}
 }
 
-// TestClassifyIntentUnknownDefaultsToSimpleChat verifies that an unrecognized
-// classifier output defaults to "simple_chat" rather than returning an error.
+// TestClassifyIntentUnknownDefaultsToSimpleChat 验证无法识别的分类器输出
+// 默认为 "simple_chat"，而不是返回 error。
 func TestClassifyIntentUnknownDefaultsToSimpleChat(t *testing.T) {
 	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "totally-unknown-category"})
 	got, err := r.classifyIntent(context.Background(), "x")
@@ -244,8 +241,8 @@ func TestClassifyIntentUnknownDefaultsToSimpleChat(t *testing.T) {
 	}
 }
 
-// TestClassifyIntentError verifies that a classifier error is wrapped and
-// returned. This drives the fallback to keywordClassify inside Select.
+// TestClassifyIntentError 验证分类器 error 会被包装并返回。
+// 这驱动 Select 内部回退到 keywordClassify。
 func TestClassifyIntentError(t *testing.T) {
 	sentinel := errors.New("network down")
 	r := NewRouter(NewModelRegistry(), &stubClassifier{chatErr: sentinel})
@@ -258,8 +255,7 @@ func TestClassifyIntentError(t *testing.T) {
 	}
 }
 
-// TestClassifyIntentEmptyResponse verifies that a classifier returning an empty
-// Choices slice yields an error.
+// TestClassifyIntentEmptyResponse 验证分类器返回空 Choices slice 时会得到 error。
 func TestClassifyIntentEmptyResponse(t *testing.T) {
 	r := NewRouter(NewModelRegistry(), &emptyChoiceClassifier{})
 	_, err := r.classifyIntent(context.Background(), "x")
@@ -271,8 +267,8 @@ func TestClassifyIntentEmptyResponse(t *testing.T) {
 	}
 }
 
-// emptyChoiceClassifier is a Provider that returns a ChatResponse with no
-// Choices, used to exercise the empty-response branch of classifyIntent.
+// emptyChoiceClassifier 是一个返回无 Choices 的 ChatResponse 的 Provider，
+// 用于触发 classifyIntent 的 empty-response 分支。
 type emptyChoiceClassifier struct{}
 
 func (emptyChoiceClassifier) Name() string { return "empty" }
@@ -286,14 +282,13 @@ func (emptyChoiceClassifier) ChatStream(req ChatRequest, onChunk func(StreamChun
 var _ Provider = emptyChoiceClassifier{}
 
 // ---------------------------------------------------------------------------
-// Select — end-to-end routing with stub classifier
+// Select —— 用 stub 分类器做端到端路由
 // ---------------------------------------------------------------------------
 
-// TestSelectByClassifierIntent verifies that the Router's Select method picks a
-// model from the tier matching the classifier's intent. Table-driven across
-// the four intents.
+// TestSelectByClassifierIntent 验证 Router 的 Select 会从分类器 intent
+// 对应的层级中选 model。对四个 intent 做表驱动测试。
 func TestSelectByClassifierIntent(t *testing.T) {
-	// Registry: one model per tier, all satisfying a no-cap request.
+	// Registry：每个层级一个 model，都满足无能力要求的请求。
 	reg := newRegistryWith(
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
@@ -333,8 +328,8 @@ func TestSelectByClassifierIntent(t *testing.T) {
 	}
 }
 
-// TestSelectFallsBackToKeywordOnClassifierError verifies that when the classifier
-// Provider fails, Select falls back to keywordClassify and still routes correctly.
+// TestSelectFallsBackToKeywordOnClassifierError 验证当分类
+// Provider 失败时，Select 会回退到 keywordClassify 并仍能正确路由。
 func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
@@ -343,7 +338,7 @@ func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 	)
 	r := NewRouter(reg, &stubClassifier{chatErr: errors.New("classifier unavailable")})
 
-	// "implement a function" matches the "implement" code keyword → code_generation → TierStandard.
+	// "implement a function" 命中 "implement" code 关键字 → code_generation → TierStandard。
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "implement a function"})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
@@ -354,15 +349,14 @@ func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 	if dec.Intent != "code_generation" {
 		t.Errorf("Intent = %q, want code_generation", dec.Intent)
 	}
-	// Sanity: the classifier was actually called (and failed), proving the
-	// fallback path was taken.
+	// Sanity：分类器确实被调用过（且失败了），证明走了 fallback 路径。
 	if r.classifier.(*stubClassifier).chatCalls != 1 {
 		t.Errorf("classifier chat calls = %d, want 1", r.classifier.(*stubClassifier).chatCalls)
 	}
 }
 
-// TestSelectFallbackChainResolved verifies that RouteDecision.Fallback is
-// resolved via the registry's GetFallback (primary's FallbackModel field).
+// TestSelectFallbackChainResolved 验证 RouteDecision.Fallback 通过
+// registry 的 GetFallback（primary 的 FallbackModel 字段）解析得到。
 func TestSelectFallbackChainResolved(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, "efficient-m"),
@@ -382,8 +376,8 @@ func TestSelectFallbackChainResolved(t *testing.T) {
 	}
 }
 
-// TestSelectNoFallbackWhenNotConfigured verifies that RouteDecision.Fallback is
-// nil when the selected primary has no FallbackModel configured.
+// TestSelectNoFallbackWhenNotConfigured 验证当选中的 primary 未配置
+// FallbackModel 时，RouteDecision.Fallback 为 nil。
 func TestSelectNoFallbackWhenNotConfigured(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
@@ -399,10 +393,10 @@ func TestSelectNoFallbackWhenNotConfigured(t *testing.T) {
 	}
 }
 
-// TestSelectFilterByCapability verifies that RequiredCaps filters out models
-// lacking the needed capability, even if they are in the target tier.
+// TestSelectFilterByCapability 验证 RequiredCaps 会过滤掉缺少所需能力的
+// model，即使它们在目标层级内。
 func TestSelectFilterByCapability(t *testing.T) {
-	// standard tier has two models: one with tool calling, one without.
+	// standard 层级有两个 model：一个带 tool calling，一个不带。
 	reg := newRegistryWith(
 		profileFor("standard-notool", TierStandard, nil, 8192, ""),
 		profileFor("standard-tool", TierStandard, []ModelCapability{CapToolCalling}, 8192, ""),
@@ -421,8 +415,7 @@ func TestSelectFilterByCapability(t *testing.T) {
 	}
 }
 
-// TestSelectFilterByContextLen verifies that ContextLen filters out models with
-// insufficient context windows.
+// TestSelectFilterByContextLen 验证 ContextLen 会过滤掉上下文窗口不足的 model。
 func TestSelectFilterByContextLen(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("small-ctx", TierStandard, nil, 4096, ""),
@@ -432,7 +425,7 @@ func TestSelectFilterByContextLen(t *testing.T) {
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:  "x",
-		ContextLen: 8192, // exceeds small-ctx's 4096
+		ContextLen: 8192, // 超过 small-ctx 的 4096
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
@@ -442,10 +435,10 @@ func TestSelectFilterByContextLen(t *testing.T) {
 	}
 }
 
-// TestSelectNoSuitableModelReturnsError verifies that when no model satisfies the
-// hard requirements, Select returns an error mentioning "no suitable model".
+// TestSelectNoSuitableModelReturnsError 验证当没有 model 满足硬性要求时，
+// Select 会返回含 "no suitable model" 的 error。
 func TestSelectNoSuitableModelReturnsError(t *testing.T) {
-	// Only one model, and it lacks vision. Request vision.
+	// 仅一个 model，且不支持 vision。请求要求 vision。
 	reg := newRegistryWith(
 		profileFor("no-vision", TierStandard, nil, 8192, ""),
 	)
@@ -463,15 +456,14 @@ func TestSelectNoSuitableModelReturnsError(t *testing.T) {
 	}
 }
 
-// TestSelectPreferredTierEscalates verifies that PreferredTier is combined with
-// the intent-derived tier via max(...), allowing callers to force a higher tier
-// than the intent alone would select.
+// TestSelectPreferredTierEscalates 验证 PreferredTier 会与 intent 推导出的
+// 层级通过 max(...) 合并，让调用方可以强制升到比 intent 单独决定的更高的层级。
 func TestSelectPreferredTierEscalates(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
-	// simple_chat would pick TierEfficient, but PreferredTier=Premium escalates.
+	// simple_chat 本会选 TierEfficient，但 PreferredTier=Premium 升级。
 	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
@@ -486,9 +478,8 @@ func TestSelectPreferredTierEscalates(t *testing.T) {
 	}
 }
 
-// TestSelectReasonPopulated verifies that the RouteDecision.Reason field is
-// populated with a human-readable explanation containing the intent and model
-// name (white-box transparency).
+// TestSelectReasonPopulated 验证 RouteDecision.Reason 字段被填入人类可读说明，
+// 包含 intent 与 model 名（白盒透明度）。
 func TestSelectReasonPopulated(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
@@ -510,8 +501,8 @@ func TestSelectReasonPopulated(t *testing.T) {
 	}
 }
 
-// TestSelectModelShorthand verifies that SelectModel returns just the model name
-// and propagates errors from Select.
+// TestSelectModelShorthand 验证 SelectModel 只返回 model 名，
+// 并透传 Select 的 error。
 func TestSelectModelShorthand(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
@@ -527,10 +518,10 @@ func TestSelectModelShorthand(t *testing.T) {
 	}
 }
 
-// TestSelectModelShorthandError verifies that SelectModel surfaces the Select
-// error when no suitable model is found.
+// TestSelectModelShorthandError 验证找不到合适 model 时，
+// SelectModel 会透出 Select 的 error。
 func TestSelectModelShorthandError(t *testing.T) {
-	reg := NewModelRegistry() // empty
+	reg := NewModelRegistry() // 空
 	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
 	_, err := r.SelectModel(context.Background(), &RouteRequest{UserInput: "x"})
 	if err == nil {
@@ -539,11 +530,11 @@ func TestSelectModelShorthandError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Select with empty registry
+// 空 registry 下的 Select
 // ---------------------------------------------------------------------------
 
-// TestSelectEmptyRegistryReturnsError verifies that an empty ModelRegistry plus
-// any request yields the "no suitable model" error.
+// TestSelectEmptyRegistryReturnsError 验证空 ModelRegistry 加任意请求
+// 会得到 "no suitable model" error。
 func TestSelectEmptyRegistryReturnsError(t *testing.T) {
 	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "simple_chat"})
 	_, err := r.Select(context.Background(), &RouteRequest{UserInput: "hi"})
@@ -553,11 +544,11 @@ func TestSelectEmptyRegistryReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ModelRegistry (companion to Router — exercised via Router's deps)
+// ModelRegistry（Router 的伴生组件 —— 经由 Router 依赖被测试覆盖）
 // ---------------------------------------------------------------------------
 
-// TestModelRegistryGetMissingReturnsNil verifies that Get on a missing name
-// returns nil (not an error), per the documented contract.
+// TestModelRegistryGetMissingReturnsNil 验证对不存在的名字调用 Get
+// 返回 nil（而非 error），符合文档契约。
 func TestModelRegistryGetMissingReturnsNil(t *testing.T) {
 	reg := NewModelRegistry()
 	if got := reg.Get("missing"); got != nil {
@@ -565,8 +556,8 @@ func TestModelRegistryGetMissingReturnsNil(t *testing.T) {
 	}
 }
 
-// TestModelRegistryGetByTierEmpty verifies that GetByTier on an empty tier
-// returns an empty (non-nil) slice.
+// TestModelRegistryGetByTierEmpty 验证对空层级调用 GetByTier
+// 返回空（非 nil）slice。
 func TestModelRegistryGetByTierEmpty(t *testing.T) {
 	reg := NewModelRegistry()
 	got := reg.GetByTier(TierPremium)
@@ -578,8 +569,8 @@ func TestModelRegistryGetByTierEmpty(t *testing.T) {
 	}
 }
 
-// TestModelRegistryGetFallbackMissing verifies that GetFallback returns nil when
-// the named model is not registered.
+// TestModelRegistryGetFallbackMissing 验证当指定 model 未注册时
+// GetFallback 返回 nil。
 func TestModelRegistryGetFallbackMissing(t *testing.T) {
 	reg := NewModelRegistry()
 	if got := reg.GetFallback("nope"); got != nil {
@@ -587,8 +578,8 @@ func TestModelRegistryGetFallbackMissing(t *testing.T) {
 	}
 }
 
-// TestModelRegistryGetFallbackNoFallbackConfigured verifies GetFallback returns
-// nil when the model exists but has an empty FallbackModel field.
+// TestModelRegistryGetFallbackNoFallbackConfigured 验证当 model 存在
+// 但 FallbackModel 字段为空时，GetFallback 返回 nil。
 func TestModelRegistryGetFallbackNoFallbackConfigured(t *testing.T) {
 	reg := newRegistryWith(profileFor("m", TierStandard, nil, 8192, ""))
 	if got := reg.GetFallback("m"); got != nil {
@@ -596,12 +587,12 @@ func TestModelRegistryGetFallbackNoFallbackConfigured(t *testing.T) {
 	}
 }
 
-// TestModelRegistryRegisterOverwrites verifies that registering a profile with
-// an existing name overwrites the previous entry.
+// TestModelRegistryRegisterOverwrites 验证以已存在的名字注册 profile
+// 会覆盖之前的条目。
 func TestModelRegistryRegisterOverwrites(t *testing.T) {
 	reg := NewModelRegistry()
 	reg.Register(profileFor("m", TierStandard, nil, 8192, ""))
-	reg.Register(profileFor("m", TierPremium, nil, 8192, "")) // overwrite
+	reg.Register(profileFor("m", TierPremium, nil, 8192, "")) // 覆盖
 
 	got := reg.Get("m")
 	if got == nil {
@@ -613,10 +604,10 @@ func TestModelRegistryRegisterOverwrites(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ModelProfile helpers (used by Router's filtering)
+// ModelProfile helper（Router 过滤使用）
 // ---------------------------------------------------------------------------
 
-// TestModelProfileHasCapability is a table-driven test of HasCapability.
+// TestModelProfileHasCapability 是 HasCapability 的表驱动测试。
 func TestModelProfileHasCapability(t *testing.T) {
 	mp := &ModelProfile{Capabilities: []ModelCapability{CapToolCalling, CapStreaming}}
 	tests := []struct {
@@ -638,7 +629,7 @@ func TestModelProfileHasCapability(t *testing.T) {
 	}
 }
 
-// TestModelProfileSupportsContextLen verifies the context window check.
+// TestModelProfileSupportsContextLen 验证上下文窗口检查。
 func TestModelProfileSupportsContextLen(t *testing.T) {
 	mp := &ModelProfile{MaxContextWindow: 8192}
 	tests := []struct {
@@ -647,8 +638,8 @@ func TestModelProfileSupportsContextLen(t *testing.T) {
 	}{
 		{0, true},
 		{1, true},
-		{8192, true},   // exactly equal
-		{8193, false},  // one over
+		{8192, true},   // 恰好相等
+		{8193, false},  // 多 1
 		{100000, false},
 	}
 	for _, tc := range tests {
@@ -664,8 +655,7 @@ func TestModelProfileSupportsContextLen(t *testing.T) {
 // ModelTier.String()
 // ---------------------------------------------------------------------------
 
-// TestModelTierString verifies the human-readable tier names and that unknown
-// tiers map to "unknown".
+// TestModelTierString 验证人类可读的层级名，以及未知层级映射到 "unknown"。
 func TestModelTierString(t *testing.T) {
 	tests := []struct {
 		tier ModelTier
@@ -688,11 +678,11 @@ func TestModelTierString(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DefaultProfiles (sanity check the registry's seeded data)
+// DefaultProfiles（对 registry 的种子数据做 sanity check）
 // ---------------------------------------------------------------------------
 
-// TestDefaultProfilesShape sanity-checks DefaultProfiles: it returns two
-// profiles with expected names and the pro model's fallback points to flash.
+// TestDefaultProfilesShape 对 DefaultProfiles 做 sanity check：
+// 返回两个 profile，名字符合预期，且 pro model 的 fallback 指向 flash。
 func TestDefaultProfilesShape(t *testing.T) {
 	profiles := DefaultProfiles()
 	if len(profiles) != 2 {
@@ -725,12 +715,12 @@ func TestDefaultProfilesShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewRouter constructor
+// NewRouter 构造器
 // ---------------------------------------------------------------------------
 
-// TestNewRouterNilArgs verifies that NewRouter does not panic when given nil
-// arguments — it simply stores them. Calling Select on such a Router would
-// panic on the nil registry, but construction itself must be safe.
+// TestNewRouterNilArgs 验证 NewRouter 在传入 nil 参数时不会 panic ——
+// 它只是把它们存起来。对这样的 Router 调用 Select 会在 nil registry 上
+// panic，但构造本身必须安全。
 func TestNewRouterNilArgs(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -744,13 +734,13 @@ func TestNewRouterNilArgs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// BudgetUSD filtering
+// BudgetUSD 过滤
 // ---------------------------------------------------------------------------
 
-// TestSelectFiltersByBudgetUSD verifies that a model whose InputPrice exceeds the
-// budget ceiling is excluded from candidate selection.
+// TestSelectFiltersByBudgetUSD 验证 InputPrice 超过预算上限的 model
+// 会被排除出候选。
 func TestSelectFiltersByBudgetUSD(t *testing.T) {
-	// standard-m has InputPrice=1.0; budget=0.5 means it should be filtered out.
+	// standard-m 的 InputPrice=1.0；budget=0.5 意味着应被过滤。
 	reg := newRegistryWith(
 		profileFor("expensive-m", TierStandard, nil, 8192, ""), // InputPrice=1.0
 	)
@@ -765,7 +755,7 @@ func TestSelectFiltersByBudgetUSD(t *testing.T) {
 	}
 }
 
-// TestSelectPassesByBudgetUSD verifies that a model within budget is still selected.
+// TestSelectPassesByBudgetUSD 验证预算内的 model 仍会被选中。
 func TestSelectPassesByBudgetUSD(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("cheap-m", TierEfficient, nil, 8192, ""), // InputPrice=1.0
@@ -774,7 +764,7 @@ func TestSelectPassesByBudgetUSD(t *testing.T) {
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
-		BudgetUSD: 1.0, // exactly at the limit — InputPrice=1.0 is NOT > 1.0, so passes
+		BudgetUSD: 1.0, // 恰好到上限 —— InputPrice=1.0 不大于 1.0，所以通过
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
@@ -785,21 +775,21 @@ func TestSelectPassesByBudgetUSD(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// LatencyReq filtering
+// LatencyReq 过滤
 // ---------------------------------------------------------------------------
 
-// TestSelectFiltersByLatencyReq verifies that models whose AvgLatencyMs exceeds
-// the latency requirement are excluded from candidate selection.
+// TestSelectFiltersByLatencyReq 验证 AvgLatencyMs 超过延迟要求的 model
+// 会被排除出候选。
 func TestSelectFiltersByLatencyReq(t *testing.T) {
-	// profileFor defaults to AvgLatencyMs=500. Set a 300ms ceiling to exclude it.
+	// profileFor 默认 AvgLatencyMs=500。设 300ms 上限以排除它。
 	slowModel := profileFor("slow-m", TierStandard, nil, 8192, "")
 	slowModel.AvgLatencyMs = 500
 
 	reg := newRegistryWith(
 		slowModel,
-		profileFor("fast-m", TierEfficient, nil, 8192, ""), // AvgLatencyMs=500 default
+		profileFor("fast-m", TierEfficient, nil, 8192, ""), // 默认 AvgLatencyMs=500
 	)
-	// Make fast-m actually fast
+	// 把 fast-m 真正调快
 	for _, m := range reg.List() {
 		if m.Name == "fast-m" {
 			m.AvgLatencyMs = 200
@@ -811,7 +801,7 @@ func TestSelectFiltersByLatencyReq(t *testing.T) {
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
 		LatencyReq:   250 * time.Millisecond,
-		PreferredTier: TierEfficient, // force tier so cheap-m is tried first
+		PreferredTier: TierEfficient, // 强制层级，让 cheap-m 先被尝试
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
@@ -823,11 +813,11 @@ func TestSelectFiltersByLatencyReq(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Zero-value BudgetUSD / LatencyReq disables filtering (backward compat)
+// BudgetUSD / LatencyReq 零值时禁用过滤（向后兼容）
 // ---------------------------------------------------------------------------
 
-// TestSelectBudgetUSDZeroDisablesFiltering verifies that BudgetUSD=0 means no
-// budget filter is applied (existing behavior preserved).
+// TestSelectBudgetUSDZeroDisablesFiltering 验证 BudgetUSD=0 表示
+// 不应用预算过滤（保留既有行为）。
 func TestSelectBudgetUSDZeroDisablesFiltering(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
@@ -836,7 +826,7 @@ func TestSelectBudgetUSDZeroDisablesFiltering(t *testing.T) {
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
-		// BudgetUSD defaults to 0 — budget filter not applied
+		// BudgetUSD 默认 0 —— 不应用预算过滤
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)

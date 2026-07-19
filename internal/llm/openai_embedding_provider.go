@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// OpenAIEmbeddingProvider implements EmbeddingProvider for OpenAI-compatible
-// text embedding endpoints.
+// OpenAIEmbeddingProvider 为 OpenAI-compatible 文本 embedding endpoint 实现 EmbeddingProvider。
 type OpenAIEmbeddingProvider struct {
 	endpoint   string
 	apiKey     string

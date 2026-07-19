@@ -1,8 +1,7 @@
-// Package llm — MockProvider: deterministic LLM provider for testing.
+// Package llm —— MockProvider：用于测试的确定性 LLM provider。
 //
-// MockProvider implements the Provider interface but never calls a remote API.
-// Instead, it looks up a MockScript from a MockScriptStore and returns the
-// scripted response sequence.
+// MockProvider 实现了 Provider 接口，但绝不调用远程 API。
+// 而是从 MockScriptStore 中查找 MockScript，并返回脚本中预设的响应序列。
 package llm
 
 import (
@@ -12,11 +11,11 @@ import (
 	"time"
 )
 
-// MockProvider implements the Provider interface using deterministic scripts.
+// MockProvider 基于确定性脚本实现 Provider 接口。
 //
-// It selects a script by case_id (from ChatRequest.CaseID) or by keyword matching
-// the last user message, and replays the next response in the script's sequence.
-// Built-in scripts are loaded into the store at startup and serve as fallbacks.
+// 它通过 case_id（来自 ChatRequest.CaseID）或对最后一条 user 消息的关键字
+// 匹配来选择脚本，并重放脚本序列中的下一条响应。
+// 内置脚本在启动时加载到 store 中，作为回退使用。
 type MockProvider struct {
 	name            string
 	store           MockScriptStore
@@ -24,8 +23,8 @@ type MockProvider struct {
 	callIndexByCase map[string]int
 }
 
-// NewMockProvider creates a new mock provider backed by store, with builtinScripts
-// available as fallback when no dynamic script matches.
+// NewMockProvider 创建一个以 store 为底层、以 builtinScripts 为
+// 无动态脚本匹配时回退的新 mock provider。
 func NewMockProvider(name string, store MockScriptStore, builtinScripts []MockScript) *MockProvider {
 	return &MockProvider{
 		name:            name,
@@ -35,10 +34,10 @@ func NewMockProvider(name string, store MockScriptStore, builtinScripts []MockSc
 	}
 }
 
-// Name returns the provider identifier.
+// Name 返回 provider 标识。
 func (p *MockProvider) Name() string { return p.name }
 
-// Chat sends a non-streaming request and returns the first scripted response.
+// Chat 发送非流式请求并返回第一条脚本响应。
 func (p *MockProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	ctx := req.Context
 	if ctx == nil {
@@ -60,7 +59,7 @@ func (p *MockProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 	}, nil
 }
 
-// ChatStream sends a streaming request and emits scripted chunks.
+// ChatStream 发送流式请求并发出脚本化的 chunk。
 func (p *MockProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	ctx := req.Context
 	if ctx == nil {
@@ -129,14 +128,14 @@ func (p *MockProvider) chatStream(ctx context.Context, req ChatRequest, onChunk 
 	}
 }
 
-// selectScript chooses the best matching script for the request.
-// It returns a stable key for response-sequence indexing and the selected script.
+// selectScript 为请求选择最佳匹配脚本。
+// 它返回用于响应序列索引的稳定 key 以及被选中的脚本。
 func (p *MockProvider) selectScript(userInput, model, caseID string, scripts []MockScript) (string, MockScript) {
 	lowerInput := strings.ToLower(userInput)
 
-	// Dynamic scripts from store take precedence.
+	// 来自 store 的动态脚本优先。
 	allScripts := append([]MockScript{}, scripts...)
-	// Built-in scripts are appended as fallback.
+	// 内置脚本追加在后作为回退。
 	allScripts = append(allScripts, p.builtinScripts...)
 
 	var best MockScript

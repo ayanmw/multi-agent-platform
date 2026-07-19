@@ -6,18 +6,18 @@ import (
 	"time"
 )
 
-// MockResponseType identifies the kind of response entry in a mock script.
+// MockResponseType 标识 mock 脚本中响应条目的类型。
 type MockResponseType string
 
 const (
-	// MockResponseText emits a single text response with no tool calls.
+	// MockResponseText 发出单条文本响应，无 tool call。
 	MockResponseText MockResponseType = "text"
-	// MockResponseToolCall emits a tool call response.
+	// MockResponseToolCall 发出 tool call 响应。
 	MockResponseToolCall MockResponseType = "tool_call"
 )
 
-// MockResponse is a single step in a mock script response sequence.
-// When Type is "tool_call", ToolCalls carries the requested tool calls.
+// MockResponse 是 mock 脚本响应序列中的单步。
+// 当 Type 为 "tool_call" 时，ToolCalls 携带所请求的 tool call。
 type MockResponse struct {
 	Type      MockResponseType `json:"type"`
 	Content   string           `json:"content,omitempty"`
@@ -25,8 +25,8 @@ type MockResponse struct {
 	DelayMs   int              `json:"delay_ms,omitempty"`
 }
 
-// MockScript describes a deterministic LLM response sequence used by MockProvider.
-// It can be matched by caseID or by keywords in the last user message.
+// MockScript 描述 MockProvider 使用的确定性 LLM 响应序列。
+// 可通过 caseID 或最后一条 user 消息中的关键字进行匹配。
 type MockScript struct {
 	ID         string         `json:"id"`
 	CaseID     string         `json:"case_id"`
@@ -37,36 +37,36 @@ type MockScript struct {
 	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
-// MockScriptStore defines persistence operations for MockScript records.
-// DB-backed implementations can be plugged in without changing MockProvider.
+// MockScriptStore 定义 MockScript 记录的持久化操作。
+// 可插入 DB 后端实现而无需改动 MockProvider。
 type MockScriptStore interface {
-	// List returns all stored mock scripts.
+	// List 返回所有已存储的 mock 脚本。
 	List() ([]MockScript, error)
-	// Get returns a single script by ID.
+	// Get 按 ID 返回单个脚本。
 	Get(id string) (MockScript, error)
-	// Save persists a script, assigning an ID if needed.
+	// Save 持久化一个脚本，必要时分配 ID。
 	Save(script MockScript) (MockScript, error)
-	// Delete removes a script by ID.
+	// Delete 按 ID 删除脚本。
 	Delete(id string) error
-	// LoadBuiltin seeds the store with built-in scripts.
+	// LoadBuiltin 用内置脚本初始化 store。
 	LoadBuiltin(scripts []MockScript) error
 }
 
-// InMemoryMockScriptStore is a thread-safe in-memory implementation of MockScriptStore.
-// It is used when no DB is available or as a cache layer on top of a DB store.
+// InMemoryMockScriptStore 是 MockScriptStore 的线程安全内存实现。
+// 在无可用 DB 或作为 DB store 之上的缓存层时使用。
 type InMemoryMockScriptStore struct {
 	mu      sync.RWMutex
 	scripts map[string]MockScript
 }
 
-// NewInMemoryMockScriptStore creates an empty in-memory mock script store.
+// NewInMemoryMockScriptStore 创建一个空的内存 mock 脚本 store。
 func NewInMemoryMockScriptStore() *InMemoryMockScriptStore {
 	return &InMemoryMockScriptStore{
 		scripts: make(map[string]MockScript),
 	}
 }
 
-// List returns all stored mock scripts.
+// List 返回所有已存储的 mock 脚本。
 func (s *InMemoryMockScriptStore) List() ([]MockScript, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -78,7 +78,7 @@ func (s *InMemoryMockScriptStore) List() ([]MockScript, error) {
 	return list, nil
 }
 
-// Get returns a single script by ID.
+// Get 按 ID 返回单个脚本。
 func (s *InMemoryMockScriptStore) Get(id string) (MockScript, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -90,7 +90,7 @@ func (s *InMemoryMockScriptStore) Get(id string) (MockScript, error) {
 	return script, nil
 }
 
-// Save persists a script, assigning a random ID if empty.
+// Save 持久化一个脚本，ID 为空时分配随机 ID。
 func (s *InMemoryMockScriptStore) Save(script MockScript) (MockScript, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,7 +106,7 @@ func (s *InMemoryMockScriptStore) Save(script MockScript) (MockScript, error) {
 	return script, nil
 }
 
-// Delete removes a script by ID.
+// Delete 按 ID 删除脚本。
 func (s *InMemoryMockScriptStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,7 +118,7 @@ func (s *InMemoryMockScriptStore) Delete(id string) error {
 	return nil
 }
 
-// LoadBuiltin seeds the store with built-in scripts, overwriting any existing scripts with the same ID.
+// LoadBuiltin 用内置脚本初始化 store，相同 ID 的脚本会被覆盖。
 func (s *InMemoryMockScriptStore) LoadBuiltin(scripts []MockScript) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,9 +136,8 @@ func (s *InMemoryMockScriptStore) LoadBuiltin(scripts []MockScript) error {
 	return nil
 }
 
-// DefaultMockStore is the process-wide default in-memory mock script store.
-// It is used by the mock provider and by the mock management API so both share
-// the same set of scripts.
+// DefaultMockStore 是进程级默认内存 mock 脚本 store。
+// mock provider 与 mock 管理 API 共用同一组脚本。
 var DefaultMockStore = NewInMemoryMockScriptStore()
 
 // RegisterMockScriptForTest 把一条 mock script 注入 DefaultMockStore 并返回一个
