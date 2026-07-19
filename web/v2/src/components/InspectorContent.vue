@@ -4,12 +4,15 @@ import InspectorTabs from './InspectorTabs.vue'
 import SkillPanel from './SkillPanel.vue'
 import CaseFilter from './CaseFilter.vue'
 import CaseCard from './CaseCard.vue'
+import CaseDetailModal from './CaseDetailModal.vue'
+import CaseForm from './CaseForm.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import RAGPreviewPanel from './RAGPreviewPanel.vue'
 import ContextWindowPanel from './ContextWindowPanel.vue'
 import AgentConfig from './AgentConfig.vue'
 import ProjectConfig from './ProjectConfig.vue'
 import { useCaseStore } from '@/composables/useCaseStore'
+import { useToast } from '@/composables/useToast'
 import { useSkills } from '@/composables/useSkills'
 import { useTaskStore } from '@/composables/useTaskStore'
 import { useSessionStore } from '@/composables/useSessionStore'
@@ -37,6 +40,7 @@ const emit = defineEmits<{
 const activeTab = ref('sessions')
 
 const caseStore = useCaseStore()
+const { showError, showInfo } = useToast()
 const { filteredCases, allTags, allCategories, selectedTags, selectedCategory, loading: casesLoading } = caseStore
 const { skills } = useSkills()
 const { activeTaskId, taskCache } = useTaskStore()
@@ -46,6 +50,19 @@ const traceStore = useTraceStore()
 
 /** 当前在 ContextWindowPanel 中查看的子任务 / Agent 实例 */
 const selectedSubTaskId = ref('')
+
+// Case Detail / Form modal 状态：
+// - detailVisible / detailCase 驱动 CaseDetailModal，查看 case 详情
+// - formVisible / formCase 驱动 CaseForm，caseData 为 null 表示新建
+const detailVisible = ref(false)
+const detailCase = ref<Case | null>(null)
+const formVisible = ref(false)
+const formCase = ref<Case | null>(null)
+
+/** 从 store 中按 id 查找 case；store 未提供 getCase，这里本地 find */
+function findCase(caseId: string): Case | undefined {
+  return caseStore.cases.value.find(c => c.id === caseId)
+}
 
 /** 将 trace tree 拍平为带缩进深度的行列表 */
 const flattenedSpans = computed(() => {
@@ -74,26 +91,49 @@ const subTaskOptions = computed(() => {
 })
 
 function handleCaseRun(caseId: string) {
+  // detail 内点击 Run 时也需要关闭弹窗，再向上层 emit 运行请求
+  detailVisible.value = false
   emit('run-case', caseId)
 }
 
 function handleCaseView(caseId: string) {
-  console.log('[InspectorContent] view case:', caseId)
+  // 从 Case Card 触发：装载 case 数据并打开 Detail Modal
+  detailCase.value = findCase(caseId) ?? null
+  detailVisible.value = true
 }
 
 function handleCaseEdit(caseId: string) {
-  console.log('[InspectorContent] edit case:', caseId)
+  // 从 Case Card 或 Detail Modal 触发：装载 case 数据并打开 Form Modal
+  formCase.value = findCase(caseId) ?? null
+  formVisible.value = true
+  detailVisible.value = false
 }
 
 function handleCaseDelete(caseId: string) {
   if (!confirm('Are you sure you want to delete this case?')) return
-  caseStore.deleteCase(caseId).catch((err: unknown) => {
-    console.error('[InspectorContent] delete case failed:', err)
-  })
+  caseStore.deleteCase(caseId)
+    .then(() => showInfo('Case 已删除'))
+    .catch((err: unknown) => {
+      console.error('[InspectorContent] delete case failed:', err)
+      showError(`删除 Case 失败: ${err instanceof Error ? err.message : String(err)}`)
+    })
 }
 
-function handleCaseSave(req: CreateCaseRequest | UpdateCaseRequest) {
-  console.log('[InspectorContent] save case:', req)
+// CaseForm @save：联合类型 req，根据 formCase 是否存在断言为 Update / Create
+async function handleCaseSave(req: CreateCaseRequest | UpdateCaseRequest) {
+  try {
+    if (formCase.value) {
+      await caseStore.updateCase(formCase.value.id, req as UpdateCaseRequest)
+      showInfo('Case 已更新')
+    } else {
+      await caseStore.createCase(req as CreateCaseRequest)
+      showInfo('Case 已创建')
+    }
+    formVisible.value = false
+  } catch (err: unknown) {
+    console.error('[InspectorContent] save case failed:', err)
+    showError(`保存 Case 失败: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 function handleTriggerSkill(command: string) {
@@ -149,8 +189,16 @@ function handleProjectBack() {
 
       <div v-else-if="activeTab === 'cases'" class="tab-pane">
         <div class="cases-header">
-          <h3 class="panel-title">Case Library</h3>
-          <span class="case-count">{{ filteredCases.length }}</span>
+          <div class="cases-title-row">
+            <h3 class="panel-title">Case Library</h3>
+            <span class="case-count">{{ filteredCases.length }}</span>
+          </div>
+          <!-- 新建 Case 按钮：formCase 置 null 进入 Form Modal 新建模式 -->
+          <button
+            class="case-new-btn"
+            title="新建 Case"
+            @click="formCase = null; formVisible = true"
+          >+ New Case</button>
         </div>
         <CaseFilter
           :selected-tags="selectedTags"
@@ -217,6 +265,22 @@ function handleProjectBack() {
         </div>
       </div>
     </InspectorTabs>
+
+    <!-- Cases tab 的两个 Modal：Detail（只读查看）与 Form（新建/编辑）。
+         都通过 Teleport 渲染到 body，这里只负责数据与事件绑定。 -->
+    <CaseDetailModal
+      :case-data="detailCase"
+      :visible="detailVisible"
+      @close="detailVisible = false"
+      @run="handleCaseRun"
+      @edit="handleCaseEdit"
+    />
+    <CaseForm
+      :case-data="formCase"
+      :visible="formVisible"
+      @close="formVisible = false"
+      @save="handleCaseSave"
+    />
   </div>
 </template>
 
@@ -356,6 +420,31 @@ function handleProjectBack() {
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--space-sm);
+}
+
+.cases-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* 新建 Case 按钮：与 .context-select 等控件视觉一致，使用 v2 token 而非硬编码颜色 */
+.case-new-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--accent-running);
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.case-new-btn:hover {
+  border-color: var(--accent-running);
+  background: rgba(0, 229, 255, 0.08);
 }
 
 .panel-title {
