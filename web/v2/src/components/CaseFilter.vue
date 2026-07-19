@@ -89,14 +89,14 @@ function handleCategoryChange(e: Event) {
 
 .filter-label {
   font-size: 12px;
-  color: #888;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .category-select {
-  background: #252525;
-  border: 1px solid #444;
-  color: #ccc;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
   font-size: 12px;
   padding: 6px 10px;
   border-radius: 6px;
@@ -105,7 +105,7 @@ function handleCategoryChange(e: Event) {
 }
 
 .category-select:focus {
-  border-color: #4a9eff;
+  border-color: var(--accent-running);
 }
 
 .tag-pills {
@@ -116,9 +116,9 @@ function handleCategoryChange(e: Event) {
 
 .tag-pill {
   font-size: 11px;
-  color: #888;
-  background: #333;
-  border: 1px solid #444;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   padding: 3px 10px;
   cursor: pointer;
@@ -126,21 +126,21 @@ function handleCategoryChange(e: Event) {
 }
 
 .tag-pill:hover {
-  background: #3a3a3a;
-  color: #ccc;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .tag-pill.active {
-  background: rgba(74, 158, 255, 0.2);
-  color: #4a9eff;
-  border-color: #4a9eff;
+  background: rgba(0, 229, 255, 0.2);
+  color: var(--accent-running);
+  border-color: var(--accent-running);
 }
 
 .clear-btn {
   font-size: 11px;
-  color: #aaa;
+  color: var(--text-secondary);
   background: transparent;
-  border: 1px dashed #555;
+  border: 1px dashed var(--border-default);
   border-radius: 6px;
   padding: 4px 10px;
   cursor: pointer;
@@ -148,8 +148,8 @@ function handleCategoryChange(e: Event) {
 }
 
 .clear-btn:hover {
-  background: rgba(231, 76, 60, 0.1);
-  color: #e74c3c;
-  border-color: #e74c3c;
+  background: rgba(255, 77, 77, 0.1);
+  color: var(--accent-danger);
+  border-color: var(--accent-danger);
 }
 </style>

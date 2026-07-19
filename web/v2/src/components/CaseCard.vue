@@ -94,8 +94,8 @@ function handleTagClick(tag: string, event: MouseEvent) {
 
 <style scoped>
 .case-card {
-  background: #252525;
-  border: 1px solid #333;
+  background: var(--bg-panel);
+  border: 1px solid var(--bg-elevated);
   border-radius: 8px;
   padding: 14px;
   transition: border-color 0.2s, background 0.2s;
@@ -105,7 +105,7 @@ function handleTagClick(tag: string, event: MouseEvent) {
 }
 
 .case-card:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent-running);
 }
 
 .case-card-header {
@@ -137,7 +137,7 @@ function handleTagClick(tag: string, event: MouseEvent) {
 .case-card-title h3 {
   font-size: 14px;
   font-weight: 600;
-  color: #e0e0e0;
+  color: var(--text-primary);
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -146,16 +146,16 @@ function handleTagClick(tag: string, event: MouseEvent) {
 
 .case-category {
   font-size: 10px;
-  color: #888;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .builtin-badge {
   font-size: 9px;
-  color: #aaa;
-  background: #333;
-  border: 1px solid #444;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   padding: 1px 5px;
   border-radius: 8px;
   text-transform: uppercase;
@@ -164,7 +164,7 @@ function handleTagClick(tag: string, event: MouseEvent) {
 
 .case-description {
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
   line-height: 1.5;
   margin: 0;
   flex: 1;
@@ -186,8 +186,8 @@ function handleTagClick(tag: string, event: MouseEvent) {
 
 .case-tag {
   font-size: 10px;
-  color: #888;
-  background: #333;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
   padding: 1px 6px;
   border-radius: 8px;
   cursor: pointer;
@@ -195,8 +195,8 @@ function handleTagClick(tag: string, event: MouseEvent) {
 }
 
 .case-tag:hover {
-  background: #3a3a3a;
-  color: #4a9eff;
+  background: var(--bg-hover);
+  color: var(--accent-running);
 }
 
 .case-actions {
@@ -219,33 +219,34 @@ function handleTagClick(tag: string, event: MouseEvent) {
 
 .case-action-btn:hover {
   opacity: 1;
-  background: #333;
+  background: var(--bg-elevated);
 }
 
 .case-action-btn.edit:hover {
-  color: #4a9eff;
+  color: var(--accent-running);
 }
 
 .case-action-btn.delete:hover {
-  color: #e74c3c;
+  color: var(--accent-danger);
 }
 
 .case-run-btn {
   padding: 6px 16px;
-  background: #4a9eff;
-  color: #fff;
+  background: var(--accent-running);
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, filter 0.2s;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .case-run-btn:hover:not(:disabled) {
-  background: #3a8eef;
+  background: var(--accent-running);
+  filter: brightness(1.1);
 }
 
 .case-run-btn:disabled {

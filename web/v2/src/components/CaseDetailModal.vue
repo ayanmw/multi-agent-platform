@@ -173,8 +173,8 @@ defineEmits<{
 }
 
 .modal-content {
-  background: #252525;
-  border: 1px solid #444;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   max-width: 640px;
   width: 100%;
@@ -205,13 +205,13 @@ defineEmits<{
 .modal-title {
   font-size: 18px;
   font-weight: 700;
-  color: #e0e0e0;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .modal-category {
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -219,7 +219,7 @@ defineEmits<{
 .modal-close-btn {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
@@ -228,8 +228,8 @@ defineEmits<{
 }
 
 .modal-close-btn:hover {
-  color: #fff;
-  background: #333;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .modal-body {
@@ -245,7 +245,7 @@ defineEmits<{
 .modal-section h3 {
   font-size: 12px;
   font-weight: 600;
-  color: #999;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 6px;
@@ -253,7 +253,7 @@ defineEmits<{
 
 .modal-section p {
   font-size: 13px;
-  color: #ccc;
+  color: var(--text-primary);
   line-height: 1.6;
 }
 
@@ -265,20 +265,20 @@ defineEmits<{
 
 .modal-tag {
   font-size: 11px;
-  color: #aaa;
-  background: #333;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
   padding: 2px 10px;
   border-radius: 10px;
 }
 
 .modal-code {
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg-canvas);
+  border: 1px solid var(--bg-elevated);
   border-radius: 6px;
   padding: 10px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: #ce9178;
+  color: var(--accent-warning);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -309,7 +309,7 @@ defineEmits<{
 
 .contract-label {
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary);
   min-width: 100px;
   flex-shrink: 0;
   text-transform: uppercase;
@@ -318,7 +318,7 @@ defineEmits<{
 
 .contract-value {
   font-size: 13px;
-  color: #d4d4d4;
+  color: var(--text-primary);
 }
 
 .contract-tools {
@@ -329,10 +329,10 @@ defineEmits<{
 
 .contract-tools code {
   font-size: 11px;
-  background: #333;
+  background: var(--bg-elevated);
   padding: 1px 6px;
   border-radius: 4px;
-  color: #ce9178;
+  color: var(--accent-warning);
 }
 
 .contract-permissions {
@@ -349,13 +349,13 @@ defineEmits<{
 }
 
 .permission-pill.allowed {
-  background: rgba(81, 207, 102, 0.15);
-  color: #51cf66;
+  background: rgba(57, 255, 20, 0.15);
+  color: var(--accent-success);
 }
 
 .permission-pill.denied {
-  background: rgba(231, 76, 60, 0.15);
-  color: #e74c3c;
+  background: rgba(255, 77, 77, 0.15);
+  color: var(--accent-danger);
 }
 
 /* Acceptance criteria */
@@ -370,40 +370,40 @@ defineEmits<{
   align-items: flex-start;
   gap: 10px;
   padding: 6px 10px;
-  background: #1e1e1e;
+  background: var(--bg-canvas);
   border-radius: 6px;
-  border: 1px solid #333;
+  border: 1px solid var(--bg-elevated);
   flex-wrap: wrap;
 }
 
 .ac-type {
   font-size: 10px;
   font-weight: 600;
-  color: #4a9eff;
-  background: #1a2a3a;
+  color: var(--accent-running);
+  background: rgba(0, 229, 255, 0.10);
   padding: 1px 6px;
   border-radius: 4px;
   white-space: nowrap;
-  font-family: 'Consolas', monospace;
+  font-family: var(--font-mono);
 }
 
 .ac-target {
   font-size: 11px;
-  color: #ce9178;
-  font-family: 'Consolas', monospace;
+  color: var(--accent-warning);
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 
 .ac-desc {
   font-size: 12px;
-  color: #ccc;
+  color: var(--text-primary);
   line-height: 1.4;
   flex: 1;
 }
 
 .ac-expected {
   font-size: 10px;
-  color: #888;
+  color: var(--text-secondary);
   font-style: italic;
 }
 
@@ -413,14 +413,14 @@ defineEmits<{
   justify-content: flex-end;
   gap: 10px;
   padding: 16px 20px;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--bg-elevated);
 }
 
 .modal-cancel-btn {
   padding: 8px 20px;
-  background: #333;
-  color: #ccc;
-  border: 1px solid #444;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -428,14 +428,14 @@ defineEmits<{
 }
 
 .modal-cancel-btn:hover {
-  background: #444;
+  background: var(--border-default);
 }
 
 .modal-edit-btn {
   padding: 8px 20px;
-  background: #2a2a2a;
-  color: #ccc;
-  border: 1px solid #555;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -443,25 +443,26 @@ defineEmits<{
 }
 
 .modal-edit-btn:hover {
-  background: #3a3a3a;
-  color: #4a9eff;
-  border-color: #4a9eff;
+  background: var(--bg-hover);
+  color: var(--accent-running);
+  border-color: var(--accent-running);
 }
 
 .modal-run-btn {
   padding: 8px 24px;
-  background: #4a9eff;
-  color: #fff;
+  background: var(--accent-running);
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, filter 0.2s;
 }
 
 .modal-run-btn:hover {
-  background: #3a8eef;
+  background: var(--accent-running);
+  filter: brightness(1.1);
 }
 
 /* Transition */

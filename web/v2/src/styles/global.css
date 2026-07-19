@@ -35,6 +35,10 @@
   --accent-info: #60a5fa;
   --accent-token: #f472b6;
 
+  /* accent 背景上的对比文字（Run/Save 等主行动按钮）。
+     cyan 背景较亮，用近黑保证对比度，与舱壁主题一致。 */
+  --text-on-accent: #07090c;
+
   /* 字体 — display + mono with fallbacks */
   --font-display: 'Chakra Petch', 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, 'Liberation Mono',

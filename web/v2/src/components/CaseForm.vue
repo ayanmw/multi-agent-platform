@@ -671,8 +671,8 @@ function handleClose() {
 }
 
 .modal-content {
-  background: #252525;
-  border: 1px solid #444;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   max-width: 640px;
   width: 100%;
@@ -687,20 +687,20 @@ function handleClose() {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--bg-elevated);
 }
 
 .modal-title {
   font-size: 16px;
   font-weight: 700;
-  color: #e0e0e0;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .modal-close-btn {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
@@ -709,8 +709,8 @@ function handleClose() {
 }
 
 .modal-close-btn:hover {
-  color: #fff;
-  background: #333;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .modal-body {
@@ -724,13 +724,13 @@ function handleClose() {
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 20px;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--bg-elevated);
 }
 
 .form-error {
-  background: rgba(231, 76, 60, 0.1);
-  border: 1px solid rgba(231, 76, 60, 0.3);
-  color: #e74c3c;
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.3);
+  color: var(--accent-danger);
   font-size: 12px;
   padding: 8px 10px;
   border-radius: 6px;
@@ -752,30 +752,30 @@ function handleClose() {
 
 .form-field label {
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
 
 .form-field label .required {
-  color: #e74c3c;
+  color: var(--accent-danger);
 }
 
 .form-field label .hint {
   text-transform: none;
-  color: #666;
+  color: var(--text-muted);
   font-weight: 400;
   margin-left: 4px;
 }
 
 .form-field input,
 .form-field textarea {
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg-canvas);
+  border: 1px solid var(--bg-elevated);
   border-radius: 6px;
   padding: 8px 10px;
-  color: #ddd;
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
   transition: border-color 0.2s;
@@ -784,7 +784,7 @@ function handleClose() {
 
 .form-field input:focus,
 .form-field textarea:focus {
-  border-color: #4a9eff;
+  border-color: var(--accent-running);
 }
 
 .form-field textarea {
@@ -794,9 +794,9 @@ function handleClose() {
 
 .modal-cancel-btn {
   padding: 8px 20px;
-  background: #333;
-  color: #ccc;
-  border: 1px solid #444;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -804,23 +804,24 @@ function handleClose() {
 }
 
 .modal-cancel-btn:hover {
-  background: #444;
+  background: var(--border-default);
 }
 
 .modal-save-btn {
   padding: 8px 24px;
-  background: #4a9eff;
-  color: #fff;
+  background: var(--accent-running);
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background 0.2s, filter 0.2s;
 }
 
 .modal-save-btn:hover {
-  background: #3a8eef;
+  background: var(--accent-running);
+  filter: brightness(1.1);
 }
 
 .modal-enter-active,
@@ -848,8 +849,8 @@ function handleClose() {
   left: var(--dropdown-left, auto);
   width: var(--dropdown-width, auto);
   max-height: var(--dropdown-max-height, 200px);
-  background: #1e1e1e;
-  border: 1px solid #444;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   overflow-y: auto;
   z-index: 10001;
@@ -859,24 +860,24 @@ function handleClose() {
 .dropdown-item {
   padding: 8px 10px;
   font-size: 13px;
-  color: #ccc;
+  color: var(--text-primary);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .dropdown-item:hover {
-  background: #333;
+  background: var(--bg-elevated);
 }
 
 .dropdown-item.add-item {
-  color: #4a9eff;
+  color: var(--accent-running);
   font-weight: 600;
 }
 
 .dropdown-empty {
   padding: 10px;
   font-size: 12px;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .tags-field {
@@ -888,8 +889,8 @@ function handleClose() {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg-canvas);
+  border: 1px solid var(--bg-elevated);
   border-radius: 6px;
   padding: 5px 8px;
   min-height: 36px;
@@ -897,7 +898,7 @@ function handleClose() {
 }
 
 .tags-input:focus-within {
-  border-color: #4a9eff;
+  border-color: var(--accent-running);
 }
 
 .tags-input input {
@@ -906,7 +907,7 @@ function handleClose() {
   background: transparent;
   border: none;
   padding: 4px 2px;
-  color: #ddd;
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
 }
@@ -915,8 +916,8 @@ function handleClose() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #333;
-  color: #ddd;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   font-size: 12px;
   padding: 3px 8px;
   border-radius: 4px;
@@ -925,7 +926,7 @@ function handleClose() {
 .tag-remove {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   padding: 0;
@@ -933,7 +934,7 @@ function handleClose() {
 }
 
 .tag-remove:hover {
-  color: #e74c3c;
+  color: var(--accent-danger);
 }
 
 .icon-field {
@@ -942,11 +943,11 @@ function handleClose() {
 
 .icon-trigger {
   width: 100%;
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg-canvas);
+  border: 1px solid var(--bg-elevated);
   border-radius: 6px;
   padding: 8px 10px;
-  color: #ddd;
+  color: var(--text-primary);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -954,7 +955,7 @@ function handleClose() {
 }
 
 .icon-trigger:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent-running);
 }
 
 .icon-selected {
@@ -962,7 +963,7 @@ function handleClose() {
 }
 
 .icon-placeholder {
-  color: #888;
+  color: var(--text-secondary);
 }
 
 .icon-grid {
@@ -974,8 +975,8 @@ function handleClose() {
   display: grid;
   grid-template-columns: repeat(10, minmax(32px, 1fr));
   gap: 6px;
-  background: #1e1e1e;
-  border: 1px solid #444;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 8px;
   z-index: 10001;
@@ -993,20 +994,20 @@ function handleClose() {
 }
 
 .icon-btn:hover {
-  background: #333;
+  background: var(--bg-elevated);
 }
 
 .icon-btn.active {
-  background: #2b4a6f;
-  border-color: #4a9eff;
+  background: rgba(0, 229, 255, 0.15);
+  border-color: var(--accent-running);
 }
 
 .permissions-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px 16px;
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg-canvas);
+  border: 1px solid var(--bg-elevated);
   border-radius: 6px;
   padding: 12px;
 }
@@ -1015,7 +1016,7 @@ function handleClose() {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ccc;
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
   text-transform: none;
@@ -1026,13 +1027,13 @@ function handleClose() {
 .permission-row input[type='checkbox'] {
   width: 16px;
   height: 16px;
-  accent-color: #4a9eff;
+  accent-color: var(--accent-running);
   cursor: pointer;
 }
 
 .field-help {
   font-size: 11px;
-  color: #999;
+  color: var(--text-secondary);
   margin: 2px 0 0;
   line-height: 1.4;
 }
@@ -1056,7 +1057,7 @@ function handleClose() {
 .criterion-remove {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   padding: 6px;
@@ -1064,14 +1065,14 @@ function handleClose() {
 }
 
 .criterion-remove:hover {
-  color: #e74c3c;
-  background: #333;
+  color: var(--accent-danger);
+  background: var(--bg-elevated);
 }
 
 .add-criterion-btn {
   background: transparent;
-  border: 1px dashed #555;
-  color: #aaa;
+  border: 1px dashed var(--border-default);
+  color: var(--text-secondary);
   border-radius: 6px;
   padding: 6px 12px;
   font-size: 12px;
@@ -1081,7 +1082,7 @@ function handleClose() {
 }
 
 .add-criterion-btn:hover {
-  border-color: #4a9eff;
-  color: #4a9eff;
+  border-color: var(--accent-running);
+  color: var(--accent-running);
 }
 </style>
