@@ -70,6 +70,23 @@ type Config struct {
 	EmbeddingAPIKey     string // EMBEDDING_API_KEY
 	EmbeddingModel      string // EMBEDDING_MODEL
 	EmbeddingDimensions int    // EMBEDDING_DIMENSIONS
+
+	// ContractLimits defines server-enforced upper bounds for task contracts.
+	// Loaded from CONTRACT_LIMIT_* environment variables and exposed via the
+	// /api/contract-limits endpoint so frontends can clamp user inputs.
+	ContractLimits ContractLimits
+}
+
+// ContractLimits stores server-enforced upper bounds for task contracts.
+// Values are loaded from CONTRACT_LIMIT_* environment variables and consumed
+// by HTTP handlers to validate / clamp user-provided task parameters.
+type ContractLimits struct {
+	MaxSteps          int      `json:"max_steps"`
+	MaxTokensPerStep  int      `json:"max_tokens_per_step"`
+	MaxTimeoutSeconds int      `json:"max_timeout_seconds"`
+	MaxSubAgents      int      `json:"max_sub_agents"`
+	MaxInputLength    int      `json:"max_input_length"`
+	Scopes            []string `json:"scopes"`
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -194,6 +211,9 @@ func Load() (*Config, error) {
 	if err := cfg.LoadMCPPreinstallConfig(); err != nil {
 		return nil, fmt.Errorf("load mcp preinstall config: %w", err)
 	}
+
+	// Load server-enforced contract limits from environment variables.
+	cfg.LoadContractLimits()
 
 	return cfg, nil
 }
@@ -324,6 +344,35 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// parseEnvIntDefault reads an integer environment variable and returns the
+// default value when the variable is missing, empty, or not a valid integer.
+func parseEnvIntDefault(key string, defaultValue int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultValue
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: invalid %s value %q, using default %d: %v\n", key, v, defaultValue, err)
+		return defaultValue
+	}
+	return n
+}
+
+// LoadContractLimits loads server-enforced task contract bounds from
+// CONTRACT_LIMIT_* environment variables. Any missing or invalid value falls
+// back to a safe default so the server can start without manual tuning.
+func (cfg *Config) LoadContractLimits() {
+	cfg.ContractLimits = ContractLimits{
+		MaxSteps:          parseEnvIntDefault("CONTRACT_LIMIT_MAX_STEPS", 200),
+		MaxTokensPerStep:  parseEnvIntDefault("CONTRACT_LIMIT_MAX_TOKENS_PER_STEP", 4096),
+		MaxTimeoutSeconds: parseEnvIntDefault("CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS", 7200),
+		MaxSubAgents:      parseEnvIntDefault("CONTRACT_LIMIT_MAX_SUB_AGENTS", 10),
+		MaxInputLength:    parseEnvIntDefault("CONTRACT_LIMIT_MAX_INPUT_LENGTH", 10000),
+		Scopes:            []string{"read_only", "standard", "unrestricted"},
+	}
 }
 
 // ShouldMock decides whether a request for the given case/endpoint should be routed

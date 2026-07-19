@@ -1765,10 +1765,28 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.MaxSteps < 1 || req.MaxSteps > 200 {
-		http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+
+	// Validate request against server-enforced contract limits.
+	if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+		http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
 		return
 	}
+	if req.MaxSteps < 1 {
+		http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+		return
+	}
+	if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+		req.MaxSteps = cfg.ContractLimits.MaxSteps
+	}
+	if req.TimeoutSeconds < 0 {
+		http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+		http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+		return
+	}
+
 	if req.Input == "" {
 		http.Error(w, "input is required", http.StatusBadRequest)
 		return
@@ -2102,6 +2120,19 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		"session_id": req.SessionID,
 		"status":     "started",
 	})
+}
+
+// handleContractLimits returns the server-enforced task contract limits.
+// GET /api/contract-limits
+func handleContractLimits(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg.ContractLimits)
+	}
 }
 
 // handleAudit returns recent audit records from the default auditor.

@@ -1464,8 +1464,22 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// and JSON Schema parameters are sent to the LLM so it can decide which tools
 	// to call and with what arguments. If the registry is empty, the LLM will
 	// operate in pure text mode (no tool calls possible).
+	//
+	// Phase 7-I: If TaskContract.AllowedTools is specified, only advertise those
+	// tools to the LLM. This prevents the agent from reasoning about tooling it is
+	// not permitted to execute and keeps the prompt small. An empty AllowedTools
+	// list retains backward compatibility (all tools visible).
 	toolDefs := make([]llm.ToolDef, 0)
+	allowed := make(map[string]struct{}, len(e.cfg.Contract.AllowedTools))
+	for _, name := range e.cfg.Contract.AllowedTools {
+		allowed[name] = struct{}{}
+	}
 	for _, t := range e.tools.List() {
+		if len(allowed) > 0 {
+			if _, ok := allowed[t.FullName()]; !ok {
+				continue
+			}
+		}
 		toolDefs = append(toolDefs, llm.ToolDef{
 			Type: "function",
 			Function: llm.FunctionDefinition{

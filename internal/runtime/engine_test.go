@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
@@ -446,3 +448,112 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 		t.Fatalf("injected AgentBus message not found in conversation as user message")
 	}
 }
+
+// capturingProvider is a test LLM Provider that records the ChatRequest so the
+// test can inspect the tool definitions passed to the model.
+type capturingProvider struct {
+	captured *llm.ChatRequest
+}
+
+func (p *capturingProvider) Name() string { return "capturing" }
+
+func (p *capturingProvider) Chat(req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *capturingProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.StreamChunk) error) (string, llm.Usage, []llm.ToolCall, error) {
+	p.captured = &req
+	return "final answer", llm.Usage{TotalTokens: 7}, nil, nil
+}
+
+// TestEngine_AllowedToolsFiltersToolDefinitions verifies that when
+// TaskContract.AllowedTools is set, the think() step only advertises the
+// allowed tools to the LLM. This is the runtime complement to the
+// ToolWhitelistRule enforcement at execution time.
+func TestEngine_AllowedToolsFiltersToolDefinitions(t *testing.T) {
+	// Build a registry with three tools: run_shell and two MCP proxies.
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltins(registry)
+
+	// Use a minimal fake MCP transport so the proxy tool can be constructed
+	// without starting a real child process.
+	fakeMCPTransport := &fakeMCPTransport{}
+	registry.Register(mcp.NewProxyTool("time", mcp.ToolDefinition{
+		Name:        "now",
+		Description: "Returns current time",
+		InputSchema: map[string]any{"type": "object"},
+	}, mcp.NewClient(fakeMCPTransport)))
+	registry.Register(mcp.NewProxyTool("github", mcp.ToolDefinition{
+		Name:        "issues",
+		Description: "Lists GitHub issues",
+		InputSchema: map[string]any{"type": "object"},
+	}, mcp.NewClient(fakeMCPTransport)))
+
+	provider := &capturingProvider{}
+	cfg := EngineConfig{
+		AgentID:      "filter-test",
+		SystemPrompt: "You are a test agent.",
+		Model:        "fake-model",
+		Provider:     provider,
+		Contract: harness.TaskContract{
+			Goal:         "test allowed tools filtering",
+			Scope:        ".",
+			AllowedTools: []string{"run_shell", "mcp__time__now"},
+		},
+	}
+	bus := &recordingBus{}
+	engine := NewEngine(cfg, registry, bus, "task-filter-test")
+
+	// Stop after one think step by using a short timeout. The mock provider
+	// returns a final answer immediately, so this finishes naturally.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, _, err := engine.Run(ctx, "test allowed tools filtering")
+	if err != nil {
+		t.Fatalf("engine.Run: %v", err)
+	}
+
+	if provider.captured == nil {
+		t.Fatalf("provider.ChatStream was not called")
+	}
+
+	toolNames := make([]string, 0, len(provider.captured.Tools))
+	for _, td := range provider.captured.Tools {
+		toolNames = append(toolNames, td.Function.Name)
+	}
+
+	if len(toolNames) != 2 {
+		t.Errorf("expected 2 tool definitions, got %d: %v", len(toolNames), toolNames)
+	}
+
+	want := map[string]bool{
+		"run_shell":      false,
+		"mcp__time__now": false,
+	}
+	for _, name := range toolNames {
+		want[name] = true
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("expected tool %q in request tools, got %v", name, toolNames)
+		}
+	}
+	for _, name := range toolNames {
+		if name == "mcp__github__issues" {
+			t.Errorf("disallowed tool mcp__github__issues should not be in request tools")
+		}
+	}
+}
+
+// fakeMCPTransport is a minimal mcp.Transport implementation for use in tests
+// where the proxy tool only needs to advertise metadata and never actually
+// executes a remote call.
+type fakeMCPTransport struct{}
+
+func (fakeMCPTransport) Start(ctx context.Context) error { return nil }
+func (fakeMCPTransport) Send(message []byte) error       { return nil }
+func (fakeMCPTransport) Receive(timeout time.Duration) ([]byte, error) {
+	return nil, errors.New("fake transport: no response")
+}
+func (fakeMCPTransport) Close() error { return nil }

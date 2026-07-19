@@ -520,6 +520,92 @@ func TestGetAgentConfigNotImplemented(t *testing.T) {
 	}
 }
 
+// TestLoadContractLimits verifies that Config.LoadContractLimits loads server-
+// enforced task contract bounds from environment variables with safe defaults.
+func TestLoadContractLimits(t *testing.T) {
+	defaultLimits := ContractLimits{
+		MaxSteps:          200,
+		MaxTokensPerStep:  4096,
+		MaxTimeoutSeconds: 7200,
+		MaxSubAgents:      10,
+		MaxInputLength:    10000,
+		Scopes:            []string{"read_only", "standard", "unrestricted"},
+	}
+
+	tests := []struct {
+		name     string
+		env      map[string]string
+		expected ContractLimits
+	}{
+		{
+			name:     "defaults when no env vars set",
+			env:      map[string]string{},
+			expected: defaultLimits,
+		},
+		{
+			name: "CONTRACT_LIMIT_MAX_STEPS overrides default",
+			env:  map[string]string{"CONTRACT_LIMIT_MAX_STEPS": "50"},
+			expected: ContractLimits{
+				MaxSteps:          50,
+				MaxTokensPerStep:  4096,
+				MaxTimeoutSeconds: 7200,
+				MaxSubAgents:      10,
+				MaxInputLength:    10000,
+				Scopes:            []string{"read_only", "standard", "unrestricted"},
+			},
+		},
+		{
+			name: "invalid CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS falls back to default",
+			env:  map[string]string{"CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS": "abc"},
+			expected: ContractLimits{
+				MaxSteps:          200,
+				MaxTokensPerStep:  4096,
+				MaxTimeoutSeconds: 7200,
+				MaxSubAgents:      10,
+				MaxInputLength:    10000,
+				Scopes:            []string{"read_only", "standard", "unrestricted"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set env vars for this subtest and defer cleanup to avoid side effects.
+			for k, v := range tt.env {
+				os.Setenv(k, v)
+				defer os.Unsetenv(k)
+			}
+
+			cfg := &Config{}
+			cfg.LoadContractLimits()
+
+			if cfg.ContractLimits.MaxSteps != tt.expected.MaxSteps {
+				t.Errorf("MaxSteps = %d, want %d", cfg.ContractLimits.MaxSteps, tt.expected.MaxSteps)
+			}
+			if cfg.ContractLimits.MaxTokensPerStep != tt.expected.MaxTokensPerStep {
+				t.Errorf("MaxTokensPerStep = %d, want %d", cfg.ContractLimits.MaxTokensPerStep, tt.expected.MaxTokensPerStep)
+			}
+			if cfg.ContractLimits.MaxTimeoutSeconds != tt.expected.MaxTimeoutSeconds {
+				t.Errorf("MaxTimeoutSeconds = %d, want %d", cfg.ContractLimits.MaxTimeoutSeconds, tt.expected.MaxTimeoutSeconds)
+			}
+			if cfg.ContractLimits.MaxSubAgents != tt.expected.MaxSubAgents {
+				t.Errorf("MaxSubAgents = %d, want %d", cfg.ContractLimits.MaxSubAgents, tt.expected.MaxSubAgents)
+			}
+			if cfg.ContractLimits.MaxInputLength != tt.expected.MaxInputLength {
+				t.Errorf("MaxInputLength = %d, want %d", cfg.ContractLimits.MaxInputLength, tt.expected.MaxInputLength)
+			}
+			if len(cfg.ContractLimits.Scopes) != len(tt.expected.Scopes) {
+				t.Fatalf("Scopes length = %d, want %d", len(cfg.ContractLimits.Scopes), len(tt.expected.Scopes))
+			}
+			for i, want := range tt.expected.Scopes {
+				if cfg.ContractLimits.Scopes[i] != want {
+					t.Errorf("Scopes[%d] = %q, want %q", i, cfg.ContractLimits.Scopes[i], want)
+				}
+			}
+		})
+	}
+}
+
 // chdir changes the working directory for the duration of the test. Restored
 // automatically via t.Cleanup.
 func chdir(t *testing.T, dir string) {

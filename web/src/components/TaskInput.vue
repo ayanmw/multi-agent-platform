@@ -32,6 +32,26 @@ const QUICK_TIMEOUTS_SECONDS = [
 ]
 const MAX_TIMEOUT_MINUTES = 120
 
+const CONTRACT_LIMITS_STORAGE_KEY = 'map_contract_limits'
+
+interface ContractLimits {
+  max_steps: number
+  max_tokens_per_step: number
+  max_timeout_seconds: number
+  max_sub_agents: number
+  max_input_length: number
+  scopes: string[]
+}
+
+const DEFAULT_CONTRACT_LIMITS: ContractLimits = {
+  max_steps: 200,
+  max_tokens_per_step: 8192,
+  max_timeout_seconds: 7200,
+  max_sub_agents: 5,
+  max_input_length: 4000,
+  scopes: [],
+}
+
 export interface SendOptions {
   maxSteps: number
   timeoutSeconds?: number
@@ -58,9 +78,10 @@ const inputText = ref('')
 const showOptions = ref(false)
 const maxSteps = ref(DEFAULT_MAX_STEPS)
 const timeoutSeconds = ref(DEFAULT_TIMEOUT_SECONDS)
+const contractLimits = ref<ContractLimits>(DEFAULT_CONTRACT_LIMITS)
 
 // Load saved preference on mount so the user's choice survives refreshes.
-onMounted(() => {
+onMounted(async () => {
   try {
     const savedSteps = localStorage.getItem(MAX_STEPS_STORAGE_KEY)
     if (savedSteps) {
@@ -83,19 +104,41 @@ onMounted(() => {
   } catch {
     // ignore storage errors
   }
+
+  // Try loading cached contract limits first to avoid waiting for the network.
+  try {
+    const cached = localStorage.getItem(CONTRACT_LIMITS_STORAGE_KEY)
+    if (cached) {
+      const parsed = JSON.parse(cached) as Partial<ContractLimits>
+      contractLimits.value = { ...DEFAULT_CONTRACT_LIMITS, ...parsed }
+    }
+  } catch {
+    // ignore malformed cache
+  }
+
+  try {
+    const response = await fetch('/api/contract-limits')
+    if (response.ok) {
+      const data = (await response.json()) as Partial<ContractLimits>
+      contractLimits.value = { ...DEFAULT_CONTRACT_LIMITS, ...data }
+      try {
+        localStorage.setItem(CONTRACT_LIMITS_STORAGE_KEY, JSON.stringify(contractLimits.value))
+      } catch {
+        // ignore storage errors
+      }
+    }
+  } catch {
+    // Network or parse error: keep default (or cached) limits.
+  }
 })
 
-// TODO: Phase 7 — 从后端读取 max_steps 合理范围
-// 当前 quickSteps / 滑块上限与后端允许范围仍可能脱节；后续应通过
-// /api/limits 或 case 配置回读后端实际允许的 max_steps 上限。
 // 后端允许的 max_steps 范围，与 API 校验保持一致。
-const MAX_STEPS_ALLOWED = 200
 const MIN_STEPS_ALLOWED = 1
 
 const quickSteps = [2, 5, 10, 15, 20, 30, 50, 100, 200]
 
 function clampSteps(n: number): number {
-  return Math.max(MIN_STEPS_ALLOWED, Math.min(n, MAX_STEPS_ALLOWED))
+  return Math.max(MIN_STEPS_ALLOWED, Math.min(n, contractLimits.value.max_steps))
 }
 
 function handleSend() {
@@ -208,12 +251,12 @@ function setTimeoutSeconds(seconds: number) {
           v-model.number="maxSteps"
           type="range"
           min="1"
-          max="200"
+          :max="contractLimits.max_steps"
           class="steps-slider"
           @change="setMaxSteps(maxSteps)"
         />
         <div class="option-hint">
-          Maximum number of ReAct loop iterations. Backend accepted range: {{ MIN_STEPS_ALLOWED }}–{{ MAX_STEPS_ALLOWED }}.
+          Maximum number of ReAct loop iterations. Backend accepted range: {{ MIN_STEPS_ALLOWED }}–{{ contractLimits.max_steps }}.
         </div>
       </div>
 

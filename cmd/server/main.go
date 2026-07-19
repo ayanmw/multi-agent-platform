@@ -824,13 +824,54 @@ func main() {
 			return
 		}
 
+		var contract harness.TaskContract
+		caseID := r.URL.Query().Get("case")
+		if caseID != "" {
+			if c := cases.Get(caseID); c != nil {
+				contract = c.Contract
+				// Use case's default input if none provided in request
+				if req.Input == "" {
+					req.Input = c.DefaultInput
+				}
+				// Use case's system prompt if none provided in request
+				if req.SystemPrompt == "" {
+					req.SystemPrompt = c.SystemPrompt
+				}
+			}
+		}
+
+		// Validate request input length against server-enforced contract limits.
+		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+			return
+		}
+
+		if req.MaxSteps < 1 {
+			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+			req.MaxSteps = cfg.ContractLimits.MaxSteps
+		}
+		if req.TimeoutSeconds < 0 {
+			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+			return
+		}
+		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+			return
+		}
+
 		switch req.Action {
 
 		case "multi-agent":
-			if req.MaxSteps < 1 || req.MaxSteps > 200 {
-				http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+			// req.MaxSteps already validated and clamped above.
+			// Validate explicit sub-agent count against server limits.
+			if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
+				http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
 				return
 			}
+
 			// Phase 7-H：multi-agent 改为 leader-agent 驱动。
 			// 1) 解析/生成 session 与 root task；2）启动一个 Leader Agent；
 			// 3) Leader 通过 dispatch_sub_agent 工具决定派哪些子 agent。
@@ -910,14 +951,10 @@ func main() {
 			})
 
 		case "chat":
-			if req.MaxSteps < 1 || req.MaxSteps > 200 {
-				http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
-				return
-			}
+			// req.MaxSteps already validated and clamped above.
 
 			// Check if a preset case was specified — load its contract,
 			// default input, and system prompt before validating the request.
-			var contract harness.TaskContract
 			caseID := r.URL.Query().Get("case")
 			if caseID != "" {
 				if c := cases.Get(caseID); c != nil {
@@ -934,6 +971,7 @@ func main() {
 			}
 
 			if req.Input == "" {
+
 				http.Error(w, "input is required for chat action", http.StatusBadRequest)
 				return
 			}
@@ -1009,6 +1047,10 @@ func main() {
 	http.HandleFunc("/api/replay/events", func(w http.ResponseWriter, r *http.Request) {
 		handleReplayEvents(w, r, hub)
 	})
+
+	// Contract limits endpoint: exposes server-enforced task contract bounds.
+	// GET /api/contract-limits
+	http.HandleFunc("/api/contract-limits", handleContractLimits(cfg))
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
@@ -1315,8 +1357,28 @@ func main() {
 			return
 		}
 
-		if req.MaxSteps < 1 || req.MaxSteps > 200 {
-			http.Error(w, "max_steps must be between 1 and 200", http.StatusBadRequest)
+		// Validate request against server-enforced contract limits.
+		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps < 1 {
+			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+			req.MaxSteps = cfg.ContractLimits.MaxSteps
+		}
+		if req.TimeoutSeconds < 0 {
+			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+			return
+		}
+		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+			return
+		}
+		if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
+			http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
 			return
 		}
 
@@ -1348,8 +1410,8 @@ func main() {
 
 		// Apply global MaxSteps override if provided
 		if req.MaxSteps > 0 {
-			if req.MaxSteps > 200 {
-				req.MaxSteps = 200
+			if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+				req.MaxSteps = cfg.ContractLimits.MaxSteps
 			}
 			for i := range specs {
 				if specs[i].Contract == nil {
