@@ -400,6 +400,9 @@ func TestHandleContractLimits(t *testing.T) {
 	if got.MaxInputLength != cfg.ContractLimits.MaxInputLength {
 		t.Errorf("MaxInputLength = %d, want %d", got.MaxInputLength, cfg.ContractLimits.MaxInputLength)
 	}
+	if len(got.Scopes) != len(cfg.ContractLimits.Scopes) {
+		t.Errorf("Scopes length = %d, want %d", len(got.Scopes), len(cfg.ContractLimits.Scopes))
+	}
 }
 
 // TestCaseRoutesIntegration runs the full API through an httptest server.

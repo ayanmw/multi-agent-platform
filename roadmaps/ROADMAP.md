@@ -1,7 +1,7 @@
 # Multi-Agent Platform — Product Roadmap
 
-> **Last updated**: 2026-07-18
-> **Current version**: v0.7.5 Alpha (DuckDuckGo web_search fallback)
+> **Last updated**: 2026-07-19
+> **Current version**: v0.7.6 Alpha (MCP 按 agent 可见性 + contract limits 闭环)
 > **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -480,22 +480,22 @@ const activeTaskId = ref<string | null>(null)
 | — | 默认最大步数 MaxSteps 10 → 30 | `internal/harness/harness.go` + `internal/runtime/engine.go` + `web/src/components/TaskInput.vue` | ✅ |
 | — | 首次错误反馈给 AI / 连续两次相同错误才失败 | `internal/runtime/engine.go` | ✅ |
 | — | 任务/会话耗时统计 (`duration_ms`) | `pkg/db/*` + `internal/runtime/*` + `cmd/server/*` + `web/src/components/MetricsPanel.vue` + `TurnItem.vue` / `AgentTree.vue` | ✅ |
-| F8 | WS 重连不补事件 | `web/src/composables/useWebSocket.ts`（标记 TODO） | ⏳ Phase 7 |
-| F9 | maxSteps 滑块与后端脱节 | `web/src/components/TaskInput.vue`（标记 TODO） | ⏳ Phase 7 |
+| F8 | WS 重连不补事件 | `internal/ws/hub.go` + `cmd/server/api.go` + `web/src/composables/useWebSocket.ts` | ✅ |
+| F9 | maxSteps 滑块与后端脱节 | `internal/config/config.go` + `cmd/server/main.go` + `web/src/components/TaskInput.vue` | ✅ |
 
 ### 验证
 - `npx vue-tsc -b --noEmit` 通过
-- `npx vite build` 通过（82 modules transformed）
+- `npx vite build` 通过
 
-### 已知遗留（推入 Phase 7 安全加固）
+### 已知遗留（已全部解决或迁移）
 
-| 编号 | 问题 | 说明 |
-|------|------|------|
-| M4 | Auth GET 请求豁免敏感端点 | 需团队讨论安全策略 |
-| M5 | 无 RBAC enforcement | Role 结构已搭好，enforcement 需设计路由规则映射 |
-| M6 | GET /api/auth/api-keys 无 token 可枚举 | 依赖 M5 RBAC |
-| F8 | WS 重连不补事件 | 需要后端 replay 端点或前端 onopen reload task |
-| F9 | maxSteps 滑块与后端脱节 | 需要从后端读取 max_steps 合理范围 |
+| 编号 | 问题 | 说明 | 状态 |
+|------|------|------|------|
+| M4 | Auth GET 请求豁免敏感端点 | 已收紧：敏感 GET 端点纳入 auth | ✅ |
+| M5 | 无 RBAC enforcement | 已接入 `RequireRole` / `auth_http.go` | ✅ |
+| M6 | GET /api/auth/api-keys 无 token 可枚举 | 列表响应已脱敏 key_hash | ✅ |
+| F8 | WS 重连不补事件 | 已交付 ring buffer + `/api/replay/events` + 前端重连拉取 | ✅ |
+| F9 | maxSteps 滑块与后端脱节 | 已从前端拉取 `/api/contract-limits` 并限制滑块 | ✅ |
 
 ---
 
@@ -512,12 +512,13 @@ const activeTaskId = ref<string | null>(null)
 ### 候选特性
 - [ ] 在线 tokenizer（tiktoken / cl100k_base）替换当前字符启发式估算
 - [ ] 后端 context window 压缩策略：按 token 预算自动截断/摘要历史 messages
-- [ ] `/api/tasks/:id/context_window` 历史快照查询端点（当前仅 WS 实时事件）
-- [ ] F8 / F9 遗留修复（WS 重连补事件、maxSteps 滑块同步）
-- [ ] RBAC enforcement + Auth 敏感端点保护
-- [x] **MCP 增强：SSE transport、远程市场安装、工具变更事件 `{mcp_tools_changed}`、按 project 的 MCP 可见性**
-  - 已交付（本批次）: stdio transport + Manager 生命周期 + DB 持久化 + `/api/mcp/servers` REST API + **MCP Marketplace Provider（static default market）+ 前端市场安装入口**
+- [x] `/api/tasks/:id/context_window` 历史快照查询端点（WS 实时事件 + REST 查询双通道）
+- [x] F8 / F9 遗留修复（WS 重连补事件、maxSteps 滑块同步）
+- [x] RBAC enforcement + Auth 敏感端点保护
+- [x] **MCP 增强：SSE transport、远程市场安装、工具变更事件 `{mcp_tools_changed}`、按 agent 的 MCP 可见性**
+  - 已交付（本批次）: stdio transport + Manager 生命周期 + DB 持久化 + `/api/mcp/servers` REST API + **MCP Marketplace Provider（static default market）+ 前端市场安装入口 + agent tools 白名单自动注入 `AllowedTools`**
 - [x] **web_search fallback**: 未配置 Exa/Parallel 时自动降级到 DuckDuckGo HTML/lite 搜索，无需 API key
+- [x] **Contract limits**: 后端 `CONTRACT_LIMIT_*` 配置 + `/api/contract-limits` + 请求校验 / clamping + 前端 TaskInput 消费 + `Scopes` 下拉校验
 
 **目标**: 在 Phase 6 落地的 Auth（API key + RBAC 骨架）与 RAG（本地 TF-IDF + 内存向量库）之上，推进生产化、多用户、深度可观测与外部集成。延续 6-D/6-E 的"非空壳、真实运行"原则。MCP 已作为 Phase 6 扩展完成核心能力（stdio transport + Manager + DB + REST API），剩余增强项入 Phase 7。
 
@@ -589,4 +590,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.2 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 + MCP 市场 Provider（default static market）+ 前端市场安装入口 |
 | v0.7.3 Alpha | 2026-07-18 | MCP SSE transport: `internal/tool/mcp/sse_transport.go` + endpoint handshake + JSON-RPC over SSE + Manager/REST/前端 create dialog 已支持 `sse` transport |
 | v0.7.5 Alpha | 2026-07-18 | DuckDuckGo fallback: core/web_search 无 API key 时自动降级到 DuckDuckGo HTML/lite 搜索 |
-| v0.7.4 Alpha | 2026-07-18 | MCP 远程 marketplace: 新增 `URLProvider` 从 HTTP URL 拉取 JSON catalog + `MCP_MARKETS` 环境变量注册 + Manager 自动加载远程市场 + 示例与测试 |
+| v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |

@@ -1022,10 +1022,16 @@ func main() {
 			// Override TaskContract fields from request body when provided —
 			// lets the frontend drive PolicyChain (scope, tools, budgets, timeout).
 			if req.Scope != "" {
+				if !isAllowedScope(req.Scope, cfg.ContractLimits.Scopes) {
+					http.Error(w, fmt.Sprintf("scope %q is not allowed", req.Scope), http.StatusBadRequest)
+					return
+				}
 				contract.Scope = req.Scope
 			}
 			if len(req.AllowedTools) > 0 {
 				contract.AllowedTools = req.AllowedTools
+			} else if tools := agentAllowedTools(agentID); len(tools) > 0 {
+				contract.AllowedTools = tools
 			}
 			if req.TokenBudget > 0 {
 				contract.TokenBudget = req.TokenBudget
@@ -1410,7 +1416,7 @@ func main() {
 		var specs []orchestrator.AgentSpec
 		strategy := "parallel"
 		if len(req.Agents) > 0 {
-			specs = req.Agents
+			specs = enrichAgentSpecAllowedTools(req.Agents)
 		} else {
 			var decomposer orchestrator.Decomposer
 			if cfg.LLMUseMock {
@@ -1759,6 +1765,67 @@ func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, 
 		}
 	}
 	return out, nil
+}
+
+// agentAllowedTools loads the configured tools for an agent from the DB.
+// If the agent does not exist or has no tools, nil is returned, which means
+// "all tools allowed" in the Engine and PolicyGate.
+func agentAllowedTools(agentID string) []string {
+	if agentID == "" {
+		return nil
+	}
+	agent, err := db.QueryAgentByID(agentID)
+	if err != nil || agent == nil {
+		return nil
+	}
+	return agent.Tools
+}
+
+// resolveAllowedTools returns the effective allowed-tools list for a task.
+// Explicit request-provided tools take precedence; otherwise the agent's
+// configured tools are used. An empty result means no restriction.
+func resolveAllowedTools(reqTools []string, agentID string) []string {
+	if len(reqTools) > 0 {
+		return reqTools
+	}
+	return agentAllowedTools(agentID)
+}
+
+// isAllowedScope reports whether scope is allowed by the configured contract
+// limits. Empty scope is allowed (falls back to default). If no scopes are
+// configured, all scopes are allowed.
+func isAllowedScope(scope string, allowed []string) bool {
+	if scope == "" {
+		return true
+	}
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, s := range allowed {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// enrichAgentSpecAllowedTools loads each spec's agent from the DB and fills in
+// AllowedTools when the spec does not already provide an explicit list.
+func enrichAgentSpecAllowedTools(specs []orchestrator.AgentSpec) []orchestrator.AgentSpec {
+	for i := range specs {
+		if len(specs[i].AllowedTools) > 0 {
+			continue
+		}
+		if tools := agentAllowedTools(specs[i].AgentID); len(tools) > 0 {
+			specs[i].AllowedTools = tools
+			if specs[i].Contract == nil {
+				contract := harness.DefaultContract(specs[i].Input)
+				specs[i].Contract = &contract
+			}
+			specs[i].Contract.AllowedTools = tools
+		}
+	}
+	return specs
 }
 
 // runAgentLoop executes the full ReAct loop for a chat request.

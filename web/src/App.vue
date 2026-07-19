@@ -632,7 +632,7 @@ onMounted(() => {
 })
 
 /** Handle task submission from TaskInput */
-async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number }) {
+async function handleSend(text: string, options: { maxSteps?: number; timeoutSeconds?: number; scope?: string }) {
   try {
     const session = activeSession.value
     if (useMultiAgent.value) {
@@ -653,6 +653,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
         sessionId: targetSession.id,
         maxSteps: options.maxSteps,
         timeoutSeconds: options.timeoutSeconds,
+        scope: options.scope,
         agents,
       })
       return
@@ -664,6 +665,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
       await startTask(text, {
         timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
+        scope: options.scope,
         sessionId: newSession.id,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
       })
@@ -672,6 +674,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
       await startTask(text, {
         timeoutSeconds: options.timeoutSeconds,
         maxSteps: options.maxSteps,
+        scope: options.scope,
         sessionId: session.id,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
       })
@@ -682,6 +685,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
         timeoutSeconds: options.timeoutSeconds,
         sessionId: session.id,
         maxSteps: options.maxSteps,
+        scope: options.scope,
         agentId: selectedAgentId.value !== 'agent_default' ? selectedAgentId.value : undefined,
       })
     }

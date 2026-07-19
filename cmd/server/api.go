@@ -1867,10 +1867,16 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		contract.TimeoutSeconds = req.TimeoutSeconds
 	}
 	if req.Scope != "" {
+		if !isAllowedScope(req.Scope, cfg.ContractLimits.Scopes) {
+			http.Error(w, fmt.Sprintf("scope %q is not allowed", req.Scope), http.StatusBadRequest)
+			return
+		}
 		contract.Scope = req.Scope
 	}
 	if len(req.AllowedTools) > 0 {
 		contract.AllowedTools = req.AllowedTools
+	} else if tools := agentAllowedTools(agentID); len(tools) > 0 {
+		contract.AllowedTools = tools
 	}
 	if req.TokenBudget > 0 {
 		contract.TokenBudget = req.TokenBudget

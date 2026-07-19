@@ -55,7 +55,10 @@ const DEFAULT_CONTRACT_LIMITS: ContractLimits = {
 export interface SendOptions {
   maxSteps: number
   timeoutSeconds?: number
+  scope?: string
 }
+
+const selectedScope = ref('')
 
 const props = defineProps<{
   disabled: boolean
@@ -144,7 +147,11 @@ function clampSteps(n: number): number {
 function handleSend() {
   const text = inputText.value.trim()
   if (!text || props.disabled) return
-  emit('send', text, { maxSteps: clampSteps(maxSteps.value), timeoutSeconds: timeoutSeconds.value })
+  const options: SendOptions = { maxSteps: clampSteps(maxSteps.value), timeoutSeconds: timeoutSeconds.value }
+  if (selectedScope.value) {
+    options.scope = selectedScope.value
+  }
+  emit('send', text, options)
   inputText.value = ''
 }
 
@@ -257,6 +264,17 @@ function setTimeoutSeconds(seconds: number) {
         />
         <div class="option-hint">
           Maximum number of ReAct loop iterations. Backend accepted range: {{ MIN_STEPS_ALLOWED }}–{{ contractLimits.max_steps }}.
+        </div>
+      </div>
+
+      <div v-if="contractLimits.scopes.length > 0" class="option-group">
+        <label class="option-label">Scope</label>
+        <select v-model="selectedScope" class="scope-select">
+          <option value="">Default</option>
+          <option v-for="s in contractLimits.scopes" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <div class="option-hint">
+          Restrict file operations to the selected scope. Empty uses the session workspace.
         </div>
       </div>
 
