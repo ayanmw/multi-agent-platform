@@ -31,8 +31,8 @@
 
 ### 2.1 风格关键词
 
-- **Industrial utilitarian / deep-space dark**：工业精密感 + 深邃暗舱
-- **Sharp data accents**：锐利信息荧光
+- **Industrial utilitarian / deep-space dark**（工业实用 / 深空暗色）：工业精密感 + 深邃暗舱
+- **Sharp data accents**（锐利数据强调色）：锐利信息荧光
 - 每个 Agent 是一条航迹，每个 step / tool call 是一次仪表读数。
 
 ### 2.2 设计系统
