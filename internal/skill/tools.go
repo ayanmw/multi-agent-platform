@@ -7,7 +7,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// skillCreateLocalTool implements skill/create_local (alias skill_create_local).
+// skillCreateLocalTool 实现 skill/create_local Tool（别名 skill_create_local）。
 type skillCreateLocalTool struct {
 	store    *Store
 	registry *Registry

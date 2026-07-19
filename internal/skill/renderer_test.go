@@ -26,7 +26,7 @@ func TestRendererRender(t *testing.T) {
 		t.Fatalf("ExtractVariables = %v, want [name score total]", vars)
 	}
 
-	// Missing variable preserved
+	// 缺失变量时保留原始占位符
 	tmpl2 := SkillTemplate{Content: "Hi {{name}}, missing {{foo}}"}
 	got2 := r.Render(tmpl2, map[string]any{"name": "Bob"})
 	want2 := "Hi Bob, missing {{foo}}"

@@ -75,7 +75,7 @@ func TestLoaderLoadAll(t *testing.T) {
 		t.Fatalf("expected 2 builtins, got %d", len(builtins))
 	}
 
-	// Verify builtin tags persisted
+	// 校验内置 Skill 的 tags 是否被正确持久化
 	s, _ := reg.Get("builtin-code-helper")
 	if len(s.Tags) == 0 || s.Tags[0] != "code" {
 		t.Fatalf("expected builtin-code-helper to have code tag, got %v", s.Tags)
