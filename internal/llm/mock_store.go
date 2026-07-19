@@ -140,3 +140,25 @@ func (s *InMemoryMockScriptStore) LoadBuiltin(scripts []MockScript) error {
 // It is used by the mock provider and by the mock management API so both share
 // the same set of scripts.
 var DefaultMockStore = NewInMemoryMockScriptStore()
+
+// RegisterMockScriptForTest 把一条 mock script 注入 DefaultMockStore 并返回一个
+// 清理函数，调用清理函数会从 store 中删除该 script。
+//
+// 为什么需要这个辅助函数：DefaultMockStore 是进程级全局变量，直接在测试中
+// 调用 Save 会让脚本残留，污染后续用例（例如其它测试默认走 builtin 脚本时
+// 可能被误命中）。用本函数注册的脚本，测试结束后通过返回的 cleanup 删除，
+// 保证 DefaultMockStore 回到测试前状态。
+//
+// 用法：
+//
+//	cleanup := llm.RegisterMockScriptForTest(llm.MockScript{...})
+//	defer cleanup()
+func RegisterMockScriptForTest(script MockScript) func() {
+	saved, err := DefaultMockStore.Save(script)
+	if err != nil {
+		// Save 在 InMemoryMockScriptStore 实现中永远不会失败；这里仅做防御性处理。
+		return func() {}
+	}
+	id := saved.ID
+	return func() { _ = DefaultMockStore.Delete(id) }
+}

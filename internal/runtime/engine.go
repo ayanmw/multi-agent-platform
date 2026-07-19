@@ -93,6 +93,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,6 +102,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
+	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
@@ -419,6 +421,17 @@ type EngineConfig struct {
 	// results are still broadcast via task_evaluated events but are not durably
 	// stored.
 	EvaluationRepository EvaluationRepository
+
+	// SkillRegistry is the optional skill registry. When set with ActiveSkills,
+	// the Engine injects rendered skill prompts into the system prompt.
+	SkillRegistry *skill.Registry
+
+	// ActiveSkills is the list of skill IDs whose prompts should be injected
+	// into the system prompt.
+	ActiveSkills []string
+
+	// SkillVariables provides the variable values used to render skill templates.
+	SkillVariables map[string]any
 }
 
 // OnLLMUsage is the callback type invoked after every successful LLM call.
@@ -569,6 +582,29 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		systemPrompt += "absolute paths — the system resolves all relative paths against this working directory.\n"
 	}
 
+	// Inject rendered skill prompts into the system prompt when a skill
+	// registry and active skills are configured. Only templates named
+	// "system_prompt" or "task_prompt" are appended, rendered with the
+	// configured SkillVariables. This lets agents dynamically extend their
+	// instructions without changing the base system prompt.
+	if cfg.SkillRegistry != nil && len(cfg.ActiveSkills) > 0 {
+		renderer := skill.NewRenderer()
+		var rendered []string
+		for _, id := range cfg.ActiveSkills {
+			s, ok := cfg.SkillRegistry.Get(id)
+			if !ok {
+				continue
+			}
+			for _, tmpl := range s.Templates {
+				if tmpl.Name == "system_prompt" || tmpl.Name == "task_prompt" {
+					rendered = append(rendered, renderer.Render(tmpl, cfg.SkillVariables))
+				}
+			}
+		}
+		if len(rendered) > 0 {
+			systemPrompt += "\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n")
+		}
+	}
 	return &Engine{
 		cfg:              cfg,
 		llm:              provider,
@@ -583,7 +619,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		turnIndex:        cfg.TurnIndex,            // turn index within the session
 		caseID:           cfg.CaseID,               // case ID hint for mock script matching
 		taskID:           taskID,
-		rootTraceCtx:     cfg.RootTraceCtx,         // root span context for the task
+		rootTraceCtx:     cfg.RootTraceCtx, // root span context for the task
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -729,13 +765,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
 					// 最后发射 step_complete 并持久化该 step。
 					e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-						"type":              "agent_message_input",
-						"from_agent":        msg.FromAgentID,
-						"from_sub_task_id":  msg.SubTaskID, // 对旧消息可能为空
-						"to_agent":          e.cfg.AgentID,
-						"to_sub_task_id":    e.cfg.SubTaskID,
-						"msg_type":          msg.Type,
-						"content":           msg.Content,
+						"type":             "agent_message_input",
+						"from_agent":       msg.FromAgentID,
+						"from_sub_task_id": msg.SubTaskID, // 对旧消息可能为空
+						"to_agent":         e.cfg.AgentID,
+						"to_sub_task_id":   e.cfg.SubTaskID,
+						"msg_type":         msg.Type,
+						"content":          msg.Content,
 					}))
 
 					// Append the incoming message to the conversation as a user

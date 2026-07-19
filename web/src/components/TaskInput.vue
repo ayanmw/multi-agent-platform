@@ -14,7 +14,8 @@
        openWorkflowEditor: user clicked workflow editor button
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import SkillPicker, { type Skill } from './SkillPicker.vue'
 
 const MAX_STEPS_STORAGE_KEY = 'map_default_max_steps'
 const DEFAULT_MAX_STEPS = 30
@@ -82,6 +83,97 @@ const showOptions = ref(false)
 const maxSteps = ref(DEFAULT_MAX_STEPS)
 const timeoutSeconds = ref(DEFAULT_TIMEOUT_SECONDS)
 const contractLimits = ref<ContractLimits>(DEFAULT_CONTRACT_LIMITS)
+
+// === Skill Picker 状态 ===
+// showSkillPicker: 是否展示悬浮面板。当用户在输入框输入 `/` 触发字符时打开。
+// skillQuery: 当前搜索关键词（已剥离前导 `/`）。空字符串表示列出全部。
+// skillPickerRef: 持有 SkillPicker 组件实例，用于把键盘事件转发给它。
+const showSkillPicker = ref(false)
+const skillQuery = ref('')
+const skillPickerRef = ref<InstanceType<typeof SkillPicker> | null>(null)
+// textarea DOM 引用，用于在 skill 选中后把焦点切回输入框。
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+/** 解析当前 textarea 光标位置之前最近的 `/` 触发点。
+ *  触发条件：`/` 必须位于行首或前面是空白字符，避免误匹配代码片段里的除法。
+ *  返回该 `/` 在文本中的索引，找不到返回 -1。 */
+function findSkillTriggerIndex(text: string, caret: number): number {
+  // 从光标位置往前找最近的 `/`
+  for (let i = caret - 1; i >= 0; i--) {
+    const ch = text[i]
+    if (ch === '/') {
+      // 必须位于行首或前一个字符是空白
+      if (i === 0 || /\s/.test(text[i - 1])) {
+        return i
+      }
+      // 否则不是触发点，继续往前找
+      continue
+    }
+    // 遇到换行/空白之外的非 `/` 字符且还没找到 `/`，说明当前段不会触发，停止。
+    if (/\s/.test(ch)) {
+      // 空白允许继续往前找（用户可能在中间打字）
+      continue
+    }
+    // 遇到非 `/` 非空白字符，停止回溯（这段不可能是 skill 触发）
+    break
+  }
+  return -1
+}
+
+/** 根据当前 inputText 与光标位置，决定是否显示/隐藏 skill picker 以及 query。 */
+function updateSkillPickerState() {
+  const ta = textareaRef.value
+  if (!ta) return
+  const caret = ta.selectionStart ?? inputText.value.length
+  const text = inputText.value
+  const triggerIdx = findSkillTriggerIndex(text, caret)
+  if (triggerIdx < 0) {
+    showSkillPicker.value = false
+    skillQuery.value = ''
+    return
+  }
+  // 取 `/` 之后到光标之间的内容作为搜索关键词。
+  const q = text.slice(triggerIdx + 1, caret)
+  // 如果关键词里出现空白，说明用户已经在 skill 后输入了别的内容，关闭面板。
+  if (/\s/.test(q)) {
+    showSkillPicker.value = false
+    return
+  }
+  skillQuery.value = q
+  showSkillPicker.value = true
+}
+
+/** 用户从 picker 选中一个 skill 后，把 `/skill-id ` 填入输入框。
+ *  策略：替换从触发 `/` 到光标之间的内容为 `/skill-id `（尾部加空格），
+ *  保留用户在 `/` 之前已有的文本和后续内容，并把光标移到空格之后。 */
+function handleSkillSelect(skill: Skill) {
+  const ta = textareaRef.value
+  const caret = ta?.selectionStart ?? inputText.value.length
+  const text = inputText.value
+  const triggerIdx = findSkillTriggerIndex(text, caret)
+  const start = triggerIdx < 0 ? caret : triggerIdx
+  const before = text.slice(0, start)
+  const after = text.slice(caret)
+  const insert = `/${skill.id} `
+  inputText.value = before + insert + after
+  showSkillPicker.value = false
+  skillQuery.value = ''
+  // 把焦点切回 textarea 并把光标放到插入文本末尾。
+  nextTick(() => {
+    if (ta) {
+      ta.focus()
+      const pos = before.length + insert.length
+      ta.setSelectionRange(pos, pos)
+    }
+  })
+}
+
+/** 关闭 picker（Esc 或外部点击）。 */
+function handleSkillCancel() {
+  showSkillPicker.value = false
+  skillQuery.value = ''
+}
+
 
 // Load saved preference on mount so the user's choice survives refreshes.
 onMounted(async () => {
@@ -155,12 +247,22 @@ function handleSend() {
   inputText.value = ''
 }
 
-/** Send on Enter (without Shift) */
+/** Send on Enter (without Shift). 当 SkillPicker 打开时，Enter / 方向键 / Esc
+ *  全部交给 picker 处理，不触发发送。 */
 function handleKeydown(e: KeyboardEvent) {
+  if (showSkillPicker.value && skillPickerRef.value) {
+    const handled = skillPickerRef.value.handleKeydown(e)
+    if (handled) return
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
   }
+}
+
+/** 监听输入变化，动态判断是否需要弹出/关闭 SkillPicker。 */
+function handleInput() {
+  updateSkillPickerState()
 }
 
 function setMaxSteps(n: number) {
@@ -184,13 +286,23 @@ function setTimeoutSeconds(seconds: number) {
 <template>
   <div class="task-input">
     <div class="input-row">
+      <!-- SkillPicker 悬浮在 textarea 上方。visible 由输入文本中的 `/` 触发。 -->
+      <SkillPicker
+        ref="skillPickerRef"
+        :visible="showSkillPicker"
+        :query="skillQuery"
+        @select="handleSkillSelect"
+        @cancel="handleSkillCancel"
+      />
       <textarea
+        ref="textareaRef"
         v-model="inputText"
         class="input-textarea"
         :disabled="disabled"
-        placeholder="Enter your task description... (e.g., 'Write a Python script to analyze a CSV file')"
+        placeholder="Enter your task description... (输入 / 触发 Skill 选择；e.g., 'Write a Python script to analyze a CSV file')"
         rows="2"
         @keydown="handleKeydown"
+        @input="handleInput"
       ></textarea>
       <button
         class="btn btn-send"

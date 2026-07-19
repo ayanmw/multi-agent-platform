@@ -27,6 +27,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
+	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
@@ -64,6 +65,15 @@ var (
 	// traceRegistry holds root trace contexts so handlers can pass them into engines.
 	traceRegistry sync.Map
 )
+
+// globalSkillRegistry 是 Skill 子系统的全局注册表引用。
+//
+// 在 main() 中初始化后保留为包级变量，让 runAgentLoopWithTurn 等闭包能直接把
+// SkillRegistry / ActiveSkills 注入 EngineConfig，而不必把参数一路透传到所有
+// handler 签名上（runAgentLoop 已有 20+ 个参数，再加会失控）。
+//
+// 当 db.DB 未初始化时仍是一个空 registry，避免 nil 解引用。
+var globalSkillRegistry *skill.Registry
 
 // storeCancel 注册 task/agent 对应的取消函数。
 //
@@ -706,6 +716,37 @@ func main() {
 
 	log.Printf("Registered %d built-in tools (dispatch_sub_agent enabled for leader)", len(toolRegistry.List()))
 
+	// Phase skill: 初始化 Skill 子系统。
+	// 三件套：Registry（内存）、Store（SQLite 持久化）、Loader（启动期加载）。
+	// LoadAll 先注册 DefaultBuiltins，再把数据库中持久化的 skill 覆盖进 registry，
+	// 保证用户创建的 local_db skill 不会被内置版本"压回"。
+	var skillRegistry *skill.Registry
+	var skillStore *skill.Store
+	var skillLoader *skill.Loader
+	if db.DB != nil {
+		skillRegistry = skill.NewRegistry()
+		skillStore = skill.NewStore(db.DB)
+		skillLoader = skill.NewLoader(skillStore, skillRegistry)
+		if err := skillLoader.LoadAll(); err != nil {
+			observability.DefaultLogger.Warn("skill", "failed to load skills", map[string]any{"error": err.Error()})
+		} else {
+			log.Printf("Skill subsystem: loaded %d skill(s) into registry", len(skillRegistry.List(nil)))
+		}
+		// 注册 skill 管理工具（create_local / delete_local / list），让 Agent 也能操作 skill。
+		toolRegistry.Register(skill.NewSkillCreateLocalTool(skillStore, skillRegistry))
+		toolRegistry.Register(skill.NewSkillDeleteLocalTool(skillStore, skillRegistry))
+		toolRegistry.Register(skill.NewSkillListTool(skillRegistry))
+	} else {
+		// DB 未初始化时仍提供一个空 registry，避免后续 nil 解引用。
+		skillRegistry = skill.NewRegistry()
+		skillLoader = skill.NewLoader(nil, skillRegistry)
+		_ = skillLoader.LoadAll()
+		log.Printf("Skill subsystem: disabled (no database)")
+	}
+	// 把 registry 提升为包级变量，让 runAgentLoopWithTurn / runAgentLoop 等闭包
+	// 可以直接读取当前已启用的 skill 列表并注入 EngineConfig。
+	globalSkillRegistry = skillRegistry
+
 	// Phase 5: AgentBus for inter-agent communication.
 	// The AgentBus is shared across all agents and allows agents to send messages
 	// to each other during execution.
@@ -1340,6 +1381,10 @@ func main() {
 
 	// MCP management API: dynamic add, enable, disable, remove.
 	registerMCPRoutes(http.DefaultServeMux, mcpManager)
+
+	// Phase skill: 注册 Skill REST API。
+	// 路由实现集中在 api_skill.go，hub 用于广播 skill 状态变化事件。
+	registerSkillRoutes(http.DefaultServeMux, hub, skillStore, skillRegistry)
 
 	// Dynamic Tool Registration API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
@@ -2073,6 +2118,11 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		ToolLatencyRecorder: func(latency time.Duration) {
 			observability.DefaultMetrics.RecordToolLatency(latency)
 		},
+		// Phase skill: 注入 Skill 子系统。ActiveSkills 取当前 registry 中所有
+		// 处于 enabled 状态的 skill id；SkillVariables 暂留 nil，由后续 case/
+		// session 上下文填充。
+		SkillRegistry: globalSkillRegistry,
+		ActiveSkills:  GetEnabledSkillIDs(globalSkillRegistry),
 	}, tools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
