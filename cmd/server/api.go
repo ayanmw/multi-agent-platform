@@ -187,10 +187,9 @@ func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id strin
 	encodeContextWindowSnapshot(w, snapshot)
 }
 
-// encodeContextWindowSnapshot writes a snapshot as JSON. It reuses the same
-// field names the WebSocket event emits so the frontend can treat both sources
-// identically. Errors during encoding are logged but cannot be returned once
-// the response has started.
+// encodeContextWindowSnapshot 把快照写成 JSON。它复用 WebSocket 事件使用的
+// 字段名，让前端可以把两个来源同等对待。响应已开始后，编码错误只能记录
+// 而无法再返回。
 func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWindowSnapshot) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
@@ -198,10 +197,10 @@ func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWind
 	}
 }
 
-// handleGetAgentMessages returns the AgentBus message history for a task
-// (GET /api/tasks/:id/agent-messages). It always returns a non-nil
-// `messages` array — empty when the task has no inter-agent traffic — so the
-// frontend can render the timeline without a null check.
+// handleGetAgentMessages 返回某任务的 AgentBus 消息历史
+// （GET /api/tasks/:id/agent-messages）。它始终返回非 nil 的
+// `messages` 数组 —— 任务没有跨 agent 流量时为空 —— 让前端
+// 渲染时间线时无需做 null 检查。
 func handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID string) {
 	msgs, err := db.QueryAgentMessages(taskID)
 	if err != nil {
@@ -223,7 +222,7 @@ func handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID strin
 
 // === Task History API ===
 
-// handleListTasks returns recent tasks (GET /api/tasks)
+// handleListTasks 返回最近的任务（GET /api/tasks）
 func handleListTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := db.QueryTasks(50)
 	if err != nil {
@@ -237,9 +236,8 @@ func handleListTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
-// handleGetTask returns a single task with its steps (GET /api/tasks?id=xxx).
-// When an associated case evaluation exists, it is included under the
-// "evaluation" key in a backward-compatible way.
+// handleGetTask 返回单个任务及其步骤（GET /api/tasks?id=xxx）。
+// 若存在关联的 case evaluation，则以向后兼容的方式放在 "evaluation" key 下。
 func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
 	log.Printf("[API] GET /api/tasks?id=%s", taskID)
@@ -274,8 +272,8 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 		childTasks = []db.TaskRecord{}
 	}
 
-	// For multi-agent root tasks, merge steps from child sub-tasks so the
-	// root task detail view shows the complete execution history of all agents.
+	// 对 multi-agent root 任务，合并子任务的步骤，让 root 任务详情页
+	// 能展示所有 agent 的完整执行历史。
 	stepIDs := make(map[string]bool)
 	for _, s := range steps {
 		stepIDs[s.ID] = true
@@ -293,12 +291,12 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Sort merged steps by step_index for coherent ordering
+	// 合并后的步骤按 step_index 排序以保证连贯顺序
 	sort.SliceStable(steps, func(i, j int) bool { return steps[i].StepIndex < steps[j].StepIndex })
 
-	// Load the task's most recent evaluation (if any) to surface case pass/fail
-	// state in the task detail view. case_evaluations is keyed by task_id; we
-	// pick the latest row regardless of case_id so the API works for all tasks.
+	// 加载任务最近的一次 evaluation（若有），在任务详情页展示 case 通过/失败
+	// 状态。case_evaluations 以 task_id 为键；这里不区分 case_id 取最新一行，
+	// 让 API 对所有任务都可用。
 	eval, evalErr := queryLatestCaseEvaluation(taskID)
 	if evalErr != nil {
 		log.Printf("[API] GET /api/tasks?id=%s: evaluation query error: %v", taskID, evalErr)
@@ -313,9 +311,8 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// queryLatestCaseEvaluation returns the most recent case evaluation for a
-// task, or nil when none exists. Errors are returned so the caller can log
-// them without failing the task detail request.
+// queryLatestCaseEvaluation 返回某任务最近的 case evaluation，没有则返回 nil。
+// 错误返回给调用方，让其记录日志但不让任务详情请求失败。
 func queryLatestCaseEvaluation(taskID string) (map[string]any, error) {
 	if db.DB == nil {
 		return nil, errors.New("database not initialized")
@@ -348,8 +345,8 @@ func queryLatestCaseEvaluation(taskID string) (map[string]any, error) {
 
 // === Case API ===
 
-// handleListCases handles GET /api/cases with optional tag and category filters.
-// Multiple tags use OR semantics: a case matches if it contains ANY listed tag.
+// handleListCases 处理 GET /api/cases，支持可选的 tag 与 category 过滤。
+// 多个 tag 采用 OR 语义：case 只要包含任一所列 tag 即匹配。
 func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
 	tags := parseTagFilter(r.URL.Query().Get("tag"))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
@@ -367,7 +364,7 @@ func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service)
 	json.NewEncoder(w).Encode(all)
 }
 
-// parseTagFilter splits a comma-separated tag query parameter into normalized tags.
+// parseTagFilter 把逗号分隔的 tag 查询参数切成规整化的 tag 列表。
 func parseTagFilter(s string) []string {
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
@@ -380,7 +377,7 @@ func parseTagFilter(s string) []string {
 	return result
 }
 
-// handleGetCase handles GET /api/cases/{id}.
+// handleGetCase 处理 GET /api/cases/{id}。
 func handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	c, err := svc.Get(id)
 	if err != nil {
@@ -399,7 +396,7 @@ func handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases
 	json.NewEncoder(w).Encode(c)
 }
 
-// handleCreateCase handles POST /api/cases.
+// handleCreateCase 处理 POST /api/cases。
 func handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
@@ -420,13 +417,13 @@ func handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service
 	json.NewEncoder(w).Encode(created)
 }
 
-// handleUpdateCase handles PUT /api/cases/{id}. Built-in cases are rejected.
+// handleUpdateCase 处理 PUT /api/cases/{id}。内置 case 会被拒绝。
 func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	// Reject built-in cases explicitly so the 403 reason is clear.
+	// 显式拒绝内置 case，让 403 原因清晰。
 	existing, err := svc.Get(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -459,7 +456,7 @@ func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 	json.NewEncoder(w).Encode(updated)
 }
 
-// handleDeleteCase handles DELETE /api/cases/{id}. Built-in cases are rejected.
+// handleDeleteCase 处理 DELETE /api/cases/{id}。内置 case 会被拒绝。
 func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
@@ -490,10 +487,10 @@ func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleGetCaseEvaluation returns the persisted evaluation for a specific
-// task+case pair (GET /api/cases/{id}/evaluations/{task_id}).
-// If no evaluation exists, it returns {"evaluation": null} with HTTP 200 so
-// non-case tasks are handled gracefully.
+// handleGetCaseEvaluation 返回某 task+case 配对的持久化 evaluation
+// （GET /api/cases/{id}/evaluations/{task_id}）。
+// 若没有 evaluation，则返回 {"evaluation": null} 与 HTTP 200，
+// 让非 case 任务也能被优雅处理。
 func handleGetCaseEvaluation(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
@@ -504,7 +501,7 @@ func handleGetCaseEvaluation(w http.ResponseWriter, r *http.Request, id string, 
 		return
 	}
 
-	// Extract task_id from the trailing path segment.
+	// 从末尾 path 段提取 task_id。
 	path := strings.TrimPrefix(r.URL.Path, "/api/cases/")
 	parts := strings.Split(path, "/")
 	if len(parts) < 3 || parts[1] != "evaluations" {
@@ -535,14 +532,14 @@ type createSessionRequest struct {
 	Name         string `json:"name"`
 	UserInput    string `json:"user_input"`
 	ProjectID    string `json:"project_id"`
-	WorkspaceDir string `json:"workspace_dir"` // optional: user-specified path; empty = auto
+	WorkspaceDir string `json:"workspace_dir"` // 可选：用户指定的路径；为空则自动
 }
 
 type renameSessionRequest struct {
 	Name string `json:"name"`
 }
 
-// handleSessions handles GET/POST /api/sessions
+// handleSessions 处理 GET/POST /api/sessions
 func handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -561,15 +558,15 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				sessions[i].TotalTokens = total
 			}
-			// Fallback: if root_task_id is empty, discover it from the session's tasks.
-			// This handles sessions created before the root_task_id binding was implemented.
+			// 兜底：若 root_task_id 为空，则从 session 的任务中重新发现它。
+			// 这覆盖了 root_task_id 绑定实现之前创建的 session。
 			if sessions[i].RootTaskID == "" {
 				tasks, tErr := db.QueryTasksBySession(sessions[i].ID)
 				if tErr == nil {
 					for _, t := range tasks {
 						if t.IsRoot {
 							sessions[i].RootTaskID = t.ID
-							// Persist the discovered root_task_id so we don't need to rediscover
+							// 把发现的 root_task_id 持久化，避免下次再重新发现
 							db.UpdateSession(sessions[i].ID, t.ID, sessions[i].Status, sessions[i].UserInput)
 							log.Printf("[API] GET /api/sessions: auto-discovered root_task_id=%s for session %s", t.ID, sessions[i].ID)
 							break
@@ -598,10 +595,10 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 			name = extractSessionName(req.UserInput)
 		}
 
-		// Resolve workspace directory according to the fallback rules:
-		// 1. Explicit user path (validated/created) -> use it, isAuto=false
-		// 2. Project's working_directory/session-{id} -> use it, isAuto=false
-		// 3. ./workspace/session-{id}/ -> use it, isAuto=true
+		// 按以下兜底规则确定 workspace 目录：
+		// 1. 用户显式路径（校验/创建）-> 使用它，isAuto=false
+		// 2. Project 的 working_directory/session-{id} -> 使用它，isAuto=false
+		// 3. ./workspace/session-{id}/ -> 使用它，isAuto=true
 		workspaceDir, workspaceAuto := resolveWorkspaceDir(req.WorkspaceDir, req.ProjectID, sessionID)
 
 		now := time.Now()
@@ -633,7 +630,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSessionByID handles GET/PUT/DELETE /api/sessions/{id}
+// handleSessionByID 处理 GET/PUT/DELETE /api/sessions/{id}
 func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	if id == "" || id == "/" {
@@ -658,8 +655,8 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			tasks = []db.TaskRecord{}
 		}
 
-		// Aggregate session duration alongside tokens so the frontend can
-		// show session-level elapsed time without summing every task client-side.
+		// 同时聚合 session 时长与 token，让前端无需逐任务求和即可显示
+		// session 级别的耗时。
 		aggregateTokens, _ := db.AggregateSessionTokens(id)
 		totalDuration, _ := db.AggregateSessionDuration(id)
 
@@ -694,7 +691,7 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(sess)
 
 	case http.MethodDelete:
-		// Fetch session first to get workspace_dir before deleting the DB record
+		// 删 DB 记录前先取出 session，以拿到 workspace_dir
 		sessToDelete, sessErr := db.QuerySessionByID(id)
 		if sessErr != nil {
 			http.Error(w, "session not found: "+sessErr.Error(), http.StatusNotFound)
@@ -714,7 +711,7 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Phase 7-C: audit log for destructive write operation.
+		// Phase 7-C：破坏性写操作的 audit log。
 		observability.DefaultAuditor.Record(observability.AuditRecord{
 			Actor:  currentActor(r),
 			Action: "delete_session",
@@ -722,7 +719,7 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			Before: map[string]any{"id": id, "workspace_dir": sessToDelete.WorkspaceDir},
 			After:  map[string]any{"deleted": true},
 		})
-		// Clean up workspace directory after DB deletion
+		// DB 删除后再清理 workspace 目录
 		if sessToDelete.WorkspaceDir != "" {
 			if rmErr := os.RemoveAll(sessToDelete.WorkspaceDir); rmErr != nil {
 				log.Printf("[API] DELETE /api/sessions/%s: workspace cleanup failed: %v", id, rmErr)
@@ -739,12 +736,12 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// extractSessionName generates a display name from user input.
+// extractSessionName 从用户输入生成展示名称。
 func extractSessionName(input string) string {
 	if input == "" {
 		return "New Session"
 	}
-	// Remove newlines and extra spaces
+	// 去除换行与多余空格
 	clean := strings.Join(strings.Fields(input), " ")
 	if len(clean) > 30 {
 		return clean[:30] + "..."
@@ -752,13 +749,12 @@ func extractSessionName(input string) string {
 	return clean
 }
 
-// resolveWorkspaceDir determines the workspace directory for a new session
-// following the fallback rules:
-//  1. Explicit user-specified path — validate or create it; isAuto=false
-//  2. Project working_directory/session-{id}/ — isAuto=false
-//  3. ./workspace/session-{id}/ — isAuto=true (default)
+// resolveWorkspaceDir 按以下兜底规则为新 session 决定 workspace 目录：
+//  1. 用户显式路径 —— 校验或创建；isAuto=false
+//  2. Project working_directory/session-{id}/ —— isAuto=false
+//  3. ./workspace/session-{id}/ —— isAuto=true（默认）
 func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceDir string, isAuto bool) {
-	// 1. Explicit user path: validate existence, or try to create it
+	// 1. 用户显式路径：校验存在性，否则尝试创建
 	if specifiedPath != "" {
 		if info, err := os.Stat(specifiedPath); err == nil && info.IsDir() {
 			return specifiedPath, false
@@ -766,10 +762,10 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 		if err := os.MkdirAll(specifiedPath, 0755); err == nil {
 			return specifiedPath, false
 		}
-		// Creation failed — fall through to default
+		// 创建失败 —— 落到默认值
 	}
 
-	// 2. Project working_directory: create session subdirectory
+	// 2. Project working_directory：创建 session 子目录
 	if projectID != "" {
 		proj, projErr := db.QueryProjectByID(projectID)
 		if projErr == nil && proj.WorkingDirectory != "" {
@@ -780,20 +776,19 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 		}
 	}
 
-	// 3. Default: <cwd>/workspace/session-{id}/
-	// Use an absolute path based on the current working directory so it is
-	// independent of the directory the server binary was launched from.
+	// 3. 默认：<cwd>/workspace/session-{id}/
+	// 用基于当前工作目录的绝对路径，使其不依赖 server binary 启动时的目录。
 	cwd, _ := os.Getwd()
 	wsPath := filepath.Join(cwd, "workspace", "session-"+sessionID)
 	if err := os.MkdirAll(wsPath, 0755); err == nil {
 		return wsPath, true
 	}
-	return "", true // best-effort; empty path tolerated
+	return "", true // 尽力而为；空路径也能容忍
 }
 
 // === Agent CRUD API ===
 
-// agentRequest is the JSON body for agent create/update
+// agentRequest 是 agent create/update 的 JSON body
 type agentRequest struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
@@ -806,7 +801,7 @@ type agentRequest struct {
 	Tools        []string `json:"tools"`
 }
 
-// handleAgents handles GET/POST /api/agents
+// handleAgents 处理 GET/POST /api/agents
 func handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -850,9 +845,9 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAgentByID handles GET/PUT/DELETE /api/agents/{id}
+// handleAgentByID 处理 GET/PUT/DELETE /api/agents/{id}
 func handleAgentByID(w http.ResponseWriter, r *http.Request) {
-	// Extract agent ID from URL path: /api/agents/{id}
+	// 从 URL path 提取 agent ID：/api/agents/{id}
 	id := strings.TrimPrefix(r.URL.Path, "/api/agents/")
 	if id == "" || id == "/" {
 		http.Error(w, "agent ID required", http.StatusBadRequest)
@@ -905,8 +900,8 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 // === Memory API (Phase 6) ===
 
-// handleListMemories returns memory records filtered by scope, tier, type,
-// status, and project with pagination.
+// handleListMemories 返回按 scope、tier、type、status、project 过滤并分页的
+// memory 记录。
 // GET /api/memories?scope=session&tier=consolidated&type=rule&status=active&project=default&limit=20&offset=0
 func handleListMemories(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project")
@@ -949,7 +944,7 @@ func handleListMemories(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// memoryCreateRequest is the JSON body for POST /api/memories.
+// memoryCreateRequest 是 POST /api/memories 的 JSON body。
 type memoryCreateRequest struct {
 	ProjectID  string   `json:"project_id"`
 	Scope      string   `json:"scope"` // session | project | global
@@ -959,18 +954,18 @@ type memoryCreateRequest struct {
 	Content    string   `json:"content"`
 	Confidence float64  `json:"confidence"`
 	Status     string   `json:"status"`
-	Tags       []string `json:"tags,omitempty"` // only used in metadata, may be ignored
+	Tags       []string `json:"tags,omitempty"` // 仅用于 metadata，可能被忽略
 }
 
-// memoryUpdateRequest is the JSON body for PUT /api/memories/{id}.
+// memoryUpdateRequest 是 PUT /api/memories/{id} 的 JSON body。
 type memoryUpdateRequest struct {
 	Content    string  `json:"content"`
 	Confidence float64 `json:"confidence"`
 	Status     string  `json:"status"`
 }
 
-// handleMemoryByID handles GET / PUT / DELETE /api/memories/{id} and
-// POST /api/memories/{id}/embed.
+// handleMemoryByID 处理 GET / PUT / DELETE /api/memories/{id} 以及
+// POST /api/memories/{id}/embed。
 func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
 	switch r.Method {
 	case http.MethodGet:
@@ -996,7 +991,7 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			http.Error(w, "at least one field must be provided", http.StatusBadRequest)
 			return
 		}
-		// Verify the memory exists before mutating.
+		// 修改前先确认 memory 存在。
 		existing, err := db.QueryMemoryByID(id)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -1033,7 +1028,7 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Phase 7-C: audit log memory update.
+		// Phase 7-C：memory 更新的 audit log。
 		observability.DefaultAuditor.Record(observability.AuditRecord{
 			Actor:  currentActor(r),
 			Action: "update_memory",
@@ -1051,8 +1046,8 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 		json.NewEncoder(w).Encode(record)
 
 	case http.MethodDelete:
-		// Reuse the existing delete handler logic so we don't diverge, then
-		// broadcast the deletion event with the deleted memory details.
+		// 复用已有的删除 handler 逻辑避免分叉，然后再广播带被删 memory 详情的
+		// 删除事件。
 		record, lookupErr := db.QueryMemoryByID(id)
 		if lookupErr != nil {
 			if lookupErr == sql.ErrNoRows {
@@ -1063,7 +1058,7 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			return
 		}
 		handleDeleteMemory(w, r, id)
-		// Phase 7-C: audit log memory deletion.
+		// Phase 7-C：memory 删除的 audit log。
 		observability.DefaultAuditor.Record(observability.AuditRecord{
 			Actor:  currentActor(r),
 			Action: "delete_memory",
@@ -1084,8 +1079,8 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 	}
 }
 
-// handleMemoryEmbed handles POST /api/memories/{id}/embed. It embeds the
-// memory content and stores the vector in the configured VectorStore.
+// handleMemoryEmbed 处理 POST /api/memories/{id}/embed。它对 memory 内容
+// 做 embedding，并把向量存入配置的 VectorStore。
 func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1102,8 +1097,8 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 	}
 	vec, err := embedProvider.Embed(record.Content)
 	if err != nil {
-		// Degrade gracefully: the memory exists but its embedding could not be
-		// computed. Return a 422 so the frontend notices without retry storms.
+		// 优雅降级：memory 存在但其 embedding 无法计算。返回 422 让前端
+		// 注意到而不触发重试风暴。
 		log.Printf("[API] embed memory %s failed: %v", id, err)
 		http.Error(w, "embedding failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -1128,7 +1123,7 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 	} else {
 		if err := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, dims); err != nil {
 			log.Printf("[API] persist embedding for memory %s failed: %v", id, err)
-			// Embedding is in VectorStore already; DB persistence is best-effort.
+			// Embedding 已在 VectorStore 中；DB 持久化是尽力而为。
 		}
 	}
 
@@ -1148,8 +1143,8 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 	})
 }
 
-// resolveProviderNameForAPI returns a human-readable model name for an
-// embedding provider. Falls back to "unknown" when the provider is nil.
+// resolveProviderNameForAPI 返回某 embedding provider 的人类可读模型名。
+// provider 为 nil 时回退到 "unknown"。
 func resolveProviderNameForAPI(provider llm.EmbeddingProvider) string {
 	if provider == nil {
 		return "unknown"
@@ -1157,8 +1152,8 @@ func resolveProviderNameForAPI(provider llm.EmbeddingProvider) string {
 	return fmt.Sprintf("%T", provider)
 }
 
-// encodeFloat32ToBytes serializes a []float32 vector into a little-endian
-// byte slice suitable for the memory_embeddings table.
+// encodeFloat32ToBytes 把 []float32 向量序列化为小端字节切片，
+// 适合写入 memory_embeddings 表。
 func encodeFloat32ToBytes(vec []float32) ([]byte, error) {
 	buf := make([]byte, 4*len(vec))
 	for i, v := range vec {
@@ -1168,11 +1163,11 @@ func encodeFloat32ToBytes(vec []float32) ([]byte, error) {
 	return buf, nil
 }
 
-// handleUpdateMemoryScope updates the scope (and optional session_id) of a memory.
+// handleUpdateMemoryScope 更新 memory 的 scope（以及可选的 session_id）。
 // PUT /api/memories/{id}/scope
 // Body: {"scope": "project", "session_id": ""}
 func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) {
-	// Verify the memory exists before attempting to update.
+	// 更新前先确认 memory 存在。
 	if _, err := db.QueryMemoryByID(id); err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, "memory not found", http.StatusNotFound)
@@ -1193,7 +1188,7 @@ func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) 
 		http.Error(w, "scope must be session, project, or global", http.StatusBadRequest)
 		return
 	}
-	// Clear session_id when scope is not session so we don't leave stale values.
+	// scope 不是 session 时清空 session_id，避免遗留过期值。
 	sessionID := req.SessionID
 	if req.Scope != "session" {
 		sessionID = ""
@@ -1211,10 +1206,10 @@ func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) 
 	})
 }
 
-// handleDeleteMemory removes a memory record by ID.
+// handleDeleteMemory 按 ID 删除 memory 记录。
 // DELETE /api/memories/{id}
 func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
-	// Verify the memory exists before attempting to delete.
+	// 删除前先确认 memory 存在。
 	record, err := db.QueryMemoryByID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -1228,8 +1223,8 @@ func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Phase 7-C: audit log memory deletion at the lowest-level helper too,
-	// so direct callers of handleDeleteMemory still produce an audit record.
+	// Phase 7-C：在最底层 helper 也记录 memory 删除的 audit log，
+	// 这样直接调用 handleDeleteMemory 的地方同样会留下 audit 记录。
 	observability.DefaultAuditor.Record(observability.AuditRecord{
 		Actor:  currentActor(r),
 		Action: "delete_memory",
@@ -1246,7 +1241,7 @@ func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 	})
 }
 
-// handleCreateMemory creates a new memory from a user request.
+// handleCreateMemory 根据用户请求创建新 memory。
 // POST /api/memories
 func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
 	if r.Method != http.MethodPost {
@@ -1311,8 +1306,8 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Best-effort embedding: do not fail the create API if embedding/vector
-	// persistence is unavailable.
+	// 尽力而为的 embedding：若 embedding / 向量持久化不可用，
+	// 也不要让 create API 失败。
 	if vectorStore != nil && embedProvider != nil {
 		if vec, err := embedProvider.Embed(record.Content); err == nil {
 			metadata := map[string]any{
@@ -1354,7 +1349,7 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 	json.NewEncoder(w).Encode(created)
 }
 
-// handlePromoteMemories triggers the promotion pipeline manually.
+// handlePromoteMemories 手动触发 promotion pipeline。
 // POST /api/memories/promote
 // Body: {"project_id": "default"}
 func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness.PromotionGate) {
@@ -1362,7 +1357,7 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 		ProjectID string `json:"project_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Accept empty body — use default project
+		// 接受空 body —— 使用默认 project
 		req.ProjectID = "default"
 	}
 	if req.ProjectID == "" {
@@ -1379,7 +1374,7 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 	json.NewEncoder(w).Encode(report)
 }
 
-// handleMemoryStats returns aggregate memory statistics for a project.
+// handleMemoryStats 返回某项目的聚合 memory 统计。
 // GET /api/memories/stats?project=default
 func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1398,7 +1393,7 @@ func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 	if grouped == nil {
 		grouped = map[string]int{}
 	}
-	// Add a computed total field for convenience.
+	// 为方便调用方，额外计算一个 total 字段。
 	grouped["total"] = 0
 	for k, v := range grouped {
 		if strings.HasPrefix(k, "tier_") {
@@ -1423,11 +1418,11 @@ func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRecallPreview previews what memories would be recalled for a given task.
+// handleRecallPreview 预览某个任务会召回哪些 memory。
 // GET /api/memories/recall?task=xxx&project=default&max=3
-// GET /api/memories/recall?query=xxx&project=default&max=3 — pure vector search
-// This is a debugging endpoint — it shows the WorkingMemory that would be injected
-// for a task without actually running the agent.
+// GET /api/memories/recall?query=xxx&project=default&max=3 —— 纯向量检索
+// 这是一个调试 endpoint —— 它展示某任务会被注入的 WorkingMemory，
+// 但不会真正运行 agent。
 func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness.MemoryRecall) {
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
@@ -1441,8 +1436,8 @@ func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness
 		}
 	}
 
-	// Vector query mode: GET /api/memories/recall?query=xxx
-	// Performs pure vector similarity search and returns ranked MemoryItems.
+	// 向量查询模式：GET /api/memories/recall?query=xxx
+	// 执行纯向量相似度检索，返回按相关性排序的 MemoryItem。
 	if queryParam := r.URL.Query().Get("query"); queryParam != "" {
 		items, err := recall.RecallWithQuery(projectID, "", queryParam, maxEpisodes)
 		if err != nil {
@@ -1470,7 +1465,7 @@ func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness
 		return
 	}
 
-	// Detect conflicts among the recalled memories
+	// 检测召回 memory 之间的冲突
 	allMemories := append(wm.ProjectRules, wm.ProjectEpisodes...)
 	allMemories = append(allMemories, wm.SessionMemories...)
 	allMemories = append(allMemories, wm.GlobalRules...)
@@ -1484,8 +1479,8 @@ func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness
 	})
 }
 
-// parseInt parses a simple integer string. Used for URL query parameter parsing
-// where we don't need the full strconv import for a single value.
+// parseInt 解析简单的整数字符串。用于 URL 查询参数解析，
+// 这里不需要为单个值引入完整的 strconv 包。
 func parseInt(s string) (int, error) {
 	var n int
 	for _, c := range s {
@@ -1499,15 +1494,15 @@ func parseInt(s string) (int, error) {
 
 // === Project API ===
 
-// projectRequest is the JSON body for project create/update
+// projectRequest 是 project create/update 的 JSON body
 type projectRequest struct {
 	Name             string `json:"name"`
 	Description      string `json:"description"`
 	WorkingDirectory string `json:"working_directory"`
 }
 
-// projectSummary is the compact view returned in list endpoints.
-// It includes counts computed from related tables.
+// projectSummary 是 list endpoint 返回的紧凑视图。
+// 包含从关联表计算出的计数。
 type projectSummary struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -1535,7 +1530,7 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 			projects = []db.ProjectRecord{}
 		}
 
-		// Build summaries with session and memory counts
+		// 构建 summary，附带 session 与 memory 计数
 		summaries := make([]projectSummary, 0, len(projects))
 		for _, p := range projects {
 			summary := projectSummary{
@@ -1547,13 +1542,13 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 				UpdatedAt:        p.UpdatedAt.Format(time.RFC3339),
 			}
 
-			// Count sessions for this project
+			// 统计该项目的 session 数量
 			sessions, err := db.QuerySessionsByProject(p.ID, 1000)
 			if err == nil {
 				summary.SessionCount = len(sessions)
 			}
 
-			// Count memories for this project
+			// 统计该项目的 memory 数量
 			memories, err := db.QueryMemoriesByProject(p.ID)
 			if err == nil {
 				summary.MemoryCount = len(memories)
@@ -1635,7 +1630,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			sessions = []db.SessionRecord{}
 		}
 
-		// Compute memory stats: total, consolidated, semantic
+		// 计算 memory 统计：total、consolidated、semantic
 		memories, err := db.QueryMemoriesByProject(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1676,7 +1671,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Fetch existing project to preserve its config
+		// 取出已有 project 以保留其 config
 		existing, err := db.QueryProjectByID(id)
 		if err != nil {
 			http.Error(w, "project not found: "+err.Error(), http.StatusNotFound)
@@ -1698,7 +1693,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(updated)
 
 	case http.MethodDelete:
-		// Protect the default project from deletion
+		// 保护 default project 不被删除
 		if id == "default" {
 			http.Error(w, "cannot delete the default project", http.StatusBadRequest)
 			return
@@ -1709,7 +1704,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Phase 7-C: audit log project deletion.
+		// Phase 7-C：project 删除的 audit log。
 		observability.DefaultAuditor.Record(observability.AuditRecord{
 			Actor:  currentActor(r),
 			Action: "delete_project",
@@ -1731,8 +1726,8 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 
 // === Multi-Turn Chat API ===
 
-// handleSessionChat handles POST /api/sessions/{id}/chat
-// 在已有 Session 中发起新轮对话，自动注入历史消息上下文
+// handleSessionChat 处理 POST /api/sessions/{id}/chat
+// 在已有 Session 中发起新一轮对话，自动注入历史消息上下文
 func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1754,8 +1749,8 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		SystemPrompt   string `json:"system_prompt"`
 		MaxSteps       int    `json:"max_steps"`
 		TimeoutSeconds int    `json:"timeout_seconds"`
-		// TaskContract optional overrides — when >0 / non-empty, override the
-		// default contract so frontend can drive PolicyChain.
+		// TaskContract 可选覆盖项 —— 大于 0 / 非空时覆盖默认 contract，
+		// 让前端能驱动 PolicyChain。
 		Scope         string   `json:"scope"`
 		AllowedTools  []string `json:"allowed_tools"`
 		TokenBudget   int      `json:"token_budget"`
@@ -1766,15 +1761,14 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		return
 	}
 
-	// Validate request against server-enforced contract limits.
+	// 按服务端强制 contract 限制校验请求。
 	if len(req.Input) > cfg.ContractLimits.MaxInputLength {
 		http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
 		return
 	}
 	if req.MaxSteps < 1 {
-		// No explicit max_steps and no case context — fall back to the server default
-		// so plain chat requests remain usable without requiring the client to always
-		// provide a positive value.
+		// 未显式指定 max_steps 也没有 case 上下文 —— 回退到服务端默认值，
+		// 让普通 chat 请求无需客户端总是提供正值也能用。
 		req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
 	}
 	if req.MaxSteps > cfg.ContractLimits.MaxSteps {
@@ -1815,8 +1809,8 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	}
 
 	// 上下文压缩：在创建新 Task 前检查是否需要压缩
-	// Phase 6-F: pass the same LLM summarizer used by Heartbeat so summaries are
-	// high quality. nil summarizer falls back to keyword path inside Compressor.
+	// Phase 6-F：传入与 Heartbeat 相同的 LLM summarizer，保证 summary 质量。
+	// nil summarizer 会让 Compressor 回退到关键词路径。
 	compressor := harness.NewContextCompressor(memDB, nil)
 	if result, err := compressor.CompressIfNeeded(id); err != nil {
 		log.Printf("[SessionChat] Compression failed: %v", err)
@@ -1863,8 +1857,8 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	if req.MaxSteps > 0 {
 		contract.MaxSteps = req.MaxSteps
 	}
-	// Override TaskContract fields from request body when provided —
-	// lets the frontend drive PolicyChain (scope, tools, budgets) and timeout.
+	// 请求体提供时覆盖 TaskContract 字段 ——
+	// 让前端能驱动 PolicyChain（scope、tools、预算）与 timeout。
 	if req.TimeoutSeconds > 0 {
 		contract.TimeoutSeconds = req.TimeoutSeconds
 	}
@@ -1910,7 +1904,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	})
 }
 
-// handleSessionMessages handles GET /api/sessions/{id}/messages
+// handleSessionMessages 处理 GET /api/sessions/{id}/messages
 // 返回指定 Session 的所有历史消息（按 turn_index ASC, created_at ASC）
 func handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method != http.MethodGet {
@@ -1945,8 +1939,8 @@ func buildHistoryContext(msgs []db.SessionMessageRecord) string {
 	return sb.String()
 }
 
-// handleCostQuery handles GET /api/costs with dimension filtering.
-// Supported query parameters: task_id, session_id, project_id, days.
+// handleCostQuery 处理 GET /api/costs，支持按维度过滤。
+// 支持的查询参数：task_id、session_id、project_id、days。
 func handleCostQuery(w http.ResponseWriter, r *http.Request, repo cost.CostRepository) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -1974,7 +1968,7 @@ func handleCostQuery(w http.ResponseWriter, r *http.Request, repo cost.CostRepos
 	json.NewEncoder(w).Encode(report)
 }
 
-// costReportFromRecords builds a JSON-friendly cost summary from a slice of records.
+// costReportFromRecords 从一组 record 构建适合 JSON 输出的 cost 汇总。
 func costReportFromRecords(records []cost.CostRecord) map[string]any {
 	if records == nil {
 		records = []cost.CostRecord{}
@@ -1995,8 +1989,8 @@ func costReportFromRecords(records []cost.CostRecord) map[string]any {
 	}
 	return map[string]any{
 		"record_count":     len(records),
-		"total_cost_usd":   totalCostUSD, // primary, full float64 precision (no /100 truncation)
-		"total_cost_cents": totalCents,   // derived, backward-compatible integer sum
+		"total_cost_usd":   totalCostUSD, // 主字段，完整 float64 精度（不做 /100 截断）
+		"total_cost_cents": totalCents,   // 派生字段，向后兼容的整数和
 		"total_tokens":     totalTokens,
 		"input_tokens":     totalInput,
 		"output_tokens":    totalOutput,
@@ -2006,8 +2000,8 @@ func costReportFromRecords(records []cost.CostRecord) map[string]any {
 	}
 }
 
-// truncateContent truncates a message content to maxLen characters.
-// If the content is longer than maxLen, it appends "...".
+// truncateContent 把消息内容截断到 maxLen 字符。
+// 内容超过 maxLen 时追加 "..."。
 func truncateContent(content string, maxLen int) string {
 	if len(content) <= maxLen {
 		return content
@@ -2015,19 +2009,19 @@ func truncateContent(content string, maxLen int) string {
 	return content[:maxLen] + "..."
 }
 
-// handleRunCase is a thin proxy for the CaseCard frontend.
+// handleRunCase 是 CaseCard 前端使用的薄代理。
 // POST /api/run-case
 // Body: {"input": "...", "agent_id": "...", "max_steps": N, "case": "code-gen", "session_id": "..."}
-// It extracts the case identifier (from "case" or "case_id" field), then executes
-// the same chat action logic as POST /api/tasks?case=<caseID>, with the case's
-// default input and system prompt applied when the body does not override them.
+// 它提取 case 标识（从 "case" 或 "case_id" 字段），然后执行与
+// POST /api/tasks?case=<caseID> 相同的 chat action 逻辑，body 未覆盖时
+// 使用 case 的默认 input 与 system prompt。
 func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Parse the request body — accepts both "case" and "case_id" for the case identifier.
+	// 解析请求体 —— 同时接受 "case" 与 "case_id" 作为 case 标识。
 	var body struct {
 		Input          string `json:"input"`
 		AgentID        string `json:"agent_id"`
@@ -2043,7 +2037,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		return
 	}
 
-	// Resolve caseID: prefer "case", fall back to "case_id".
+	// 解析 caseID：优先用 "case"，回退到 "case_id"。
 	caseID := body.Case
 	if caseID == "" {
 		caseID = body.CaseID
@@ -2069,12 +2063,12 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		req.SessionID = body.SessionID
 	}
 
-	// Mirror the chat-action logic from POST /api/tasks: apply case defaults,
-	// then run the agent loop.
-	// Resolve the case via caseService so custom cases persisted in SQLite are
-	// also honored. cases.Get only knows built-in cases; falling back to it would
-	// drop the case's default_input/system_prompt/max_steps for custom cases and
-	// surface as a 400 "input is required" from the chat path.
+	// 复刻 POST /api/tasks 中的 chat-action 逻辑：先应用 case 默认值，
+	// 再运行 agent loop。
+	// 通过 caseService 解析 case，让 SQLite 中持久化的自定义 case 也能
+	// 生效。cases.Get 只认识内置 case；回退到它会丢失自定义 case 的
+	// default_input/system_prompt/max_steps，并在 chat 路径以
+	// 400 "input is required" 返回。
 	resolveCase := func(caseID string) *cases.Case {
 		if caseID == "" {
 			return nil
@@ -2099,8 +2093,8 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 			if req.SystemPrompt == "" {
 				req.SystemPrompt = c.SystemPrompt
 			}
-			// Inherit case-level step/timeout defaults when client does not override,
-			// otherwise a request without explicit max_steps will fail validation.
+			// 客户端未覆盖时继承 case 级别的 step/timeout 默认值，
+			// 否则未显式指定 max_steps 的请求会校验失败。
 			if req.MaxSteps <= 0 {
 				req.MaxSteps = c.Contract.MaxSteps
 			}
@@ -2156,7 +2150,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	})
 }
 
-// handleContractLimits returns the server-enforced task contract limits.
+// handleContractLimits 返回服务端强制 task contract 限制。
 // GET /api/contract-limits
 func handleContractLimits(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -2169,7 +2163,7 @@ func handleContractLimits(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-// handleAudit returns recent audit records from the default auditor.
+// handleAudit 返回默认 auditor 最近的 audit 记录。
 // GET /api/audit?limit=N
 func handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit := 100
@@ -2183,7 +2177,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(records)
 }
 
-// handleTraces returns all buffered trace spans from the process-level tracer.
+// handleTraces 返回进程级 tracer 中所有缓存的 trace span。
 // GET /api/traces
 func handleTraces(w http.ResponseWriter, r *http.Request) {
 	data, _ := tracer.JSON()
@@ -2191,12 +2185,10 @@ func handleTraces(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleReplayEvents returns cached WebSocket events after a given event_id.
+// handleReplayEvents 返回给定 event_id 之后的缓存 WebSocket 事件。
 // GET /api/replay/events?since_event_id=<id>&limit=<n>
-// It is used by the frontend after reconnecting to catch up on events missed
-// during the disconnect window. A 410 Gone is returned when since_event_id is
-// no longer in the in-memory buffer so the client can fall back to a full task
-// replay.
+// 前端重连后用它补齐断连期间错过的事件。当 since_event_id 已不在内存
+// 缓冲区中时返回 410 Gone，让客户端回退到完整任务回放。
 func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -2246,7 +2238,7 @@ func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
 	})
 }
 
-// handleReplay replays task execution events from persistent storage.
+// handleReplay 从持久化存储回放任务执行事件。
 // GET /api/replay/tasks/{task_id}
 func handleReplay(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/replay/tasks/"), "/")
@@ -2260,7 +2252,7 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(events)
 }
 
-// buildReplayEvents reconstructs a flat event sequence from steps and conversations.
+// buildReplayEvents 从 steps 与 conversations 重建一条扁平的事件序列。
 func buildReplayEvents(taskID string) []map[string]any {
 	var events []map[string]any
 	steps, _ := db.QueryStepsByTask(taskID)
@@ -2274,7 +2266,7 @@ func buildReplayEvents(taskID string) []map[string]any {
 			"tool_name":   s.ToolName,
 			"tool_input":  s.ToolInput,
 			"tool_output": s.ToolOutput,
-			"timestamp":   s.ID, // steps table has no created_at; use id as stable ordering proxy
+			"timestamp":   s.ID, // steps 表没有 created_at；用 id 作为稳定排序代理
 		})
 	}
 	convs, _ := db.QueryConversationsByTask(taskID)
