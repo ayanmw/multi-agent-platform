@@ -1,4 +1,4 @@
-# Multi-Agent Platform — 测试覆盖率审计报告
+# 多 Agent 平台 — 测试覆盖率审计报告
 
 > 生成日期：2026-07-12
 > 审计范围：Go 后端全量包 + 前端 Vue 3 + 脚本端到端冒烟
@@ -14,7 +14,7 @@
 | Go 源码总量（非测试） | ~18,846 LOC |
 | 单元测试文件 | 10 个（~4,972 行） |
 | 已测试包（有 `_test.go`） | 10 / 21 |
-| 单测覆盖率 ≥ 80% 的包 | 3（memory, config, fib demo） |
+| 单测覆盖率 ≥ 80% 的包 | 3（memory、config、fib demo） |
 | 单测覆盖率 0% 的包 | 11（含 runtime/orchestrator/ws 等核心） |
 | 端到端冒烟脚本 | 6 个（共 ~119K 字节，46+34 PASS） |
 | 前端运行时测试 | 0（仅 vue-tsc 类型检查） |
@@ -50,7 +50,7 @@
 | `internal/pool` | Worker Pool 并发调度 | 187 | 🟠 P1 | 并发上限/退避 |
 | `internal/cases` | 6 预设 Case 管理 | 266 | 🟡 P2 | case_id 匹配，已由端到端兜底 |
 | `internal/observability` | 结构化日志 + Metrics | 238 | 🟡 P2 | 辅出层，bug 不影响主链路 |
-| `pkg/event` | 事件结构体 + 工厂函数 | 42 | 🟡 P2 | 仅 1 个 `NewEvent`，POJO |
+| `pkg/event` | 事件结构体 + 工厂函数 | 42 | 🟡 P2 | 仅 1 个 `NewEvent`，POJO（Plain Old Java Object，简单对象）|
 | `internal/agent` | Agent 类型定义 | 51 | 🟢 P3 | 纯数据结构 |
 | `internal/version` | 版本字符串（go:embed） | 26 | 🟢 P3 | 编译期常量 |
 | `cmd/e2e-test` | e2e 测试工具 | 359 | 🟢 P3 | 测试工具本身 |
@@ -184,7 +184,7 @@
 |---|----|-----|-----------|------|
 | 6 | `internal/cases` | 266 | case_id 匹配 + 关键词回退 | 已由 cases-regression.sh 6 PASS 兜底 |
 | 7 | `internal/observability` | 238 | 结构化日志 + Metrics | bug 不影响主链路 |
-| 8 | `pkg/event` | 42 | 事件工厂函数 | 仅 1 个 `NewEvent`，POJO |
+| 8 | `pkg/event` | 42 | 事件工厂函数 | 仅 1 个 `NewEvent`，POJO（简单对象） |
 
 ### 🟢 P3 — 低风险
 
@@ -217,7 +217,7 @@
 下表评估每个 API 端点在冒出脚本中的覆盖深度。覆盖等级：
 - ✅ **5 脚本全过** — 多维度验证，行为确定
 - 🟢 **3-4 脚本覆盖** — 主要路径有保障，少量边界未测
-- 🟡 **1-2 脚本覆盖** — happy path 有保障，错误/边界路径薄弱
+- 🟡 **1-2 脚本覆盖** — happy path（正常路径）有保障，错误/边界路径薄弱
 - 🔴 **仅 1 个脚本浅覆盖** — 仅端点存在性验证，无业务逻辑验证
 - ❌ **无覆盖** — 未出现在任何冒出脚本中
 

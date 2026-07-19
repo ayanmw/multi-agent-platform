@@ -1,4 +1,4 @@
-# API CHANGELOG
+# API 变更日志
 
 > 文档位置：`docs/API_CHANGELOG.md`  
 > 生成日期：2026-07-10  
@@ -174,7 +174,7 @@
 - **状态**: 后端已以薄代理端点实现，前端可直接使用。
 - **端点**: `POST /api/run-case`
 - **实际行为**: 转发至 `POST /api/tasks?case=<caseID>`，透传 body 和查询参数。
-- **文档来源**: `IMPLEMENTATION_PLAN.md` 第 4.5 节最初标记为”待补实现”，现已交付。
+- **文档来源**: `IMPLEMENTATION_PLAN.md` 第 4.5 节最初标记为"待补实现"，现已交付。
 - **前端适配**: 已在 §6 清单中标记为已完成（§6.1 CaseCard 调用）。
 
 ### 2.2 Memory 路由——设计决策，非文档缺口
@@ -191,7 +191,7 @@
   PUT    /api/memories/{id}/scope
   DELETE /api/memories/{id}
   ```
-- **前端适配**: Memory 浏览页按实际路由对接；不存在”直接新建记忆”功能，必须从 task 提升。
+- **前端适配**: Memory 浏览页按实际路由对接；不存在"直接新建记忆"功能，必须从 task 提升。
 
 ### 2.3 `POST /api/tools` 必填字段 `type`——文档说明变更
 

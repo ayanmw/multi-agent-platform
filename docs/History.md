@@ -33,7 +33,7 @@
 
 **改动**
 - `App.vue` 中 Memory Browser 渲染为独立 overlay 层，主内容区保持在下方。
-- 新增关闭按钮（× Close）和点击遮罩关闭。
+- 新增关闭按钮（× 关闭）和点击遮罩关闭。
 - 关闭后自动回到之前的 Session/Task 视图；左侧 Session 切换不受影响。
 
 **涉及文件**
@@ -44,7 +44,7 @@
 ### 3. 展开/折叠全部 + 最新内容自动展开
 
 **改动**
-- `App.vue` 任务视图区新增 "Expand All" / "Collapse All" 按钮，控制当前所有 Turn 与 Step。
+- `App.vue` 任务视图区新增 "全部展开" / "全部折叠" 按钮，控制当前所有 Turn 与 Step。
 - `TurnList.vue` 保持最后一个 Turn 默认展开。
 - `AgentTree.vue` 当新 step 到达时自动展开最新 step；全局展开/折叠命令同步生效。
 
@@ -71,7 +71,7 @@
 ### 5. max_steps 失败后 "Continue" 保留上下文
 
 **问题**
-`max_steps_exceeded` 后点击 "Continue with max steps ×2" 会创建新的 root task，丢失了 Session 中的对话上下文。
+`max_steps_exceeded` 后点击 "以 max steps ×2 继续" 会创建新的 root task，丢失了 Session 中的对话上下文。
 
 **改动**
 - `App.vue` 的 `handleContinue` 改为调用 `startTurn`（而非 `startTask`），在同一 Session 内开启下一轮。

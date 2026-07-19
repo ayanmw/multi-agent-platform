@@ -1,4 +1,4 @@
-# Multi-Agent Platform — 冒烟测试覆盖度盘点与后续计划
+# 多 Agent 平台 — 冒烟测试覆盖度盘点与后续计划
 
 > 编排者：leader（基于 mock / real-llm 两轮冒烟结果 + 代码走读）
 > 生成日期：2026-07-15
@@ -84,7 +84,7 @@
 |------|------|------|
 | CostRecord 写入 + 持久化 | mock/real | `cost_tracker.go`, `cost/repository.go` |
 | `/api/costs` 查询 | mock/real | `api.go:659` |
-| cost_cents 整数列 round-trip | 单测 | `pkg/db/database_test.go` |
+| cost_cents 整数列 round-trip（往返读写）| 单测 | `pkg/db/database_test.go` |
 | float64 USD 精度（小对话非 0） | **已代码修复，未真实验证** | D3, commit a2475e7 |
 | `/api/models/prices` 查看/修改价格 | 单测 | `cmd/server/model_price_api.go`（UI 有 Dialog，未端到端跑） |
 | Prometheus `/metrics` | mock | `main.go:693` |
@@ -109,10 +109,10 @@
 | TaskDecomposer 拆分 agent specs | mock | `orchestrator.go` |
 | 并发拉起多个 agent goroutine | mock/real | `RunBlocking` |
 | root task 状态聚合 | mock | `orchestrator.go:182` |
-| child_tasks 关联（parent_task_id） | **单测/部分修复，真实未验证** | `SaveTaskMeta` 已设，真实多 agent 未 green |
+| child_tasks 关联（parent_task_id） | **单测/部分修复，真实未验证** | `SaveTaskMeta` 已设，真实多 agent 未通过（green） |
 | AgentBus agent 间消息传递 | **未覆盖** | `agentBus.go` 有实现但无调用方 |
 | Strategy pipeline/parallel | **未覆盖** | 字段存在但 `RunBlocking` 总是并行 |
-| multi-agent 真实 LLM 端到端 green | **未验证** | real 场景3 首轮 failed，D1 后待第三轮 |
+| multi-agent 真实 LLM 端到端通过 | **未验证** | real 场景3 首轮 failed，D1 后待第三轮 |
 
 ### 3.7 Auth
 
@@ -123,7 +123,7 @@
 | 受保护端点写操作拦截 | mock | `DefaultProtectedRoutes` |
 | Auth 开启下的 smoke 变体 | mock | `ws-auth-smoke`, `multi-agent-auth`, `policy-auth` |
 | RBAC role 区分 admin/user/viewer | **未覆盖** | `auth.Role` 定义未接入中间件 |
-| GET 敏感读端点保护 | **未覆盖** | `auth_http.go:94` 一律 exempt GET |
+| GET 敏感读端点保护 | **未覆盖** | `auth_http.go:94` 一律豁免 GET |
 | `PUT /api/models/prices` 写保护 | **已加 protectedRoute，未测** | `auth_http.go:71` |
 
 ### 3.8 Memory / RAG（Phase 6）
@@ -150,7 +150,7 @@
 |------|------|------|
 | cancel task via WS control | **部分实现，未测试** | `main.go:96` 有 cancel 分支但无 handler 逻辑 |
 | pause/resume | **未实现** | `main.go:84` TODO |
-| checkpoint save/load | **未测试** | `checkpointMgr` 已注入 but 未验证崩溃恢复 |
+| checkpoint save/load | **未测试** | `checkpointMgr` 已注入但未验证崩溃恢复 |
 
 ---
 
@@ -160,11 +160,11 @@
 
 | # | case | 当前问题/风险 | 目标脚本/扩展 |
 |---|------|-------------|--------------|
-| 1 | **✅ 修复 multi-agent 真实 LLM green** | researcher 不再依赖未注册 web_search；tool_call Arguments 回写 history 前统一 sanitize，场景 3 completed（commit `0d19eb7`） | `scripts/real-llm-smoke.sh` 场景3 |
+| 1 | **✅ 修复 multi-agent 真实 LLM 通过** | researcher 不再依赖未注册 web_search；tool_call Arguments 回写 history 前统一 sanitize，场景 3 completed（commit `0d19eb7`） | `scripts/real-llm-smoke.sh` 场景3 |
 | 2 | **AgentBus 真实 agent 间通信** | `sendAgentMessage` 无调用方，researcher→writer 数据不传递；需构造 case 让 writer 真正消费 researcher 产出 | 新增 `scripts/agentbus-smoke.sh` 或扩展 multi-agent case |
 | 3 | **子任务树独立回放** | child_tasks 已非空，但子任务 status/steps 仍挂在 root taskID 下；前端无法点开单个 agent 历史 | 扩展 `multi-agent-smoke.sh` 断言每个 agent 子任务有独立 steps、parent_task_id 正确、子任务 status=completed |
 | 4 | **CostBudgetRule 端到端触发** | 已接入但在 smoke 中未设置 `cost_budget_usd` | 扩展 `policy-smoke.sh` 或新增 `cost-budget-smoke.sh` |
-| 5 | **TokenBudgetRule / ToolWhitelistRule 触发** | API body 已支持 but 未在冒烟中传入 | 扩展 `policy-smoke.sh` body 传 `token_budget` / `allowed_tools` |
+| 5 | **TokenBudgetRule / ToolWhitelistRule 触发** | API body 已支持但未在冒烟中传入 | 扩展 `policy-smoke.sh` body 传 `token_budget` / `allowed_tools` |
 | 6 | **审批 approved 路径** | mock 下 DangerousCommand 走审批超时拒绝，approved 放行分支未测 | 扩展 `policy-smoke.sh` 加 approve decision WS 消息 |
 | 7 | **真实 LLM multi-agent 产物断言** | 场景 3 只断言 status=completed；未验证 writer 是否真正使用了 researcher 的结果 | 扩展 `real-llm-smoke.sh` 场景3：断言最终答案包含 research 关键词或 writer 产物文件存在 |
 
@@ -177,8 +177,8 @@
 | 10 | **HTTP 429/5xx 重试** | 当前失败直接返回，没有重试 | 需先实现 D7，再新增 `scripts/retry-smoke.sh` |
 | 11 | **WS 背压 / 慢客户端** | hub.go 丢 delta，终态事件可能被丢 | 新增 `scripts/ws-backpressure-smoke.go` |
 | 12 | **Memory CRUD + embed + search** | API 存在但冒烟未覆盖 | 新增 `scripts/memory-smoke.sh` |
-| 13 | **模型价格编辑 API 鉴权与生效** | UI 已做 but 端到端未跑；鉴权写保护已加 | 扩展 `auth-smoke.sh` 或新增 `model-price-smoke.sh` |
-| 14 | **Docker sandbox shell** | 功能检票在启动 but 未验证隔离 | 需环境有 Docker；新增 `scripts/docker-sandbox-smoke.sh` |
+| 13 | **模型价格编辑 API 鉴权与生效** | UI 已做但端到端未跑；鉴权写保护已加 | 扩展 `auth-smoke.sh` 或新增 `model-price-smoke.sh` |
+| 14 | **Docker sandbox shell** | 功能检票在启动但未验证隔离 | 需环境有 Docker；新增 `scripts/docker-sandbox-smoke.sh` |
 
 ### 🟢 低优先级（代码质量 / 长期）
 
@@ -186,7 +186,7 @@
 |---|------|-------------|--------------|
 | 15 | **RBAC role 区分 admin/user** | Role 定义未接入中间件 | 需先实现；新增 `scripts/rbac-smoke.sh` |
 | 16 | **GET 请求 Auth 保护** | `auth_http.go:94` 一律放行 GET | 需先决策；扩展 `auth-smoke.sh` |
-| 17 | **checkpoint 崩溃恢复** | CheckpointManager 注入 but 未验证 | 需模拟崩溃；新增 `scripts/checkpoint-smoke.sh` |
+| 17 | **checkpoint 崩溃恢复** | CheckpointManager 已注入但未验证 | 需模拟崩溃；新增 `scripts/checkpoint-smoke.sh` |
 | 18 | **Strategy pipeline 顺序执行** | 字段存在但总是并行 | 需先实现；新增 `scripts/strategy-smoke.sh` |
 
 ---
@@ -200,7 +200,7 @@
 | Strategy 字段无效（总是并行） | `orchestrator.go:158` | 字段忽略 | 实现 pipeline/parallel 调度后 |
 | WorkerPool.dispatch 占位 | `internal/pool/pool.go:167-168` | `_ = ctx; _ = cancel` | 实现后 |
 | RBAC 中间件未接入 | `auth_http.go:94` | Role 只定义未用 | 实现后 |
-| GET 请求一律 exempt | `auth_http.go:94` | 设计选择 but 中危 | 如果需要改设计后 |
+| GET 请求一律豁免 | `auth_http.go:94` | 设计选择但中危 | 如果需要改设计后 |
 | Docker sandbox 环境依赖 | `main.go:355` | 环境通常无 Docker | CI 有 Docker 后 |
 
 ---
@@ -209,7 +209,7 @@
 
 ### 6.1 立即执行（本轮无新增开发）
 
-目标：**验证 R7/R8 修复后 multi-agent 真实 LLM green**
+目标：**验证 R7/R8 修复后 multi-agent 真实 LLM 通过**
 
 ```bash
 bash scripts/real-llm-smoke.sh
@@ -243,7 +243,7 @@ bash scripts/real-llm-smoke.sh
 |----------|-----------|------|
 | 单 Agent ReAct Loop | **80%** | 基础路径 mock+real 全绿；pause/resume/cancel、tool-error 真实事件仍可补 |
 | Router 分层模型 | **85%** | primary + fallback chain 真实验证，multi-agent pro→efficient 回退路径真实跑通 |
-| 多 Agent 编排 | **60%** | 入口真实 LLM green；child tree 结构基本正确，但子任务独立 steps/status、AgentBus、strategy、并发控制仍未验证 |
+| 多 Agent 编排 | **60%** | 入口真实 LLM 通过；child tree 结构基本正确，但子任务独立 steps/status、AgentBus、strategy、并发控制仍未验证 |
 | Policy 安全门 | **50%** | 主要规则 mock 测试；budget/whitelist/approved 路径未测；Windows 路径缺陷未修 |
 | Auth | **70%** | Bearer + key 生命周期完整；RBAC、GET 保护、细粒度 route 未测 |
 | Cost / Metrics | **70%** | 真实 LLM 下 cost 链路完整；价格编辑 API 真实验证未做 |

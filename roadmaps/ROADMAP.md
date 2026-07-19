@@ -1,8 +1,8 @@
-# Multi-Agent Platform — Product Roadmap
+# 多 Agent 平台 — 产品路线图
 
-> **Last updated**: 2026-07-19
-> **Current version**: v0.8.0 Alpha (Skill system + MCP 按 agent 可见性 + contract limits 闭环)
-> **Update rule**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
+> **最近更新**: 2026-07-19
+> **当前版本**: v0.8.0 Alpha（Skill 系统 + MCP 按 agent 可见性 + contract limits 闭环）
+> **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
 
@@ -15,7 +15,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 0: 项目骨架 + 通信验证 ✅ COMPLETED
+## Phase 0: 项目骨架 + 通信验证 ✅ 已完成
 
 **完成日期**: 2026-07-03
 **Git commit**: `82735b5`
@@ -40,7 +40,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 1: Agent Loop 核心引擎 ✅ COMPLETED
+## Phase 1: Agent Loop 核心引擎 ✅ 已完成
 
 **目标**: 打通真实 LLM API 调用，实现 ReAct Loop 完整闭环
 
@@ -80,7 +80,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 1.5: 扩展工具注册表 ✅ COMPLETED (2026-07-18)
+## Phase 1.5: 扩展工具注册表 ✅ 已完成 (2026-07-18)
 
 **目标**: 引入 namespace/tag 工具身份体系，补充常用 function tools
 
@@ -106,7 +106,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 2: 前端可视化 ✅ COMPLETED
+## Phase 2: 前端可视化 ✅ 已完成
 
 **目标**: 实现 Agent 执行过程的完整可视化
 
@@ -135,7 +135,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 3: 预设 Cases + 配置页面 + Harness 基础 ✅ COMPLETED
+## Phase 3: 预设 Cases + 配置页面 + Harness 基础 ✅ 已完成
 
 **目标**: 提供一键式任务和 Agent 配置管理，引入 Harness 基础组件
 
@@ -176,7 +176,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ---
 
-## Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 ✅ COMPLETED
+## Phase 4: 多 Agent 并发 + Harness 控制层 + 记忆基础 ✅ 已完成
 
 **目标**: 支持多个 Agent 并行执行，引入 Policy Gate 和记忆系统
 
@@ -246,7 +246,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] **Checkpoint / Recovery**（任务检查点 + 崩溃恢复）
 - [x] **Agent 配置 CRUD 前端页面**（创建/编辑/删除 Agent）
 
-### Phase 5-A: Project 管理 + 多轮对话 ✅ COMPLETED (2026-07-07)
+### Phase 5-A: Project 管理 + 多轮对话 ✅ 已完成 (2026-07-07)
 - [x] **Project CRUD API**（`/api/projects` + `/api/projects/:id`）
 - [x] **Project 管理前端**（useProjectStore + 侧边栏 Project 分组 + ProjectConfig 组件）
 - [x] **session_messages 表**（Session 级消息持久化，Engine 通过 SessionMessageWriter 同步写入）
@@ -257,7 +257,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] **任务层级架构**（root → turn_2, turn_3 (siblings) → child_of_turn_2 (children)）
 - [x] **DB 迁移 v5-v8**（projects 表 + session_messages 表 + sessions/tasks/memories 新增字段）
 
-### Phase 5-B: 上下文压缩 + 记忆作用域（优化）✅ COMPLETED (2026-07-07)
+### Phase 5-B: 上下文压缩 + 记忆作用域（优化）✅ 已完成 (2026-07-07)
 - [x] Memory 作用域扩展（scope 字段 + session/project/global 召回优先级）
 - [x] 上下文压缩引擎（阈值检测 turn_count>=20 或 total_tokens>=100KB + 摘要生成）
 - [x] 前端 Memory 浏览页（按 scope/project 查看记忆）
@@ -309,8 +309,8 @@ const activeTaskId = ref<string | null>(null)
 
 #### 后端数据模型
 
--新增 `sessions` 表：`id`, `name`, `root_task_id`, `status`, `user_input`, `created_at`, `updated_at`
-- `tasks` 表新增：`session_id`, `parent_task_id`, `is_root`
+-新增 `sessions` 表：`id`、`name`、`root_task_id`、`status`、`user_input`、`created_at`、`updated_at`
+- `tasks` 表新增：`session_id`、`parent_task_id`、`is_root`
 - 新增索引：`idx_tasks_session_id`, `idx_tasks_parent_task_id`
 
 #### 与现有功能的关系
@@ -339,7 +339,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 6: 高级特性 ✅ COMPLETED
+## Phase 6: 高级特性 ✅ 已完成
 
 **目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理、可观测性
 
@@ -507,7 +507,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase skill: 可复用 Skill 系统 ✅ COMPLETED (2026-07-18)
+## Phase skill: 可复用 Skill 系统 ✅ 已完成 (2026-07-18)
 
 **目标**: 为 Agent 提供可复用的 prompt + 任务知识包，让同一 Agent 在不切换配置时按启用 Skill 切换专长。
 
@@ -539,7 +539,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase UI-v2: Observable Control Room 前端重设计 🚧 IN PROGRESS (2026-07-19)
+## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
 **目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
 
@@ -564,7 +564,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 7: 生产化与深度集成 🔜 PLANNING (暂不实施)
+## Phase 7: 生产化与深度集成 🔜 规划中（暂不实施）
 
 ### 候选特性
 - [ ] 在线 tokenizer（tiktoken / cl100k_base）替换当前字符启发式估算

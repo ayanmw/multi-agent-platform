@@ -1,4 +1,4 @@
-# Multi-Agent Platform — 项目说明
+# 多 Agent 平台 — 项目说明
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测。
 
@@ -196,7 +196,7 @@ Phase skill ✅ → Phase 7 🔜
 | Phase | 状态 | 核心交付 |
 |-------|------|---------|
 | skill | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + Agent Tools + 前端 `/` 触发 SkillPicker + E2E 测试 |
-| 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（ Roadmap 统一规划）|
+| 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 
 ## 编码约定
 
@@ -257,7 +257,7 @@ LLM_MODEL=deepseek-v4-flash
 
 ---
 
-## Open Questions
+## 待定问题
 
 - `run_shell` 沙箱方案 (Docker / Firecracker) → Phase 5
 - 前端状态管理 (Pinia vs reactive) → Phase 2

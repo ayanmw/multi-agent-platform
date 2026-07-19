@@ -1,4 +1,4 @@
-# Multi-Agent Platform — API 全方位测试实施计划
+# 多 Agent 平台 — API 全方位测试实施计划
 
 > **目标**: 对项目进行 API 层面全方位测试，确保所有功能模块和系统设计符合预期。
 > **原则**: 先 backend 全测完并列出 API 调整清单，再统一评估并修改 frontend。
@@ -74,7 +74,7 @@
 | case_id | 行为 |
 |---------|------|
 | `code-gen` | 返回 `write_file` tool_call，写入文件后第二轮返回最终说明。 |
-| `dialogue` | 返回纯文本 final answer，无 tool_call。 |
+| `dialogue` | 返回纯文本 final answer（最终答案），无 tool_call。 |
 | `research` | 返回 `read_file` 或 `run_shell` tool_call，第二轮总结。 |
 | `multi-agent` | 返回子任务派发信息（通过 AgentBus 或纯文本）。 |
 | `long-task` | 多轮 thought → tool_call → observe 循环，用于测试 Policy/TokenBudget。 |
