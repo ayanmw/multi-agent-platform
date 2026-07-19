@@ -26,6 +26,7 @@ import (
 type contextKey string
 
 const userIDKey contextKey = "user_id"
+const roleKey contextKey = "role"
 
 // WithUserID injects a user ID into the context.
 // Used by the auth middleware after successful verification.
@@ -40,6 +41,20 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
+// WithRole injects a role into the context. Used by the auth middleware after
+// resolving the authenticated user's record. Downstream RBAC helpers read the
+// role via RoleFromContext.
+func WithRole(ctx context.Context, role Role) context.Context {
+	return context.WithValue(ctx, roleKey, role)
+}
+
+// RoleFromContext extracts the RBAC role from the request context.
+// Returns the Role and true if it has been injected; otherwise ("", false).
+func RoleFromContext(ctx context.Context) (Role, bool) {
+	v, ok := ctx.Value(roleKey).(Role)
+	return v, ok
+}
+
 // DefaultPublicRoutes returns GET routes that should remain public even when
 // REQUIRE_AUTH is enabled. These are typically health, metrics, and read-only
 // discovery endpoints.
@@ -48,6 +63,30 @@ func DefaultPublicRoutes() []string {
 		"GET /healthz",
 		"GET /metrics",
 		"GET /health",
+	}
+}
+
+// DefaultAdminRoutes returns the list of METHOD + path prefix combinations
+// that are restricted to admin users only. Format: "METHOD /path/prefix".
+// These routes perform privileged writes: mutating platform configuration,
+// managing users/agents/cases/tools, and installing marketplace packages.
+func DefaultAdminRoutes() []string {
+	return []string{
+		"POST /api/agents",
+		"PUT /api/agents/",
+		"DELETE /api/agents/",
+		"PUT /api/models/prices/",
+		"POST /api/cases",
+		"PUT /api/cases/",
+		"DELETE /api/cases/",
+		"POST /api/tools",
+		"PUT /api/tools",
+		"DELETE /api/tools",
+		"POST /api/mcp/servers",
+		"POST /api/mcp/servers/",
+		"DELETE /api/mcp/servers/",
+		"POST /api/mcp/markets/",
+		"POST /api/auth/api-keys",
 	}
 }
 
@@ -118,6 +157,13 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		// When auth is disabled, inject the fallback user and pass through.
 		if !requireAuth {
 			ctx := WithUserID(r.Context(), fallbackUserID)
+			ctx = injectRole(ctx, store, fallbackUserID)
+			// REQUIRE_AUTH 关闭时，如果 seed user 角色是 viewer，则仍然要阻止写操作；
+			// admin/user 继续放行，保持原有行为。
+			if role, ok := RoleFromContext(ctx); ok && role == RoleViewer && isViewerWriteOperation(r.Method) {
+				writeJSONError(w, "forbidden: viewer role is read-only", http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -125,6 +171,7 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		// Public routes are always allowed without authentication.
 		if isPublicRoute(r.Method, r.URL.Path, publicRoutes) {
 			ctx := WithUserID(r.Context(), fallbackUserID)
+			ctx = injectRole(ctx, store, fallbackUserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -134,6 +181,7 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		if !requiresAuth {
 			// Unprotected non-public route — inject fallback user.
 			ctx := WithUserID(r.Context(), fallbackUserID)
+			ctx = injectRole(ctx, store, fallbackUserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -149,11 +197,101 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		}
 
 		ctx := WithUserID(r.Context(), userID)
+		ctx = injectRole(ctx, store, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// isPublicRoute checks if the given method+path matches any public route.
+// injectRole resolves the user's role and injects it into the context.
+// If the store cannot resolve the user, RoleViewer is used as a safe default
+// to avoid accidentally elevating a broken session to admin privileges.
+// The caller must have already validated that userID is non-empty.
+func injectRole(ctx context.Context, store APIKeyStore, userID string) context.Context {
+	if store == nil {
+		return WithRole(ctx, RoleViewer)
+	}
+	user, err := store.GetUser(userID)
+	if err != nil || user == nil {
+		return WithRole(ctx, RoleViewer)
+	}
+	return WithRole(ctx, user.Role)
+}
+
+// isViewerWriteOperation returns true for authenticated write requests made by
+// a viewer role. Viewers are restricted to read-only access across the API.
+func isViewerWriteOperation(method string) bool {
+	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+		return false
+	}
+	return true
+}
+
+// RequireRole is an HTTP middleware guard that responds with 403 Forbidden when
+// the context role is not in the allowed set. It should be placed after the
+// auth middleware so that role has already been injected. If role is missing,
+// it is treated as RoleViewer for safety.
+func RequireRole(allowed ...Role) func(http.Handler) http.Handler {
+	allowedSet := make(map[Role]struct{}, len(allowed))
+	for _, r := range allowed {
+		allowedSet[r] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, _ := RoleFromContext(r.Context())
+			if role == "" {
+				role = RoleViewer
+			}
+			if _, ok := allowedSet[role]; !ok {
+				writeJSONError(w, "forbidden: insufficient role", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// requireRoleForRequest is a convenience helper for handlers registered with
+// http.HandleFunc. It checks that the current request's role is in the allowed
+// set and writes a 403 JSON response if not. Returns true when access is granted.
+func requireRoleForRequest(w http.ResponseWriter, r *http.Request, allowed ...Role) bool {
+	role, _ := RoleFromContext(r.Context())
+	if role == "" {
+		role = RoleViewer
+	}
+	for _, allowedRole := range allowed {
+		if role == allowedRole {
+			return true
+		}
+	}
+	writeJSONError(w, "forbidden: insufficient role", http.StatusForbidden)
+	return false
+}
+
+// RequireRoleFunc provides a direct handler-level check compatible with
+// http.HandleFunc closures. It is equivalent to requireRoleForRequest but
+// exported for use outside this package.
+func RequireRoleFunc(w http.ResponseWriter, r *http.Request, allowed ...Role) bool {
+	return requireRoleForRequest(w, r, allowed...)
+}
+
+// maskAPIKey returns a display-only form of a key prefix suitable for list
+// responses. It keeps the first 4 and last 4 characters of the prefix and
+// masks the middle with "****", so enumerating /api/auth/api-keys does not
+// expose the real credential prefix.
+func maskAPIKey(prefix string) string {
+	if len(prefix) <= 8 {
+		return prefix[:min(len(prefix), 4)] + "****"
+	}
+	return prefix[:4] + "****" + prefix[len(prefix)-4:]
+}
+
+// min returns the smaller of a and b.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 func isPublicRoute(method, path string, publicRoutes []string) bool {
 	for _, route := range publicRoutes {
 		parts := strings.SplitN(route, " ", 2)
@@ -366,7 +504,7 @@ func (a *AuthAPI) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 			"id":         k.ID,
 			"user_id":    k.UserID,
 			"name":       k.Name,
-			"prefix":     k.Prefix,
+			"prefix":     maskAPIKey(k.Prefix),
 			"created_at": formatTime(k.CreatedAt),
 		}
 		if k.LastUsedAt != nil {

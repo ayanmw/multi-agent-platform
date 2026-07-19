@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // Config holds application configuration loaded from environment and .env
@@ -41,6 +42,11 @@ type Config struct {
 	// MCPMarkets lists remote marketplace catalogs loaded from MCP_MARKETS.
 	// Each entry is fetched at startup and registered as a marketplace provider.
 	MCPMarkets []MCPMarketConfig
+
+	// MCPPreinstall lists market packages that should be installed automatically
+	// at server startup. Loaded from MCP_PREINSTALL; failures are logged but do
+	// not block startup because packages may depend on external commands.
+	MCPPreinstall []marketplace.MCPPreinstallEntry
 
 	// Sandbox configuration for execute_program (Phase 5 preview).
 	// When EnableSandbox is false (default), execute_program runs locally.
@@ -93,6 +99,23 @@ type Config struct {
 	EmbeddingAPIKey     string // EMBEDDING_API_KEY
 	EmbeddingModel      string // EMBEDDING_MODEL
 	EmbeddingDimensions int    // EMBEDDING_DIMENSIONS
+
+	// ContractLimits defines server-enforced upper bounds for task contracts.
+	// Loaded from CONTRACT_LIMIT_* environment variables and exposed via the
+	// /api/contract-limits endpoint so frontends can clamp user inputs.
+	ContractLimits ContractLimits
+}
+
+// ContractLimits stores server-enforced upper bounds for task contracts.
+// Values are loaded from CONTRACT_LIMIT_* environment variables and consumed
+// by HTTP handlers to validate / clamp user-provided task parameters.
+type ContractLimits struct {
+	MaxSteps          int      `json:"max_steps"`
+	MaxTokensPerStep  int      `json:"max_tokens_per_step"`
+	MaxTimeoutSeconds int      `json:"max_timeout_seconds"`
+	MaxSubAgents      int      `json:"max_sub_agents"`
+	MaxInputLength    int      `json:"max_input_length"`
+	Scopes            []string `json:"scopes"`
 }
 
 // ModelConfig describes a single model's configuration for multi-model setups.
@@ -277,6 +300,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load mcp market config: %w", err)
 	}
 
+	// Load MCP preinstall configuration
+	if err := cfg.LoadMCPPreinstallConfig(); err != nil {
+		return nil, fmt.Errorf("load mcp preinstall config: %w", err)
+	}
+
+	// Load server-enforced contract limits from environment variables.
+	cfg.LoadContractLimits()
+
 	return cfg, nil
 }
 
@@ -315,6 +346,54 @@ func (cfg *Config) LoadMCPMarketConfig() error {
 		return fmt.Errorf("parse MCP_MARKETS JSON: %w", err)
 	}
 	cfg.MCPMarkets = markets
+	return nil
+}
+
+// LoadMCPPreinstallConfig loads the list of market packages that should be
+// installed automatically at startup from MCP_PREINSTALL.
+//
+// The value is a JSON array where each element is either a shorthand string
+// "market/package" (market defaults to "default" if omitted) or an object
+// {"market":"...","package":"..."}. Parse errors are returned so the server
+// can decide whether to log and continue or fail fast.
+func (cfg *Config) LoadMCPPreinstallConfig() error {
+	jsonStr := os.Getenv("MCP_PREINSTALL")
+	if jsonStr == "" {
+		return nil
+	}
+
+	// First try the heterogeneous array: strings and objects.
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return fmt.Errorf("parse MCP_PREINSTALL JSON: %w", err)
+	}
+
+	entries := make([]marketplace.MCPPreinstallEntry, 0, len(raw))
+	for _, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			entry, err := marketplace.ParsePreinstallEntry(s)
+			if err != nil {
+				return fmt.Errorf("parse MCP_PREINSTALL entry %q: %w", s, err)
+			}
+			entries = append(entries, entry)
+			continue
+		}
+
+		var entry marketplace.MCPPreinstallEntry
+		if err := json.Unmarshal(r, &entry); err != nil {
+			return fmt.Errorf("parse MCP_PREINSTALL entry: %w", err)
+		}
+		if entry.Package == "" {
+			return fmt.Errorf("MCP_PREINSTALL entry missing package: %s", string(r))
+		}
+		if entry.Market == "" {
+			entry.Market = "default"
+		}
+		entries = append(entries, entry)
+	}
+
+	cfg.MCPPreinstall = entries
 	return nil
 }
 
@@ -358,6 +437,35 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// parseEnvIntDefault reads an integer environment variable and returns the
+// default value when the variable is missing, empty, or not a valid integer.
+func parseEnvIntDefault(key string, defaultValue int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultValue
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: invalid %s value %q, using default %d: %v\n", key, v, defaultValue, err)
+		return defaultValue
+	}
+	return n
+}
+
+// LoadContractLimits loads server-enforced task contract bounds from
+// CONTRACT_LIMIT_* environment variables. Any missing or invalid value falls
+// back to a safe default so the server can start without manual tuning.
+func (cfg *Config) LoadContractLimits() {
+	cfg.ContractLimits = ContractLimits{
+		MaxSteps:          parseEnvIntDefault("CONTRACT_LIMIT_MAX_STEPS", 200),
+		MaxTokensPerStep:  parseEnvIntDefault("CONTRACT_LIMIT_MAX_TOKENS_PER_STEP", 4096),
+		MaxTimeoutSeconds: parseEnvIntDefault("CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS", 7200),
+		MaxSubAgents:      parseEnvIntDefault("CONTRACT_LIMIT_MAX_SUB_AGENTS", 10),
+		MaxInputLength:    parseEnvIntDefault("CONTRACT_LIMIT_MAX_INPUT_LENGTH", 10000),
+		Scopes:            []string{"read_only", "standard", "unrestricted"},
+	}
 }
 
 // ShouldMock decides whether a request for the given case/endpoint should be routed

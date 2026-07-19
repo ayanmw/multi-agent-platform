@@ -651,6 +651,7 @@ async function handleSend(text: string, options: { maxSteps?: number; timeoutSec
       })) : undefined
       await startMultiAgentTask(text, {
         sessionId: targetSession.id,
+        maxSteps: options.maxSteps,
         timeoutSeconds: options.timeoutSeconds,
         agents,
       })

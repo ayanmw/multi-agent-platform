@@ -654,6 +654,28 @@ func main() {
 	if err := mcpManager.LoadDBServers(mcpCtx); err != nil {
 		observability.DefaultLogger.Warn("mcp", "failed to load db servers", map[string]any{"error": err.Error()})
 	}
+
+	// Phase 7: install configured marketplace packages before the startup
+	// context expires. Individual failures are logged as warnings and do not
+	// prevent the server from starting, because packages may depend on external
+	// commands that are not available in every environment.
+	for _, entry := range cfg.MCPPreinstall {
+		_, installed, err := mcpManager.InstallFromMarketIfMissing(mcpCtx, entry.Market, entry.Package)
+		if err != nil {
+			observability.DefaultLogger.Warn("mcp", "preinstall failed", map[string]any{
+				"market":  entry.Market,
+				"package": entry.Package,
+				"error":   err.Error(),
+			})
+			continue
+		}
+		if installed {
+			log.Printf("MCP preinstall: installed %s", entry.String())
+		} else {
+			log.Printf("MCP preinstall: %s already present, skipped", entry.String())
+		}
+	}
+
 	log.Printf("MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
 	defer mcpManager.Close()
 
@@ -821,9 +843,54 @@ func main() {
 			return
 		}
 
+		var contract harness.TaskContract
+		caseID := r.URL.Query().Get("case")
+		if caseID != "" {
+			if c := cases.Get(caseID); c != nil {
+				contract = c.Contract
+				// Use case's default input if none provided in request
+				if req.Input == "" {
+					req.Input = c.DefaultInput
+				}
+				// Use case's system prompt if none provided in request
+				if req.SystemPrompt == "" {
+					req.SystemPrompt = c.SystemPrompt
+				}
+			}
+		}
+
+		// Validate request input length against server-enforced contract limits.
+		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+			return
+		}
+
+		if req.MaxSteps < 1 {
+			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+			req.MaxSteps = cfg.ContractLimits.MaxSteps
+		}
+		if req.TimeoutSeconds < 0 {
+			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+			return
+		}
+		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+			return
+		}
+
 		switch req.Action {
 
 		case "multi-agent":
+			// req.MaxSteps already validated and clamped above.
+			// Validate explicit sub-agent count against server limits.
+			if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
+				http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
+				return
+			}
+
 			// Phase 7-H：multi-agent 改为 leader-agent 驱动。
 			// 1) 解析/生成 session 与 root task；2）启动一个 Leader Agent；
 			// 3) Leader 通过 dispatch_sub_agent 工具决定派哪些子 agent。
@@ -903,9 +970,10 @@ func main() {
 			})
 
 		case "chat":
+			// req.MaxSteps already validated and clamped above.
+
 			// Check if a preset case was specified — load its contract,
 			// default input, and system prompt before validating the request.
-			var contract harness.TaskContract
 			caseID := r.URL.Query().Get("case")
 			if caseID != "" {
 				if c := cases.Get(caseID); c != nil {
@@ -922,6 +990,7 @@ func main() {
 			}
 
 			if req.Input == "" {
+
 				http.Error(w, "input is required for chat action", http.StatusBadRequest)
 				return
 			}
@@ -994,12 +1063,26 @@ func main() {
 	http.HandleFunc("/api/audit", handleAudit)
 	http.HandleFunc("/api/traces", handleTraces)
 	http.HandleFunc("/api/replay/tasks/", handleReplay)
+	http.HandleFunc("/api/replay/events", func(w http.ResponseWriter, r *http.Request) {
+		handleReplayEvents(w, r, hub)
+	})
+
+	// Contract limits endpoint: exposes server-enforced task contract bounds.
+	// GET /api/contract-limits
+	http.HandleFunc("/api/contract-limits", handleContractLimits(cfg))
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+		// Agent 写操作仅 admin 可执行。
+		if r.Method != http.MethodGet && !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
 		handleAgents(w, r)
 	})
 	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
 		handleAgentByID(w, r)
 	})
 
@@ -1181,6 +1264,9 @@ func main() {
 			}
 			handleListCases(w, r, caseService)
 		case http.MethodPost:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleCreateCase(w, r, caseService)
 		default:
 			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -1225,8 +1311,14 @@ func main() {
 			}
 			handleGetCase(w, r, id, caseService)
 		case http.MethodPut:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleUpdateCase(w, r, id, caseService)
 		case http.MethodDelete:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleDeleteCase(w, r, id, caseService)
 		default:
 			http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
@@ -1247,10 +1339,16 @@ func main() {
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleRegisterTool(w, r, toolRegistry)
 		case http.MethodGet:
 			handleListTools(w, r, toolRegistry)
 		case http.MethodDelete:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleDeleteTool(w, r, toolRegistry)
 		default:
 			http.Error(w, "GET, POST, or DELETE only", http.StatusMethodNotAllowed)
@@ -1275,6 +1373,31 @@ func main() {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Validate request against server-enforced contract limits.
+		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps < 1 {
+			http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+			return
+		}
+		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+			req.MaxSteps = cfg.ContractLimits.MaxSteps
+		}
+		if req.TimeoutSeconds < 0 {
+			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+			return
+		}
+		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+			return
+		}
+		if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
+			http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
 			return
 		}
 
@@ -1306,6 +1429,9 @@ func main() {
 
 		// Apply global MaxSteps override if provided
 		if req.MaxSteps > 0 {
+			if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+				req.MaxSteps = cfg.ContractLimits.MaxSteps
+			}
 			for i := range specs {
 				if specs[i].Contract == nil {
 					contract := harness.DefaultContract(specs[i].Input)

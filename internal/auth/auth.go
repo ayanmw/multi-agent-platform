@@ -151,6 +151,9 @@ type APIKeyStore interface {
 	List(userID string) ([]APIKey, error)
 	Revoke(keyID string) error
 	Verify(rawKey string) (*APIKey, error)
+	// GetUser loads the user record with the given ID. Required by the auth
+	// middleware to inject the user's RBAC role into the request context.
+	GetUser(userID string) (*User, error)
 }
 
 // --- HTTP API --------------------------------------------------------------

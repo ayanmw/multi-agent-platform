@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { useWebSocket } from './useWebSocket'
+import { useWebSocket, setOnReplayGone } from './useWebSocket'
 import { useTraceStore } from './useTraceStore'
 import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
@@ -132,7 +132,9 @@ let colorIdx = 0
 
 export function useTaskStore() {
   const { status, connect, disconnect, sendControl, onEvent } = useWebSocket()
-  const { updateSession } = useSessionStore()
+  const sessionStore = useSessionStore()
+  const { activeSessionId } = sessionStore
+  const { updateSession } = sessionStore
 
   // F6: 注入 sendControl / showError 给模块级 startApprovalTimer 使用。
   // 一次性注入即可，多次赋值无副作用。
@@ -150,6 +152,18 @@ export function useTaskStore() {
     onEvent((evt: AgentEvent) => {
       traceStore.onEvent(evt)
       handleEvent(evt)
+    })
+
+    // #49: WS 重连补事件 410 降级：清空本地 task cache 并重载当前 session turn。
+    setOnReplayGone(async () => {
+      const sid = activeSessionId.value
+      if (!sid) return
+      console.warn('[useTaskStore] Replay buffer gone — clearing task cache and reloading session', sid)
+      taskCache.value = {}
+      clearActiveTask()
+      await loadSessionTurns(sid).catch(err => {
+        console.error('[useTaskStore] Failed to reload session turns after 410:', err)
+      })
     })
   }
 
@@ -753,7 +767,7 @@ export function useTaskStore() {
   /** Start a multi-agent task via /api/multi-agent. */
   async function startMultiAgentTask(
     input: string,
-    options: { caseType?: string; sessionId?: string; timeoutSeconds?: number; agents?: any[] } = {}
+    options: { caseType?: string; sessionId?: string; maxSteps?: number; timeoutSeconds?: number; agents?: any[] } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     isTaskPending.value = true
     const safetyTimeout = setTimeout(() => {
@@ -770,6 +784,7 @@ export function useTaskStore() {
         session_id: options.sessionId || '',
         timeout_seconds: options.timeoutSeconds ?? 0,
       }
+      if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
       if (options.agents && options.agents.length > 0) {
         body.agents = options.agents
       }

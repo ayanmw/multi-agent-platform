@@ -338,7 +338,50 @@ func TestNewAPIKeyIDAndUserIDDistinctNamespaces(t *testing.T) {
 	}
 }
 
-// --- AuthAPI accessors -----------------------------------------------------
+// TestMaskAPIKeyFormat verifies API key prefixes are masked in list responses
+// so that enumerating keys does not expose a usable credential prefix.
+func TestMaskAPIKeyFormat(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		want   string
+	}{
+		{"typical_12_char_prefix", "sk_aBcDeFgHiJk", "sk_a****HiJk"},
+		{"short_prefix", "sk_12", "sk_1****"},
+		{"exactly_8_prefix", "sk_abcdef", "sk_a****cdef"},
+		{"empty", "", "****"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := maskAPIKey(tt.prefix); got != tt.want {
+				t.Errorf("maskAPIKey(%q) = %q, want %q", tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMemoryStoreGetUser checks the in-memory store returns the user created
+// implicitly by Create.
+func TestMemoryStoreGetUser(t *testing.T) {
+	store := NewMemoryAPIKeyStore()
+	userID := "usr_test_1"
+	_, _, err := store.Create(userID, "memory-test")
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	user, err := store.GetUser(userID)
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if user.ID != userID {
+		t.Errorf("user.ID = %q, want %q", user.ID, userID)
+	}
+	if user.Role != RoleUser {
+		t.Errorf("user.Role = %q, want %q", user.Role, RoleUser)
+	}
+}
+
 
 // TestNewAuthAPIDefaults verifies the constructor wires the store and that
 // the seed-user-ID accessors behave as plain getters/setters. We pass a nil

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
+	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 
@@ -349,6 +350,55 @@ func TestHandleDeleteBuiltinCaseRejected(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandleContractLimits returns server-enforced contract bounds as JSON.
+func TestHandleContractLimits(t *testing.T) {
+	cfg := &config.Config{
+		ContractLimits: config.ContractLimits{
+			MaxSteps:          25,
+			MaxTokensPerStep:  2048,
+			MaxTimeoutSeconds: 3600,
+			MaxSubAgents:      5,
+			MaxInputLength:    5000,
+			Scopes:            []string{"read_only", "standard"},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/contract-limits", nil)
+	rr := httptest.NewRecorder()
+
+	// handleContractLimits returns an http.HandlerFunc bound to cfg.
+	handler := handleContractLimits(cfg)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var got config.ContractLimits
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if got.MaxSteps != cfg.ContractLimits.MaxSteps {
+		t.Errorf("MaxSteps = %d, want %d", got.MaxSteps, cfg.ContractLimits.MaxSteps)
+	}
+	if got.MaxTokensPerStep != cfg.ContractLimits.MaxTokensPerStep {
+		t.Errorf("MaxTokensPerStep = %d, want %d", got.MaxTokensPerStep, cfg.ContractLimits.MaxTokensPerStep)
+	}
+	if got.MaxTimeoutSeconds != cfg.ContractLimits.MaxTimeoutSeconds {
+		t.Errorf("MaxTimeoutSeconds = %d, want %d", got.MaxTimeoutSeconds, cfg.ContractLimits.MaxTimeoutSeconds)
+	}
+	if got.MaxSubAgents != cfg.ContractLimits.MaxSubAgents {
+		t.Errorf("MaxSubAgents = %d, want %d", got.MaxSubAgents, cfg.ContractLimits.MaxSubAgents)
+	}
+	if got.MaxInputLength != cfg.ContractLimits.MaxInputLength {
+		t.Errorf("MaxInputLength = %d, want %d", got.MaxInputLength, cfg.ContractLimits.MaxInputLength)
 	}
 }
 

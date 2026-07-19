@@ -1765,6 +1765,28 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Validate request against server-enforced contract limits.
+	if len(req.Input) > cfg.ContractLimits.MaxInputLength {
+		http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+		return
+	}
+	if req.MaxSteps < 1 {
+		http.Error(w, "max_steps must be at least 1", http.StatusBadRequest)
+		return
+	}
+	if req.MaxSteps > cfg.ContractLimits.MaxSteps {
+		req.MaxSteps = cfg.ContractLimits.MaxSteps
+	}
+	if req.TimeoutSeconds < 0 {
+		http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
+		http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+		return
+	}
+
 	if req.Input == "" {
 		http.Error(w, "input is required", http.StatusBadRequest)
 		return
@@ -2100,6 +2122,19 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	})
 }
 
+// handleContractLimits returns the server-enforced task contract limits.
+// GET /api/contract-limits
+func handleContractLimits(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg.ContractLimits)
+	}
+}
+
 // handleAudit returns recent audit records from the default auditor.
 // GET /api/audit?limit=N
 func handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -2120,6 +2155,61 @@ func handleTraces(w http.ResponseWriter, r *http.Request) {
 	data, _ := tracer.JSON()
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// handleReplayEvents returns cached WebSocket events after a given event_id.
+// GET /api/replay/events?since_event_id=<id>&limit=<n>
+// It is used by the frontend after reconnecting to catch up on events missed
+// during the disconnect window. A 410 Gone is returned when since_event_id is
+// no longer in the in-memory buffer so the client can fall back to a full task
+// replay.
+func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if hub == nil {
+		http.Error(w, "event replay unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	sinceEventID := r.URL.Query().Get("since_event_id")
+	if sinceEventID == "" {
+		http.Error(w, "since_event_id required", http.StatusBadRequest)
+		return
+	}
+
+	limit := 100
+	if limStr := r.URL.Query().Get("limit"); limStr != "" {
+		if n, err := strconv.Atoi(limStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	evts, err := hub.ReplayEvents(sinceEventID, limit)
+	if err != nil {
+		if errors.Is(err, ws.ErrEventIDNotFound) {
+			w.WriteHeader(http.StatusGone)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":   "event_id not found in replay buffer",
+				"since":   sinceEventID,
+				"message": "disconnected too long or server restarted; please reload task",
+			})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"events": evts,
+		"since":  sinceEventID,
+		"count":  len(evts),
+	})
 }
 
 // handleReplay replays task execution events from persistent storage.

@@ -32,6 +32,26 @@ const QUICK_TIMEOUTS_SECONDS = [
 ]
 const MAX_TIMEOUT_MINUTES = 120
 
+const CONTRACT_LIMITS_STORAGE_KEY = 'map_contract_limits'
+
+interface ContractLimits {
+  max_steps: number
+  max_tokens_per_step: number
+  max_timeout_seconds: number
+  max_sub_agents: number
+  max_input_length: number
+  scopes: string[]
+}
+
+const DEFAULT_CONTRACT_LIMITS: ContractLimits = {
+  max_steps: 200,
+  max_tokens_per_step: 8192,
+  max_timeout_seconds: 7200,
+  max_sub_agents: 5,
+  max_input_length: 4000,
+  scopes: [],
+}
+
 export interface SendOptions {
   maxSteps: number
   timeoutSeconds?: number
@@ -58,15 +78,16 @@ const inputText = ref('')
 const showOptions = ref(false)
 const maxSteps = ref(DEFAULT_MAX_STEPS)
 const timeoutSeconds = ref(DEFAULT_TIMEOUT_SECONDS)
+const contractLimits = ref<ContractLimits>(DEFAULT_CONTRACT_LIMITS)
 
 // Load saved preference on mount so the user's choice survives refreshes.
-onMounted(() => {
+onMounted(async () => {
   try {
     const savedSteps = localStorage.getItem(MAX_STEPS_STORAGE_KEY)
     if (savedSteps) {
       const n = parseInt(savedSteps, 10)
-      if (!Number.isNaN(n) && n > 0) {
-        maxSteps.value = n
+      if (!Number.isNaN(n) && n >= MIN_STEPS_ALLOWED) {
+        maxSteps.value = clampSteps(n)
       }
     }
   } catch {
@@ -83,18 +104,47 @@ onMounted(() => {
   } catch {
     // ignore storage errors
   }
+
+  // Try loading cached contract limits first to avoid waiting for the network.
+  try {
+    const cached = localStorage.getItem(CONTRACT_LIMITS_STORAGE_KEY)
+    if (cached) {
+      const parsed = JSON.parse(cached) as Partial<ContractLimits>
+      contractLimits.value = { ...DEFAULT_CONTRACT_LIMITS, ...parsed }
+    }
+  } catch {
+    // ignore malformed cache
+  }
+
+  try {
+    const response = await fetch('/api/contract-limits')
+    if (response.ok) {
+      const data = (await response.json()) as Partial<ContractLimits>
+      contractLimits.value = { ...DEFAULT_CONTRACT_LIMITS, ...data }
+      try {
+        localStorage.setItem(CONTRACT_LIMITS_STORAGE_KEY, JSON.stringify(contractLimits.value))
+      } catch {
+        // ignore storage errors
+      }
+    }
+  } catch {
+    // Network or parse error: keep default (or cached) limits.
+  }
 })
 
-// TODO: Phase 7 — 从后端读取 max_steps 合理范围
-// 当前 quickSteps / 滑块上限 50 是前端硬编码，与后端实际允许的范围可能脱节。
-// 后续应通过 GET /api/agents/:id 或 case 配置回读合理上限，避免用户设置一个
-// 后端拒绝的值（或滑块范围远超实际可用区间）。
-const quickSteps = [2, 5, 10, 15, 20, 30, 50]
+// 后端允许的 max_steps 范围，与 API 校验保持一致。
+const MIN_STEPS_ALLOWED = 1
+
+const quickSteps = [2, 5, 10, 15, 20, 30, 50, 100, 200]
+
+function clampSteps(n: number): number {
+  return Math.max(MIN_STEPS_ALLOWED, Math.min(n, contractLimits.value.max_steps))
+}
 
 function handleSend() {
   const text = inputText.value.trim()
   if (!text || props.disabled) return
-  emit('send', text, { maxSteps: maxSteps.value, timeoutSeconds: timeoutSeconds.value })
+  emit('send', text, { maxSteps: clampSteps(maxSteps.value), timeoutSeconds: timeoutSeconds.value })
   inputText.value = ''
 }
 
@@ -107,9 +157,9 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function setMaxSteps(n: number) {
-  maxSteps.value = n
+  maxSteps.value = clampSteps(n)
   try {
-    localStorage.setItem(MAX_STEPS_STORAGE_KEY, String(n))
+    localStorage.setItem(MAX_STEPS_STORAGE_KEY, String(maxSteps.value))
   } catch {
     // ignore storage errors
   }
@@ -201,11 +251,12 @@ function setTimeoutSeconds(seconds: number) {
           v-model.number="maxSteps"
           type="range"
           min="1"
-          max="50"
+          :max="contractLimits.max_steps"
           class="steps-slider"
+          @change="setMaxSteps(maxSteps)"
         />
         <div class="option-hint">
-          Maximum number of ReAct loop iterations. Increase for long tasks, decrease for quick tasks.
+          Maximum number of ReAct loop iterations. Backend accepted range: {{ MIN_STEPS_ALLOWED }}–{{ contractLimits.max_steps }}.
         </div>
       </div>
 

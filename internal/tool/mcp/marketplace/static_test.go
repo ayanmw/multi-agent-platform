@@ -91,3 +91,29 @@ func TestRegistry(t *testing.T) {
 		t.Fatalf("Names() = %v, want [default]", names)
 	}
 }
+
+func TestParsePreinstallEntry(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    MCPPreinstallEntry
+		wantErr bool
+	}{
+		{"full", "default/time-server", MCPPreinstallEntry{Market: "default", Package: "time-server"}, false},
+		{"bare_package", "github", MCPPreinstallEntry{Market: "default", Package: "github"}, false},
+		{"whitespace", "  opencode / github  ", MCPPreinstallEntry{Market: "opencode", Package: "github"}, false},
+		{"empty", "", MCPPreinstallEntry{}, true},
+		{"missing_package", "default/", MCPPreinstallEntry{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParsePreinstallEntry(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParsePreinstallEntry(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("ParsePreinstallEntry(%q) = %+v, want %+v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
