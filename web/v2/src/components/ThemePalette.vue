@@ -53,6 +53,7 @@ function itemTitle(t: ThemeMeta): string {
     <button
       class="palette-trigger icon-btn"
       :class="{ active: expanded }"
+      :style="{ background: 'var(--accent-running)', color: 'var(--text-on-accent)', borderColor: 'var(--accent-running)' }"
       :title="`当前主题：${theme}（生效：${effectiveTheme}）`"
     >
       🎨
