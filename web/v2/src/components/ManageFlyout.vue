@@ -6,7 +6,7 @@ import { ref, watch } from 'vue'
  *
  * 设计意图：
  *   将 Inspector 中除 Context 之外的入口（Memory、RAG、Cases、Agents、
- *   Project、Skills、Traces、Sessions）集中到一个管理菜单。点击任一项目
+ *   Project、Skills、Traces）集中到一个管理菜单。点击任一项目
  *   打开大 Inspector Dialog 并定位到对应 tab。
  *
  * Props:
@@ -26,7 +26,6 @@ const emit = defineEmits<{
 }>()
 
 const menuItems = [
-  { id: 'sessions', label: 'Sessions', icon: '🗂' },
   { id: 'memory', label: 'Memory', icon: '🧠' },
   { id: 'rag', label: 'RAG', icon: '📚' },
   { id: 'cases', label: 'Cases', icon: '📋' },
@@ -49,8 +48,7 @@ function openTab(tab: string) {
 }
 
 function expandAll() {
-  // 不指定 tab：由 App.vue 保留上次 inspectorInitialTab（默认 memory），
-  // 避免"展开管理"总是回到信息有限的 Sessions tab。
+  // 不指定 tab：由 App.vue 保留上次 inspectorInitialTab（默认 memory）。
   emit('expand')
   close()
 }

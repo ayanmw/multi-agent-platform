@@ -4,9 +4,9 @@
  * 管理（原 Inspector）面板的 Tab 容器。渲染顶部 tab bar，并通过默认 slot 暴露当前 tab 的内容区。
  * 父组件使用 v-model:activeTab 或监听 update:activeTab 来同步当前激活 tab。
  *
- * tab 列表包含 Sessions/Memory/RAG/Context/Cases/Agents/Project/Skills/Traces。
- * 其中 Sessions 与左侧 SessionDock 信息重复，仅作辅助查看保留，不再作为默认 tab
- * （默认 tab 由 ManageContent 设为 memory）。
+ * tab 列表包含 Memory/RAG/Context/Cases/Agents/Project/Skills/Traces。
+ * Sessions tab 已移除——其信息与左侧 SessionDock 完全重复，无额外价值；
+ * 默认 tab 由 ManageContent 设为 memory。
  */
 <script setup lang="ts">
 interface Props {
@@ -20,7 +20,6 @@ const emit = defineEmits<{
 }>()
 
 const tabs = [
-  { id: 'sessions', label: 'Sessions' },
   { id: 'memory', label: 'Memory' },
   { id: 'rag', label: 'RAG' },
   { id: 'context', label: 'Context' },

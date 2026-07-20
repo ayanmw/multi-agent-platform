@@ -1117,11 +1117,14 @@ func main() {
 				contract.CostBudgetUSD = req.CostBudgetUSD
 			}
 
-			// 从过往经验为本任务构建 Working Memory
+			// 从过往经验为本任务构建 Working Memory。
+			// project 级 rules 文本（project.config.rules）追加在 Working Memory 之后，
+			// 作为项目级约定注入到 agent 的 system prompt。
 			workingMemory := ""
 			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
 				workingMemory = memRecall.FormatForSystemPrompt(wm)
 			}
+			workingMemory += projectRulesPrompt(req.SessionID)
 
 			taskID := newTaskID()
 			// Phase 7-C: 为本任务创建 root trace context 并透传给 Engine。
@@ -1563,13 +1566,17 @@ func main() {
 			}
 		}
 
-		// 为本次 orchestration 中的所有 agent 构建 Working Memory
-		if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-			workingMemory := memRecall.FormatForSystemPrompt(wm)
+			// 为本次 orchestration 中的所有 agent 构建 Working Memory。
+			// project 级 rules 文本（project.config.rules）会被追加到 Working Memory
+			// 之后，作为项目级约定注入到所有子 agent 的 system prompt。
+			workingMemory := ""
+			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
+				workingMemory = memRecall.FormatForSystemPrompt(wm)
+			}
+			workingMemory += projectRulesPrompt(req.SessionID)
 			for i := range specs {
 				specs[i].WorkingMemory = workingMemory
 			}
-		}
 
 		// 解析或创建 session
 		sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
@@ -1898,6 +1905,32 @@ func enrichAgentSpecAllowedTools(specs []orchestrator.AgentSpec) []orchestrator.
 		}
 	}
 	return specs
+}
+
+// projectRulesPrompt 从 session 反查其所属 project，读取 project.config.rules 文本，
+// 并格式化为可注入 system prompt 的 Markdown 段落。用于在发起任务时把项目级规则
+// 自动注入到该 project 下所有 session 的 agent。
+//
+// 返回空字符串表示无规则（session 不存在、project 不存在、或未配置 rules），
+// 调用方拼接时不会产生多余空白段。格式对齐 recall.FormatForSystemPrompt 的
+// "## Working Memory" 标题层级，使用 "## Project Rules" 区分来源。
+func projectRulesPrompt(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	sess, err := db.QuerySessionByID(sessionID)
+	if err != nil || sess == nil || sess.ProjectID == "" {
+		return ""
+	}
+	proj, err := db.QueryProjectByID(sess.ProjectID)
+	if err != nil || proj == nil || proj.Config == nil {
+		return ""
+	}
+	rules, _ := proj.Config["rules"].(string)
+	if strings.TrimSpace(rules) == "" {
+		return ""
+	}
+	return "\n\n## Project Rules\n" + rules + "\n"
 }
 
 // runAgentLoop 执行一次 chat 请求的完整 ReAct loop。

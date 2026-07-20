@@ -1496,24 +1496,49 @@ func parseInt(s string) (int, error) {
 
 // === Project API ===
 
-// projectRequest 是 project create/update 的 JSON body
+// projectRequest 是 project create/update 的 JSON body。
+// Rules 是可选的 project 级规则文本，归属于此 project 的所有 session 在发起任务时
+// 会自动注入到 system prompt（类似项目级记忆），存入 project.config.rules。
 type projectRequest struct {
 	Name             string `json:"name"`
 	Description      string `json:"description"`
 	WorkingDirectory string `json:"working_directory"`
+	Rules            string `json:"rules"`
 }
 
 // projectSummary 是 list endpoint 返回的紧凑视图。
-// 包含从关联表计算出的计数。
+// 包含从关联表计算出的计数。Config 透传 project.config JSON（含 rules），
+// 供前端 ProjectConfig 回显已保存的规则文本。
 type projectSummary struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	WorkingDirectory string `json:"working_directory"`
-	SessionCount     int    `json:"session_count"`
-	MemoryCount      int    `json:"memory_count"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Description      string         `json:"description"`
+	WorkingDirectory string         `json:"working_directory"`
+	Config           map[string]any `json:"config"`
+	SessionCount     int            `json:"session_count"`
+	MemoryCount      int            `json:"memory_count"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
+// buildProjectConfig 在已有 config 之上合并前端传入的 rules 文本。
+//   - rules 非空：写入 config["rules"] = rules（覆盖旧值）
+//   - rules 为空：删除 config["rules"]，使规则可被清空
+//   - base 为 nil 时初始化为空 map，避免写入 nil 导致 JSON 序列化为 null
+//
+// 这样 project.config 既能承载 rules，也为未来其它扩展字段（如默认模型、超时）
+// 保留空间，不会被 rules 字段覆盖时整体丢失。
+func buildProjectConfig(base map[string]any, rules string) map[string]any {
+	cfg := make(map[string]any, len(base)+1)
+	for k, v := range base {
+		cfg[k] = v
+	}
+	if strings.TrimSpace(rules) != "" {
+		cfg["rules"] = rules
+	} else {
+		delete(cfg, "rules")
+	}
+	return cfg
 }
 
 // handleProjects handles GET/POST /api/projects
@@ -1540,6 +1565,7 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 				Name:             p.Name,
 				Description:      p.Description,
 				WorkingDirectory: p.WorkingDirectory,
+				Config:           p.Config,
 				CreatedAt:        p.CreatedAt.Format(time.RFC3339),
 				UpdatedAt:        p.UpdatedAt.Format(time.RFC3339),
 			}
@@ -1580,6 +1606,7 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 			Name:             req.Name,
 			Description:      req.Description,
 			WorkingDirectory: req.WorkingDirectory,
+			Config:           buildProjectConfig(nil, req.Rules),
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}
@@ -1673,14 +1700,15 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 取出已有 project 以保留其 config
+		// 取出已有 project 以保留其 config，并在其上覆盖 rules 字段
 		existing, err := db.QueryProjectByID(id)
 		if err != nil {
 			http.Error(w, "project not found: "+err.Error(), http.StatusNotFound)
 			return
 		}
 
-		if err := db.UpdateProject(id, req.Name, req.Description, req.WorkingDirectory, existing.Config); err != nil {
+		mergedConfig := buildProjectConfig(existing.Config, req.Rules)
+		if err := db.UpdateProject(id, req.Name, req.Description, req.WorkingDirectory, mergedConfig); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

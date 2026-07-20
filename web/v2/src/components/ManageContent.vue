@@ -15,7 +15,6 @@ import { useCaseStore } from '@/composables/useCaseStore'
 import { useToast } from '@/composables/useToast'
 import { useSkills } from '@/composables/useSkills'
 import { useTaskStore } from '@/composables/useTaskStore'
-import { useSessionStore } from '@/composables/useSessionStore'
 import { useProjectStore } from '@/composables/useProjectStore'
 import { useTraceStore } from '@/composables/useTraceStore'
 import type { Case, CreateCaseRequest, UpdateCaseRequest } from '@/types/case'
@@ -27,8 +26,9 @@ import type { SpanNode } from '@/composables/useTraceStore'
  * 使用 ManageTabs 切换多个信息面板的容器组件。
  * 已迁移的面板直接渲染真实组件；暂时保留 traces 的最小化实现。
  *
- * 默认 tab 为 memory（sessions tab 信息有限、与左侧 SessionDock 重复，
- * 仅在用户显式点击时展示）。
+ * 默认 tab 为 memory。
+ * Sessions tab 已移除——其信息（当前 session name/status/token）与左侧
+ * SessionDock、底部 ContextFlyout 完全重复，不提供额外价值。
  *
  * Emits:
  *   - run-case: 从 Cases tab 运行指定 case
@@ -39,8 +39,7 @@ const emit = defineEmits<{
   (e: 'trigger-skill', command: string): void
 }>()
 
-/** 当前激活的管理 tab。默认 memory——sessions tab 与左侧 SessionDock 重复，
- *  仅作辅助查看保留，不再作为打开弹窗时的首屏。 */
+/** 当前激活的管理 tab。默认 memory。Sessions tab 已移除，不再作为可选项。 */
 const props = defineProps<{
   /** 大 Dialog 打开时希望直接定位的 tab（一次性消费）。 */
   initialTab?: string
@@ -48,11 +47,16 @@ const props = defineProps<{
 
 const activeTab = ref(props.initialTab || 'memory')
 
+// 兼容历史：若传入的 initialTab 是已移除的 'sessions'，回退到默认 memory。
+if (activeTab.value === 'sessions') activeTab.value = 'memory'
+
 // 父级每次打开 Dialog 可能传入新的 initialTab，同步过去。
+// 兼容历史：若传入的是已移除的 'sessions'，回退到默认 memory。
 watch(
   () => props.initialTab,
   (t) => {
-    if (t) activeTab.value = t
+    if (!t) return
+    activeTab.value = t === 'sessions' ? 'memory' : t
   },
 )
 
@@ -61,8 +65,7 @@ const { showError, showInfo } = useToast()
 const { filteredCases, allTags, allCategories, selectedTags, selectedCategory, loading: casesLoading } = caseStore
 const { skills } = useSkills()
 const { activeTaskId, taskCache } = useTaskStore()
-const { activeSession } = useSessionStore()
-const { activeProject, projects } = useProjectStore()
+const { activeProject } = useProjectStore()
 const traceStore = useTraceStore()
 
 /** 当前在 ContextWindowPanel 中查看的子任务 / Agent 实例 */
@@ -165,23 +168,7 @@ function handleMemorySelect(id: string) {
 <template>
   <div class="manage-content">
     <ManageTabs v-model:active-tab="activeTab">
-      <div v-if="activeTab === 'sessions'" class="tab-pane">
-        <div class="session-card" v-if="activeSession">
-          <div class="session-name">{{ activeSession.name }}</div>
-          <div class="session-meta">
-            <span class="session-status" :class="activeSession.status">{{ activeSession.status }}</span>
-            <span class="session-tokens">{{ activeSession.totalTokens.toLocaleString() }} tokens</span>
-          </div>
-        </div>
-        <div v-else class="placeholder">
-          <div class="placeholder-title">Sessions</div>
-          <p class="placeholder-hint">
-            Session overview and quick navigation. For full session management use the left dock.
-          </p>
-        </div>
-      </div>
-
-      <div v-else-if="activeTab === 'memory'" class="tab-pane tab-pane--flush">
+      <div v-if="activeTab === 'memory'" class="tab-pane tab-pane--flush">
         <MemoryBrowser @select-memory="handleMemorySelect" />
       </div>
 
@@ -321,90 +308,6 @@ function handleMemorySelect(id: string) {
 .full-panel {
   height: 100%;
   overflow-y: auto;
-}
-
-.placeholder {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  padding-top: 20%;
-  color: var(--text-muted);
-  text-align: center;
-  gap: var(--space-sm);
-}
-
-.placeholder-title {
-  font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.placeholder-hint {
-  margin: 0;
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-  max-width: 240px;
-  line-height: 1.5;
-}
-
-.session-card {
-  padding: var(--space-md);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  margin: var(--space-md);
-}
-
-.session-name {
-  font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-sm);
-}
-
-.session-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.session-status {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  padding: 0.125rem 0.5rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-}
-
-.session-status.running {
-  color: var(--accent-running);
-  border-color: rgba(0, 229, 255, 0.25);
-  background: rgba(0, 229, 255, 0.08);
-}
-
-.session-status.completed {
-  color: var(--accent-success);
-  border-color: rgba(57, 255, 20, 0.25);
-  background: rgba(57, 255, 20, 0.08);
-}
-
-.session-status.failed {
-  color: var(--accent-danger);
-  border-color: rgba(255, 77, 77, 0.25);
-  background: rgba(255, 77, 77, 0.08);
-}
-
-.session-tokens {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
 }
 
 .context-subtask-bar {
