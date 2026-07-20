@@ -14,23 +14,28 @@
 // The "default" project always exists and cannot be deleted.
 import { ref, computed } from 'vue'
 
-/** Project summary returned by GET /api/projects (matches backend projectSummary) */
+/** Project summary returned by GET /api/projects (matches backend projectSummary)。
+ *  config 字段对应后端 project.config JSON，目前用于承载 project rules 文本
+ *  （config.rules），由 ProjectConfig 表单读写，运行时注入到 session system prompt。 */
 export interface Project {
   id: string
   name: string
   description: string
   working_directory: string
+  config?: Record<string, unknown>
   session_count?: number
   memory_count?: number
   created_at: string
   updated_at: string
 }
 
-/** Request body for POST/PUT /api/projects */
+/** Request body for POST/PUT /api/projects。
+ *  rules 为可选字段：非空时前端把它放进 config.rules 透传给后端。 */
 export interface ProjectRequest {
   name: string
   description: string
   working_directory: string
+  rules?: string
 }
 
 /** Singleton state shared across all consumers */

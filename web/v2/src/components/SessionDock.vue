@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import type { Session } from '@/composables/useSessionStore'
 import type { Project } from '@/composables/useProjectStore'
 
@@ -47,8 +47,42 @@ const emit = defineEmits<{
   (e: 'update:renameBuffer', value: string): void
 }>()
 
-/** 用户折叠的项目 ID 集合 */
-const collapsedProjectIds = ref<Set<string>>(new Set())
+/**
+ * 用户折叠的项目 ID 集合。
+ *
+ * 设计取舍：折叠状态完全由用户手动操作决定——切换/激活某个 project 不会自动展开它，
+ * 也不会自动收起其它 project。这样多组可以同时展开对照查看。
+ *
+ * 状态持久化到 localStorage，刷新后保持上次的手动折叠状态。
+ * 任意 project 在 store 中出现时即参与初始化（见 initCollapsed），不在集合里的
+ * project 默认展开。
+ */
+const COLLAPSED_KEY = 'v2:session-dock:collapsed-projects'
+const collapsedProjectIds = ref<Set<string>>(loadCollapsed())
+
+/** 从 localStorage 读取上次保存的折叠集合。 */
+function loadCollapsed(): Set<string> {
+  if (typeof localStorage === 'undefined') return new Set()
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    if (Array.isArray(arr)) return new Set(arr.filter((x): x is string => typeof x === 'string'))
+  } catch {
+    // 损坏数据忽略，回到默认全展开。
+  }
+  return new Set()
+}
+
+/** 把当前折叠集合写回 localStorage，刷新后保持一致。 */
+function persistCollapsed() {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedProjectIds.value]))
+  } catch {
+    // 配额或隐私模式下写入失败可忽略，仅影响下次刷新的折叠记忆。
+  }
+}
 
 /** 按项目分组的会话 */
 const projectGroups = computed(() => {
@@ -70,8 +104,7 @@ const projectGroups = computed(() => {
     groups.push({
       project: p,
       sessions: list,
-      // 折叠状态直接由 collapsedProjectIds 决定，active project 也允许折叠。
-      // 切换到某 project 时由下方 watch 自动展开它，但手动折叠当前 active 不应被阻止。
+      // 折叠状态直接由 collapsedProjectIds 决定，完全手动控制，不随激活状态自动展开。
       isCollapsed: collapsedProjectIds.value.has(p.id),
     })
   }
@@ -96,6 +129,7 @@ function toggleCollapse(projectId: string) {
   if (next.has(projectId)) next.delete(projectId)
   else next.add(projectId)
   collapsedProjectIds.value = next
+  persistCollapsed()
 }
 
 /**
@@ -122,6 +156,8 @@ function sessionCount(group: { project: Project; sessions: Session[] }): number 
  * - 若点击的是当前未激活项目，切换项目（useSessionStore 会加载该项目 sessions）。
  * - 若点击的是当前已激活项目，则切换该分组的折叠/展开，让用户可以一键收起已展开的项目。
  * 折叠/展开仍可通过左侧独立的 collapse-btn 操作。
+ *
+ * 注意：切换项目不再自动展开/收起其它分组——多组可同时展开，状态完全手动控制。
  */
 function handleProjectHeaderClick(projectId: string) {
   if (projectId === props.activeProjectId) {
@@ -130,21 +166,6 @@ function handleProjectHeaderClick(projectId: string) {
     emit('select-project', projectId)
   }
 }
-
-// 选中某项目时自动展开该项目分组，避免用户点了项目却还要再点一次箭头才看到
-// 该项目下的 session——这是"查找下面一组 session 比较麻烦"的根因之一。
-watch(
-  () => props.activeProjectId,
-  (pid) => {
-    if (!pid) return
-    if (collapsedProjectIds.value.has(pid)) {
-      const next = new Set(collapsedProjectIds.value)
-      next.delete(pid)
-      collapsedProjectIds.value = next
-    }
-  },
-  { immediate: true },
-)
 
 function statusClass(status: Session['status']): string {
   switch (status) {
@@ -179,17 +200,6 @@ function formatTime(ts: number): string {
 
 <template>
   <div class="session-dock">
-    <div class="dock-section-header">
-      <span class="dock-section-title">Sessions</span>
-      <button
-        class="dock-action-btn"
-        title="New session"
-        @click="emit('new-session-request')"
-      >
-        +
-      </button>
-    </div>
-
     <div class="project-groups">
       <div
         v-for="group in projectGroups"
@@ -294,46 +304,6 @@ function formatTime(ts: number): string {
   overflow: hidden;
 }
 
-.dock-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-default);
-  background: var(--bg-elevated);
-  flex-shrink: 0;
-}
-
-.dock-section-title {
-  font-family: var(--font-display);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.dock-action-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-default);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font-size: 16px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--transition-fast);
-}
-
-.dock-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--accent-running);
-  border-color: var(--border-active);
-}
-
 .project-groups {
   flex: 1;
   overflow-y: auto;
@@ -411,12 +381,7 @@ function formatTime(ts: number): string {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.project-header:hover .project-new-session-btn {
-  opacity: 1;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .project-new-session-btn:hover {

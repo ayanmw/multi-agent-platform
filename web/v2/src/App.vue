@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import TopBar from './components/TopBar.vue'
 import DockPanel from './components/DockPanel.vue'
 import SessionDock from './components/SessionDock.vue'
-import InspectorContent from './components/InspectorContent.vue'
+import ManageContent from './components/ManageContent.vue'
 import SessionFiles from './components/SessionFiles.vue'
 import ColumnResizer from './components/ColumnResizer.vue'
 import RowResizer from './components/RowResizer.vue'
@@ -152,10 +152,10 @@ watch(activeSessionId, (sid) => {
   if (sid) setFilesSession(sid)
 }, { immediate: true })
 
-// === Inspector 大 Dialog ===
+// === 管理（原 Inspector）大 Dialog ===
 // 7/20: Context 已经抽到 CommandBar 右侧浮窗；此处只保留用于"展开管理"的 90vw Dialog。
 const inspectorDialogOpen = ref(false)
-const inspectorInitialTab = ref<string>('sessions')
+const inspectorInitialTab = ref<string>('memory')
 
 // Context 与 Manage 浮窗开关状态
 const contextFlyoutOpen = ref(false)
@@ -185,6 +185,8 @@ if (typeof window !== 'undefined') {
 
 // 打开管理大 Dialog，并可选地定位到指定 tab。
 function openInspectorDialog(tab?: string) {
+  // 菜单项明确指定 tab 时用该 tab；否则保留上次的 inspectorInitialTab（默认 memory），
+  // 让"展开管理"按钮的行为稳定、不总是跳回 sessions。
   if (tab) inspectorInitialTab.value = tab
   inspectorDialogOpen.value = true
 }
@@ -1068,14 +1070,14 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         <div v-if="inspectorDialogOpen" class="inspector-dialog-overlay" @click.self="closeInspectorDialog">
           <div class="inspector-dialog-panel">
             <div class="inspector-dialog-header">
-              <span class="inspector-dialog-title">🧭 Inspector</span>
+              <span class="inspector-dialog-title">🎛 管理</span>
               <div class="inspector-dialog-actions">
                 <button class="inspector-dialog-reset" title="Reset column widths" @click="resetWidths">↺ Reset Layout</button>
                 <button class="inspector-dialog-close" @click="closeInspectorDialog" title="Close">×</button>
               </div>
             </div>
             <div class="inspector-dialog-body">
-              <InspectorContent
+              <ManageContent
                 :initial-tab="inspectorInitialTab"
                 @run-case="handleRunCase"
                 @trigger-skill="handleTriggerSkill"

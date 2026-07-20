@@ -435,7 +435,6 @@ function truncate(s: string, maxLen: number): string {
 <style scoped>
 .memory-browser {
   padding:1.25rem;
-  max-width:75rem;
   margin:0 auto;
 }
 
@@ -645,6 +644,7 @@ function truncate(s: string, maxLen: number): string {
 .memory-card-main {
   flex:1;
   min-width:0;
+  order:2;
 }
 
 .memory-type {
@@ -662,6 +662,12 @@ function truncate(s: string, maxLen: number): string {
   font-size:0.9rem;
   line-height:1.4;
   word-break:break-word;
+  /* 限制预览高度，避免长内容把卡片撑高挤压右侧 tag 区。
+     完整内容在展开后的 detail 中查看。 */
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
 }
 
 .memory-card-tags {
@@ -669,6 +675,8 @@ function truncate(s: string, maxLen: number): string {
   gap:0.375rem;
   flex-shrink:0;
   flex-wrap:wrap;
+  justify-content:flex-end;
+  max-width:40%;
 }
 
 .tag {
@@ -677,7 +685,8 @@ function truncate(s: string, maxLen: number): string {
   font-size:0.7rem;
   font-weight:600;
   text-transform:uppercase;
-  letter-spacing:188rem;
+  letter-spacing:0.03125rem;
+  white-space:nowrap;
 }
 
 .scope-tag {

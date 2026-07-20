@@ -1,8 +1,12 @@
 /**
- * InspectorTabs.vue
+ * ManageTabs.vue
  *
- * Inspector 面板的 Tab 容器。渲染顶部 tab bar，并通过默认 slot 暴露当前 tab 的内容区。
+ * 管理（原 Inspector）面板的 Tab 容器。渲染顶部 tab bar，并通过默认 slot 暴露当前 tab 的内容区。
  * 父组件使用 v-model:activeTab 或监听 update:activeTab 来同步当前激活 tab。
+ *
+ * tab 列表包含 Sessions/Memory/RAG/Context/Cases/Agents/Project/Skills/Traces。
+ * 其中 Sessions 与左侧 SessionDock 信息重复，仅作辅助查看保留，不再作为默认 tab
+ * （默认 tab 由 ManageContent 设为 memory）。
  */
 <script setup lang="ts">
 interface Props {
@@ -33,7 +37,7 @@ function selectTab(id: string) {
 </script>
 
 <template>
-  <div class="inspector-tabs">
+  <div class="manage-tabs">
     <div class="tab-bar" role="tablist">
       <button
         v-for="tab in tabs"
@@ -56,12 +60,11 @@ function selectTab(id: string) {
 </template>
 
 <style scoped>
-.inspector-tabs {
+.manage-tabs {
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-panel);
-  border-left: 1px solid var(--border-default);
 }
 
 .tab-bar {
@@ -110,7 +113,6 @@ function selectTab(id: string) {
 .tab-content {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: var(--space-md);
+  overflow: hidden;
 }
 </style>

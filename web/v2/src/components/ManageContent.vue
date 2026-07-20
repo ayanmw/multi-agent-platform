@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import InspectorTabs from './InspectorTabs.vue'
+import ManageTabs from './ManageTabs.vue'
 import SkillPanel from './SkillPanel.vue'
 import CaseFilter from './CaseFilter.vue'
 import CaseCard from './CaseCard.vue'
@@ -22,10 +22,13 @@ import type { Case, CreateCaseRequest, UpdateCaseRequest } from '@/types/case'
 import type { SpanNode } from '@/composables/useTraceStore'
 
 /**
- * InspectorContent — 右侧 Inspector 面板内容
+ * ManageContent — 管理（原 Inspector）面板内容
  *
- * 使用 InspectorTabs 切换多个信息面板的容器组件。
- * 已迁移的面板直接渲染真实组件；暂时保留 traces / sessions 的最小化实现。
+ * 使用 ManageTabs 切换多个信息面板的容器组件。
+ * 已迁移的面板直接渲染真实组件；暂时保留 traces 的最小化实现。
+ *
+ * 默认 tab 为 memory（sessions tab 信息有限、与左侧 SessionDock 重复，
+ * 仅在用户显式点击时展示）。
  *
  * Emits:
  *   - run-case: 从 Cases tab 运行指定 case
@@ -36,13 +39,14 @@ const emit = defineEmits<{
   (e: 'trigger-skill', command: string): void
 }>()
 
-/** 当前激活的 Inspector tab */
+/** 当前激活的管理 tab。默认 memory——sessions tab 与左侧 SessionDock 重复，
+ *  仅作辅助查看保留，不再作为打开弹窗时的首屏。 */
 const props = defineProps<{
   /** 大 Dialog 打开时希望直接定位的 tab（一次性消费）。 */
   initialTab?: string
 }>()
 
-const activeTab = ref(props.initialTab || 'sessions')
+const activeTab = ref(props.initialTab || 'memory')
 
 // 父级每次打开 Dialog 可能传入新的 initialTab，同步过去。
 watch(
@@ -127,7 +131,7 @@ function handleCaseDelete(caseId: string) {
   caseStore.deleteCase(caseId)
     .then(() => showInfo('Case 已删除'))
     .catch((err: unknown) => {
-      console.error('[InspectorContent] delete case failed:', err)
+      console.error('[ManageContent] delete case failed:', err)
       showError(`删除 Case 失败: ${err instanceof Error ? err.message : String(err)}`)
     })
 }
@@ -144,7 +148,7 @@ async function handleCaseSave(req: CreateCaseRequest | UpdateCaseRequest) {
     }
     formVisible.value = false
   } catch (err: unknown) {
-    console.error('[InspectorContent] save case failed:', err)
+    console.error('[ManageContent] save case failed:', err)
     showError(`保存 Case 失败: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
@@ -154,17 +158,13 @@ function handleTriggerSkill(command: string) {
 }
 
 function handleMemorySelect(id: string) {
-  console.log('[InspectorContent] select memory:', id)
-}
-
-function handleProjectBack() {
-  activeTab.value = 'sessions'
+  console.log('[ManageContent] select memory:', id)
 }
 </script>
 
 <template>
-  <div class="inspector-content">
-    <InspectorTabs v-model:active-tab="activeTab">
+  <div class="manage-content">
+    <ManageTabs v-model:active-tab="activeTab">
       <div v-if="activeTab === 'sessions'" class="tab-pane">
         <div class="session-card" v-if="activeSession">
           <div class="session-name">{{ activeSession.name }}</div>
@@ -181,7 +181,7 @@ function handleProjectBack() {
         </div>
       </div>
 
-      <div v-else-if="activeTab === 'memory'" class="tab-pane">
+      <div v-else-if="activeTab === 'memory'" class="tab-pane tab-pane--flush">
         <MemoryBrowser @select-memory="handleMemorySelect" />
       </div>
 
@@ -242,12 +242,12 @@ function handleProjectBack() {
         </div>
       </div>
 
-      <div v-else-if="activeTab === 'agents'" class="tab-pane">
-        <AgentConfig class="full-panel" @back="activeTab = 'sessions'" />
+      <div v-else-if="activeTab === 'agents'" class="tab-pane tab-pane--flush">
+        <AgentConfig class="full-panel" />
       </div>
 
-      <div v-else-if="activeTab === 'project'" class="tab-pane">
-        <ProjectConfig class="full-panel" :projects="projects" :active-project="activeProject" @back="handleProjectBack" />
+      <div v-else-if="activeTab === 'project'" class="tab-pane tab-pane--flush">
+        <ProjectConfig class="full-panel" />
       </div>
 
       <div v-else-if="activeTab === 'skills'" class="tab-pane">
@@ -277,7 +277,7 @@ function handleProjectBack() {
           </div>
         </div>
       </div>
-    </InspectorTabs>
+    </ManageTabs>
 
     <!-- Cases tab 的两个 Modal：Detail（只读查看）与 Form（新建/编辑）。
          都通过 Teleport 渲染到 body，这里只负责数据与事件绑定。 -->
@@ -298,7 +298,7 @@ function handleProjectBack() {
 </template>
 
 <style scoped>
-.inspector-content {
+.manage-content {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -308,6 +308,14 @@ function handleProjectBack() {
 .tab-pane {
   height: 100%;
   overflow-y: auto;
+  /* 默认无 padding：内容面板自带留白时（如 MemoryBrowser）直接全宽铺开，
+     避免双层 padding 在窄弹窗里挤压内容。需要留白的面板自行加 padding。 */
+  padding: 0;
+}
+
+/* 全宽 flush tab 的占位类（保留语义，padding 已统一为 0）。 */
+.tab-pane--flush {
+  padding: 0;
 }
 
 .full-panel {

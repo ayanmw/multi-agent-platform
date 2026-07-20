@@ -1,5 +1,5 @@
 /**
- * InspectorContent 集成测试
+ * ManageContent 集成测试
  *
  * 覆盖 Cases tab 的状态机与子组件事件冒泡：
  * - 点击 CaseCard view → 打开 CaseDetailModal
@@ -11,7 +11,7 @@
  * - CaseCard @run 直接冒泡为 run-case
  *
  * 通过 stub 子组件 + 直接驱动 stub emit 来隔离 CaseDetailModal/CaseForm 内部，
- * 专注验证 InspectorContent 的编排逻辑。CaseStore 用真实模块 + fetch mock。
+ * 专注验证 ManageContent 的编排逻辑。CaseStore 用真实模块 + fetch mock。
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -80,15 +80,15 @@ const CaseFilterStub = defineComponent({
 
 const EmptyStub = defineComponent({ name: 'Empty', render: () => null })
 
-// InspectorTabs stub：渲染默认 slot，并提供一个按钮把 activeTab 切到 cases，
+// ManageTabs stub：渲染默认 slot，并提供一个按钮把 activeTab 切到 cases，
 // 便于测试驱动 v-model 切换。通过 emit('update:activeTab', 'cases') 通知父级。
-const InspectorTabsStub = defineComponent({
-  name: 'InspectorTabs',
-  props: { activeTab: { type: String, default: 'sessions' } },
+const ManageTabsStub = defineComponent({
+  name: 'ManageTabs',
+  props: { activeTab: { type: String, default: 'memory' } },
   emits: ['update:activeTab'],
   setup(_, { slots, emit }) {
     return () =>
-      h('div', { class: 'inspector-tabs-stub' }, [
+      h('div', { class: 'manage-tabs-stub' }, [
         h('button', {
           class: 'tabs-goto-cases',
           onClick: () => emit('update:activeTab', 'cases'),
@@ -136,22 +136,22 @@ async function mountInspector() {
     return jsonResponse({})
   }) as unknown as typeof globalThis.fetch
 
-  // 动态 import 拿到应用了 doMock 的 InspectorContent
-  const InspectorContent = (await import('./InspectorContent.vue')).default
+  // 动态 import 拿到应用了 doMock 的 ManageContent
+  const ManageContent = (await import('./ManageContent.vue')).default
   const useCaseStore = (await import('@/composables/useCaseStore')).useCaseStore
   const store = useCaseStore()
   await store.loadCases()
   // fetch mock 已触发 reload，清除调用记录，便于后续断言 CRUD 的网络请求
   fetchCalls.length = 0
 
-  const wrapper = mount(InspectorContent, {
+  const wrapper = mount(ManageContent, {
     global: {
       stubs: {
         CaseCard: CaseCardStub,
         CaseDetailModal: CaseDetailModalStub,
         CaseForm: CaseFormStub,
         CaseFilter: CaseFilterStub,
-        InspectorTabs: InspectorTabsStub,
+        ManageTabs: ManageTabsStub,
         MemoryBrowser: EmptyStub,
         RAGPreviewPanel: EmptyStub,
         ContextWindowPanel: EmptyStub,
@@ -177,7 +177,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.doUnmock('@/composables/useToast')
 })
-describe('InspectorContent — Cases tab 状态机', () => {
+describe('ManageContent — Cases tab 状态机', () => {
   it('CaseCard view → 打开 CaseDetailModal', async () => {
     const { wrapper } = await mountInspector()
     await wrapper.find('.stub-view').trigger('click')

@@ -55,13 +55,14 @@ export function useSessionStore() {
     sessions.value.find(s => s.id === activeSessionId.value) || null
   )
 
-  /** Load list of sessions from backend and replace local cache.
-   *  If projectId is provided, filters sessions by project. */
+  /** Load ALL sessions across every project and replace local cache.
+   *  不再按 project 过滤——一次加载所有 session，配合 SessionDock 的
+   *  "多组同时展开 + 折叠状态手动持久化"策略，让用户刷新后仍能看到各 project
+   *  的 session 而无需逐个点击加载。 */
   async function loadSessions(projectId?: string): Promise<void> {
-    let url = '/api/sessions'
-    if (projectId) {
-      url += `?project_id=${encodeURIComponent(projectId)}`
-    }
+    // 保留 projectId 入参以维持调用方签名兼容，但忽略它：始终加载全部 session。
+    void projectId
+    const url = '/api/sessions'
     const resp = await fetch(url)
     if (!resp.ok) {
       throw new Error(`Failed to load sessions: ${resp.status}`)

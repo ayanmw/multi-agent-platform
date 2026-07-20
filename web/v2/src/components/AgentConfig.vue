@@ -1,23 +1,15 @@
 <!-- AgentConfig — agent configuration management page
-     Replaces the main content area to manage agent CRUD.
+     Renders inside the Manage dialog (no back button — the dialog itself closes the view).
 
      Features:
        - Agent list table with name, model, temperature, tools, created_at
        - Create/Edit form with all agent fields
        - Delete with confirmation dialog
        - Test connection button to verify API endpoint/key
-       - Back button to return to main view
-
-     Emits:
-       back: user clicked the back button to return to main view
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest } from '../composables/useAgentStore'
-
-const emit = defineEmits<{
-  back: []
-}>()
 
 const {
   agents,
@@ -196,7 +188,6 @@ function formatDate(iso: string): string {
   <div class="agent-config">
     <!-- Header -->
     <div class="config-header">
-      <button class="btn-back" @click="emit('back')">← Back</button>
       <h2 class="config-title">⚙ Agent Configuration</h2>
       <button class="btn-add" @click="openCreate">+ New Agent</button>
     </div>
@@ -462,22 +453,6 @@ function formatDate(iso: string): string {
   font-weight:700;
   color:var(--text-primary);
   margin:0;
-}
-
-.btn-back {
-  background:var(--bg-elevated);
-  border:1px solid var(--border-default);
-  color:var(--text-secondary);
-  font-size:0.812rem;
-  padding:0.375rem 0.875rem;
-  border-radius: var(--radius-md);
-  cursor:pointer;
-  transition:background 0.2s, color 0.2s;
-}
-
-.btn-back:hover {
-  background:var(--bg-hover);
-  color:var(--text-primary);
 }
 
 .btn-add {

@@ -49,7 +49,9 @@ function openTab(tab: string) {
 }
 
 function expandAll() {
-  emit('expand', 'sessions')
+  // 不指定 tab：由 App.vue 保留上次 inspectorInitialTab（默认 memory），
+  // 避免"展开管理"总是回到信息有限的 Sessions tab。
+  emit('expand')
   close()
 }
 
