@@ -177,13 +177,15 @@ const emit = defineEmits<{
 }
 
 /* 桌面端：宽度由 App.vue 注入的 --left-w / --right-w 决定；未注入时回退到 --dock-width。
-   注意 width prop 会通过 inline style 覆盖此处，优先级最高。 */
+   注意 width prop 会通过 inline style 覆盖此处，优先级最高。
+   只作用于展开态 .dock-panel —— 折叠态 .dock-rail 始终 18px，否则 min-width 会把
+   rail 撑成整栏宽度的空白条，空间让不出来。 */
 @media (min-width: 1024px) {
-  .dock-left {
+  .dock-panel.dock-left {
     width: var(--left-w, var(--dock-width, 280px));
     min-width: var(--left-w, var(--dock-width, 280px));
   }
-  .dock-right {
+  .dock-panel.dock-right {
     width: var(--right-w, var(--inspector-width, 320px));
     min-width: var(--right-w, var(--inspector-width, 320px));
   }

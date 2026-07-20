@@ -96,7 +96,7 @@ function formatDuration(ms: number): string {
     <!-- Think step -->
     <template v-if="step.type === 'think'">
       <div class="step-header">
-        <span class="step-type-icon">LIGHTBULB</span>
+        <span class="step-type-icon" title="Think — LLM 推理/思考步骤">💡</span>
         <span class="step-type-label">THINK</span>
         <span class="step-meta">
           <span class="step-tokens">{{ step.tokens }}t</span>
@@ -109,7 +109,7 @@ function formatDuration(ms: number): string {
     <!-- Tool call step -->
     <template v-else-if="step.type === 'tool_call' && step.toolCall">
       <div class="step-header">
-        <span class="step-type-icon" :style="{ color: 'var(--accent-tool)' }">WRENCH</span>
+        <span class="step-type-icon" :style="{ color: 'var(--accent-tool)' }" title="Tool Call — 工具调用步骤">🔧</span>
         <div class="tool-name-block">
           <span v-if="toolNamespace" class="tool-namespace">{{ toolNamespace }}/</span>
           <span class="tool-name">{{ toolName }}</span>
@@ -165,7 +165,7 @@ function formatDuration(ms: number): string {
     <!-- Observation step -->
     <template v-else-if="step.type === 'observation'">
       <div class="step-header">
-        <span class="step-type-icon">EYE</span>
+        <span class="step-type-icon" title="Observation — 工具返回结果/观察">👁</span>
         <span class="step-type-label">OBSERVATION</span>
       </div>
       <div class="observation-body">{{ step.thinking }}</div>
