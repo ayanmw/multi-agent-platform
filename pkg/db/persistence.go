@@ -197,6 +197,28 @@ func UpdateSessionName(id, name string) error {
 	return err
 }
 
+// UpdateSessionMeta 更新 session 的可编辑元数据：显示名称与 workspace 目录。
+//
+// workspace_dir 的语义：
+//   - 非空：用户显式指定的路径，workspace_auto 置为 false，运行时工具链直接使用该目录
+//   - 为空：回退到 project.working_directory 或自动生成的 ./workspace/session-{id}/，
+//     workspace_auto 置为 true
+//
+// 注意：本函数只更新 DB 指针，不负责在磁盘上创建或迁移目录。新自定义路径的目录
+// 创建由 API handler 在调用前完成（参考 resolveWorkspaceDir 的 MkdirAll 兜底），
+// 旧 workspace 目录的物理迁移/清理不在本函数职责内——变更 workspace 只切换指针。
+func UpdateSessionMeta(id, name, workspaceDir string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	isAuto := workspaceDir == ""
+	_, err := DB.Exec(
+		`UPDATE sessions SET name=?, workspace_dir=?, workspace_auto=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		name, workspaceDir, isAuto, id,
+	)
+	return err
+}
+
 // DeleteSession 删除一个 session 及其全部关联数据。
 // 清理顺序为：conversations → steps → files → tasks → session。
 // 之所以手动 cascade，是因为 SQLite 的外键可能未被强制启用。

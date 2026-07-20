@@ -534,8 +534,15 @@ type createSessionRequest struct {
 	WorkspaceDir string `json:"workspace_dir"` // 可选：用户指定的路径；为空则自动
 }
 
-type renameSessionRequest struct {
-	Name string `json:"name"`
+// updateSessionRequest 是 PUT /api/sessions/{id} 的 JSON body。
+//
+// workspace_dir 用指针类型：区分"未提供"（nil，走旧"仅重命名"路径，保留
+// 既有 workspace）与"显式空串"（清空 workspace，回退 auto/project）。空
+// 字符串在 JSON 里是合法值，必须用指针才能与"字段缺省"区分开，否则旧
+// 客户端只发 {name} 会被误解成"清空 workspace"。
+type updateSessionRequest struct {
+	Name         string  `json:"name"`
+	WorkspaceDir *string `json:"workspace_dir"`
 }
 
 // handleSessions 处理 GET/POST /api/sessions
@@ -668,7 +675,7 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPut:
-		var req renameSessionRequest
+		var req updateSessionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -677,10 +684,39 @@ func handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if err := db.UpdateSessionName(id, req.Name); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+
+		// workspace_dir 字段未提供（指针为 nil）→ 旧客户端的"仅重命名"路径，
+		// 只更新 name，保留既有 workspace_dir/workspace_auto。
+		// workspace_dir 字段被显式提供（指针非 nil，值可为空串）→ 完整元数据更新，
+		// 同时改 name 与 workspace。
+		if req.WorkspaceDir == nil {
+			if err := db.UpdateSessionName(id, req.Name); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			ws := strings.TrimSpace(*req.WorkspaceDir)
+			// 自定义路径需要确保目录存在；空串表示回退 auto，无需创建。
+			if ws != "" {
+				if info, err := os.Stat(ws); err == nil {
+					if !info.IsDir() {
+						http.Error(w, "workspace_dir is not a directory", http.StatusBadRequest)
+						return
+					}
+				} else {
+					// 目录不存在则尝试创建，失败则报错让前端明确知道。
+					if err := os.MkdirAll(ws, 0755); err != nil {
+						http.Error(w, "cannot create workspace_dir: "+err.Error(), http.StatusBadRequest)
+						return
+					}
+				}
+			}
+			if err := db.UpdateSessionMeta(id, req.Name, ws); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
+
 		sess, err := db.QuerySessionByID(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

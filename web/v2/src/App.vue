@@ -19,6 +19,7 @@ import RecentModsDialog from './components/RecentModsDialog.vue'
 import ModelPricesDialog from './components/ModelPricesDialog.vue'
 import MCPServerDialog from './components/MCPServerDialog.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
+import SessionEditDialog from './components/SessionEditDialog.vue'
 import { useLayout } from './composables/useLayout'
 import { useTaskStore } from './composables/useTaskStore'
 import { useSessionStore } from './composables/useSessionStore'
@@ -100,7 +101,7 @@ const {
   createSession,
   setActiveSession,
   deleteSession,
-  renameSession,
+  updateSessionFields,
 } = useSessionStore()
 
 const { agents, availableTools, loadAgents } = useAgentStore()
@@ -119,9 +120,12 @@ function onMultiAgentChange(v: boolean) {
   multiAgentEnabled.value = v
 }
 
-// === 行内重命名状态 ===
-const renamingSessionId = ref<string | null>(null)
-const renameBuffer = ref('')
+// === Session 编辑弹窗状态 ===
+// sessionEditTarget：当前编辑的 session；sessionEditVisible：弹窗显隐。
+// 用 ref 引用 SessionEditDialog 实例，保存失败时调用其 failWith 显示错误。
+const sessionEditTarget = ref<Session | null>(null)
+const sessionEditVisible = ref(false)
+const sessionEditDialogRef = ref<InstanceType<typeof SessionEditDialog> | null>(null)
 
 // === 弹窗可见性 ===
 const recentModsVisible = ref(false)
@@ -521,14 +525,32 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
 // === 项目/会话选择 ===
 async function handleProjectSelect(projectId: string) {
   if (projectId === activeProjectId.value) return
+  // 切换前读取目标 project 的 rules，用于切换后的"规则已生效"提示。
+  // 这里用切换前的 projects 快照即可：loadProjects 之后 projects 已是最新。
+  const targetProject = projects.value.find(p => p.id === projectId) || null
+  const targetRules = extractProjectRules(targetProject)
   setActiveProject(projectId)
   clearActiveTask()
   clearContextWindow()
   try {
     await loadSessions(projectId)
+    // project 切换时若新 project 配有 rules，明确提示用户：后续在该 project 下
+    // 新建/发起的 session 会自动注入这段规则，避免用户以为规则"没生效"。
+    // 仅在有 rules 时提示，避免每次切换都弹 toast。
+    if (targetRules) {
+      const preview = targetRules.length > 60 ? targetRules.slice(0, 60) + '…' : targetRules
+      showInfo(`已切换到 project「${targetProject?.name || projectId}」，其规则将注入新会话：${preview}`)
+    }
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to load sessions')
   }
+}
+
+/** 从 project.config.rules 提取规则文本（与 ProjectConfig.readRules 同源）。 */
+function extractProjectRules(p: { config?: Record<string, unknown> } | null): string {
+  if (!p || !p.config) return ''
+  const r = p.config.rules
+  return typeof r === 'string' ? r.trim() : ''
 }
 
 async function handleSessionSelect(session: Session) {
@@ -610,29 +632,40 @@ async function handleDeleteSession(session: Session) {
   }
 }
 
-// === 行内重命名 ===
-function startRenameSession(session: Session) {
-  renamingSessionId.value = session.id
-  renameBuffer.value = session.name
+// === Session 编辑弹窗 ===
+// 从 SessionDock 的 ✎ 按钮打开，展示完整 session 信息并支持改名 + 改 workspace。
+function openSessionEdit(session: Session) {
+  sessionEditTarget.value = session
+  sessionEditVisible.value = true
 }
 
-async function commitRenameSession(session: Session) {
-  if (renamingSessionId.value !== session.id) return
-  const newName = renameBuffer.value.trim()
-  if (newName && newName !== session.name) {
-    try {
-      await renameSession(session.id, newName)
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to rename session')
-    }
+function closeSessionEdit() {
+  sessionEditVisible.value = false
+  // 稍延迟清空 target，避免关闭动画期间内容闪空。
+  sessionEditTarget.value = null
+}
+
+/** SessionEditDialog @save：根据 workspaceMode 决定传给后端的 workspaceDir。
+ *  - keep：不传 workspace_dir，后端保留旧值（仅重命名）
+ *  - auto：传空串，后端清空 workspace_dir，回退 auto/project
+ *  - custom：传自定义路径，后端确保目录存在并切换指针 */
+async function handleSessionEditSave(payload: { name: string; workspaceMode: 'keep' | 'auto' | 'custom'; customPath: string }) {
+  const target = sessionEditTarget.value
+  if (!target) return
+  try {
+    let workspaceDir: string | undefined
+    if (payload.workspaceMode === 'auto') workspaceDir = ''
+    else if (payload.workspaceMode === 'custom') workspaceDir = payload.customPath
+    // keep → workspaceDir 保持 undefined，updateSessionFields 不会带 workspace_dir 字段
+    await updateSessionFields(target.id, { name: payload.name, workspaceDir })
+    sessionEditVisible.value = false
+    sessionEditTarget.value = null
+    showInfo('Session 已更新')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to update session'
+    // 通过 dialog 暴露的 failWith 在弹窗内显示错误并保持打开，让用户改完再试。
+    sessionEditDialogRef.value?.failWith(msg)
   }
-  renamingSessionId.value = null
-  renameBuffer.value = ''
-}
-
-function cancelRenameSession() {
-  renamingSessionId.value = null
-  renameBuffer.value = ''
 }
 
 // === 审批对话框 ===
@@ -797,16 +830,11 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           :active-project-id="activeProjectId"
           :sessions="sessions"
           :active-session-id="activeSessionId"
-          :renaming-session-id="renamingSessionId"
-          :rename-buffer="renameBuffer"
-          @update:rename-buffer="renameBuffer = $event"
           @select-project="handleProjectSelect"
           @select-session="handleSessionSelect"
           @new-session-request="openNewSessionDialog"
           @delete-session="handleDeleteSession"
-          @rename-start="startRenameSession"
-          @rename-commit="commitRenameSession"
-          @rename-cancel="cancelRenameSession"
+          @edit-session="openSessionEdit"
         />
       </DockPanel>
 
@@ -902,16 +930,11 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           :active-project-id="activeProjectId"
           :sessions="sessions"
           :active-session-id="activeSessionId"
-          :renaming-session-id="renamingSessionId"
-          :rename-buffer="renameBuffer"
-          @update:rename-buffer="renameBuffer = $event"
           @select-project="handleProjectSelect"
           @select-session="handleSessionSelect"
           @new-session-request="openNewSessionDialog"
           @delete-session="handleDeleteSession"
-          @rename-start="startRenameSession"
-          @rename-commit="commitRenameSession"
-          @rename-cancel="cancelRenameSession"
+          @edit-session="openSessionEdit"
         />
       </DockPanel>
 
@@ -1009,16 +1032,11 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :active-project-id="activeProjectId"
             :sessions="sessions"
             :active-session-id="activeSessionId"
-            :renaming-session-id="renamingSessionId"
-            :rename-buffer="renameBuffer"
-            @update:rename-buffer="renameBuffer = $event"
             @select-project="handleProjectSelect"
             @select-session="handleSessionSelect"
             @new-session-request="openNewSessionDialog"
             @delete-session="handleDeleteSession"
-            @rename-start="startRenameSession"
-            @rename-commit="commitRenameSession"
-            @rename-cancel="cancelRenameSession"
+            @edit-session="openSessionEdit"
           />
         </DockPanel>
       </div>
@@ -1095,6 +1113,17 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       :project-working-directory="newSessionTargetProject?.working_directory || ''"
       @close="closeNewSessionDialog"
       @create="handleCreateSession"
+    />
+
+    <!-- Session 编辑弹窗：完整 session 信息展示 + 改名/改 workspace。
+         projectName 用于只读 badge；session 为 null 时弹窗内部不渲染内容。 -->
+    <SessionEditDialog
+      ref="sessionEditDialogRef"
+      :visible="sessionEditVisible"
+      :session="sessionEditTarget"
+      :project-name="projects.find(p => p.id === sessionEditTarget?.projectId)?.name || sessionEditTarget?.projectId || ''"
+      @close="closeSessionEdit"
+      @save="handleSessionEditSave"
     />
 
     <!-- Toast / Dialogs -->

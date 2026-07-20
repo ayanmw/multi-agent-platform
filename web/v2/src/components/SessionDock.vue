@@ -14,26 +14,19 @@ import type { Project } from '@/composables/useProjectStore'
  *   - activeProjectId: 当前激活项目 ID
  *   - sessions: 会话列表
  *   - activeSessionId: 当前激活会话 ID
- *   - renamingSessionId: 处于行内重命名状态的会话 ID
- *   - renameBuffer: 重命名输入框当前值
  *
  * Emits:
  *   - select-project: 切换项目
  *   - select-session: 切换会话
  *   - new-session: 在当前/指定项目下新建会话
  *   - delete-session: 删除会话
- *   - rename-start: 开始会话行内重命名
- *   - rename-commit: 提交重命名
- *   - rename-cancel: 取消重命名
- *   - update:renameBuffer: 同步重命名输入值（v-model 风格，避免直接修改 props）
+ *   - edit-session: 打开 session 编辑弹窗（完整信息查看 + 改名/改 workspace）
  */
 const props = defineProps<{
   projects: Project[]
   activeProjectId: string
   sessions: Session[]
   activeSessionId: string | null
-  renamingSessionId: string | null
-  renameBuffer: string
 }>()
 
 const emit = defineEmits<{
@@ -41,10 +34,7 @@ const emit = defineEmits<{
   (e: 'select-session', session: Session): void
   (e: 'new-session-request', projectId?: string): void
   (e: 'delete-session', session: Session): void
-  (e: 'rename-start', session: Session): void
-  (e: 'rename-commit', session: Session): void
-  (e: 'rename-cancel'): void
-  (e: 'update:renameBuffer', value: string): void
+  (e: 'edit-session', session: Session): void
 }>()
 
 /**
@@ -243,18 +233,7 @@ function formatTime(ts: number): string {
             @click="emit('select-session', session)"
           >
             <div class="session-main">
-              <input
-                v-if="renamingSessionId === session.id"
-                :value="renameBuffer"
-                type="text"
-                class="rename-input"
-                @click.stop
-                @input="emit('update:renameBuffer', ($event.target as HTMLInputElement).value)"
-                @keydown.enter="emit('rename-commit', session)"
-                @keydown.escape="emit('rename-cancel')"
-                @blur="emit('rename-commit', session)"
-              />
-              <span v-else class="session-name" :title="session.name">
+              <span class="session-name" :title="session.name">
                 {{ session.name }}
               </span>
             </div>
@@ -272,8 +251,8 @@ function formatTime(ts: number): string {
             <div class="session-actions">
               <button
                 class="session-action edit"
-                title="Rename"
-                @click.stop="emit('rename-start', session)"
+                title="编辑 Session"
+                @click.stop="emit('edit-session', session)"
               >
                 ✎
               </button>
@@ -437,19 +416,6 @@ function formatTime(ts: number): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.rename-input {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-active);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  padding: 2px 6px;
-  outline: none;
 }
 
 .session-meta {

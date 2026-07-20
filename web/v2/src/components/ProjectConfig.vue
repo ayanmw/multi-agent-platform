@@ -10,13 +10,21 @@
      rules 字段说明：
        project 级规则文本，归属于该 project 的所有 session 在发起任务时都会把这段
        文本注入到 system prompt（类似记忆，避免每次重复说明上下文约定）。
-       当前阶段仅在前端 store + 后端 config 中持久化保存；注入逻辑留待后端后续接入。
+       后端：projectRequest.Rules → project.config.rules；发起任务时
+       projectRulesPrompt 读取并拼接为 "## Project Rules" 段落注入 system prompt。
+
+     rules 实时预览（本组件）：
+       编辑表单里的 rules 文本框下方提供"注入预览"，按后端 projectRulesPrompt
+       的相同格式渲染（## Project Rules 标题 + 原文），让用户在保存前就能看到
+       这段规则会被怎样拼进 system prompt，避免格式预期错位。
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useProjectStore, type Project, type ProjectRequest } from '../composables/useProjectStore'
+import { useToast } from '../composables/useToast'
 
 const { projects, activeProjectId, loadProjects, createProject, updateProject, deleteProject, setActiveProject } = useProjectStore()
+const { showInfo } = useToast()
 
 /** 默认的空表单值。rules 暂存在 project.config.rules（后端 config JSON）。 */
 function emptyForm(): ProjectForm {
@@ -60,6 +68,23 @@ function readRules(p: Project): string {
   return ''
 }
 
+/**
+ * Rules 注入预览：按后端 projectRulesPrompt 的相同格式渲染当前表单中的
+ * rules 文本，让用户在保存前就能看到这段规则会被怎样拼进 system prompt。
+ *
+ * 与后端 cmd/server/main.go::projectRulesPrompt 保持格式一致：
+ *   "\n\n## Project Rules\n" + rules + "\n"
+ * 这里只展示主体（标题 + 正文），不渲染首尾的空行占位。
+ */
+const rulesPreview = computed(() => {
+  const text = form.value.rules
+  if (!text.trim()) return ''
+  return `## Project Rules\n${text}`
+})
+
+/** 切换预览面板展开/收起。默认收起，避免在不需要时占用表单空间。 */
+const showRulesPreview = ref(false)
+
 /** 打开新建表单 */
 function openCreate() {
   editingId.value = null
@@ -94,6 +119,11 @@ async function handleSave() {
     formError.value = 'Name is required'
     return
   }
+  const hadRulesBefore = editingId.value
+    ? readRules(projects.value.find(p => p.id === editingId.value) as Project).trim() !== ''
+    : false
+  const hasRulesNow = form.value.rules.trim() !== ''
+  const rulesChanged = hadRulesBefore !== hasRulesNow
   saving.value = true
   try {
     const req: ProjectRequest & { rules?: string } = {
@@ -104,14 +134,26 @@ async function handleSave() {
     if (form.value.rules.trim()) {
       req.rules = form.value.rules
     }
+    let savedId: string
     if (editingId.value) {
       await updateProject(editingId.value, req)
+      savedId = editingId.value
     } else {
       const created = await createProject(req)
+      savedId = created.id
       setActiveProject(created.id)
     }
     showForm.value = false
     editingId.value = null
+    // rules 变更提示：明确告诉用户注入何时生效——保存后新发起的任务才会读到
+    // 新规则，正在运行/已完成的任务不受影响（system prompt 在任务启动时定版）。
+    if (rulesChanged) {
+      if (hasRulesNow) {
+        showInfo(`Project rules 已保存，本 project 下新发起的任务将自动注入`)
+      } else {
+        showInfo(`Project rules 已清空，新发起的任务不再注入旧规则`)
+      }
+    }
   } catch (err) {
     formError.value = err instanceof Error ? err.message : 'Save failed'
   } finally {
@@ -259,7 +301,17 @@ watch(showForm, (open) => { if (!open) formError.value = null })
 
           <!-- Project Rules：归属于此 project 的所有 session 自动注入到 system prompt -->
           <div class="form-group">
-            <label class="form-label">Project Rules</label>
+            <div class="form-label-row">
+              <label class="form-label">Project Rules</label>
+              <button
+                v-if="rulesPreview"
+                type="button"
+                class="preview-toggle"
+                @click="showRulesPreview = !showRulesPreview"
+              >
+                {{ showRulesPreview ? '隐藏注入预览' : '预览注入效果' }}
+              </button>
+            </div>
             <textarea
               v-model="form.rules"
               class="form-input form-textarea form-rules"
@@ -268,8 +320,13 @@ watch(showForm, (open) => { if (!open) formError.value = null })
             ></textarea>
             <span class="form-hint">
               自动注入到本 project 下所有 session 的 system prompt，类似项目级记忆，
-              避免每次对话重复说明上下文约定。
+              避免每次对话重复说明上下文约定。保存后仅对新发起的任务生效。
             </span>
+            <!-- 注入预览：与后端 projectRulesPrompt 格式一致（## Project Rules 标题 + 原文） -->
+            <div v-if="showRulesPreview && rulesPreview" class="rules-preview">
+              <div class="rules-preview-title">system prompt 注入预览</div>
+              <pre class="rules-preview-body">{{ rulesPreview }}</pre>
+            </div>
           </div>
         </div>
 
@@ -620,6 +677,65 @@ watch(showForm, (open) => { if (!open) formError.value = null })
   font-family: var(--font-mono);
   line-height: 1.6;
   min-height: 9rem;
+}
+
+/* ---- Rules 预览 ---- */
+.form-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.312rem;
+}
+
+.preview-toggle {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--accent-running);
+  font-family: var(--font-display);
+  font-size: 0.688rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.preview-toggle:hover {
+  background: rgba(0, 229, 255, 0.08);
+  border-color: var(--accent-running);
+}
+
+.rules-preview {
+  margin-top: 0.5rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.rules-preview-title {
+  padding: 0.312rem 0.625rem;
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.rules-preview-body {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 14rem;
+  overflow-y: auto;
 }
 
 .form-hint {

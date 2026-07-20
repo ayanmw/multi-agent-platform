@@ -227,14 +227,39 @@ export function useSessionStore() {
     if (!trimmed) {
       throw new Error('Session name cannot be empty')
     }
+    return updateSessionFields(id, { name: trimmed })
+  }
+
+  /** 更新 session 的可编辑元数据（name + workspace_dir）。
+   *
+   *  workspaceDir 语义：
+   *    - undefined：不修改 workspace（仅重命名，走旧 API 路径，body 只含 name）
+   *    - 非空字符串：切换到自定义 workspace，后端会确保目录存在
+   *    - 空字符串：清空 workspace，回退到 auto / project working_directory
+   *
+   *  返回更新后的 session，并同步本地缓存。 */
+  async function updateSessionFields(
+    id: string,
+    opts: { name: string; workspaceDir?: string },
+  ): Promise<Session> {
+    const trimmedName = opts.name.trim()
+    if (!trimmedName) {
+      throw new Error('Session name cannot be empty')
+    }
+    // 仅当显式提供 workspaceDir（包括空串）时才带上 workspace_dir 字段，
+    // 让后端区分"未提供（保留旧值）"与"显式清空"。
+    const body: Record<string, unknown> = { name: trimmedName }
+    if (opts.workspaceDir !== undefined) {
+      body.workspace_dir = opts.workspaceDir
+    }
     const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: trimmed }),
+      body: JSON.stringify(body),
     })
     if (!resp.ok) {
       const text = await resp.text()
-      throw new Error(`Failed to rename session: ${resp.status} ${text}`)
+      throw new Error(`Failed to update session: ${resp.status} ${text}`)
     }
     const s = (await resp.json()) as {
       id: string
@@ -285,6 +310,7 @@ export function useSessionStore() {
     updateSession,
     refreshSession,
     renameSession,
+    updateSessionFields,
   }
 }
 
