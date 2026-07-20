@@ -32,7 +32,6 @@ const expanded = ref(false)
 
 function select(id: ThemeId) {
   setTheme(id)
-  expanded.value = false
 }
 
 function previewColors(preview: string): string[] {
@@ -101,16 +100,16 @@ function itemTitle(t: ThemeMeta): string {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 220px;
-  max-width: 280px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
   background: var(--bg-panel);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 6px;
+  padding: 8px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
   z-index: 32;
 }
 
@@ -118,7 +117,7 @@ function itemTitle(t: ThemeMeta): string {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  min-width: 0;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
