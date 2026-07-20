@@ -3,13 +3,14 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useLayout } from '../composables/useLayout'
 
 /**
- * 底部命令输入条（TaskInput 的 v2 升级版）
+ * 底部命令输入条（TaskInput 的 v2 升级版），现在作为中栏底部输入区使用。
  *
  * props:
  *   - disabled: 输入框是否禁用
  *   - isRunning: 任务是否运行中，控制 Pause/Resume/Cancel 与进度条
  *   - isPending: 任务是否在启动Pending
  *   - prefill: 外部注入的预填充文本（例如 `/skill-id `）
+ *   - contextOpen: Context 浮窗是否打开，用于按钮高亮
  *
  * emits:
  *   - send(text, {maxSteps, timeoutSeconds}): 提交输入
@@ -17,6 +18,8 @@ import { useLayout } from '../composables/useLayout'
  *   - toggleOptions: 切换 options drawer 显隐状态（可选）
  *   - update:multiAgent / multiAgentChange: multi-agent 开关变化
  *   - update:prefill: 预填充消费后重置
+ *   - openCases: 打开 Case Library
+ *   - update:contextOpen: Context 浮窗显隐切换
  */
 const props = withDefaults(
   defineProps<{
@@ -24,12 +27,14 @@ const props = withDefaults(
     isRunning?: boolean
     isPending?: boolean
     prefill?: string
+    contextOpen?: boolean
   }>(),
   {
     disabled: false,
     isRunning: false,
     isPending: false,
     prefill: '',
+    contextOpen: false,
   },
 )
 
@@ -44,9 +49,10 @@ const emit = defineEmits<{
   (e: 'update:multiAgent', value: boolean): void
   (e: 'multiAgentChange', value: boolean): void
   (e: 'update:prefill', value: string): void
-  // 打开 Case 窗口。用户希望在发送按钮左侧的 📋 按钮打开 Case Library，
-  // 取代原 Inspector 右上角入口，便于在无 task 的空闲态快速挑 Case 跑。
+  // 打开 Case 窗口。
   (e: 'openCases'): void
+  // 底部输入条右侧 Context 浮窗切换
+  (e: 'update:contextOpen', value: boolean): void
 }>()
 
 const text = ref('')
@@ -125,14 +131,26 @@ watch(
     </div>
 
     <div class="command-main">
-      <button
-        class="options-toggle"
-        :class="{ open: optionsOpen }"
-        title="Options"
-        @click="toggleOptions"
-      >
-        ⚙
-      </button>
+      <div class="command-left">
+        <button
+          class="options-toggle"
+          :class="{ open: optionsOpen }"
+          title="Options"
+          @click="toggleOptions"
+        >
+          ⚙
+        </button>
+
+        <!-- Context 入口：左侧，点击展开 Context Window 浮窗 -->
+        <button
+          class="options-toggle context-btn"
+          :class="{ open: contextOpen }"
+          title="打开 Context Window"
+          @click.stop="emit('update:contextOpen', !contextOpen)"
+        >
+          🪟
+        </button>
+      </div>
 
       <textarea
         ref="textareaRef"
@@ -144,29 +162,30 @@ watch(
         @keydown="handleKeydown"
       />
 
-      <!-- Case 入口：放在发送按钮左侧，点开 Inspector 并直接定位 Cases tab。
-           空闲态没有 task 在跑时最常用，所以不论 running/pending/idle 都常驻可见。 -->
-      <button
-        class="options-toggle cases-btn"
-        title="Open Case Library"
-        @click="emit('openCases')"
-      >
-        📋
-      </button>
-
-      <template v-if="isRunning">
-        <button class="control-btn pause" title="Pause" @click="emit('pause')">⏸</button>
-        <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
-      </template>
-      <template v-else-if="isPending">
-        <button class="control-btn pause" title="Pause" disabled>⏸</button>
-        <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
-      </template>
-      <template v-else>
-        <button class="send-btn" :disabled="!text.trim() || disabled" @click="submit">
-          ➤
+      <div class="command-right">
+        <!-- Case 入口：右侧发送按钮左侧，点开 Inspector 并直接定位 Cases tab。 -->
+        <button
+          class="options-toggle cases-btn"
+          title="Open Case Library"
+          @click="emit('openCases')"
+        >
+          📋
         </button>
-      </template>
+
+        <template v-if="isRunning">
+          <button class="control-btn pause" title="Pause" @click="emit('pause')">⏸</button>
+          <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
+        </template>
+        <template v-else-if="isPending">
+          <button class="control-btn pause" title="Pause" disabled>⏸</button>
+          <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
+        </template>
+        <template v-else>
+          <button class="send-btn" :disabled="!text.trim() || disabled" @click="submit">
+            ➤
+          </button>
+        </template>
+      </div>
     </div>
 
     <Transition name="sheet">
@@ -251,6 +270,14 @@ watch(
   min-height: 42px;
 }
 
+.command-left,
+.command-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .options-toggle {
   width: 32px;
   height: 32px;
@@ -268,7 +295,8 @@ watch(
 }
 
 .options-toggle:hover,
-.options-toggle.open {
+.options-toggle.open,
+.options-toggle.context-btn.open {
   background: var(--bg-hover, #202632);
   color: var(--accent-running, #00e5ff);
   border-color: var(--border-active, rgba(0, 229, 255, 0.4));
@@ -288,7 +316,7 @@ watch(
   resize: none;
   outline: none;
   min-height: 42px;
-  max-height: 160px;
+  max-height: 100%;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 

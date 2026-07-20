@@ -9,15 +9,15 @@ import StatusIndicator from './StatusIndicator.vue'
  *   - statusLabel: 连接状态文字
  *   - taskStatusLabel: 当前任务状态文字（可选）
  *   - showInspectorToggle: 是否显式提供右侧 Inspector 切换按钮（平板端使用）
- *   - inspectorOpen: 当前 Inspector 浮窗是否打开，用于高亮切换按钮
+ *   - manageOpen: 当前 Manage 下拉浮窗是否打开，用于高亮管理按钮
  *
  * emits:
- *   - toggle-inspector: 请求切换 Inspector 浮窗显隐
  *   - toggle-left-dock: 请求切换左侧 Session Dock（平板端/紧凑模式）
  *   - toggle-recent-mods: 请求打开最近修改弹窗
  *   - toggle-model-prices: 请求打开模型价格管理弹窗
  *   - toggle-mcp: 请求打开 MCP Server 管理弹窗
  *   - toggle-keyboard-tips: 请求打开键盘快捷键提示
+ *   - toggle-manage: 请求切换 Manage 下拉浮窗
  */
 withDefaults(
   defineProps<{
@@ -25,14 +25,14 @@ withDefaults(
     statusLabel?: string
     taskStatusLabel?: string
     showInspectorToggle?: boolean
-    inspectorOpen?: boolean
+    manageOpen?: boolean
   }>(),
   {
     status: 'idle',
     statusLabel: '离线',
     taskStatusLabel: '',
     showInspectorToggle: false,
-    inspectorOpen: false,
+    manageOpen: false,
   },
 )
 
@@ -43,6 +43,7 @@ const emit = defineEmits<{
   (e: 'toggle-model-prices'): void
   (e: 'toggle-mcp'): void
   (e: 'toggle-keyboard-tips'): void
+  (e: 'toggle-manage'): void
 }>()
 </script>
 
@@ -67,15 +68,18 @@ const emit = defineEmits<{
       <button class="icon-btn" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
       <button class="icon-btn" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
       <button class="icon-btn" title="Keyboard Tips" @click="emit('toggle-keyboard-tips')">⌨</button>
+
+      <!-- Manage 下拉按钮：位于 TopBar 最右侧，点击弹出管理浮窗 -->
       <button
-        v-if="showInspectorToggle"
-        class="icon-btn inspector-toggle"
-        :class="{ active: inspectorOpen }"
-        title="Toggle Inspector flyout"
-        @click="emit('toggle-inspector')"
+        class="icon-btn manage-toggle"
+        :class="{ active: manageOpen }"
+        title="Manage panels"
+        @click="emit('toggle-manage')"
       >
-        🧭
+        🎛
+        <span class="manage-caret">▼</span>
       </button>
+
       <span class="version-switch">v2</span>
     </div>
   </header>
@@ -162,6 +166,7 @@ const emit = defineEmits<{
   cursor: pointer;
   font-size: 14px;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
+  position: relative;
 }
 
 .icon-btn:hover {
@@ -170,9 +175,20 @@ const emit = defineEmits<{
   border-color: var(--border-default, rgba(255, 255, 255, 0.1));
 }
 
-.inspector-toggle.active {
+.manage-toggle {
+  width: auto;
+  padding: 0 8px;
+  gap: 3px;
+}
+
+.manage-toggle.active {
   color: var(--accent-running);
   border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.manage-caret {
+  font-size: 9px;
+  opacity: 0.7;
 }
 
 .version-switch {
@@ -207,11 +223,6 @@ const emit = defineEmits<{
   }
   .task-badge,
   .version-switch {
-    display: none;
-  }
-  .icon-btn:nth-of-type(1),
-  .icon-btn:nth-of-type(2),
-  .icon-btn:nth-of-type(5) {
     display: none;
   }
 }

@@ -11,7 +11,7 @@ const { activeMobileTab, setActiveMobileTab } = useLayout()
 const tabs = [
   { id: 'stage', label: 'Stage', icon: '▣' },
   { id: 'sessions', label: 'Sessions', icon: '☰' },
-  { id: 'inspector', label: 'Inspector', icon: '◧' },
+  { id: 'files', label: 'Files', icon: '📁' },
 ] as const
 </script>
 

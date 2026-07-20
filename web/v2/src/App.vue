@@ -4,10 +4,12 @@ import TopBar from './components/TopBar.vue'
 import DockPanel from './components/DockPanel.vue'
 import SessionDock from './components/SessionDock.vue'
 import InspectorContent from './components/InspectorContent.vue'
-import InspectorFlyout from './components/InspectorFlyout.vue'
 import SessionFiles from './components/SessionFiles.vue'
 import ColumnResizer from './components/ColumnResizer.vue'
+import RowResizer from './components/RowResizer.vue'
 import CommandBar from './components/CommandBar.vue'
+import ContextFlyout from './components/ContextFlyout.vue'
+import ManageFlyout from './components/ManageFlyout.vue'
 import MobileNav from './components/MobileNav.vue'
 import TimelineTrack from './components/TimelineTrack.vue'
 import Toast from './components/Toast.vue'
@@ -34,15 +36,15 @@ import type { TaskState } from './types/events'
 /**
  * App.vue — v2 Observable Control Room 根布局
  *
- * 布局策略（v2 三栏可调 + 右栏改为文件浏览器 + Inspector 浮窗）：
- * 桌面端（>=1024px）：
- *   TopBar + 左 Dock（Sessions，可调宽/隐藏）+ 主舞台 + 右 Dock（Files，可调宽/隐藏）+ 底部 CommandBar。
- *   Inspector 不再常驻右栏，改为浮在主舞台右上角的迷你卡片（InspectorFlyout），
- *   点击展开成 90vw 大 Dialog 显示 Memory/RAG/Context/Cases/Agents/Project/Skills/Traces 等重面板。
- * 平板端（768–1023px）：左 Dock 可折叠；右 Files 栏可折叠；Inspector 仍走浮窗+Dialog。
- * 移动端（<768px）：单一内容区，通过底部 MobileNav 切换 stage/sessions/inspector。
+ * 布局策略（v2 三栏可调 + 中栏合并 + 底部 Context/Manage 浮窗）：
+ * 桌面端/平板端：
+ *   TopBar + 左 Dock（Sessions）+ 中栏（舞台 + RowResizer + CommandBar）+ 右 Dock（Files）。
+ *   中栏内部上下分区：舞台占 Flex 剩余空间，底部输入区高度可拖拽调节（min 64 / max 40vh）。
+ *   Context（🪟）：直接展示当前任务 context window，默认展开，无 Expand 按钮。
+ *   Manage（🎛）：位于 TopBar 最右侧，下拉菜单，点击"展开管理"打开 90vw 大 Inspector Dialog。
+ * 移动端（<768px）：单一内容区 + 底部 CommandBar + MobileNav，输入区高度固定 64px。
  *
- * 三栏宽度与开合状态均持久化到 localStorage，方便用户自由调整。
+ * 三栏宽度、中栏输入区高度均持久化到 localStorage。
  */
 const {
   isMobile,
@@ -53,9 +55,12 @@ const {
   activeMobileTab,
   leftDockWidth,
   rightFilesWidth,
+  commandAreaHeight,
   setLeftDockWidth,
   setRightFilesWidth,
+  setCommandAreaHeight,
   commitWidths,
+  commitCommandHeight,
   resetWidths,
   toggleLeftDock,
   toggleRightFiles,
@@ -142,14 +147,16 @@ watch(activeSessionId, (sid) => {
   if (sid) setFilesSession(sid)
 }, { immediate: true })
 
-// === Inspector 浮窗 / 大 Dialog ===
-const inspectorFlyoutOpen = ref(true)
+// === Inspector 大 Dialog ===
+// 7/20: Context 已经抽到 CommandBar 右侧浮窗；此处只保留用于"展开管理"的 90vw Dialog。
 const inspectorDialogOpen = ref(false)
 const inspectorInitialTab = ref<string>('sessions')
 
-function toggleInspectorFlyout() {
-  inspectorFlyoutOpen.value = !inspectorFlyoutOpen.value
-}
+// Context 与 Manage 浮窗开关状态
+const contextFlyoutOpen = ref(false)
+const manageFlyoutOpen = ref(false)
+
+// 打开管理大 Dialog，并可选地定位到指定 tab。
 function openInspectorDialog(tab?: string) {
   if (tab) inspectorInitialTab.value = tab
   inspectorDialogOpen.value = true
@@ -344,6 +351,52 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+})
+
+// === 全局滚轮：在标题/空白处滚动时驱动主舞台滚动，
+// 左右 Dock 与底部输入区保持自身滚动独立。
+const SCROLLABLE_SELECTORS = ['.dock-body', '.command-area', '.context-flyout-body', '.context-flyout']
+function findScrollableAncestor(el: EventTarget | null): HTMLElement | null {
+  let node: Node | null = el as Node
+  while (node && node instanceof HTMLElement) {
+    if (node === mainRef.value) return null
+    if (SCROLLABLE_SELECTORS.some(s => node && (node as Element).matches?.(s))) {
+      return node as HTMLElement
+    }
+    const style = window.getComputedStyle(node as HTMLElement)
+    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+      return node as HTMLElement
+    }
+    node = node.parentNode
+  }
+  return null
+}
+function handleGlobalWheel(e: WheelEvent) {
+  if (e.deltaY === 0) return
+  const target = e.target as HTMLElement
+  if (target.closest('.inspector-dialog-overlay, .modal, .dialog, .manage-flyout, .context-flyout')) return
+
+  const scrollable = findScrollableAncestor(target)
+  if (scrollable) {
+    const canScrollDown = scrollable.scrollHeight > scrollable.clientHeight
+      && scrollable.scrollTop + scrollable.clientHeight < scrollable.scrollHeight - 2
+    const canScrollUp = scrollable.scrollTop > 2
+    if ((e.deltaY > 0 && canScrollDown) || (e.deltaY < 0 && canScrollUp)) {
+      // 让子滚动区域自由处理
+      return
+    }
+  }
+
+  const main = mainRef.value
+  if (!main) return
+  e.preventDefault()
+  main.scrollBy({ top: e.deltaY, behavior: 'auto' })
+}
+onMounted(() => {
+  window.addEventListener('wheel', handleGlobalWheel, { passive: false })
+})
+onUnmounted(() => {
+  window.removeEventListener('wheel', handleGlobalWheel)
 })
 
 // === 发送消息 ===
@@ -640,7 +693,7 @@ watch(
   },
 )
 
-const showInspectorToggle = computed(() => !isMobile.value)
+const showInspectorToggle = computed(() => false)
 </script>
 
 <template>
@@ -650,13 +703,13 @@ const showInspectorToggle = computed(() => !isMobile.value)
       :status-label="statusLabel"
       :task-status-label="taskStatusLabel"
       :show-inspector-toggle="showInspectorToggle"
-      :inspector-open="inspectorFlyoutOpen"
-      @toggle-inspector="toggleInspectorFlyout"
+      :manage-open="manageFlyoutOpen"
       @toggle-left-dock="toggleLeftDock"
       @toggle-recent-mods="showRecentMods"
       @toggle-model-prices="modelPricesVisible = true"
       @toggle-mcp="mcpServerDialogVisible = true"
       @toggle-keyboard-tips="showTips = true"
+      @toggle-manage="manageFlyoutOpen = !manageFlyoutOpen"
     />
 
     <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽 -->
@@ -688,31 +741,57 @@ const showInspectorToggle = computed(() => !isMobile.value)
         @resize-end="commitWidths"
       />
 
-      <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
-        <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
-          Auto-scroll paused — click to resume
-        </div>
-
-        <div v-if="sessionTurns.length === 0" class="placeholder-panel">
-          <div class="placeholder-title">Ready to start</div>
-          <div class="placeholder-hint">
-            Select or create a session from the left dock, then type a task below.
+      <section class="center-column" :style="{ '--cmd-h': commandAreaHeight + 'px' }">
+        <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
+          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
+            Auto-scroll paused — click to resume
           </div>
-        </div>
 
-        <TimelineTrack
-          v-for="(turn, idx) in sessionTurns"
-          :key="turn.task.id"
-          :task="turn.task"
-          :turn-index="idx + 1"
-          :user-input="turn.userInput"
-          :expand-all="true"
-          :show-agent-controls="isAgentRunning"
-          @pause-agent="handlePauseAgent"
-          @resume-agent="handleResumeAgent"
-          @cancel-agent="handleCancelAgent"
+          <div v-if="sessionTurns.length === 0" class="placeholder-panel">
+            <div class="placeholder-title">Ready to start</div>
+            <div class="placeholder-hint">
+              Select or create a session from the left dock, then type a task below.
+            </div>
+          </div>
+
+          <TimelineTrack
+            v-for="(turn, idx) in sessionTurns"
+            :key="turn.task.id"
+            :task="turn.task"
+            :turn-index="idx + 1"
+            :user-input="turn.userInput"
+            :expand-all="true"
+            :show-agent-controls="isAgentRunning"
+            @pause-agent="handlePauseAgent"
+            @resume-agent="handleResumeAgent"
+            @cancel-agent="handleCancelAgent"
+          />
+        </main>
+
+        <RowResizer
+          :height="commandAreaHeight"
+          @resize="setCommandAreaHeight"
+          @resize-end="commitCommandHeight"
         />
-      </main>
+
+        <div class="command-area">
+          <CommandBar
+            :disabled="isAgentRunning"
+            :is-running="isAgentRunning"
+            :is-pending="isTaskPending"
+            :prefill="prefilledCommand"
+            v-model:context-open="contextFlyoutOpen"
+            @send="handleSend"
+            @pause="pauseTask"
+            @resume="resumeTask"
+            @cancel="cancelTask"
+            @update:prefill="prefilledCommand = ''"
+            @update:multiAgent="onMultiAgentChange"
+            @multiAgentChange="onMultiAgentChange"
+            @open-cases="openInspectorDialog('cases')"
+          />
+        </div>
+      </section>
 
       <ColumnResizer
         v-if="rightFilesOpen"
@@ -725,21 +804,10 @@ const showInspectorToggle = computed(() => !isMobile.value)
       <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles" @reopen="toggleRightFiles">
         <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
-
-      <!-- Inspector 浮窗：浮在主舞台右上角，点击展开成大 Dialog -->
-      <InspectorFlyout
-        v-if="inspectorFlyoutOpen"
-        :task="currentTask"
-        :session-total-tokens="sessionTotalTokens"
-        :session-total-duration="sessionTotalDuration"
-        :ws-status="wsStatus"
-        :agents="agents"
-        @open-dialog="openInspectorDialog"
-      />
     </div>
 
     <!-- 平板双栏布局 -->
-    <div v-else-if="isTablet" class="layout-tablet">
+    <div v-else-if="isTablet" class="layout-tablet" :style="{ '--cmd-h': commandAreaHeight + 'px' }">
       <DockPanel
         v-if="leftDockOpen"
         side="left"
@@ -765,25 +833,55 @@ const showInspectorToggle = computed(() => !isMobile.value)
         />
       </DockPanel>
 
-      <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
-        <div v-if="sessionTurns.length === 0" class="placeholder-panel">
-          <div class="placeholder-title">Ready to start</div>
-          <div class="placeholder-hint">Create a session and type a task below.</div>
-        </div>
+      <section class="center-column center-column--tablet">
+        <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
+          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
+            Auto-scroll paused — click to resume
+          </div>
 
-        <TimelineTrack
-          v-for="(turn, idx) in sessionTurns"
-          :key="turn.task.id"
-          :task="turn.task"
-          :turn-index="idx + 1"
-          :user-input="turn.userInput"
-          :expand-all="true"
-          :show-agent-controls="isAgentRunning"
-          @pause-agent="handlePauseAgent"
-          @resume-agent="handleResumeAgent"
-          @cancel-agent="handleCancelAgent"
+          <div v-if="sessionTurns.length === 0" class="placeholder-panel">
+            <div class="placeholder-title">Ready to start</div>
+            <div class="placeholder-hint">Create a session and type a task below.</div>
+          </div>
+
+          <TimelineTrack
+            v-for="(turn, idx) in sessionTurns"
+            :key="turn.task.id"
+            :task="turn.task"
+            :turn-index="idx + 1"
+            :user-input="turn.userInput"
+            :expand-all="true"
+            :show-agent-controls="isAgentRunning"
+            @pause-agent="handlePauseAgent"
+            @resume-agent="handleResumeAgent"
+            @cancel-agent="handleCancelAgent"
+          />
+        </main>
+
+        <RowResizer
+          :height="commandAreaHeight"
+          @resize="setCommandAreaHeight"
+          @resize-end="commitCommandHeight"
         />
-      </main>
+
+        <div class="command-area">
+          <CommandBar
+            :disabled="isAgentRunning"
+            :is-running="isAgentRunning"
+            :is-pending="isTaskPending"
+            :prefill="prefilledCommand"
+            v-model:context-open="contextFlyoutOpen"
+            @send="handleSend"
+            @pause="pauseTask"
+            @resume="resumeTask"
+            @cancel="cancelTask"
+            @update:prefill="prefilledCommand = ''"
+            @update:multiAgent="onMultiAgentChange"
+            @multiAgentChange="onMultiAgentChange"
+            @open-cases="openInspectorDialog('cases')"
+          />
+        </div>
+      </section>
 
       <DockPanel
         v-if="rightFilesOpen"
@@ -794,16 +892,6 @@ const showInspectorToggle = computed(() => !isMobile.value)
       >
         <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
-
-      <InspectorFlyout
-        v-if="inspectorFlyoutOpen"
-        :task="currentTask"
-        :session-total-tokens="sessionTotalTokens"
-        :session-total-duration="sessionTotalDuration"
-        :ws-status="wsStatus"
-        :agents="agents"
-        @open-dialog="openInspectorDialog"
-      />
     </div>
 
     <!-- 移动端单视图 -->
@@ -847,19 +935,22 @@ const showInspectorToggle = computed(() => !isMobile.value)
           />
         </DockPanel>
       </div>
-      <div v-else-if="activeMobileTab === 'inspector'" class="mobile-tab-view">
+      <div v-else-if="activeMobileTab === 'files'" class="mobile-tab-view">
         <DockPanel side="right" title="Files" :open="true" @close="activeMobileTab = 'stage'">
           <SessionFiles :session-id="activeSessionId || ''" />
         </DockPanel>
       </div>
     </div>
 
+    <!-- 移动端底部 CommandBar 单独放置，桌面/平板已由中栏承载 -->
     <CommandBar
-      v-if="activeMobileTab === 'stage' || !isMobile"
+      v-if="isMobile && activeMobileTab === 'stage'"
+      class="command-bar-mobile"
       :disabled="isAgentRunning"
       :is-running="isAgentRunning"
       :is-pending="isTaskPending"
       :prefill="prefilledCommand"
+      v-model:context-open="contextFlyoutOpen"
       @send="handleSend"
       @pause="pauseTask"
       @resume="resumeTask"
@@ -870,9 +961,17 @@ const showInspectorToggle = computed(() => !isMobile.value)
       @open-cases="openInspectorDialog('cases')"
     />
 
-    <MobileNav v-if="isMobile" />
+    <ContextFlyout
+      :active-task-id="activeTaskId ?? ''"
+      :session-total-tokens="sessionTotalTokens"
+      :session-total-duration="sessionTotalDuration"
+      :ws-status="wsStatus"
+      :agents="agents"
+      v-model:open="contextFlyoutOpen"
+    />
+    <ManageFlyout v-model:open="manageFlyoutOpen" @expand="openInspectorDialog" />
 
-    <!-- Inspector 大 Dialog（90vw）：承载 Memory/RAG/Context/Cases/Agents/Project/Skills/Traces 重面板 -->
+    <!-- Inspector 大 Dialog（90vw）：承载管理面板 -->
     <Teleport to="body">
       <Transition name="inspector-dialog">
         <div v-if="inspectorDialogOpen" class="inspector-dialog-overlay" @click.self="closeInspectorDialog">
@@ -965,13 +1064,44 @@ const showInspectorToggle = computed(() => !isMobile.value)
   margin-bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px));
 }
 
+.center-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - var(--topbar-height, 48px));
+  height: calc(100vh - var(--topbar-height, 48px));
+}
+
+.center-column--tablet {
+  /* 平板端 width 由 layout-tablet 的 flex 分配，这里不需要额外限制 */
+}
+
 .main-stage {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-md);
   background: var(--bg-canvas, #0b0d10);
   position: relative;
+}
+
+.command-area {
+  flex-shrink: 0;
+  height: var(--cmd-h, 64px);
+  min-height: var(--cmd-h, 64px);
+  overflow: hidden;
+  background: var(--bg-panel, #11141a);
+  border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+}
+
+.command-area :deep(.command-bar) {
+  position: static;
+  inset: auto;
+  border-top: none;
+  height: 100%;
+  padding-bottom: 0;
 }
 
 .mobile-tab-view {
@@ -1133,10 +1263,21 @@ const showInspectorToggle = computed(() => !isMobile.value)
   }
 }
 
+@media (max-width: 1023px) {
+  .command-area {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--cmd-h, 64px);
+    z-index: 35;
+  }
+}
+
 @media (min-width: 768px) {
   .layout-tablet,
   .layout-desktop {
-    margin-bottom: var(--commandbar-height, 64px);
+    margin-bottom: 0;
   }
 }
 </style>
