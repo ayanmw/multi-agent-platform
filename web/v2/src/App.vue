@@ -101,7 +101,7 @@ const {
   renameSession,
 } = useSessionStore()
 
-const { agents, loadAgents } = useAgentStore()
+const { agents, availableTools, loadAgents } = useAgentStore()
 const { projects, activeProjectId, loadProjects, setActiveProject } = useProjectStore()
 const { toasts, showError, showInfo, dismissToast } = useToast()
 const { loadSkills, enableSkill } = useSkills()
@@ -155,6 +155,28 @@ const inspectorInitialTab = ref<string>('sessions')
 // Context 与 Manage 浮窗开关状态
 const contextFlyoutOpen = ref(false)
 const manageFlyoutOpen = ref(false)
+const commandBarRef = ref<InstanceType<typeof CommandBar> | null>(null)
+const contextAnchorRect = ref<DOMRect | null>(null)
+
+// 当 Context 浮窗打开时，从 CommandBar 获取按钮位置。
+watch(contextFlyoutOpen, (open) => {
+  if (open) {
+    nextTick(() => {
+      contextAnchorRect.value = commandBarRef.value?.getContextAnchor?.() ?? null
+    })
+  }
+})
+
+function updateContextAnchor() {
+  if (contextFlyoutOpen.value) {
+    contextAnchorRect.value = commandBarRef.value?.getContextAnchor?.() ?? null
+  }
+}
+
+// 窗口大小变化时，若 Context 浮窗打开则重新计算锚点。
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', updateContextAnchor)
+}
 
 // 打开管理大 Dialog，并可选地定位到指定 tab。
 function openInspectorDialog(tab?: string) {
@@ -191,6 +213,21 @@ const sessionTotalDuration = computed(() => {
     .filter(t => t.sessionId === sid)
     .reduce((sum, t) => sum + (t.durationMs || 0), 0)
 })
+
+/** 供 CommandBar / OptionsFlyout 使用的 agent 精简列表 */
+const agentOptions = computed(() =>
+  agents.value.map(a => ({
+    id: a.id,
+    name: a.name,
+    model: a.model || '',
+    tools: a.tools || [],
+  })),
+)
+
+/** 供 OptionsFlyout 使用的可用工具列表 */
+const availableToolOptions = computed(() =>
+  availableTools.value.map(t => ({ name: t.name, description: t.description })),
+)
 
 /** 当前会话按时间排序的 turn 列表，用于主舞台 TimelineTrack */
 const sessionTurns = computed(() => {
@@ -776,11 +813,15 @@ const showInspectorToggle = computed(() => false)
 
         <div class="command-area">
           <CommandBar
+            ref="commandBarRef"
             :disabled="isAgentRunning"
             :is-running="isAgentRunning"
             :is-pending="isTaskPending"
             :prefill="prefilledCommand"
             v-model:context-open="contextFlyoutOpen"
+            :context-anchor-rect="contextAnchorRect"
+            :agents="agentOptions"
+            :available-tools="availableToolOptions"
             @send="handleSend"
             @pause="pauseTask"
             @resume="resumeTask"
@@ -789,6 +830,7 @@ const showInspectorToggle = computed(() => false)
             @update:multiAgent="onMultiAgentChange"
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
+            @open-agents="openInspectorDialog('agents')"
           />
         </div>
       </section>
@@ -866,11 +908,15 @@ const showInspectorToggle = computed(() => false)
 
         <div class="command-area">
           <CommandBar
+            ref="commandBarRef"
             :disabled="isAgentRunning"
             :is-running="isAgentRunning"
             :is-pending="isTaskPending"
             :prefill="prefilledCommand"
             v-model:context-open="contextFlyoutOpen"
+            :context-anchor-rect="contextAnchorRect"
+            :agents="agentOptions"
+            :available-tools="availableToolOptions"
             @send="handleSend"
             @pause="pauseTask"
             @resume="resumeTask"
@@ -879,6 +925,7 @@ const showInspectorToggle = computed(() => false)
             @update:multiAgent="onMultiAgentChange"
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
+            @open-agents="openInspectorDialog('agents')"
           />
         </div>
       </section>
@@ -945,12 +992,16 @@ const showInspectorToggle = computed(() => false)
     <!-- 移动端底部 CommandBar 单独放置，桌面/平板已由中栏承载 -->
     <CommandBar
       v-if="isMobile && activeMobileTab === 'stage'"
+      ref="commandBarRef"
       class="command-bar-mobile"
       :disabled="isAgentRunning"
       :is-running="isAgentRunning"
       :is-pending="isTaskPending"
       :prefill="prefilledCommand"
       v-model:context-open="contextFlyoutOpen"
+      :context-anchor-rect="contextAnchorRect"
+      :agents="agentOptions"
+      :available-tools="availableToolOptions"
       @send="handleSend"
       @pause="pauseTask"
       @resume="resumeTask"
@@ -959,6 +1010,7 @@ const showInspectorToggle = computed(() => false)
       @update:multiAgent="onMultiAgentChange"
       @multiAgentChange="onMultiAgentChange"
       @open-cases="openInspectorDialog('cases')"
+      @open-agents="openInspectorDialog('agents')"
     />
 
     <ContextFlyout
@@ -967,6 +1019,7 @@ const showInspectorToggle = computed(() => false)
       :session-total-duration="sessionTotalDuration"
       :ws-status="wsStatus"
       :agents="agents"
+      :anchor-rect="contextAnchorRect"
       v-model:open="contextFlyoutOpen"
     />
     <ManageFlyout v-model:open="manageFlyoutOpen" @expand="openInspectorDialog" />
@@ -1102,6 +1155,20 @@ const showInspectorToggle = computed(() => false)
   border-top: none;
   height: 100%;
   padding-bottom: 0;
+}
+
+.command-area :deep(.command-main) {
+  align-items: flex-start;
+  height: 100%;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  box-sizing: border-box;
+}
+
+.command-area :deep(.command-input) {
+  min-height: 0;
+  max-height: 100%;
+  align-self: stretch;
 }
 
 .mobile-tab-view {

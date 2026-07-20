@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import ContextWindowPanel from './ContextWindowPanel.vue'
 import { useTaskStore } from '@/composables/useTaskStore'
 import type { TaskState } from '@/types/events'
@@ -20,6 +20,7 @@ import type { AgentRecord } from '@/composables/useAgentStore'
  *   - sessionTotalDuration: 当前 session 总耗时（毫秒）
  *   - wsStatus: WebSocket 连接状态
  *   - agents: 当前已加载 agent 列表
+ *   - anchorRect: 触发按钮的 DOMRect，用于定位浮窗
  *   - open: 是否显示浮窗
  *
  * Emits:
@@ -31,6 +32,7 @@ const props = defineProps<{
   sessionTotalDuration?: number
   wsStatus?: 'connected' | 'connecting' | 'disconnected'
   agents?: AgentRecord[]
+  anchorRect?: DOMRect | null
   open: boolean
 }>()
 
@@ -66,6 +68,33 @@ watch(
 )
 
 const panelRef = ref<HTMLElement | null>(null)
+const flyoutStyle = ref<Record<string, string>>({})
+
+function computePosition() {
+  const rect = props.anchorRect
+  const el = panelRef.value
+  if (!rect || !el) return
+  const width = Math.min(420, window.innerWidth - 24)
+  let left = rect.left
+  if (left + width > window.innerWidth - 12) {
+    left = window.innerWidth - width - 12
+  }
+  const bottom = window.innerHeight - rect.top + 8
+  const maxHeight = Math.floor(window.innerHeight * 0.72)
+  flyoutStyle.value = {
+    left: `${left}px`,
+    bottom: `${bottom}px`,
+    width: `${width}px`,
+    maxHeight: `${maxHeight}px`,
+  }
+}
+
+watch(() => props.open, (open) => {
+  if (open) nextTick(computePosition)
+})
+watch(() => props.anchorRect, () => {
+  if (props.open) nextTick(computePosition)
+})
 
 function close() {
   emit('update:open', false)
@@ -140,6 +169,7 @@ onUnmounted(() => {
       class="context-flyout"
       role="dialog"
       aria-label="Context Window"
+      :style="flyoutStyle"
     >
       <div class="context-flyout-header">
         <div class="context-flyout-title">
@@ -190,11 +220,7 @@ onUnmounted(() => {
 <style scoped>
 .context-flyout {
   position: fixed;
-  right: 92px;
-  bottom: calc(var(--commandbar-height, 64px) + 10px);
-  width: 420px;
-  max-width: calc(100vw - 24px);
-  max-height: 72vh;
+  /* 动态由 JS 计算 left / bottom */
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated, #181c24);
@@ -333,10 +359,10 @@ onUnmounted(() => {
 
 @media (max-width: 767px) {
   .context-flyout {
-    right: 12px;
-    left: 12px;
-    width: auto;
-    bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px) + 10px);
+    right: 12px !important;
+    left: 12px !important;
+    width: auto !important;
+    bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px) + 10px) !important;
   }
 
   .context-flyout-title span:last-child {

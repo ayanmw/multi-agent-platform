@@ -656,24 +656,38 @@ function formatDate(iso: string): string {
 }
 
 .btn-action {
-  background:transparent;
-  border:1px solid transparent;
-  font-size:0.875rem;
-  padding:0.25rem 0.5rem;
-  border-radius: var(--radius-sm);
-  cursor:pointer;
-  transition:background 0.15s, border-color 0.15s;
-  margin-right:0.25rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  font-size: 0.875rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  margin-right: 0.375rem;
+  color: var(--text-secondary);
 }
 
 .btn-edit:hover {
-  background:var(--bg-elevated);
-  border-color:var(--border-default);
+  background: var(--bg-hover);
+  border-color: var(--accent-running);
+  color: var(--accent-running);
 }
 
-.btn-delete:hover {
-  background:rgba(231, 76, 60, 0.18);
-  border-color:rgba(255, 107, 107, 0.32);
+.btn-delete {
+  color: var(--text-secondary);
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.18);
+  border-color: rgba(255, 107, 107, 0.55);
+  color: var(--accent-danger);
+}
+
+.btn-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: transparent;
+  border-color: transparent;
 }
 
 /* ---- Modal overlay ---- */

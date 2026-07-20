@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useLayout } from '../composables/useLayout'
+import OptionsFlyout from './OptionsFlyout.vue'
 
 /**
  * 底部命令输入条（TaskInput 的 v2 升级版），现在作为中栏底部输入区使用。
@@ -11,15 +12,18 @@ import { useLayout } from '../composables/useLayout'
  *   - isPending: 任务是否在启动Pending
  *   - prefill: 外部注入的预填充文本（例如 `/skill-id `）
  *   - contextOpen: Context 浮窗是否打开，用于按钮高亮
+ *   - contextAnchorRect: Context 按钮的 DOMRect，用于浮窗定位
+ *   - agents: 可选 agent 列表（用于 Options 浮窗）
+ *   - availableTools: 可选工具列表（用于 Options 浮窗）
  *
  * emits:
  *   - send(text, {maxSteps, timeoutSeconds}): 提交输入
  *   - pause / resume / cancel: 运行控制
- *   - toggleOptions: 切换 options drawer 显隐状态（可选）
  *   - update:multiAgent / multiAgentChange: multi-agent 开关变化
  *   - update:prefill: 预填充消费后重置
  *   - openCases: 打开 Case Library
  *   - update:contextOpen: Context 浮窗显隐切换
+ *   - openAgents: 打开 Agents 管理面板
  */
 const props = withDefaults(
   defineProps<{
@@ -28,6 +32,9 @@ const props = withDefaults(
     isPending?: boolean
     prefill?: string
     contextOpen?: boolean
+    contextAnchorRect?: DOMRect | null
+    agents?: { id: string; name: string; model: string; tools: string[] }[]
+    availableTools?: { name: string; description: string }[]
   }>(),
   {
     disabled: false,
@@ -35,6 +42,9 @@ const props = withDefaults(
     isPending: false,
     prefill: '',
     contextOpen: false,
+    contextAnchorRect: null,
+    agents: () => [],
+    availableTools: () => [],
   },
 )
 
@@ -45,14 +55,15 @@ const emit = defineEmits<{
   (e: 'pause'): void
   (e: 'resume'): void
   (e: 'cancel'): void
-  (e: 'toggleOptions', open: boolean): void
   (e: 'update:multiAgent', value: boolean): void
   (e: 'multiAgentChange', value: boolean): void
   (e: 'update:prefill', value: string): void
   // 打开 Case 窗口。
   (e: 'openCases'): void
-  // 底部输入条右侧 Context 浮窗切换
+  // Context 浮窗切换
   (e: 'update:contextOpen', value: boolean): void
+  // 请求打开 Agents 管理面板
+  (e: 'openAgents'): void
 }>()
 
 const text = ref('')
@@ -61,6 +72,15 @@ const maxSteps = ref(30)
 const timeoutSeconds = ref(0)
 const multiAgent = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const optionsBtnRef = ref<HTMLElement | null>(null)
+const contextBtnRef = ref<HTMLElement | null>(null)
+const optionsAnchorRect = ref<DOMRect | null>(null)
+const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 0
+
+// 父组件可通过 ref 调用 getContextAnchor 获取 Context 按钮位置。
+defineExpose({
+  getContextAnchor: () => contextBtnRef.value?.getBoundingClientRect() ?? null,
+})
 
 // 快速 options 预设
 const stepPresets = [10, 30, 50, 100]
@@ -74,8 +94,30 @@ const progress = computed(() => {
 
 function toggleOptions() {
   optionsOpen.value = !optionsOpen.value
-  emit('toggleOptions', optionsOpen.value)
+  if (optionsOpen.value) {
+    nextTick(() => {
+      optionsAnchorRect.value = optionsBtnRef.value?.getBoundingClientRect() || null
+    })
+  }
 }
+
+function adjustTextareaHeight() {
+  const el = textareaRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  const lineHeight = 20 // 14px * 1.4 + 少量
+  const minRows = 1
+  const maxRows = 12
+  const minHeight = lineHeight * minRows + 22 // padding + border
+  const maxHeight = lineHeight * maxRows + 22
+  const desired = Math.min(Math.max(el.scrollHeight, minHeight), maxHeight)
+  el.style.height = `${desired}px`
+}
+
+watch(text, () => {
+  // input 事件已负责调整，这里保留兜底
+  nextTick(adjustTextareaHeight)
+})
 
 function submit() {
   const value = text.value.trim()
@@ -85,7 +127,7 @@ function submit() {
     timeoutSeconds: timeoutSeconds.value,
   })
   text.value = ''
-  // 提交后自动折叠 options，避免遮挡内容
+  nextTick(adjustTextareaHeight)
   optionsOpen.value = false
   nextTick(() => textareaRef.value?.focus())
 }
@@ -118,7 +160,10 @@ watch(
     if (value && value !== text.value) {
       text.value = value
       emit('update:prefill', '')
-      nextTick(() => textareaRef.value?.focus())
+      nextTick(() => {
+        adjustTextareaHeight()
+        textareaRef.value?.focus()
+      })
     }
   },
 )
@@ -133,6 +178,7 @@ watch(
     <div class="command-main">
       <div class="command-left">
         <button
+          ref="optionsBtnRef"
           class="options-toggle"
           :class="{ open: optionsOpen }"
           title="Options"
@@ -143,6 +189,7 @@ watch(
 
         <!-- Context 入口：左侧，点击展开 Context Window 浮窗 -->
         <button
+          ref="contextBtnRef"
           class="options-toggle context-btn"
           :class="{ open: contextOpen }"
           title="打开 Context Window"
@@ -159,6 +206,7 @@ watch(
         :disabled="disabled"
         placeholder="Type a task... (Ctrl+Enter to send)"
         rows="1"
+        @input="adjustTextareaHeight"
         @keydown="handleKeydown"
       />
 
@@ -188,48 +236,20 @@ watch(
       </div>
     </div>
 
-    <Transition name="sheet">
-      <div
-        v-if="optionsOpen"
-        class="command-options"
-        :class="{ 'command-options--sheet': isMobile }"
-        @click.stop
-      >
-        <div v-if="isMobile" class="sheet-handle" @click="toggleOptions" />
-        <div class="option-group">
-          <span class="option-label">Max steps</span>
-          <div class="option-pills">
-            <button
-              v-for="n in stepPresets"
-              :key="n"
-              class="option-pill"
-              :class="{ active: maxSteps === n }"
-              @click="maxSteps = n"
-            >
-              {{ n }}
-            </button>
-          </div>
-        </div>
-        <div class="option-group">
-          <span class="option-label">Timeout</span>
-          <div class="option-pills">
-            <button
-              v-for="n in timeoutPresets"
-              :key="n"
-              class="option-pill"
-              :class="{ active: timeoutSeconds === n }"
-              @click="timeoutSeconds = n"
-            >
-              {{ n === 0 ? '∞' : n + 's' }}
-            </button>
-          </div>
-        </div>
-        <label class="option-toggle">
-          <input v-model="multiAgent" type="checkbox" />
-          <span>Multi-Agent</span>
-        </label>
-      </div>
-    </Transition>
+    <OptionsFlyout
+      :open="optionsOpen"
+      :max-steps="maxSteps"
+      :timeout-seconds="timeoutSeconds"
+      :multi-agent="multiAgent"
+      :agents="agents"
+      :available-tools="availableTools"
+      :anchor-rect="optionsAnchorRect"
+      @update:open="optionsOpen = $event"
+      @update:maxSteps="maxSteps = $event"
+      @update:timeoutSeconds="timeoutSeconds = $event"
+      @update:multiAgent="multiAgent = $event"
+      @open-agents="emit('openAgents')"
+    />
   </div>
 </template>
 
@@ -268,6 +288,7 @@ watch(
   align-items: center;
   gap: 8px;
   min-height: 42px;
+  height: 100%;
 }
 
 .command-left,
@@ -316,8 +337,10 @@ watch(
   resize: none;
   outline: none;
   min-height: 42px;
+  height: auto;
   max-height: 100%;
   transition: border-color 0.2s, box-shadow 0.2s;
+  overflow-y: auto;
 }
 
 .command-input:focus {
@@ -379,69 +402,6 @@ watch(
   color: var(--accent-danger, #ff4d4d);
 }
 
-.command-options {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-items: center;
-}
-
-.option-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.option-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted, #5c6675);
-  font-family: var(--font-display, 'Chakra Petch', sans-serif);
-}
-
-.option-pills {
-  display: flex;
-  gap: 4px;
-}
-
-.option-pill {
-  background: var(--bg-elevated, #181c24);
-  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-  color: var(--text-secondary, #9aa3b2);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: var(--font-mono, monospace);
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.option-pill:hover,
-.option-pill.active {
-  background: rgba(0, 229, 255, 0.12);
-  color: var(--accent-running, #00e5ff);
-  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
-}
-
-.option-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary, #9aa3b2);
-  cursor: pointer;
-  user-select: none;
-  margin-left: auto;
-}
-
-.option-toggle input[type='checkbox'] {
-  accent-color: var(--accent-running, #00e5ff);
-}
-
 @media (max-width: 767px) {
   .command-bar {
     bottom: var(--mobile-nav-height, 56px);
@@ -455,67 +415,13 @@ watch(
     min-height: 40px;
   }
 
-  .command-options--sheet {
-    position: fixed;
-    inset: auto 0 var(--mobile-nav-height, 56px) 0;
-    z-index: 45;
-    margin-top: 0;
-    padding: var(--space-md);
-    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
-    background: var(--bg-elevated, #181c24);
-    border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-    border-bottom: none;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.5);
-    flex-direction: column;
-    align-items: stretch;
-    gap: 14px;
-  }
-
-  .sheet-handle {
-    width: 36px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border-default, rgba(255, 255, 255, 0.1));
-    margin: 0 auto;
-    cursor: pointer;
-  }
-
-  .command-options--sheet .option-group {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .command-options--sheet .option-pills {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
-  .command-options--sheet .option-toggle {
-    margin-left: 0;
-  }
-
   .command-input {
     min-height: 48px;
-    min-width: 0;
     font-size: 16px; /* prevent iOS zoom */
   }
 
   .command-input::-webkit-scrollbar {
     display: none;
   }
-}
-
-.sheet-enter-active,
-.sheet-leave-active {
-  transition: transform 240ms ease, opacity 200ms ease;
-}
-
-.sheet-enter-from,
-.sheet-leave-to {
-  transform: translateY(100%);
-  opacity: 0;
 }
 </style>
