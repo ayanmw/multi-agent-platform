@@ -39,7 +39,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select-project', projectId: string): void
   (e: 'select-session', session: Session): void
-  (e: 'new-session', projectId?: string): void
+  (e: 'new-session-request', projectId?: string): void
   (e: 'delete-session', session: Session): void
   (e: 'rename-start', session: Session): void
   (e: 'rename-commit', session: Session): void
@@ -67,11 +67,12 @@ const projectGroups = computed(() => {
     const list = sessionMap.get(p.id) || []
     // 按 createdAt 降序：新建在最上。顺序不随点击/更新变化，避免列表反复跳动。
     list.sort((a, b) => b.createdAt - a.createdAt)
-    const isActive = p.id === props.activeProjectId
     groups.push({
       project: p,
       sessions: list,
-      isCollapsed: collapsedProjectIds.value.has(p.id) && !isActive,
+      // 折叠状态直接由 collapsedProjectIds 决定，active project 也允许折叠。
+      // 切换到某 project 时由下方 watch 自动展开它，但手动折叠当前 active 不应被阻止。
+      isCollapsed: collapsedProjectIds.value.has(p.id),
     })
   }
 
@@ -95,6 +96,39 @@ function toggleCollapse(projectId: string) {
   if (next.has(projectId)) next.delete(projectId)
   else next.add(projectId)
   collapsedProjectIds.value = next
+}
+
+/**
+ * 计算某 project 的 session 数量。
+ * 优先使用 project.session_count（来自后端 summary，统计该 project 下全部 session），
+ * 仅在没有该字段时回退到当前已加载 sessions 的长度。
+ * 这样在 sessions 列表只包含 active project 会话时，其它 project 仍能显示真实数量。
+ */
+function sessionCount(group: { project: Project; sessions: Session[] }): number {
+  const fromProject = group.project.session_count
+  if (typeof fromProject === 'number' && fromProject > 0) {
+    return fromProject
+  }
+  // 当 group.sessions 非空（当前 active project），优先用实际加载的数据，
+  // 因为它比 summary 计数更新（例如刚新建了一个 session）。
+  if (group.sessions.length > 0) {
+    return group.sessions.length
+  }
+  return fromProject ?? 0
+}
+
+/**
+ * 点击项目 header 的行为：
+ * - 若点击的是当前未激活项目，切换项目（useSessionStore 会加载该项目 sessions）。
+ * - 若点击的是当前已激活项目，则切换该分组的折叠/展开，让用户可以一键收起已展开的项目。
+ * 折叠/展开仍可通过左侧独立的 collapse-btn 操作。
+ */
+function handleProjectHeaderClick(projectId: string) {
+  if (projectId === props.activeProjectId) {
+    toggleCollapse(projectId)
+  } else {
+    emit('select-project', projectId)
+  }
 }
 
 // 选中某项目时自动展开该项目分组，避免用户点了项目却还要再点一次箭头才看到
@@ -150,7 +184,7 @@ function formatTime(ts: number): string {
       <button
         class="dock-action-btn"
         title="New session"
-        @click="emit('new-session')"
+        @click="emit('new-session-request')"
       >
         +
       </button>
@@ -165,7 +199,7 @@ function formatTime(ts: number): string {
         <div
           class="project-header"
           :class="{ active: group.project.id === activeProjectId }"
-          @click="emit('select-project', group.project.id)"
+          @click="handleProjectHeaderClick(group.project.id)"
         >
           <button
             class="collapse-btn"
@@ -175,7 +209,19 @@ function formatTime(ts: number): string {
             {{ group.isCollapsed ? '▶' : '▼' }}
           </button>
           <span class="project-name">{{ group.project.name }}</span>
-          <span class="project-session-count">{{ group.sessions.length }}</span>
+          <span
+            class="project-session-count"
+            :title="`${sessionCount(group)} session(s)`"
+          >
+            {{ sessionCount(group) }}
+          </span>
+          <button
+            class="project-new-session-btn"
+            title="New session in this project"
+            @click.stop="emit('new-session-request', group.project.id)"
+          >
+            +
+          </button>
         </div>
 
         <div v-if="!group.isCollapsed" class="project-sessions">
@@ -230,13 +276,6 @@ function formatTime(ts: number): string {
               </button>
             </div>
           </div>
-
-          <button
-            class="new-session-inline"
-            @click="emit('new-session', group.project.id)"
-          >
-            + New Session
-          </button>
         </div>
       </div>
 
@@ -357,6 +396,33 @@ function formatTime(ts: number): string {
   background: var(--bg-panel);
   padding: 1px 6px;
   border-radius: 8px;
+}
+
+.project-new-session-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.project-header:hover .project-new-session-btn {
+  opacity: 1;
+}
+
+.project-new-session-btn:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-active);
+  color: var(--accent-running);
 }
 
 .project-sessions {
@@ -491,26 +557,6 @@ function formatTime(ts: number): string {
 
 .session-action.delete:hover {
   color: var(--accent-danger);
-}
-
-.new-session-inline {
-  width: 100%;
-  text-align: left;
-  padding: var(--space-sm) var(--space-md);
-  border: 1px dashed var(--border-default);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.new-session-inline:hover {
-  background: rgba(0, 229, 255, 0.04);
-  border-color: var(--border-active);
-  color: var(--text-secondary);
 }
 
 .empty-state {

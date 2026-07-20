@@ -750,8 +750,12 @@ func extractSessionName(input string) string {
 
 // resolveWorkspaceDir 按以下兜底规则为新 session 决定 workspace 目录：
 //  1. 用户显式路径 —— 校验或创建；isAuto=false
-//  2. Project working_directory/session-{id}/ —— isAuto=false
-//  3. ./workspace/session-{id}/ —— isAuto=true（默认）
+//  2. Project working_directory —— 当 session.workspace_dir 为空时，
+//     运行时工具链回退到 project.working_directory。因此创建 session 时
+//     不再自动在 project 下创建 session 子目录，而是保持空字符串，
+//     让多个 session 共享同一个 project workspace。
+//  3. ./workspace/session-{id}/ —— project 无 working_directory 或用户
+//     显式选择 auto 模式时使用，isAuto=true（默认）
 func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceDir string, isAuto bool) {
 	// 1. 用户显式路径：校验存在性，否则尝试创建
 	if specifiedPath != "" {
@@ -764,14 +768,13 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 		// 创建失败 —— 落到默认值
 	}
 
-	// 2. Project working_directory：创建 session 子目录
+	// 2. Project working_directory：保持 session.WorkspaceDir 为空，
+	//    由运行时根据 session.ProjectID 回退到 project.WorkingDirectory。
+	//    这样多个 session 可共享同一个 project workspace。
 	if projectID != "" {
 		proj, projErr := db.QueryProjectByID(projectID)
 		if projErr == nil && proj.WorkingDirectory != "" {
-			wsPath := filepath.Join(proj.WorkingDirectory, "workspace", "session-"+sessionID)
-			if err := os.MkdirAll(wsPath, 0755); err == nil {
-				return wsPath, false
-			}
+			return "", false
 		}
 	}
 

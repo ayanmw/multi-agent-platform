@@ -1329,15 +1329,26 @@ func main() {
 
 		// 查 session 以验证存在并取回 workspace_dir
 		sess, err := db.QuerySessionByID(sessionID)
-		if err != nil || sess.WorkspaceDir == "" {
+		if err != nil {
+			http.Error(w, "session not found or no workspace", http.StatusNotFound)
+			return
+		}
+
+		workspaceDir := sess.WorkspaceDir
+		if workspaceDir == "" && sess.ProjectID != "" {
+			if proj, projErr := db.QueryProjectByID(sess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
+				workspaceDir = proj.WorkingDirectory
+			}
+		}
+		if workspaceDir == "" {
 			http.Error(w, "session not found or no workspace", http.StatusNotFound)
 			return
 		}
 
 		// 安全：确保解析后的路径仍位于 workspace dir 内
-		requestPath := filepath.Join(sess.WorkspaceDir, filepath.Join(pathParts[1:]...))
+		requestPath := filepath.Join(workspaceDir, filepath.Join(pathParts[1:]...))
 		cleanPath := filepath.Clean(requestPath)
-		workspaceRoot := filepath.Clean(sess.WorkspaceDir)
+		workspaceRoot := filepath.Clean(workspaceDir)
 		if !strings.HasPrefix(cleanPath, workspaceRoot) {
 			http.Error(w, "path traversal detected", http.StatusForbidden)
 			return
@@ -1945,15 +1956,17 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	// read_file）以正确的 CWD 执行。每一轮都要读取 —— 不只是 root ——
 	// 这样多轮对话的后续轮次才能继承同一个 workspace。
 	//
-	// 否则 EngineConfig.WorkspaceDir 会保持为空，Engine (engine.go:1330)
-	// 永远不会把 "workdir" 注入 tool 参数。write_file 就会把相对路径
-	// 以 server 的 CWD 解析，把绝对路径按字面处理（例如 "/tmp/x" 直接
-	// 写到 /tmp/x 而不是 session workspace），导致文件永远落不到
-	// <cwd>/workspace/session-<id>/ 里。
+	// 若 session.WorkspaceDir 为空但 session 属于某个 project，则回退到
+	// project.WorkingDirectory，让多个 session 可共享同一个 project workspace。
 	workspaceDir := ""
 	if sessionID != "" {
 		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
 			workspaceDir = wsSess.WorkspaceDir
+			if workspaceDir == "" && wsSess.ProjectID != "" {
+				if proj, projErr := db.QueryProjectByID(wsSess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
+					workspaceDir = proj.WorkingDirectory
+				}
+			}
 		}
 	}
 
@@ -2527,7 +2540,15 @@ func handleSessionWorkspaceTree(w http.ResponseWriter, r *http.Request, sessionI
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	if sess.WorkspaceDir == "" {
+
+	workspaceDir := sess.WorkspaceDir
+	if workspaceDir == "" && sess.ProjectID != "" {
+		if proj, projErr := db.QueryProjectByID(sess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
+			workspaceDir = proj.WorkingDirectory
+		}
+	}
+
+	if workspaceDir == "" {
 		// 没有 workspace 目录（例如尚未创建任务）直接返回空列表，而不是 404，
 		// 让前端文件树显示"空目录"占位而不是错误态。
 		w.Header().Set("Content-Type", "application/json")
@@ -2552,7 +2573,7 @@ func handleSessionWorkspaceTree(w http.ResponseWriter, r *http.Request, sessionI
 		return
 	}
 
-	root := filepath.Clean(sess.WorkspaceDir)
+	root := filepath.Clean(workspaceDir)
 	target := filepath.Clean(filepath.Join(root, rel))
 	// 再次确认解析后仍在 root 内。
 	if target != root && !strings.HasPrefix(target+string(filepath.Separator), root+string(filepath.Separator)) {

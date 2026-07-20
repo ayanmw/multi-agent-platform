@@ -18,6 +18,7 @@ import ApprovalDialog from './components/ApprovalDialog.vue'
 import RecentModsDialog from './components/RecentModsDialog.vue'
 import ModelPricesDialog from './components/ModelPricesDialog.vue'
 import MCPServerDialog from './components/MCPServerDialog.vue'
+import NewSessionDialog from './components/NewSessionDialog.vue'
 import { useLayout } from './composables/useLayout'
 import { useTaskStore } from './composables/useTaskStore'
 import { useSessionStore } from './composables/useSessionStore'
@@ -126,6 +127,8 @@ const renameBuffer = ref('')
 const recentModsVisible = ref(false)
 const modelPricesVisible = ref(false)
 const mcpServerDialogVisible = ref(false)
+const newSessionDialogVisible = ref(false)
+const newSessionProjectId = ref<string | undefined>(undefined)
 
 const {
   items: recentMods,
@@ -733,6 +736,39 @@ watch(
 )
 
 const showInspectorToggle = computed(() => false)
+
+const newSessionTargetProject = computed(() => {
+  const pid = newSessionProjectId.value || activeProjectId.value
+  return projects.value.find(p => p.id === pid) || null
+})
+
+function openNewSessionDialog(projectId?: string) {
+  newSessionProjectId.value = projectId
+  newSessionDialogVisible.value = true
+}
+
+function closeNewSessionDialog() {
+  newSessionDialogVisible.value = false
+  newSessionProjectId.value = undefined
+}
+
+async function handleCreateSession(payload: { name: string; workspaceDir: string }) {
+  const pid = newSessionProjectId.value || activeProjectId.value
+  if (!pid) {
+    showError('No project selected')
+    return
+  }
+  const workspaceDir = payload.workspaceDir || undefined
+  try {
+    const session = await createSession(payload.name || undefined, undefined, pid, workspaceDir)
+    setActiveSession(session.id)
+    clearActiveTask()
+    clearContextWindow()
+    closeNewSessionDialog()
+  } catch (err) {
+    showError(err instanceof Error ? err.message : 'Failed to create session')
+  }
+}
 </script>
 
 <template>
@@ -764,7 +800,7 @@ const showInspectorToggle = computed(() => false)
           @update:rename-buffer="renameBuffer = $event"
           @select-project="handleProjectSelect"
           @select-session="handleSessionSelect"
-          @new-session="handleNewSession"
+          @new-session-request="openNewSessionDialog"
           @delete-session="handleDeleteSession"
           @rename-start="startRenameSession"
           @rename-commit="commitRenameSession"
@@ -869,7 +905,7 @@ const showInspectorToggle = computed(() => false)
           @update:rename-buffer="renameBuffer = $event"
           @select-project="handleProjectSelect"
           @select-session="handleSessionSelect"
-          @new-session="handleNewSession"
+          @new-session-request="openNewSessionDialog"
           @delete-session="handleDeleteSession"
           @rename-start="startRenameSession"
           @rename-commit="commitRenameSession"
@@ -976,7 +1012,7 @@ const showInspectorToggle = computed(() => false)
             @update:rename-buffer="renameBuffer = $event"
             @select-project="handleProjectSelect"
             @select-session="handleSessionSelect"
-            @new-session="handleNewSession"
+            @new-session-request="openNewSessionDialog"
             @delete-session="handleDeleteSession"
             @rename-start="startRenameSession"
             @rename-commit="commitRenameSession"
@@ -1049,6 +1085,15 @@ const showInspectorToggle = computed(() => false)
         </div>
       </Transition>
     </Teleport>
+
+    <NewSessionDialog
+      :visible="newSessionDialogVisible"
+      :project-id="newSessionTargetProject?.id || activeProjectId"
+      :project-name="newSessionTargetProject?.name || activeProjectId"
+      :project-working-directory="newSessionTargetProject?.working_directory || ''"
+      @close="closeNewSessionDialog"
+      @create="handleCreateSession"
+    />
 
     <!-- Toast / Dialogs -->
     <Toast :toasts="toasts" @dismiss="dismissToast" />
