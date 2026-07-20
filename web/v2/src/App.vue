@@ -576,6 +576,9 @@ function handleCancelAgent(payload: { taskId: string; agentId: string }) {
 
 // === 运行 case ===
 async function handleRunCase(caseId: string) {
+  // 点 Run 后立即关闭 Inspector 大 Dialog，避免它遮挡刚启动的 timeline，
+  // 也符合"运行 case 就是把它送进主舞台"的直觉。
+  inspectorDialogOpen.value = false
   try {
     let session = activeSession.value
     if (!session) {
@@ -658,7 +661,7 @@ const showInspectorToggle = computed(() => !isMobile.value)
 
     <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽 -->
     <div v-if="isDesktop" class="layout-desktop" :style="{ '--left-w': leftDockWidth + 'px', '--right-w': rightFilesWidth + 'px' }">
-      <DockPanel side="left" title="Sessions" :open="leftDockOpen" @close="toggleLeftDock">
+      <DockPanel side="left" title="Sessions" :open="leftDockOpen" @close="toggleLeftDock" @reopen="toggleLeftDock">
         <SessionDock
           :projects="projects"
           :active-project-id="activeProjectId"
@@ -719,7 +722,7 @@ const showInspectorToggle = computed(() => !isMobile.value)
         @resize-end="commitWidths"
       />
 
-      <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles">
+      <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles" @reopen="toggleRightFiles">
         <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
 
@@ -864,6 +867,7 @@ const showInspectorToggle = computed(() => !isMobile.value)
       @update:prefill="prefilledCommand = ''"
       @update:multiAgent="onMultiAgentChange"
       @multiAgentChange="onMultiAgentChange"
+      @open-cases="openInspectorDialog('cases')"
     />
 
     <MobileNav v-if="isMobile" />

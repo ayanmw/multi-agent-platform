@@ -44,6 +44,9 @@ const emit = defineEmits<{
   (e: 'update:multiAgent', value: boolean): void
   (e: 'multiAgentChange', value: boolean): void
   (e: 'update:prefill', value: string): void
+  // 打开 Case 窗口。用户希望在发送按钮左侧的 📋 按钮打开 Case Library，
+  // 取代原 Inspector 右上角入口，便于在无 task 的空闲态快速挑 Case 跑。
+  (e: 'openCases'): void
 }>()
 
 const text = ref('')
@@ -140,6 +143,16 @@ watch(
         rows="1"
         @keydown="handleKeydown"
       />
+
+      <!-- Case 入口：放在发送按钮左侧，点开 Inspector 并直接定位 Cases tab。
+           空闲态没有 task 在跑时最常用，所以不论 running/pending/idle 都常驻可见。 -->
+      <button
+        class="options-toggle cases-btn"
+        title="Open Case Library"
+        @click="emit('openCases')"
+      >
+        📋
+      </button>
 
       <template v-if="isRunning">
         <button class="control-btn pause" title="Pause" @click="emit('pause')">⏸</button>
