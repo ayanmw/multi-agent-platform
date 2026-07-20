@@ -1,7 +1,7 @@
 /**
  * themes.css — Multi-Agent Platform v2 主题色板
  *
- * 通过 html[data-theme="obsidian"] / html[data-theme="terminal"] 切换两套皮肤。
+ * 通过 html[data-theme] 切换多套皮肤：obsidian / terminal / amber / dusk / solar / ice / auto。
  * 所有组件统一使用语义化 CSS 变量，不要直接写死色值。
  */
 
@@ -82,4 +82,120 @@ html[data-theme="terminal"] {
 
   /* 聚焦光环 */
   --glow-focus: rgba(57, 255, 20, 0.1);
+}
+
+/* ---------- Amber CRT 主题 ---------- */
+html[data-theme="amber"] {
+  --bg-canvas: #120f08;
+  --bg-panel: #1c170b;
+  --bg-elevated: #28210e;
+  --bg-hover: #352b14;
+
+  --border-subtle: rgba(255, 176, 0, 0.06);
+  --border-default: rgba(204, 140, 0, 0.3);
+  --border-active: rgba(255, 176, 0, 0.55);
+
+  --text-primary: #fff4d6;
+  --text-secondary: #c7a86a;
+  --text-muted: #7a6236;
+
+  --accent-running: #ffb000;
+  --accent-success: #c8ff00;
+  --accent-warning: #ff7b00;
+  --accent-danger: #ff3b3b;
+  --accent-tool: #ff9d00;
+  --accent-skill: #ff6b35;
+  --accent-info: #ffd166;
+  --accent-token: #ffdea8;
+
+  --text-on-accent: #0f0c06;
+  --bg-code: #0c0a05;
+  --glow-focus: rgba(255, 176, 0, 0.1);
+}
+
+/* ---------- Dusk 暮光洋红 主题 ---------- */
+html[data-theme="dusk"] {
+  --bg-canvas: #0d0712;
+  --bg-panel: #160d1f;
+  --bg-elevated: #1f142b;
+  --bg-hover: #2a1c3a;
+
+  --border-subtle: rgba(255, 120, 230, 0.06);
+  --border-default: rgba(180, 90, 180, 0.3);
+  --border-active: rgba(255, 105, 235, 0.55);
+
+  --text-primary: #f8e8ff;
+  --text-secondary: #c9a8d8;
+  --text-muted: #755488;
+
+  --accent-running: #ff69eb;
+  --accent-success: #bdff00;
+  --accent-warning: #ffcc00;
+  --accent-danger: #ff3d71;
+  --accent-tool: #a855f7;
+  --accent-skill: #ff9f43;
+  --accent-info: #c084fc;
+  --accent-token: #f0abfc;
+
+  --text-on-accent: #0a040f;
+  --bg-code: #09040d;
+  --glow-focus: rgba(255, 105, 235, 0.12);
+}
+
+/* ---------- Solar 日光纸业 主题（亮色） ---------- */
+html[data-theme="solar"] {
+  --bg-canvas: #f4f1ea;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f6f4ed;
+  --bg-hover: #ede9dc;
+
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-active: rgba(220, 80, 40, 0.45);
+
+  --text-primary: #1f1c17;
+  --text-secondary: #5e5a52;
+  --text-muted: #9b968a;
+
+  --accent-running: #e05220;
+  --accent-success: #2a9d3f;
+  --accent-warning: #c47c00;
+  --accent-danger: #d92525;
+  --accent-tool: #7c4dff;
+  --accent-skill: #ff6b35;
+  --accent-info: #2563eb;
+  --accent-token: #c13584;
+
+  --text-on-accent: #ffffff;
+  --bg-code: #f0ede4;
+  --glow-focus: rgba(220, 80, 40, 0.12);
+}
+
+/* ---------- Ice 极地冰川 主题 ---------- */
+html[data-theme="ice"] {
+  --bg-canvas: #080e16;
+  --bg-panel: #0d1724;
+  --bg-elevated: #142132;
+  --bg-hover: #1b2d42;
+
+  --border-subtle: rgba(135, 205, 255, 0.06);
+  --border-default: rgba(100, 170, 230, 0.28);
+  --border-active: rgba(110, 200, 255, 0.55);
+
+  --text-primary: #e9f4ff;
+  --text-secondary: #9fc0e0;
+  --text-muted: #547394;
+
+  --accent-running: #6ec8ff;
+  --accent-success: #5df0a8;
+  --accent-warning: #ffcc00;
+  --accent-danger: #ff5c75;
+  --accent-tool: #82aaff;
+  --accent-skill: #ff9d6e;
+  --accent-info: #4daafc;
+  --accent-token: #a7dcff;
+
+  --text-on-accent: #02060b;
+  --bg-code: #050a12;
+  --glow-focus: rgba(110, 200, 255, 0.12);
 }

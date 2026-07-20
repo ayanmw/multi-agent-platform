@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import StatusIndicator from './StatusIndicator.vue'
-import { useTheme } from '../composables/useTheme'
 import VersionSwitcher from './VersionSwitcher.vue'
+import ThemePalette from './ThemePalette.vue'
 
 /**
  * 顶部状态栏
@@ -14,6 +14,7 @@ import VersionSwitcher from './VersionSwitcher.vue'
  *   - manageOpen: 当前 Manage 下拉浮窗是否打开，用于高亮管理按钮
  *
  * emits:
+ *   - toggle-inspector: 请求切换右侧 Inspector
  *   - toggle-left-dock: 请求切换左侧 Session Dock（平板端/紧凑模式）
  *   - toggle-recent-mods: 请求打开最近修改弹窗
  *   - toggle-model-prices: 请求打开模型价格管理弹窗
@@ -22,7 +23,6 @@ import VersionSwitcher from './VersionSwitcher.vue'
  *   - toggle-manage: 请求切换 Manage 下拉浮窗
  */
 
-const { theme, toggleTheme } = useTheme()
 withDefaults(
   defineProps<{
     status?: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'pending'
@@ -68,9 +68,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="topbar-right">
-      <button class="icon-btn theme-toggle" :title="`Switch theme (current: ${theme})`" @click="toggleTheme">
-        🎨
-      </button>
+      <ThemePalette />
       <button class="icon-btn" title="MCP Server" @click="emit('toggle-mcp')">🔌</button>
       <button class="icon-btn" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
       <button class="icon-btn" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
@@ -225,17 +223,12 @@ const emit = defineEmits<{
   }
 }
 
-.theme-toggle {
-  font-size: 15px;
-}
-
 @media (max-width: 767px) {
   .logo {
     font-size: 14px;
   }
   .task-badge,
-  .version-switch,
-  .theme-toggle {
+  .version-switch {
     display: none;
   }
 }
