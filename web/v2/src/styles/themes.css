@@ -1,0 +1,85 @@
+/**
+ * themes.css — Multi-Agent Platform v2 主题色板
+ *
+ * 通过 html[data-theme="obsidian"] / html[data-theme="terminal"] 切换两套皮肤。
+ * 所有组件统一使用语义化 CSS 变量，不要直接写死色值。
+ */
+
+/* ---------- 默认（Obsidian Control Room） ---------- */
+:root,
+html[data-theme="obsidian"] {
+  /* 舱壁黑 */
+  --bg-canvas: #0b0d10;
+  --bg-panel: #11141a;
+  --bg-elevated: #181c24;
+  --bg-hover: #202632;
+
+  /* 边框 */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-active: rgba(0, 229, 255, 0.4);
+
+  /* 文字 */
+  --text-primary: #e8ebf0;
+  --text-secondary: #9aa3b2;
+  --text-muted: #5c6675;
+
+  /* 强调色（荧光） */
+  --accent-running: #00e5ff;
+  --accent-success: #39ff14;
+  --accent-warning: #ffb800;
+  --accent-danger: #ff4d4d;
+  --accent-tool: #a855f7;
+  --accent-skill: #ff6b35;
+
+  /* 信息/数据高亮 */
+  --accent-info: #60a5fa;
+  --accent-token: #f472b6;
+
+  /* 用于按钮上的对比文字 */
+  --text-on-accent: #07090c;
+
+  /* 代码/暗色表面 */
+  --bg-code: #0d0f13;
+
+  /* 聚焦光环 */
+  --glow-focus: rgba(0, 229, 255, 0.08);
+}
+
+/* ---------- Modular Terminal 主题 ---------- */
+html[data-theme="terminal"] {
+  /* 经典终端绿 / 深灰 */
+  --bg-canvas: #0c0e0a;
+  --bg-panel: #151a12;
+  --bg-elevated: #1c2318;
+  --bg-hover: #263020;
+
+  /* 边框：绿锈色调 */
+  --border-subtle: rgba(155, 220, 120, 0.08);
+  --border-default: rgba(98, 130, 80, 0.35);
+  --border-active: rgba(57, 255, 20, 0.55);
+
+  /* 文字：青柠纸白 */
+  --text-primary: #eaffea;
+  --text-secondary: #a3c69b;
+  --text-muted: #5f7a56;
+
+  /* 强调色：青柠 / 琥珀 / 红 */
+  --accent-running: #39ff14;
+  --accent-success: #7cff00;
+  --accent-warning: #ffb800;
+  --accent-danger: #ff3b3b;
+  --accent-tool: #ff9d00;
+  --accent-skill: #ff6b35;
+  --accent-info: #4ade80;
+  --accent-token: #a7f3d0;
+
+  /* 深色 accent 上的文字 */
+  --text-on-accent: #050805;
+
+  /* 代码块背景 */
+  --bg-code: #080a07;
+
+  /* 聚焦光环 */
+  --glow-focus: rgba(57, 255, 20, 0.1);
+}

@@ -200,17 +200,17 @@ function formatDuration(ms: number): string {
 }
 
 .step-card--think {
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--text-primary) 3%, transparent) 0%, transparent 100%);
 }
 
 .step-card--tool {
-  border-color: rgba(168, 85, 247, 0.25);
-  background: rgba(168, 85, 247, 0.04);
+  border-color: color-mix(in srgb, var(--accent-tool) 25%, transparent);
+  background: color-mix(in srgb, var(--accent-tool) 4%, transparent);
 }
 
 .step-card--observation {
   border-style: dashed;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 
 .step-header {
@@ -296,7 +296,7 @@ function formatDuration(ms: number): string {
 .tool-tag {
   padding: 0 4px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 77, 77, 0.12);
+  background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
   color: var(--accent-danger);
   font-size: 0.6rem;
   text-transform: uppercase;
@@ -327,7 +327,7 @@ function formatDuration(ms: number): string {
 .tool-toggle--active {
   border-color: var(--accent-tool);
   color: var(--accent-tool);
-  background: rgba(168, 85, 247, 0.1);
+  background: color-mix(in srgb, var(--accent-tool) 10%, transparent);
 }
 
 .tool-block {
@@ -353,7 +353,7 @@ function formatDuration(ms: number): string {
   padding: var(--space-sm);
   max-height: 220px;
   overflow: auto;
-  background: #0d0f13;
+  background: var(--bg-code);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -401,7 +401,7 @@ function formatDuration(ms: number): string {
   }
 }
 .status--failed {
-  border-color: rgba(255, 77, 77, 0.35);
+  border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
 }
 
 .status--failed::before {
@@ -410,7 +410,7 @@ function formatDuration(ms: number): string {
 }
 
 .status--paused {
-  border-color: rgba(255, 184, 0, 0.35);
+  border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent);
 }
 
 .status--paused::before {

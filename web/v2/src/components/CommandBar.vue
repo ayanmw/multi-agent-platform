@@ -280,7 +280,7 @@ watch(
   height: 100%;
   background: var(--accent-running, #00e5ff);
   transition: width 0.3s ease;
-  box-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 8px var(--border-active, rgba(0, 229, 255, 0.4));
 }
 
 .command-main {
@@ -345,7 +345,7 @@ watch(
 
 .command-input:focus {
   border-color: var(--border-active, rgba(0, 229, 255, 0.4));
-  box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.08);
+  box-shadow: 0 0 0 3px var(--glow-focus, rgba(0, 229, 255, 0.08));
 }
 
 .command-input:disabled {
@@ -370,7 +370,7 @@ watch(
 
 .send-btn {
   background: var(--accent-running, #00e5ff);
-  color: #000;
+  color: var(--text-on-accent, #000);
 }
 
 .send-btn:hover:not(:disabled) {

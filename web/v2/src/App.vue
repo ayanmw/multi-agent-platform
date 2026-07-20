@@ -30,6 +30,7 @@ import { useContextWindow } from './composables/useContextWindow'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useSkills } from './composables/useSkills'
 import { useSessionFiles } from './composables/useSessionFiles'
+import { useTheme } from './composables/useTheme'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
@@ -105,6 +106,7 @@ const { agents, availableTools, loadAgents } = useAgentStore()
 const { projects, activeProjectId, loadProjects, setActiveProject } = useProjectStore()
 const { toasts, showError, showInfo, dismissToast } = useToast()
 const { loadSkills, enableSkill } = useSkills()
+const { theme } = useTheme()
 const caseStore = useCaseStore()
 const { setActiveSession: setFilesSession, refreshDir: refreshFilesRoot } = useSessionFiles()
 
@@ -734,7 +736,7 @@ const showInspectorToggle = computed(() => false)
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :data-theme="theme">
     <TopBar
       :status="connectionStatus"
       :status-label="statusLabel"

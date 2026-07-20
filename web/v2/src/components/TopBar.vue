@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import StatusIndicator from './StatusIndicator.vue'
+import { useTheme } from '../composables/useTheme'
 
 /**
  * 顶部状态栏
@@ -19,6 +20,8 @@ import StatusIndicator from './StatusIndicator.vue'
  *   - toggle-keyboard-tips: 请求打开键盘快捷键提示
  *   - toggle-manage: 请求切换 Manage 下拉浮窗
  */
+
+const { theme, toggleTheme } = useTheme()
 withDefaults(
   defineProps<{
     status?: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'pending'
@@ -64,6 +67,9 @@ const emit = defineEmits<{
     </div>
 
     <div class="topbar-right">
+      <button class="icon-btn theme-toggle" :title="`Switch theme (current: ${theme})`" @click="toggleTheme">
+        🎨
+      </button>
       <button class="icon-btn" title="MCP Server" @click="emit('toggle-mcp')">🔌</button>
       <button class="icon-btn" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
       <button class="icon-btn" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
@@ -217,12 +223,17 @@ const emit = defineEmits<{
   }
 }
 
+.theme-toggle {
+  font-size: 15px;
+}
+
 @media (max-width: 767px) {
   .logo {
     font-size: 14px;
   }
   .task-badge,
-  .version-switch {
+  .version-switch,
+  .theme-toggle {
     display: none;
   }
 }
