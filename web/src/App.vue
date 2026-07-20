@@ -39,6 +39,7 @@ import MemoryEventsTimeline from './components/MemoryEventsTimeline.vue'
 import ContextWindowPanel from './components/ContextWindowPanel.vue'
 import CaseCard from './components/CaseCard.vue'
 import MultiAgentWorkflowEditor from './components/MultiAgentWorkflowEditor.vue'
+import VersionSwitcher from './components/VersionSwitcher.vue'
 import { type WorkflowConfig } from './types/agent'
 import CaseFilter from './components/CaseFilter.vue'
 import CaseForm from './components/CaseForm.vue'
@@ -1360,6 +1361,7 @@ function formatShortTime(ts: number): string {
             <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
             <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>
             <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
+            <VersionSwitcher />
             <span class="app-version">{{ appVersion }}</span>
           </div>
         </header>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import StatusIndicator from './StatusIndicator.vue'
 import { useTheme } from '../composables/useTheme'
+import VersionSwitcher from './VersionSwitcher.vue'
 
 /**
  * 顶部状态栏
@@ -87,6 +88,7 @@ const emit = defineEmits<{
       </button>
 
       <span class="version-switch">v2</span>
+      <VersionSwitcher />
     </div>
   </header>
 </template>

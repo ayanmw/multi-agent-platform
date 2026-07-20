@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1725,54 +1724,11 @@ func main() {
 	// 开发模式下用户可运行 `cd web && npm run dev` 使用 Vite 的 dev server
 	// 与 HMR。构建 Go binary 时使用嵌入式 dist/。
 	//
-	// Phase UI-v2: 同时嵌入 v1 (web/dist) 与 v2 (web/v2/dist)，通过 UI_VERSION
-	// 环境变量切换；默认使用 v1，保证现有部署行为不变。
-	uiVersion := strings.ToLower(strings.TrimSpace(os.Getenv("UI_VERSION")))
-	var activeEmbed embed.FS
-	var subDir string
-	if uiVersion == "v2" {
-		activeEmbed = web.V2Dist
-		subDir = "v2/dist"
-	} else {
-		activeEmbed = web.Dist
-		subDir = "dist"
-	}
-	distFS, err := fs.Sub(activeEmbed, subDir)
-	if err != nil {
-		log.Printf("Warning: embedded frontend dist not found (version=%s): %v", uiVersion, err)
-	} else {
-		// 创建一个 file server 来服务嵌入式 dist/ 目录
-		fileServer := http.FileServer(http.FS(distFS))
-
-		// SPA fallback：任何未匹配 API 路由或静态文件的请求都返回 index.html
-		// （由 Vue Router 处理客户端路由）。
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// API 与 WebSocket 路由由上方注册的各自 handler 处理。
-			// 末尾斜杠形式本 handler 看不到（ServeMux 会规范化路径），
-			// 但为了清晰与代理兼容性，两种形式都做保护。
-			if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws") ||
-				r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.URL.Path == "/" || r.URL.Path == "/index.html" || !fileExists(distFS, r.URL.Path) {
-				// 为 SPA 客户端路由（如 /agents、/tasks/123）返回 index.html，
-				// 但仅当路径未命中 dist/ 中的真实文件时。
-				indexFile, err := distFS.Open("index.html")
-				if err != nil {
-					http.NotFound(w, r)
-					return
-				}
-				defer indexFile.Close()
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				http.ServeContent(w, r, "index.html", time.Time{}, indexFile.(io.ReadSeeker))
-				return
-			}
-			fileServer.ServeHTTP(w, r)
-		})
-		log.Printf("Frontend embedded: serving from embedded %s/ (UI_VERSION=%s)", subDir, uiVersion)
-	}
-
+	// Phase UI-v2: 同时嵌入 v1 (web/dist) 与 v2 (web/v2/dist)，通过 URL 路径分发：
+	//   - 根路径 "/" 永远服务最新默认版本（当前为 v2）。
+	//   - "/ui/v1/" 与 "/ui/v2/" 分别服务对应历史版本。
+	//   未来新增版本时，在 web/embed.go 的 UIVersionsRegistry 注册即可。
+	serveVersionedUI()
 	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
 
 	log.Printf("========================================")
@@ -2680,6 +2636,57 @@ func isTruthyEnv(key string) bool {
 
 // fileExists 检查嵌入式文件系统中是否存在某个路径。
 // 它会去掉前导 "/"，因为 fs.FS 的路径是相对的。
+// serveVersionedUI 注册各版本 UI 的静态文件路由。
+//   - 根路径 "/" 使用 DefaultUIVersion（最新版本）。
+//   - "/ui/v1/" 与 "/ui/v2/" 分别使用对应 embed 目录。
+//   - 未来新增版本时，在 web/embed.go 注册即可，自动生效。
+//   - API / WS / health / metrics 等路由不进入此处。
+func serveVersionedUI() {
+	// 历史版本路由：/ui/v{N}/
+	for version, info := range web.UIVersionsRegistry {
+		distFS, err := fs.Sub(info.FS, info.SubDir)
+		if err != nil {
+			log.Printf("Warning: embedded frontend dist not found (version=%s): %v", version, err)
+			continue
+		}
+
+		prefix := "/ui/" + version + "/"
+		http.Handle(prefix, http.StripPrefix(prefix, newVersionFileServer(distFS, prefix)))
+		log.Printf("Frontend embedded: serving version %s at %s", version, prefix)
+	}
+
+	// 默认最新版本路由：/
+	defaultInfo := web.UIVersionsRegistry[web.DefaultUIVersion]
+	distFS, err := fs.Sub(defaultInfo.FS, defaultInfo.SubDir)
+	if err != nil {
+		log.Printf("Warning: embedded frontend dist not found for default version %s: %v", web.DefaultUIVersion, err)
+		return
+	}
+	http.Handle("/", newVersionFileServer(distFS, "/"))
+	log.Printf("Frontend embedded: serving default version %s at /", web.DefaultUIVersion)
+}
+
+// newVersionFileServer 为某个版本的 dist 创建 FileServer，并处理 SPA fallback。
+func newVersionFileServer(distFS fs.FS, prefix string) http.Handler {
+	fileServer := http.FileServer(http.FS(distFS))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		// 去掉前缀尾斜杠后检查 index.html
+		if path == "" || path == "/" || path == "/index.html" || !fileExists(distFS, path) {
+			indexFile, err := distFS.Open("index.html")
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			defer indexFile.Close()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			http.ServeContent(w, r, "index.html", time.Time{}, indexFile.(io.ReadSeeker))
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
 func fileExists(fsys fs.FS, path string) bool {
 	// 去掉前导斜杠以兼容 fs.FS
 	if len(path) > 0 && path[0] == '/' {
