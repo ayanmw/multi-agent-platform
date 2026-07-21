@@ -695,9 +695,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// 这是一个安全措施；实际上 channel 应该足够大以应对突发。
 			}
 		}
-		// Phase 7-J：leader 必须使用按 SubTaskID 注册，才能收到子 agent 发给
-		// (leader, rootTaskID) 的消息。子 agent 保持 agentID-only 兼容旧行为。
-		if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+		// Phase 7-H2 阶段 6 (MA7)：只要 SubTaskID 非空，就按 (agentID, subTaskID)
+		// 精确注册——无论 leader 还是 worker。此前 worker 走 agentID-only 注册，
+		// 导致两个并发 session 跑同名 worker（例如两个 "agent_writer"）时，后注册
+		// 的 handler 会覆盖前者，跨 session 的 AgentBus 消息被投递到错误的 engine。
+		// 按 SubTaskID 注册后，SendMessage 的精确匹配优先级保证每个 worker 实例
+		// 只收到发往自己 subTaskID 的消息。SubTaskID 为空（legacy/测试路径）时
+		// 保留 agentID-only 行为。
+		if e.cfg.SubTaskID != "" {
 			e.agentBus.RegisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID, agentBusHandler)
 		} else {
 			e.agentBus.RegisterHandler(e.cfg.AgentID, agentBusHandler)
@@ -708,7 +713,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				select {
 				case <-ctx.Done():
 					// context 取消——停止监听。
-					if e.cfg.Role == AgentRoleLeader && e.cfg.SubTaskID != "" {
+					if e.cfg.SubTaskID != "" {
 						e.agentBus.UnregisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID)
 					} else {
 						e.agentBus.UnregisterHandler(e.cfg.AgentID)

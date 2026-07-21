@@ -691,10 +691,10 @@ const activeTaskId = ref<string | null>(null)
 - [x] Leader 多轮 dispatch 的 observation 格式标准化
 
 #### 阶段 6（低优先级）— AgentBus 隔离 + Router 死代码（MA7 + MA8）
-- [ ] `internal/runtime/engine.go:703`：worker 改 `RegisterHandlerBySubTask`
-- [ ] `cmd/server/main.go`：chat 路径 EngineConfig 补 `Router/Registry/Providers`（阶段 1 已为 leader registry clone；MA8 需单独验证 chat path model_routed 事件）
-- [ ] 验证 `/api/multi-agent` 静态编排兼容路径在 leader-driven 默认入口切换后仍可回归
-- [ ] smoke 验证：两 session 同名 worker 不串台；chat 路径触发 `model_routed` 事件
+- [x] `internal/runtime/engine.go:703`：worker 改 `RegisterHandlerBySubTask`
+- [x] `cmd/server/main.go`：chat 路径 EngineConfig 补 `Router/Registry/Providers`（阶段 1 已为 leader registry clone；MA8 需单独验证 chat path model_routed 事件）
+- [x] 验证 `/api/multi-agent` 静态编排兼容路径在 leader-driven 默认入口切换后仍可回归
+- [x] smoke 验证：两 session 同名 worker 不串台；chat 路径触发 `model_routed` 事件
 
 ### 依赖与执行
 
@@ -746,3 +746,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: `handleGetTask` 返回 child_tasks.steps + 前端 `loadTask` 回填 worker lane；新增 `TestHandleGetTaskChildSteps` 单测；smoke 验证同 v0.9.3 |
 | v0.9.5 Alpha | 2026-07-21 | Phase 7-H2 阶段 4: 编排层可观测事件(`decompose_done`/`agent_dispatched`/`agent_completed`) + root final_result worker 聚合摘要 + RunBlocking 显式 UpdateTask 终态(MA9)；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(14/0/3) 验证通过 |
 | v0.9.6 Alpha | 2026-07-21 | Phase 7-H2 阶段 5: workflow DAG 表达力落地 — `WorkflowNode/Edge/AgentWorkflow` 数据模型 + decomposer 解析 `workflow.nodes/edges/dependencies/condition` + `RunBlockingDAG` Kahn 拓扑调度(条件 DSL `<id>.completed\|\|.failed` + `&&/\|\|/()` + skipped 传播) + `/api/multi-agent` 自动切换 DAG/扁平路径(向后兼容) + `dispatch_sub_agent` observation 标准化(`summary`/`all_completed`/`completed_count`/`total_tokens`/`succeeded`/`result_truncated` + 4KB UTF-8 安全截断)；新增 `dispatch_observation_test.go` 5 例；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0) 验证通过 |
+| v0.9.7 Alpha | 2026-07-21 | Phase 7-H2 阶段 6: AgentBus 隔离 + Router 死代码闭环 — worker Engine 改 `RegisterHandlerBySubTask`(此前 agentID-only 注册导致并发 session 同名 worker 串台) + `handleRecoverCheckpoint` EngineConfig 补 `Router/Registry/Providers`(恢复路径也触发 `model_routed`)；新增 `TestAgentBus_ConcurrentSameAgentIDDifferentSubTask`/`TestAgentBus_WorkerUnregisterBySubTask`；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0，含 4d Router 触发 PASS) 验证通过 |

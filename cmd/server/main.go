@@ -1711,7 +1711,7 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr)
+		handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr, modelRegistry, modelRouter, routerProviders)
 	})
 
 	// Memory API (Phase 6 / Phase 5-B)
@@ -2416,7 +2416,7 @@ func handleListCheckpoints(w http.ResponseWriter, _ *http.Request, cm *runtime.C
 // handleRecoverCheckpoint 从 checkpoint 恢复任务。
 // POST /api/checkpoints/recover
 // Body: {"task_id": "task_xxx"}
-func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, agentBus runtime.AgentBus, cm *runtime.CheckpointManager) {
+func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, agentBus runtime.AgentBus, cm *runtime.CheckpointManager, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider) {
 	var req struct {
 		TaskID string `json:"task_id"`
 	}
@@ -2489,6 +2489,13 @@ func handleRecoverCheckpoint(w http.ResponseWriter, r *http.Request, hub *ws.Hub
 		ApprovalHandler:   approvalHandler,
 		AgentBus:          agentBus,
 		CheckpointManager: cm,
+		// Phase 7-H2 阶段 6 (MA8)：恢复路径同样接入 Router，使 checkpoint
+		// 恢复后的 think step 也能触发 model_routed 事件、按 intent 选 tier，
+		// 与 chat / orchestrator 路径行为一致。modelRouter 为 nil 时 Engine
+		// 透明回退到 cfg.Model（legacy 行为）。
+		Router:    modelRouter,
+		Registry:  modelRegistry,
+		Providers: routerProviders,
 	}
 
 	engine := runtime.RecoverFromCheckpoint(cp, cfg_, tools, &hubAdapter{hub: hub}, req.TaskID)

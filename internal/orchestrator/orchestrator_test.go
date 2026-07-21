@@ -204,3 +204,92 @@ func TestAgentBus_FallsBackToAgentIDOnly(t *testing.T) {
 		// 预期：exact handler 未被调用。
 	}
 }
+
+// TestAgentBus_ConcurrentSameAgentIDDifferentSubTask 验证 Phase 7-H2 阶段 6
+// (MA7) 的核心隔离契约：两个同名 agent（例如两个 session 各自的 "agent_writer"）
+// 在不同 subTaskID 下注册的 handler 互不串台——发给 (agent_writer, subA) 的消息
+// 不会进入 (agent_writer, subB) 的 handler，反之亦然。
+//
+// 背景：worker 以前走 agentID-only RegisterHandler，后注册的会覆盖前者，导致并发
+// session 同名 worker 的 AgentBus 消息被错误投递。现在 worker 也按 SubTaskID 注册。
+func TestAgentBus_ConcurrentSameAgentIDDifferentSubTask(t *testing.T) {
+	bus := NewAgentBus()
+
+	gotA := make(chan AgentMessage, 1)
+	gotB := make(chan AgentMessage, 1)
+
+	bus.RegisterHandlerBySubTask("agent_writer", "subA", func(msg AgentMessage) {
+		gotA <- msg
+	})
+	bus.RegisterHandlerBySubTask("agent_writer", "subB", func(msg AgentMessage) {
+		gotB <- msg
+	})
+
+	// 发往 subA 的消息只能进 gotA。
+	bus.SendMessage(AgentMessage{
+		FromAgentID: "agent_researcher", ToAgentID: "agent_writer",
+		SubTaskID: "subA", Type: "observation", Content: "for A",
+	})
+	// 发往 subB 的消息只能进 gotB。
+	bus.SendMessage(AgentMessage{
+		FromAgentID: "agent_researcher", ToAgentID: "agent_writer",
+		SubTaskID: "subB", Type: "observation", Content: "for B",
+	})
+
+	select {
+	case msg := <-gotA:
+		if msg.Content != "for A" {
+			t.Errorf("subA handler got %q, want for A", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subA handler not called")
+	}
+	select {
+	case msg := <-gotB:
+		if msg.Content != "for B" {
+			t.Errorf("subB handler got %q, want for B", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subB handler not called")
+	}
+
+	// 交叉检查：两个 channel 各自只收到一条，没有串台。
+	select {
+	case extra := <-gotA:
+		t.Errorf("subA handler received stray message: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case extra := <-gotB:
+		t.Errorf("subB handler received stray message: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestAgentBus_WorkerUnregisterBySubTask 验证 worker 退出时按 subTaskID 注销，
+// 不会误删同名但不同 subTaskID 的 handler（MA7 配套清理正确性）。
+func TestAgentBus_WorkerUnregisterBySubTask(t *testing.T) {
+	bus := NewAgentBus()
+
+	gotB := make(chan AgentMessage, 1)
+	bus.RegisterHandlerBySubTask("agent_writer", "subA", func(AgentMessage) {})
+	bus.RegisterHandlerBySubTask("agent_writer", "subB", func(msg AgentMessage) {
+		gotB <- msg
+	})
+
+	// subA 退出：只应删除 (agent_writer, subA)，subB 仍可投递。
+	bus.UnregisterHandlerBySubTask("agent_writer", "subA")
+
+	bus.SendMessage(AgentMessage{
+		FromAgentID: "x", ToAgentID: "agent_writer",
+		SubTaskID: "subB", Type: "observation", Content: "still alive",
+	})
+	select {
+	case msg := <-gotB:
+		if msg.Content != "still alive" {
+			t.Errorf("subB got %q, want still alive", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unregistering subA should not affect subB delivery")
+	}
+}
