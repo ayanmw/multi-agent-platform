@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import ManageTabs from './ManageTabs.vue'
 import SkillPanel from './SkillPanel.vue'
+import TodoPanel from './TodoPanel.vue'
 import CaseFilter from './CaseFilter.vue'
 import CaseCard from './CaseCard.vue'
 import CaseDetailModal from './CaseDetailModal.vue'
@@ -15,6 +16,7 @@ import { useCaseStore } from '@/composables/useCaseStore'
 import { useToast } from '@/composables/useToast'
 import { useSkills } from '@/composables/useSkills'
 import { useTaskStore } from '@/composables/useTaskStore'
+import { useSessionStore } from '@/composables/useSessionStore'
 import { useProjectStore } from '@/composables/useProjectStore'
 import { useTraceStore } from '@/composables/useTraceStore'
 import type { Case, CreateCaseRequest, UpdateCaseRequest } from '@/types/case'
@@ -66,6 +68,7 @@ const { filteredCases, allTags, allCategories, selectedTags, selectedCategory, l
 const { skills } = useSkills()
 const { activeTaskId, taskCache } = useTaskStore()
 const { activeProject } = useProjectStore()
+const { activeSession } = useSessionStore()
 const traceStore = useTraceStore()
 
 /** 当前在 ContextWindowPanel 中查看的子任务 / Agent 实例 */
@@ -174,6 +177,10 @@ function handleMemorySelect(id: string) {
 
       <div v-else-if="activeTab === 'rag'" class="tab-pane">
         <RAGPreviewPanel :project-id="activeProject?.id || 'default'" />
+      </div>
+
+      <div v-else-if="activeTab === 'todos'" class="tab-pane">
+        <TodoPanel :session-id="activeSession?.id || ''" />
       </div>
 
       <div v-else-if="activeTab === 'context'" class="tab-pane">

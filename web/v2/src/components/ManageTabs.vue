@@ -22,6 +22,7 @@ const emit = defineEmits<{
 const tabs = [
   { id: 'memory', label: 'Memory' },
   { id: 'rag', label: 'RAG' },
+  { id: 'todos', label: 'TODOs' },
   { id: 'context', label: 'Context' },
   { id: 'cases', label: 'Cases' },
   { id: 'agents', label: 'Agents' },

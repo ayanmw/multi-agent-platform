@@ -564,10 +564,11 @@ const activeTaskId = ref<string | null>(null)
 - Skill E2E 测试通过
 
 ### 已知限制 / 后续规划
-- [x] 前端 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
+- [x] 前端 v1 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
 - [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
+- [ ] 前端 v2 TODO 面板在 `web/v2/` 的 Inspector/Dock 中集成（当前 v1 已完成，v2 待接入）
 - [ ] TODO 拖拽排序与嵌套子任务 UI 展示
-- [ ] 未接入审批/PolicyGate（todo 工具默认受现有 ToolWhitelist/TagPolicy 约束）
+- [x] todo/* 工具默认受通用 ToolWhitelist/TagPolicy 约束，无需单独审批门控；已在前端备注说明
 
 ---
 
