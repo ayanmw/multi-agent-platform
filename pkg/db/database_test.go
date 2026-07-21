@@ -83,7 +83,7 @@ func TestInitIdempotentMigrations(t *testing.T) {
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if want := len(migrations); count != want {
+	if want := len(deduplicateMigrations(migrations)); count != want {
 		t.Errorf("schema_migrations row count = %d, want %d (duplicates suggest non-idempotent migration)", count, want)
 	}
 }
@@ -108,7 +108,7 @@ func TestInitTwiceSameFile(t *testing.T) {
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if want := len(migrations); count != want {
+	if want := len(deduplicateMigrations(migrations)); count != want {
 		t.Errorf("after re-Init, schema_migrations row count = %d, want %d", count, want)
 	}
 }

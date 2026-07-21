@@ -401,6 +401,14 @@ type EngineConfig struct {
 
 	// SkillVariables 提供用于渲染 skill 模板的变量值。
 	SkillVariables map[string]any
+
+	// ActiveTodos 是可选的当前 session 待办列表文本（已格式化）。
+	// 当非空时，NewEngine 会把它追加到 system prompt 中，让 LLM 了解
+	// 当前 session 的未完成 TODO。该字段由 cmd/server 在构造 EngineConfig
+	// 前调用 todo.FormatActiveTodos 生成；runtime 包不直接依赖 internal/todo，
+	// 从而避免 import cycle。
+	// Phase 7 TODO 子系统引入。
+	ActiveTodos string
 }
 
 // OnLLMUsage 是每次成功 LLM 调用后被调用的回调类型。
@@ -566,6 +574,14 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 			systemPrompt += "\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n")
 		}
 	}
+
+	// Phase 7 TODO: 把当前 session 的 active TODO 列表注入 system prompt。
+	// 空字符串表示无 active todo，不追加任何内容，避免污染 prompt。
+	if cfg.ActiveTodos != "" {
+		systemPrompt += "\n\n" + cfg.ActiveTodos + "\n"
+		systemPrompt += "You can use the todo/* tools to manage these todos (create, update status, list, delete, etc.).\n"
+	}
+
 	return &Engine{
 		cfg:              cfg,
 		llm:              provider,

@@ -2,6 +2,8 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useLayout } from '../composables/useLayout'
 import OptionsFlyout from './OptionsFlyout.vue'
+import { useTodoStore } from '@/composables/useTodoStore'
+import { useSessionStore } from '@/composables/useSessionStore'
 
 /**
  * 底部命令输入条（TaskInput 的 v2 升级版），现在作为中栏底部输入区使用。
@@ -49,6 +51,13 @@ const props = withDefaults(
 )
 
 const { isMobile } = useLayout()
+
+// TODO 堆积提示：当前 session 存在未完成 TODO 时，在输入条上方显示提示条。
+const { activeCount, highPriorityCount } = useTodoStore()
+const { activeSession } = useSessionStore()
+const todoActiveCount = computed(() => activeSession.value ? activeCount(activeSession.value.id) : 0)
+const todoHighPriorityCount = computed(() => activeSession.value ? highPriorityCount(activeSession.value.id) : 0)
+const showTodoNotice = computed(() => todoActiveCount.value > 0)
 
 const emit = defineEmits<{
   (e: 'send', text: string, options: { maxSteps: number; timeoutSeconds: number }): void
@@ -175,6 +184,18 @@ watch(
       <div class="progress-fill" :style="{ width: progress + '%' }" />
     </div>
 
+    <!-- TODO 堆积提醒：有活跃 TODO 时显示在输入条主体上方，不占用输入框空间。 -->
+    <div v-if="showTodoNotice" class="todo-notice" :class="{ 'todo-notice--urgent': todoHighPriorityCount > 0 }">
+      <span class="todo-notice-icon">📝</span>
+      <span class="todo-notice-text">
+        {{ todoActiveCount }} active TODO{{ todoActiveCount > 1 ? 's' : '' }}
+        <template v-if="todoHighPriorityCount > 0">
+          · {{ todoHighPriorityCount }} high priority
+        </template>
+      </span>
+      <span class="todo-notice-hint">open Manage → TODOs</span>
+    </div>
+
     <div class="command-main">
       <div class="command-left">
         <button
@@ -264,6 +285,40 @@ watch(
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
+}
+
+.todo-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: -4px -14px 10px;
+  background: rgba(0, 229, 255, 0.08);
+  border-top: 1px solid rgba(0, 229, 255, 0.18);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.10);
+  color: var(--accent-running, #00e5ff);
+  font-size: 0.72rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.todo-notice--urgent {
+  background: rgba(255, 82, 82, 0.08);
+  border-color: rgba(255, 82, 82, 0.25);
+  color: var(--accent-danger, #ff5252);
+}
+
+.todo-notice-icon {
+  flex-shrink: 0;
+}
+
+.todo-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.todo-notice-hint {
+  color: var(--text-muted, #5c6675);
+  font-size: 0.65rem;
 }
 
 .progress-strip {

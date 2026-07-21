@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-21
-> **当前版本**: v0.8.0 Alpha（Skill 系统 + MCP 按 agent 可见性 + contract limits 闭环）
+> **当前版本**: v0.10.0 Alpha（Session 级 TODO 子系统落地）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase UI-v2 🚧 (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton)
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)
 ```
 
 ---
@@ -539,6 +539,40 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase TODO: Session 级 TODO 子系统 ✅ 已完成 (2026-07-21)
+
+**目标**: 让 LLM Agent 与前端共享同一个 session 级 TODO 列表，支持创建/更新状态/列出/删除/清理，并自动广播变更事件与注入 system prompt。
+
+### 交付物
+- [x] `pkg/db/todo.go`: `todos` 表迁移（v23）+ CRUD/SQLite 持久化
+- [x] `internal/todo/model.go`: `Todo` / `TodoStatus` 领域模型，`IsTerminal` 行为
+- [x] `internal/todo/store.go`: `DBStore` 接口，`Store` 薄封装，打破 import cycle
+- [x] `internal/todo/service.go`: `Service` 业务层，`Create/Update/UpdateStatus/Delete/List/ListByTask/ClearAll`，写入后广播 `todo_list_changed`
+- [x] `internal/todo/service.go`: `FormatActiveTodos` 渲染 markdown 列表供 Engine 注入
+- [x] `internal/tool/todo.go`: 6 个 Agent Tools（`todo/create`、`todo/update`、`todo/update_status`、`todo/delete`、`todo/list`、`todo/clear_all`）
+- [x] `cmd/server/api_todo.go`: `/api/todos` REST API（GET/POST/PUT/PATCH/DELETE/Clear）
+- [x] `cmd/server/main.go`: 初始化 `todo.Service`、注册 Tools、挂载 REST 路由、注入 `EngineConfig.ActiveTodos`
+- [x] `internal/runtime/engine.go`: `EngineConfig.ActiveTodos` 字段；`NewEngine` 将其追加到 system prompt
+- [x] 事件：写入操作通过 hub 广播 `todo_list_changed`（含当前 active todos）
+- [x] 单元测试：`internal/todo/service_test.go`、`internal/tool/todo_test.go`、`cmd/server/api_todo_test.go`
+- [x] Engine 注入测试：`internal/runtime/engine_todo_test.go`
+- [x] 无回归：`TestSkillPromptInjectedE2E` 仍通过
+
+### 验证标准
+- `go build ./...` 通过
+- `go test ./... -count=1 -timeout 120s` 通过
+- Skill E2E 测试通过
+
+### 已知限制 / 后续规划
+- [x] 前端 v1 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
+- [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
+- [x] 前端 v2 TODO 面板在 `web/v2/` 的 Manage Dialog 中集成（Create/Toggle Status/Edit/Delete/ClearCompleted）
+- [x] 前端 v2 TODO 未完成计数徽标（TopBar Manage 按钮）与输入条 TODO 堆积提示
+- [x] TODO 拖拽排序与嵌套子任务 UI 展示（拖入子任务、级联完成、折叠展开、循环检测）
+- [x] todo/* 工具默认受通用 ToolWhitelist/TagPolicy 约束，无需单独审批门控；已在前端备注说明
+
+---
+
 ## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
 **目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
@@ -747,3 +781,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.5 Alpha | 2026-07-21 | Phase 7-H2 阶段 4: 编排层可观测事件(`decompose_done`/`agent_dispatched`/`agent_completed`) + root final_result worker 聚合摘要 + RunBlocking 显式 UpdateTask 终态(MA9)；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(14/0/3) 验证通过 |
 | v0.9.6 Alpha | 2026-07-21 | Phase 7-H2 阶段 5: workflow DAG 表达力落地 — `WorkflowNode/Edge/AgentWorkflow` 数据模型 + decomposer 解析 `workflow.nodes/edges/dependencies/condition` + `RunBlockingDAG` Kahn 拓扑调度(条件 DSL `<id>.completed\|\|.failed` + `&&/\|\|/()` + skipped 传播) + `/api/multi-agent` 自动切换 DAG/扁平路径(向后兼容) + `dispatch_sub_agent` observation 标准化(`summary`/`all_completed`/`completed_count`/`total_tokens`/`succeeded`/`result_truncated` + 4KB UTF-8 安全截断)；新增 `dispatch_observation_test.go` 5 例；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0) 验证通过 |
 | v0.9.7 Alpha | 2026-07-21 | Phase 7-H2 阶段 6: AgentBus 隔离 + Router 死代码闭环 — worker Engine 改 `RegisterHandlerBySubTask`(此前 agentID-only 注册导致并发 session 同名 worker 串台) + `handleRecoverCheckpoint` EngineConfig 补 `Router/Registry/Providers`(恢复路径也触发 `model_routed`)；新增 `TestAgentBus_ConcurrentSameAgentIDDifferentSubTask`/`TestAgentBus_WorkerUnregisterBySubTask`；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0，含 4d Router 触发 PASS) 验证通过 |
+| v0.10.0 Alpha | 2026-07-21 | Session 级 TODO 子系统: `todos` 表 + `internal/todo` Service + `todo/*` Agent Tools 6 个 + `/api/todos` REST API + Engine system prompt 注入 Active TODO + 单元/E2E 测试 + 拖拽排序/嵌套子任务 + 树形拖拽渲染 |

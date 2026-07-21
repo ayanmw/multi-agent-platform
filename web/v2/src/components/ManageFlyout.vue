@@ -28,6 +28,7 @@ const emit = defineEmits<{
 const menuItems = [
   { id: 'memory', label: 'Memory', icon: '🧠' },
   { id: 'rag', label: 'RAG', icon: '📚' },
+  { id: 'todos', label: 'TODOs', icon: '📝' },
   { id: 'cases', label: 'Cases', icon: '📋' },
   { id: 'agents', label: 'Agents', icon: '⚙' },
   { id: 'project', label: 'Project', icon: '🏗' },

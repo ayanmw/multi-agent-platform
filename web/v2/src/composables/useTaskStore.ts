@@ -7,6 +7,8 @@ import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData, ToolVisibilityData } from '@/types/events'
 import type { EvaluationResult } from '@/types/case'
+import type { Todo, TodoListChangedData } from '@/types/todo'
+import { useTodoStore } from './useTodoStore'
 
 //Persisted step → Step converter shared between root steps and child steps.
 function persistedStepToStep(s: any, taskStartedAt: number): Step {
@@ -519,6 +521,16 @@ export function useTaskStore() {
         const durationMs = (evt.data.duration_ms as number) ?? undefined
         if (sid && durationMs !== undefined) {
           updateSession(sid, { durationMs })
+        }
+        break
+      }
+
+      case 'todo_list_changed': {
+        // 由后端 todo.Service 写入操作后广播，同步到 useTodoStore 避免前端主动轮询
+        const data = evt.data as unknown as TodoListChangedData
+        const todoStore = useTodoStore()
+        if (data?.session_id) {
+          todoStore.setTodos(data.session_id, (data.todos || []) as Todo[])
         }
         break
       }

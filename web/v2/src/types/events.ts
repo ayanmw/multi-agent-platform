@@ -51,6 +51,8 @@ export type EventType =
   | 'decompose_done'
   | 'agent_dispatched'
   | 'agent_completed'
+  // TODO subsystem events
+  | 'todo_list_changed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

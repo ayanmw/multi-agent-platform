@@ -207,10 +207,41 @@ func createTables() error {
 			FOREIGN KEY (source_id) REFERENCES memories(id),
 			FOREIGN KEY (target_id) REFERENCES memories(id)
 		)`,
+		// Phase todo: 待办事项表，用于在多轮会话/多 Agent 任务中跟踪子任务。
+		`CREATE TABLE IF NOT EXISTS todos (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			created_by_task_id TEXT NOT NULL,
+			active_task_id TEXT,
+			parent_todo_id TEXT,
+			title TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			priority INTEGER DEFAULT 0,
+			sort_order INTEGER DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			completed_at INTEGER
+		)`,
 	}
 
 	for _, schema := range schemas {
 		if _, err := DB.Exec(schema); err != nil {
+			return err
+		}
+	}
+
+	// Phase todo: todos 表索引
+	todoIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_todos_session_id ON todos(session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_todos_created_by_task_id ON todos(created_by_task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_todos_active_task_id ON todos(active_task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_todos_parent_todo_id ON todos(parent_todo_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_todos_priority_sort_order_created_at ON todos(priority DESC, sort_order ASC, created_at ASC)`,
+	}
+	for _, idx := range todoIndexes {
+		if _, err := DB.Exec(idx); err != nil {
 			return err
 		}
 	}

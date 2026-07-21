@@ -50,6 +50,7 @@ import ApprovalDialog from './components/ApprovalDialog.vue'
 import RecentModsDialog from './components/RecentModsDialog.vue'
 import ModelPricesDialog from './components/ModelPricesDialog.vue'
 import MCPServerDialog from './components/MCPServerDialog.vue'
+import TodoPanel from './components/TodoPanel.vue'
 import { useToast } from './composables/useToast'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useRecentMods } from './composables/useRecentMods'
@@ -117,6 +118,17 @@ const modelPricesVisible = ref(false)
 
 // === MCP Server 管理 Dialog 状态 ===
 const mcpServerDialogVisible = ref(false)
+
+// === TODO Panel 状态 ===
+const todoPanelVisible = ref(false)
+
+function toggleTodoPanel() {
+  todoPanelVisible.value = !todoPanelVisible.value
+}
+
+function closeTodoPanel() {
+  todoPanelVisible.value = false
+}
 
 const {
   items: recentMods,
@@ -1358,7 +1370,8 @@ function formatShortTime(ts: number): string {
             <button class="agents-btn" @click="showAgentConfig = true" title="Agent Configuration">⚙ Agents</button>
             <button class="agents-btn" @click="toggleMemoryBrowser" title="Memory Browser">🧠 Memory</button>
             <button class="recent-mods-btn" @click="mcpServerDialogVisible = true" title="MCP Server 管理">🔌</button>
-            <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">📝</button>
+            <button class="recent-mods-btn" @click="toggleTodoPanel" title="Session TODOs">📝</button>
+            <button class="recent-mods-btn" @click="toggleRecentMods" title="最近修改 (Ctrl+M)">🕒</button>
             <button class="recent-mods-btn" @click="modelPricesVisible = true" title="模型价格管理">💲</button>
             <button class="tips-btn" @click="showTips = true" title="Keyboard shortcuts (?)">⌨</button>
             <VersionSwitcher />
@@ -1578,6 +1591,13 @@ function formatShortTime(ts: number): string {
       <MCPServerDialog
         :visible="mcpServerDialogVisible"
         @update:visible="mcpServerDialogVisible = $event"
+      />
+
+      <!-- Session TODO Panel: 列出 / 创建 / 更新 / 删除 TODO -->
+      <TodoPanel
+        v-if="todoPanelVisible"
+        :session-id="activeSessionId || ''"
+        @close="closeTodoPanel"
       />
     </main>
   </div>
