@@ -19,14 +19,14 @@ type fakeSched struct {
 	updateErr error
 }
 
-func (s *fakeSched) Add(c Cron) error {
+func (s *fakeSched) AddNoCtx(c Cron) error {
 	s.mu.Lock()
 	s.adds = append(s.adds, c.ID)
 	err := s.addErr
 	s.mu.Unlock()
 	return err
 }
-func (s *fakeSched) Update(c Cron) error {
+func (s *fakeSched) UpdateNoCtx(c Cron) error {
 	s.mu.Lock()
 	s.updates = append(s.updates, c.ID)
 	err := s.updateErr

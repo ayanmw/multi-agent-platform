@@ -201,6 +201,23 @@ func (s *Scheduler) Update(ctx context.Context, c Cron) error {
 	return s.Add(ctx, c)
 }
 
+// AddNoCtx / UpdateNoCtx 是无 context 版本，供 Service 通过 SchedulerPort 接口调用。
+// 内部用 Scheduler 启动时缓存的 cancel-able context。
+func (s *Scheduler) AddNoCtx(c Cron) error {
+	return s.Add(s.lifecycleCtx(), c)
+}
+func (s *Scheduler) UpdateNoCtx(c Cron) error {
+	return s.Update(s.lifecycleCtx(), c)
+}
+
+// lifecycleCtx 返回调度器生命周期 context；未启动时返回 background。
+func (s *Scheduler) lifecycleCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 没有保存独立 ctx，用 background；robfig 回调里用的 ctx 不影响触发。
+	return context.Background()
+}
+
 // Stop 停止调度器并清理所有定时项。
 func (s *Scheduler) Stop() {
 	s.mu.Lock()

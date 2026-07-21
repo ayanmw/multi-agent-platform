@@ -20,16 +20,14 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// SchedulerPort 是 Service 依赖的 Scheduler 接口（Add/Update/Remove/Start）。
+// SchedulerPort 是 Service 依赖的 Scheduler 接口。
+// 用无 ctx 版本（Scheduler 内部自管理 context）。
 type SchedulerPort interface {
-	Add(c Cron) error
-	Update(c Cron) error
+	AddNoCtx(c Cron) error
+	UpdateNoCtx(c Cron) error
 	Remove(cronID string)
 }
 
-// SchedulerAddCtx 是 Scheduler 的带 ctx 版本，Service 通过适配器调用。
-// 为简化，Service 直接调 Scheduler 的无 ctx 方法——Scheduler 内部用自己的 ctx。
-// 因此 Scheduler 需要额外暴露无 ctx 的 Add/Update。见 scheduler.go 的 AddNoCtx/UpdateNoCtx。
 
 // ExecutorPort2 是 Service 依赖的 Executor 手动触发接口。
 type ExecutorPort2 interface {
@@ -109,7 +107,7 @@ func (s *Service) Create(in CreateInput) (*Cron, error) {
 		return nil, fmt.Errorf("insert cron: %w", err)
 	}
 	if s.sched != nil {
-		if err := s.sched.Add(c); err != nil {
+		if err := s.sched.AddNoCtx(c); err != nil {
 			// 调度注册失败不回滚 DB（cron 仍在，可手动修复后 enable），
 			// 但记日志并通过事件暴露。
 			if s.bus != nil {
@@ -190,7 +188,7 @@ func (s *Service) Update(id string, in UpdateInput) (*Cron, error) {
 	}
 	// 若 enabled 且调度变了，重新注册
 	if scheduleChanged && s.sched != nil && c.Status == StatusEnabled {
-		if err := s.sched.Update(c); err != nil {
+		if err := s.sched.UpdateNoCtx(c); err != nil {
 			if s.bus != nil {
 				s.bus.SendEvent(newCronEvent(event.EventCronMissed, c.ID, "cron", map[string]any{
 					"reason": "scheduler update failed: " + err.Error(),
@@ -261,7 +259,7 @@ func (s *Service) SetStatus(id string, status Status) (*Cron, error) {
 	case StatusEnabled:
 		evtType = event.EventCronEnabled
 		if s.sched != nil {
-			if err := s.sched.Add(c); err != nil && s.bus != nil {
+			if err := s.sched.AddNoCtx(c); err != nil && s.bus != nil {
 				s.bus.SendEvent(newCronEvent(event.EventCronMissed, c.ID, "cron", map[string]any{
 					"reason": "scheduler add failed on enable: " + err.Error(),
 				}))
