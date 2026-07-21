@@ -47,6 +47,8 @@ export type EventType =
   | 'mcp_tools_changed'
   // Trace span events (Phase 7-C)
   | 'trace_span'
+  // TODO subsystem events
+  | 'todo_list_changed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

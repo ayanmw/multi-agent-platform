@@ -7,6 +7,8 @@ import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData } from '../types/events'
 import type { EvaluationResult } from '../types/case'
+import type { Todo, TodoListChangedData } from '../types/todo'
+import { useTodoStore } from './useTodoStore'
 
 // 模块级引用，用于最近修改记录
 const { addItem: addRecentMod } = useRecentMods()
@@ -461,6 +463,16 @@ export function useTaskStore() {
         const durationMs = (evt.data.duration_ms as number) ?? undefined
         if (sid && durationMs !== undefined) {
           updateSession(sid, { durationMs })
+        }
+        break
+      }
+
+      case 'todo_list_changed': {
+        // 由后端 todo.Service 写入操作后广播，同步到 useTodoStore 避免前端主动轮询
+        const data = evt.data as unknown as TodoListChangedData
+        const todoStore = useTodoStore()
+        if (data?.session_id) {
+          todoStore.setTodos(data.session_id, (data.todos || []) as Todo[])
         }
         break
       }

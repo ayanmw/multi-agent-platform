@@ -564,9 +564,9 @@ const activeTaskId = ref<string | null>(null)
 - Skill E2E 测试通过
 
 ### 已知限制 / 后续规划
-- [ ] 前端 TODO 面板尚未实现（当前仅后端 API + Agent Tools + prompt 注入）
-- [ ] TODO 变更事件 `todo_list_changed` 未在前端 `useTaskStore` 中处理
-- [ ] 不支持 TODO 拖拽排序与嵌套子任务 UI 展示
+- [x] 前端 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
+- [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
+- [ ] TODO 拖拽排序与嵌套子任务 UI 展示
 - [ ] 未接入审批/PolicyGate（todo 工具默认受现有 ToolWhitelist/TagPolicy 约束）
 
 ---
