@@ -60,6 +60,41 @@ var (
 	traceRegistry sync.Map
 )
 
+// init 在 main 之前注册 tracer 回调，使每个 span 完成时都能以 trace_span
+// WebSocket 事件广播到前端。回调必须是轻量非阻塞的：这里只组装事件并交给
+// hub，不执行 IO 或复杂序列化。
+func init() {
+	tracer.SetOnSpan(func(rec observability.SpanRecord) {
+		if hubInstance == nil {
+			return
+		}
+		hubInstance.SendEvent(event.NewEventWithSubTask(event.EventTraceSpan, rec.TaskID, "", rec.AgentID, 0, spanRecordToMap(rec)))
+	})
+}
+
+// hubInstance 由 main() 在创建 ws.Hub 后设置，供 init 注册的 tracer 回调使用。
+var hubInstance *ws.Hub
+
+// spanRecordToMap 把 SpanRecord 序列化为前端 TraceTreePanel 期望的 map 格式。
+func spanRecordToMap(rec observability.SpanRecord) map[string]any {
+	attrs := rec.Attributes
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+	return map[string]any{
+		"trace_id":       rec.TraceID,
+		"span_id":        rec.SpanID,
+		"parent_span_id": rec.ParentSpanID,
+		"task_id":        rec.TaskID,
+		"agent_id":       rec.AgentID,
+		"operation":      rec.Operation,
+		"start_time":     rec.StartTime.UnixMilli(),
+		"duration_ms":    rec.DurationMS,
+		"status":         rec.Status,
+		"attributes":     attrs,
+	}
+}
+
 // globalSkillRegistry 是 Skill 子系统的全局注册表引用。
 //
 // 在 main() 中初始化后保留为包级变量，让 runAgentLoopWithTurn 等闭包能直接把
@@ -196,6 +231,7 @@ func main() {
 
 	// 初始化 WebSocket Hub
 	hub := ws.NewHub()
+	hubInstance = hub
 	go hub.Run()
 
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
@@ -560,6 +596,10 @@ func main() {
 	// 因为 dispatcher 依赖它。
 	orch := orchestrator.New(hub, cfg, nil, persist, nil, nil, modelRouter, modelRegistry, routerProviders)
 	globalOrchestrator = orch
+	// Phase 7-H2: 把共享 tracer 注入 orchestrator，让子 agent 的 span 能挂载
+	// 到 orchestration root 下。rootTraceCtx 为 nil 时 StartRoot 会在 RunBlocking
+	// 里自动创建。
+	orch.SetTracer(tracer, nil)
 
 	// 用内置 tool 初始化基础 registry（不含 leader 专用工具）。
 	// leader 工具在 runAgentLoopWithTurn 中按 task 动态注入克隆后的 registry，

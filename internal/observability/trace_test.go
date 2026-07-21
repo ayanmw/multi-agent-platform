@@ -12,7 +12,7 @@ func TestTracerStartFinish(t *testing.T) {
 		t.Fatal("trace_id and span_id must be set")
 	}
 
-	ctx2 := tracer.StartChild(ctx, "think-step")
+	ctx2 := tracer.StartChild(ctx, "agent_default", "think-step")
 	tracer.Finish(ctx2, nil)
 	tracer.Finish(ctx, nil)
 

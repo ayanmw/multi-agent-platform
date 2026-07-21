@@ -405,7 +405,6 @@ echo "    响应: ${MA3_RESP}"
 MA3_PARSED=$(parse_ma_response "$MA3_RESP")
 MA3_TASK=$(pget "$MA3_PARSED" "task_id")
 MA3_COUNT=$(pget "$MA3_PARSED" "agent_count")
-MA3_IDS=$(pget "$MA2_PARSED" "agent_ids")
 MA3_IDS=$(pget "$MA3_PARSED" "agent_ids")
 echo "    task_id=${MA3_TASK}, agent_count=${MA3_COUNT}, agent_ids=${MA3_IDS}"
 

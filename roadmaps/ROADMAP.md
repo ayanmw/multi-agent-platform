@@ -662,14 +662,16 @@ const activeTaskId = ref<string | null>(null)
   - chat 与 multi-agent 统一走 `/api/tasks` leader-driven 入口
 - [x] `web/v2/src/composables/useTaskStore.ts`：`startMultiAgentTask` 改 POST `/api/tasks` with `action:"multi-agent"`；前端为返回的 `agent_ids` 预创建 leader lane
 - [x] `web/v2/src/App.vue`：multi-agent 在已有 session 上触发时仍调用 `startMultiAgentTask`（不以 turn 方式追加），保证 leader 每次都从 root 开始
-- [ ] 保留 `/api/multi-agent` 入口作"显式 agents 静态编排"兼容路径（已保留，待后续回归测试补齐）
-- [ ] smoke 验证：前端开 multi-agent → 出现 leader lane + `dispatch_sub_agent` tool_call + 子 agent observation 回喂
+- [x] `internal/orchestrator/decomposer.go`：新增 `StringSlice` 类型兼容 LLM 把 `output_to` 输出为单个字符串或字符串数组的两种情况，修复真实 LLM 下 LLMDecomposer parse failed 退回到规则分解器的问题
+- [x] 保留 `/api/multi-agent` 入口作"显式 agents 静态编排"兼容路径（已保留并通过 `scripts/multi-agent-smoke.sh` / `scripts/real-llm-smoke.sh` 回归）
+- [x] smoke 验证：`scripts/multi-agent-smoke.sh` 全 PASS (12/0/0)；`scripts/real-llm-smoke.sh` 场景 3 在 18s 内完成，status=completed，agents=2
 
 #### 阶段 2 — Tracer 接入事件流（MA3 + MA4）
-- [ ] `internal/observability/trace.go`：`Tracer` 增加 `OnSpan func(SpanRecord)` 字段，`push()` 末尾异步触发；`StartChild` 补 `AgentID` 参数
-- [ ] `cmd/server/main.go`：创建 tracer 后注册 `OnSpan` → `hub.SendEvent(event.NewEventWithSubTask(EventTraceSpan, rec.TaskID, "", rec.AgentID, 0, spanToMap(rec)))`
-- [ ] `internal/orchestrator/orchestrator.go`：`Orchestrator` 加 `Tracer` 字段 + `SetTracer`；`RunBlocking` 开头 `StartRoot(rootTaskID,"task")`，透传给 `runAgent` → `EngineConfig.Tracer/RootTraceCtx`
-- [ ] （可选）engine.go 补 tool / llm 子 span 埋点
+- [x] `internal/observability/trace.go`：`Tracer` 增加 `OnSpan func(SpanRecord)` 字段与 `SetOnSpan` 方法；`push()` 末尾异步触发回调；`StartChild(parent, agentID, operation)` 改为显式传入 agentID，避免 worker span 错误继承父级 agentID
+- [x] `internal/runtime/engine.go`: `EngineConfig.Tracer` 接口同步更新 `StartChild` 签名；`think()` 调用时传入 `e.cfg.AgentID`
+- [x] `cmd/server/main.go`：`init()` 注册 `tracer.SetOnSpan` 回调 → `hub.SendEvent(event.NewEventWithSubTask(EventTraceSpan, ...))`；新增 `hubInstance` 包级引用；新增 `spanRecordToMap` 序列化函数
+- [x] `internal/orchestrator/orchestrator.go`：`Orchestrator` 加 tracer 字段 + `SetTracer`；`RunBlocking` 开头 `StartRoot(rootTaskID,"orchestrate")` 并透传给子 agent `EngineConfig.Tracer/RootTraceCtx`
+- [ ] engine.go 补 tool / llm 子 span 埋点（可选，当前 think span 已覆盖主要调用）
 - [ ] smoke 验证：chat + multi-agent 都能在 Traces tab 看到 span 树，`agent_id` 列非空
 
 #### 阶段 3 — child steps 回填（MA5）
@@ -708,8 +710,8 @@ const activeTaskId = ref<string | null>(null)
 
 ### 验证基准
 
-- [ ] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
-- [ ] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，"all agents completed" 与 root task status 一致
+- [x] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
+- [x] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，`status=completed` 与 `agent_count=2` 一致（18s 完成）
 - [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + Traces 面板均有数据
 
 ---
@@ -740,3 +742,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
 | v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
+| v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |

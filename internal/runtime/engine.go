@@ -363,7 +363,7 @@ type EngineConfig struct {
 	// 为 nil 时跳过 tracing。
 	Tracer interface {
 		StartRoot(taskID, operation string) *observability.TraceContext
-		StartChild(parent *observability.TraceContext, operation string) *observability.TraceContext
+		StartChild(parent *observability.TraceContext, agentID, operation string) *observability.TraceContext
 		Finish(ctx *observability.TraceContext, err error)
 		FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
 	}
@@ -1425,7 +1425,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// Phase 7-C：为 think step 启动一个 child trace span。
 	var traceCtx *observability.TraceContext
 	if e.cfg.Tracer != nil && e.rootTraceCtx != nil {
-		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, "think")
+		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, e.cfg.AgentID, "think")
 	}
 
 	// 发出 llm_thinking：UI 展示 "Thinking..." 指示。这在 HTTP 请求发出

@@ -48,9 +48,10 @@ type SpanRecord struct {
 // Tracer 是一个简单的内存 span 生成器。它用有界 ring buffer 保存已完成
 // 的 span，运维方无需外部 collector 即可查询最近的 trace。
 type Tracer struct {
-	mu    sync.Mutex
-	spans []SpanRecord
-	limit int
+	mu     sync.Mutex
+	spans  []SpanRecord
+	limit  int
+	onSpan func(SpanRecord) // Phase 7-H2: 新 span 完成时的异步回调入口
 }
 
 // NewTracer 创建一个带界 span 缓冲的 tracer。
@@ -59,6 +60,14 @@ func NewTracer(limit int) *Tracer {
 		limit = 1000
 	}
 	return &Tracer{limit: limit}
+}
+
+// SetOnSpan 注册一个回调，每次 span 完成时被异步调用。
+// 用于把 trace span 转成 `trace_span` WebSocket 事件广播到前端。
+func (t *Tracer) SetOnSpan(fn func(SpanRecord)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onSpan = fn
 }
 
 func generateTraceID() string {
@@ -85,13 +94,15 @@ func (t *Tracer) StartRoot(taskID, operation string) *TraceContext {
 }
 
 // StartChild 创建一个 child span。调用 Finish 完成它。
-func (t *Tracer) StartChild(parent *TraceContext, operation string) *TraceContext {
+// 创建时会继承 parent 的 TaskID，但 AgentID 由调用方显式传入，以便 worker
+// sub-agent 的 span 能正确标识其实际 agent。
+func (t *Tracer) StartChild(parent *TraceContext, agentID, operation string) *TraceContext {
 	return &TraceContext{
 		TraceID:      parent.TraceID,
 		SpanID:       generateSpanID(),
 		ParentSpanID: parent.SpanID,
 		TaskID:       parent.TaskID,
-		AgentID:      parent.AgentID,
+		AgentID:      agentID,
 		Operation:    operation,
 		StartTime:    time.Now().UTC(),
 	}
@@ -150,6 +161,9 @@ func (t *Tracer) push(rec SpanRecord) {
 	t.spans = append(t.spans, rec)
 	if len(t.spans) > t.limit {
 		t.spans = t.spans[len(t.spans)-t.limit:]
+	}
+	if t.onSpan != nil {
+		go t.onSpan(rec)
 	}
 }
 

@@ -42,6 +42,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -137,6 +138,16 @@ type Orchestrator struct {
 	modelRouter     *llm.Router
 	routerRegistry  *llm.ModelRegistry
 	routerProviders map[string]llm.Provider
+
+	// Phase 7-H2: 可选 tracer，用于为 orchestrator 调度的子 agent 生成
+	// span。tracer 为 nil 时保留旧行为。
+	tracer interface {
+		StartRoot(taskID, operation string) *observability.TraceContext
+		StartChild(parent *observability.TraceContext, agentID, operation string) *observability.TraceContext
+		Finish(ctx *observability.TraceContext, err error)
+		FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
+	}
+	rootTraceCtx *observability.TraceContext
 }
 
 // New 创建一个新的 Orchestrator。
@@ -174,6 +185,19 @@ func (o *Orchestrator) SetPersistence(persist runtime.Persistence) {
 	o.persist = persist
 }
 
+// SetTracer 设置 tracer 与 root trace context。
+// 设置后，RunBlocking 会为本次 orchestration 生成 root span，并在每个
+// 子 agent 的 EngineConfig 中透传 Tracer/RootTraceCtx。
+func (o *Orchestrator) SetTracer(tracer interface {
+	StartRoot(taskID, operation string) *observability.TraceContext
+	StartChild(parent *observability.TraceContext, agentID, operation string) *observability.TraceContext
+	Finish(ctx *observability.TraceContext, err error)
+	FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
+}, rootTraceCtx *observability.TraceContext) {
+	o.tracer = tracer
+	o.rootTraceCtx = rootTraceCtx
+}
+
 // RunBlocking 启动所有 agent 并阻塞直到全部完成。
 // 返回每个 agent 一个结果的 slice，顺序与输入 specs 一致。
 //
@@ -186,6 +210,12 @@ func (o *Orchestrator) SetPersistence(persist runtime.Persistence) {
 // 设为根任务。这是持久化层用来构建 child_tasks 树的 hook。
 func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strategy string, specs []AgentSpec) []AgentResult {
 	results := make([]AgentResult, len(specs))
+
+	// Phase 7-H2: 若 tracer 已设置，为本次 orchestration 启动 root span。
+	var orchTraceCtx *observability.TraceContext
+	if o.tracer != nil {
+		orchTraceCtx = o.tracer.StartRoot(rootTaskID, "orchestrate")
+	}
 
 	// Phase 7-C: "pipeline" 通过 OutputTo 链式转发实现，底层复用 parallel 调度。
 	if strategy == "pipeline" {
@@ -279,6 +309,9 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			"reason":       rootResult,
 			"total_tokens": rootTokens,
 		}))
+	}
+	if o.tracer != nil && orchTraceCtx != nil {
+		o.tracer.Finish(orchTraceCtx, nil)
 	}
 
 	return results
@@ -413,6 +446,10 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// 7-G: 子 agent 拥有各自的 SubTaskID，这样事件和 snapshot 会按
 		// 每个 agent 执行实例相互隔离。
 		SubTaskID: subTaskID,
+		// Phase 7-H2: 把 tracer/rootTraceCtx 透传给子 agent engine，使其 span
+		// 能挂到 orchestration root 下。
+		Tracer:       o.tracer,
+		RootTraceCtx: o.rootTraceCtx,
 		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
 		Role:                 runtime.AgentRoleWorker,
 		CanDispatchSubAgents: false,

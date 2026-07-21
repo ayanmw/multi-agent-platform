@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -42,6 +43,7 @@ func (d *LLMDecomposer) Decompose(input, requestedStrategy string) (*DecomposeRe
 		Model:       model,
 		Messages:    []llm.Message{{Role: "system", Content: "You are a task decomposition engine. Output only valid JSON."}, {Role: "user", Content: prompt}},
 		Temperature: 0,
+		Context:     context.Background(),
 	})
 	if err != nil {
 		log.Printf("[LLMDecomposer] LLM call failed, falling back: %v", err)
@@ -68,6 +70,24 @@ Preferred strategy: %s
 Input: %s`, strategy, input)
 }
 
+// StringSlice 兼容 LLM 把 output_to 输出为单个字符串或字符串数组的两种情况。
+type StringSlice []string
+
+// UnmarshalJSON 实现 json.Unmarshaler，支持 "x" 和 ["x","y"] 两种形式。
+func (s *StringSlice) UnmarshalJSON(data []byte) error {
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*s = arr
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err != nil {
+		return fmt.Errorf("output_to must be string or []string: %w", err)
+	}
+	*s = []string{single}
+	return nil
+}
+
 func parseDecomposeResponse(content, originalInput, requestedStrategy string) (*DecomposeResult, error) {
 	content = strings.TrimSpace(content)
 	if idx := strings.Index(content, "{"); idx >= 0 {
@@ -80,13 +100,13 @@ func parseDecomposeResponse(content, originalInput, requestedStrategy string) (*
 	var payload struct {
 		Strategy string `json:"strategy"`
 		Agents   []struct {
-			AgentID      string   `json:"agent_id"`
-			Name         string   `json:"name"`
-			SystemPrompt string   `json:"system_prompt"`
-			Input        string   `json:"input"`
-			AllowedTools []string `json:"allowed_tools"`
-			OutputTo     []string `json:"output_to"`
-			Model        string   `json:"model"`
+			AgentID      string      `json:"agent_id"`
+			Name         string      `json:"name"`
+			SystemPrompt string      `json:"system_prompt"`
+			Input        string      `json:"input"`
+			AllowedTools []string    `json:"allowed_tools"`
+			OutputTo     StringSlice `json:"output_to"`
+			Model        string      `json:"model"`
 		} `json:"agents"`
 	}
 	if err := json.Unmarshal([]byte(content), &payload); err != nil {

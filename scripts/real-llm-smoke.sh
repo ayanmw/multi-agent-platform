@@ -117,8 +117,9 @@ print_section() { echo; echo "===== $1 ====="; }
 # 输出 "status elapsed_sec"
 poll_task() {
   local tid="$1"
+  local timeout_sec="${2:-90}"
   local start=$SECONDS
-  local deadline=$((SECONDS + 90))
+  local deadline=$((SECONDS + timeout_sec))
   while [[ $SECONDS -lt $deadline ]]; do
     local body status
     body=$(curl -s "${BASE}/api/tasks?id=${tid}" 2>/dev/null | tr -d '\r')
@@ -388,7 +389,8 @@ else
   if [[ -z "$S3_TASK" ]]; then
     record_result "3a 编排达终态" "FAIL" "未拿到 task_id，resp=$(printf '%s' "$S3_RESP" | head -c 120)"
   else
-    S3_RESULT=$(poll_task "$S3_TASK")
+    # 改为 300s，真实 LLM 下多个 agent 可能较慢
+  S3_RESULT=$(poll_task "$S3_TASK" 300)
     S3_STATUS=$(echo "$S3_RESULT" | awk '{print $1}')
     S3_ELAPSED=$(echo "$S3_RESULT" | awk '{print $2}')
     TIMINGS+=("场景3 multi-agent: ${S3_ELAPSED}s (status=${S3_STATUS})")
@@ -397,13 +399,13 @@ else
     if [[ "$S3_STATUS" == "completed" || "$S3_STATUS" == "failed" ]]; then
       record_result "3a 编排达终态" "PASS" "status=${S3_STATUS}, elapsed=${S3_ELAPSED}s, agents=${S3_COUNT}"
     else
-      record_result "3a 编排达终态" "FAIL" "status=${S3_STATUS}（90s 超时）"
+      record_result "3a 编排达终态" "FAIL" "status=${S3_STATUS}（300s 超时）"
       # 区分是 LLM 慢还是 root task status 不更新 bug
       S3_DONE_LOG=$(grep -E "\[Multi-Agent\] Task ${S3_TASK}: all agents completed" "${SERVER_LOG}" 2>/dev/null)
       if [[ -n "$S3_DONE_LOG" ]]; then
         FINDINGS+=("[场景3] root task ${S3_TASK} 轮询 timeout，但 server log 已打印 'all agents completed'。说明 orchestrator.RunBlocking 已结束但 root task status 未更新为 completed/failed（engine.updateTask 更新的是 subTaskID=${S3_TASK}_agent_xxx 而非 rootTaskID）。【Phase 7-H2 / MA9 跟踪中】这是已知后端 bug，见 multi-agent-smoke.sh FINDINGS 与 roadmaps/ROADMAP.md Phase 7-H2 阶段4。")
       else
-        FINDINGS+=("[场景3] root task ${S3_TASK} 90s 超时且 server log 无 'all agents completed'。可能 2 个 agent 并行真实 LLM 调用总耗时 >90s，或某个 agent 卡死。")
+        FINDINGS+=("[场景3] root task ${S3_TASK} 300s 超时且 server log 无 'all agents completed'。可能 2 个 agent 并行真实 LLM 调用总耗时 >300s，或某个 agent 卡死。")
       fi
     fi
 
