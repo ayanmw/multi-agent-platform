@@ -599,40 +599,28 @@ type SubAgentResult struct {
 	Duration    int64  `json:"duration_ms"`
 }
 
-// RegisterBuiltinsWithDispatcher 注册所有内置工具，并额外注册
-// dispatch_sub_agent 工具。当 dispatcher 为 nil 时行为与 RegisterBuiltins 一致。
-//
-// canDispatchFn 在工具执行时调用，判断当前 agent 是否有派发权限；
-// 这允许 cmd/server 在 leader 运行期间动态放开权限，同时避免 worker
-// 越权调用。
-func RegisterBuiltinsWithDispatcher(registry *Registry, dispatcher SubAgentDispatcher, canDispatchFn func() bool) {
-	RegisterBuiltins(registry)
-	if dispatcher != nil {
-		registry.Register(NewDispatchSubAgentTool(dispatcher, canDispatchFn))
-	}
-}
-
-// RegisterBuiltinsWithDispatcherAndLeaderTools 注册所有内置工具、dispatch_sub_agent
-// 工具，以及 leader 审批工具 approve_sub_agent_action / reject_sub_agent_action。
-//
-// resolveApproval 回调负责把 leader 的决定写回 runtime 的委托审批表；
-// 工具层只负责解析输入并调用回调，不直接操作 runtime 注册表。
-func RegisterBuiltinsWithDispatcherAndLeaderTools(
-	registry *Registry,
+// NewLeaderTools 返回一个包含 leader 专用工具的 slice：
+// dispatch_sub_agent、approve_sub_agent_action、reject_sub_agent_action。
+// 每个 leader 调度的 taskID 在创建工具时直接注入，避免全局状态或占位符。
+// 这些工具不应注册到 worker/chat 共享的 base registry，确保 worker 不会
+// 在 tool list 中看到 dispatch_sub_agent（防止其浪费 token 去尝试调用）。
+func NewLeaderTools(
 	dispatcher SubAgentDispatcher,
-	canDispatchFn func() bool,
+	leaderSubTaskID string,
 	resolveApproval func(approvalID string, approved bool, reason string) error,
-) {
-	RegisterBuiltinsWithDispatcher(registry, dispatcher, canDispatchFn)
-	if resolveApproval != nil {
-		registry.Register(NewApproveSubAgentActionTool(resolveApproval))
-		registry.Register(NewRejectSubAgentActionTool(resolveApproval))
+) []Tool {
+	return []Tool{
+		NewDispatchSubAgentTool(dispatcher, leaderSubTaskID),
+		NewApproveSubAgentActionTool(resolveApproval),
+		NewRejectSubAgentActionTool(resolveApproval),
 	}
 }
 
 // NewDispatchSubAgentTool 创建 dispatch_sub_agent 工具实例。
-// 工具位于全局命名空间，仅允许当前 agent 的角色为 leader 时调用。
-func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func() bool) *BuiltinTool {
+// 工具位于全局命名空间，仅注册在 leader 的 registry 中，因此天然只有
+// leader 可调。leaderSubTaskID 是本次调度对应的 root task ID，直接传入，
+// 替代原先 "<leaderSubTaskID>" 占位符与全局 atomic.Bool 权限控制。
+func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, leaderSubTaskID string) *BuiltinTool {
 	return NewBuiltinTool(
 		"dispatch_sub_agent",
 		"",
@@ -689,13 +677,7 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func()
 			"required": []string{"reason", "strategy", "agents"},
 		},
 		func(input map[string]any) (any, error) {
-		if canDispatchFn == nil || !canDispatchFn() {
-			// Phase 7-I: 使用 policy-blocked 语义返回错误，让 Engine 把错误作
-			// 为 observation 反馈给 LLM，而不是当作不可恢复失败终止任务。
-			return nil, fmt.Errorf("[POLICY BLOCK] leader-only-dispatch blocked dispatch_sub_agent: sub-agent dispatch is only allowed for the leader agent")
-		}
-
-			strategy := getString(input, "strategy", "parallel")
+				strategy := getString(input, "strategy", "parallel")
 			switch strategy {
 			case "parallel", "sequential", "pipeline":
 			default:
@@ -748,8 +730,8 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, canDispatchFn func()
 			}
 
 			// 在 Phase 7-H 中，leader 的 SubTaskID 与 root task ID 相同，
-			// 因此这里把 leaderSubTaskID 直接作为 root task ID 传给 orchestrator。
-			results, err := dispatcher.Dispatch(context.Background(), "<leaderSubTaskID>", strategy, agents)
+			// 因此这里把创建工具时注入的 leaderSubTaskID 直接传给 orchestrator。
+			results, err := dispatcher.Dispatch(context.Background(), leaderSubTaskID, strategy, agents)
 			if err != nil {
 				return nil, fmt.Errorf("dispatch failed: %w", err)
 			}

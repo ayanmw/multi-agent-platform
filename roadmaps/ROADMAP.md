@@ -1,6 +1,6 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-19
+> **最近更新**: 2026-07-21
 > **当前版本**: v0.8.0 Alpha（Skill 系统 + MCP 按 agent 可见性 + contract limits 闭环）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
@@ -627,6 +627,93 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase 7-H2: Multi-Agent 编排遗留闭环 🚧 进行中（2026-07-21 起）
+
+> **背景**: `scripts/multi-agent-smoke.sh` 与 `scripts/real-llm-smoke.sh` 长期记录的"已知后端 bug，无人修复"清单。本次集中闭环 multi-agent 编排层的结构性缺陷，使其从"一次性 fan-out 原型"升级为可观测、可跑通的 leader-driven 编排。
+> **范围**: 仅 multi-agent 编排链路 + Tracer 事件流 + 子任务可观测回填。不涉及 7-A/7-D 的多用户与合规。
+> **原则**: 延续 6-D/6-E 的"非空壳、真实运行"——每个子阶段必须 smoke 脚本验证通过才算交付。
+
+### 根因（详见 memory `multi-agent-dual-entry-placeholder-bug`）
+
+| 编号 | 问题 | 定位 | 影响 |
+|------|------|------|------|
+| MA1 | **dispatch_sub_agent 占位符硬编码** `"<leaderSubTaskID>"` | `internal/tool/builtin.go:752` | leader-driven 链路从未跑通；子任务 parent_task_id 挂在假 ID，前端 `QueryChildTasks` 永远空 |
+| MA2 | **双入口语义分裂**：前端只接 `/api/multi-agent`（静态 decomposer + RunBlocking），leader-driven 入口（`/api/tasks` action=multi-agent）是死代码 | `cmd/server/main.go:1474` vs `:956` | 用户永远用到的是空壳静态编排，看不到 Leader 思考/派发 |
+| MA3 | **Tracer 不广播事件**：`Tracer.push` 只入内存缓冲，无 `SendEvent(trace_span)` | `internal/observability/trace.go:147` | 前端 Traces 面板永远空；multi-agent 路径根本没接 Tracer |
+| MA4 | **orchestrator 未接入 Tracer**：`runAgent` 创建 Engine 时 `Tracer`/`RootTraceCtx` 为 nil | `internal/orchestrator/orchestrator.go:387-422` | multi-agent 下零 span |
+| MA5 | **child_tasks 不返回 steps**：`/api/tasks?id=root` 的 child_tasks 无 steps 字段 + 前端只建空占位 | `cmd/server/api.go` + `web/v2/src/composables/useTaskStore.ts:1027` | 子 agent lane 永远 "No steps yet" |
+| MA6 | **root task 是空壳**：静态编排 root 无 engine loop，`final_result="all agents completed"` | `internal/orchestrator/orchestrator.go:265` | 编排层无可观测 step，违背白盒哲学 |
+| MA7 | **AgentBus worker 跨 session 串台**：worker 用 `RegisterHandler(agentID)` 不带 SubTaskID | `internal/runtime/engine.go:703` | 两 session 同名 worker 覆盖 handler（边缘场景） |
+| MA8 | **Router 死代码**：`runAgentLoopWithTurn` 未设 `Router/Registry/Providers`，`e.cfg.Router != nil` 永远 false | `cmd/server/main.go` chat 路径 EngineConfig | Phase 6 动态模型选择在 chat 路径未生效（`real-llm-smoke.sh:489` 标注） |
+| MA9 | **root task 状态汇聚靠轮询**：多 agent 并行终态由最后一个 agent 决定 | `internal/orchestrator/orchestrator.go:253-266` | `multi-agent-smoke.sh` 第 8 项"仍存" |
+
+### 实施阶段
+
+#### 阶段 1 — 修通 leader-driven 主链路（MA1 + MA2）
+- [x] `internal/tool/registry.go`：新增 `Clone()` 方法，支持基于 base registry 创建带独立 tools map / order slice 的浅拷贝
+- [x] `internal/tool/builtin.go`：
+  - 新增 `NewLeaderTools(dispatcher, leaderSubTaskID, resolveApproval)`，把 dispatch_sub_agent / approve_sub_agent_action / reject_sub_agent_action 三个 leader 专用工具按真实 taskID 构造
+  - `NewDispatchSubAgentTool` 直接持有 `leaderSubTaskID string`，调用 `dispatcher.Dispatch` 时传入真实 root task ID，替代原 `"<leaderSubTaskID>"` 占位符
+  - 移除旧的 `RegisterBuiltinsWithDispatcher*` 与 `canDispatchFn` 全局权限模式
+- [x] `cmd/server/main.go`：
+  - base `toolRegistry` 仅调用 `tool.RegisterBuiltins`（不含 leader 工具）
+  - `runAgentLoopWithTurn` 中 root leader 从 base registry `Clone()` 并注册 `NewLeaderTools`，taskID 直接注入
+  - 删除 `leaderDispatchEnabled atomic.Bool` 及其 Store(true/false)，消灭全局单 leader 竞态；dispatch 权限由"leader registry 是否含 dispatch_sub_agent"天然控制
+  - chat 与 multi-agent 统一走 `/api/tasks` leader-driven 入口
+- [x] `web/v2/src/composables/useTaskStore.ts`：`startMultiAgentTask` 改 POST `/api/tasks` with `action:"multi-agent"`；前端为返回的 `agent_ids` 预创建 leader lane
+- [x] `web/v2/src/App.vue`：multi-agent 在已有 session 上触发时仍调用 `startMultiAgentTask`（不以 turn 方式追加），保证 leader 每次都从 root 开始
+- [ ] 保留 `/api/multi-agent` 入口作"显式 agents 静态编排"兼容路径（已保留，待后续回归测试补齐）
+- [ ] smoke 验证：前端开 multi-agent → 出现 leader lane + `dispatch_sub_agent` tool_call + 子 agent observation 回喂
+
+#### 阶段 2 — Tracer 接入事件流（MA3 + MA4）
+- [ ] `internal/observability/trace.go`：`Tracer` 增加 `OnSpan func(SpanRecord)` 字段，`push()` 末尾异步触发；`StartChild` 补 `AgentID` 参数
+- [ ] `cmd/server/main.go`：创建 tracer 后注册 `OnSpan` → `hub.SendEvent(event.NewEventWithSubTask(EventTraceSpan, rec.TaskID, "", rec.AgentID, 0, spanToMap(rec)))`
+- [ ] `internal/orchestrator/orchestrator.go`：`Orchestrator` 加 `Tracer` 字段 + `SetTracer`；`RunBlocking` 开头 `StartRoot(rootTaskID,"task")`，透传给 `runAgent` → `EngineConfig.Tracer/RootTraceCtx`
+- [ ] （可选）engine.go 补 tool / llm 子 span 埋点
+- [ ] smoke 验证：chat + multi-agent 都能在 Traces tab 看到 span 树，`agent_id` 列非空
+
+#### 阶段 3 — child steps 回填（MA5）
+- [ ] `cmd/server/api.go` `handleGetTask`：`child_tasks` 每个 child 附带其 `steps`（按 child id 批量查询）
+- [ ] `web/v2/src/composables/useTaskStore.ts` `loadTask`：处理 child_tasks 时把 child steps 填进对应 worker lane
+- [ ] smoke 验证：multi-agent 完成后刷新 / 历史回放 → 每个 worker lane 有 step 卡片
+
+#### 阶段 4 — 编排层可观测（MA6 + MA9）
+- [ ] `internal/orchestrator/orchestrator.go`：发编排层 step 事件（`decompose_done` / `agent_dispatched` / `agent_completed`），挂在 root task、`agent_id="orchestrator"`
+- [ ] root `final_result` 从 `"all agents completed"` 改为各 worker 结果聚合摘要
+- [ ] root task 终态由 `RunBlocking` 汇聚显式 `UpdateTask`，不再依赖轮询（MA9）
+- [ ] smoke 验证：前端出现 orchestrator 编排 lane，能看到拆分决策与派发过程
+
+#### 阶段 5（长期）— workflow DAG 表达力
+- [ ] decomposer 输出从扁平 `[]AgentSpec` 升级为带依赖/条件的 DAG
+- [ ] `RunBlocking` 按 DAG 调度（A 完成且满足条件才跑 C）
+- [ ] Leader 多轮 dispatch 的 observation 格式标准化
+
+#### 阶段 6（低优先级）— AgentBus 隔离 + Router 死代码（MA7 + MA8）
+- [ ] `internal/runtime/engine.go:703`：worker 改 `RegisterHandlerBySubTask`
+- [ ] `cmd/server/main.go`：chat 路径 EngineConfig 补 `Router/Registry/Providers`（阶段 1 已为 leader registry clone；MA8 需单独验证 chat path model_routed 事件）
+- [ ] 验证 `/api/multi-agent` 静态编排兼容路径在 leader-driven 默认入口切换后仍可回归
+- [ ] smoke 验证：两 session 同名 worker 不串台；chat 路径触发 `model_routed` 事件
+
+### 依赖与执行
+
+```
+阶段1 (leader 主链路) ──→ 阶段3 (child steps) ──→ 阶段4 (编排可观测)
+        │
+阶段2 (Tracer) ──────────────────────────────→
+                                                 阶段5 (DAG) → 阶段6 (隔离+Router)
+```
+
+- 阶段 1、2 独立可并行；阶段 3 依赖 1；阶段 4 依赖 1+3；阶段 5 大改单独排；阶段 6 随时可做
+- 子 agent 串行执行（见 memory `subagent-serial-execution`），阶段 1/2 可派发但禁止并行改同一批文件
+
+### 验证基准
+
+- [ ] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
+- [ ] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，"all agents completed" 与 root task status 一致
+- [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + Traces 面板均有数据
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 变更 |
@@ -651,3 +738,5 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |
 | v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
 | v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
+| v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
+| v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |

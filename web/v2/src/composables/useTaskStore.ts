@@ -782,7 +782,7 @@ export function useTaskStore() {
     }
   }
 
-  /** Start a multi-agent task via /api/multi-agent. */
+  /** Start a multi-agent task via the leader-driven /api/tasks endpoint. */
   async function startMultiAgentTask(
     input: string,
     options: { caseType?: string; sessionId?: string; maxSteps?: number; timeoutSeconds?: number; scope?: string; agents?: any[] } = {}
@@ -796,18 +796,18 @@ export function useTaskStore() {
 
     try {
       const body: Record<string, unknown> = {
-        input,
         action: 'multi-agent',
-        case_type: options.caseType || '',
+        input,
         session_id: options.sessionId || '',
         timeout_seconds: options.timeoutSeconds ?? 0,
       }
       if (options.scope) body.scope = options.scope
       if (options.maxSteps && options.maxSteps > 0) body.max_steps = options.maxSteps
+      if (options.caseType) body.case_type = options.caseType
       if (options.agents && options.agents.length > 0) {
         body.agents = options.agents
       }
-      const resp = await fetch('/api/multi-agent', {
+      const resp = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -820,12 +820,31 @@ export function useTaskStore() {
         throw new Error(`Failed to start multi-agent task: ${resp.status} ${errText}`)
       }
 
-      const data = (await resp.json()) as { session_id: string; task_id: string }
+      const data = (await resp.json()) as {
+        session_id: string
+        task_id: string
+        agent_count?: number
+        agent_ids?: string[]
+      }
       activeTaskId.value = data.task_id
       const optimistic = ensureTask(data.task_id)
       optimistic.sessionId = data.session_id || options.sessionId || ''
       optimistic.userInput = input
       optimistic.status = 'idle'
+      // Leader-driven mode emits a single lane for the leader; worker lanes
+      // are created from WebSocket events as sub-agents are dispatched.
+      const ids = data.agent_ids || ['leader']
+      for (const id of ids) {
+        if (!optimistic.agents[id]) {
+          optimistic.agents[id] = {
+            id,
+            name: id === 'leader' ? 'Leader' : id,
+            model: 'unknown',
+            steps: [],
+            color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
+          }
+        }
+      }
       optimisticTaskIds.add(data.task_id)
       return { sessionId: data.session_id, taskId: data.task_id }
     } catch (err) {

@@ -53,6 +53,24 @@ func NewRegistry() *Registry {
 	}
 }
 
+// Clone 返回当前 registry 的浅拷贝。新 registry 拥有独立的 tools map
+// 与 order slice，但工具实例本身共享（工具应是无状态闭包，共享安全）。
+// 这让调用方可以基于一份基础工具集创建独立的 registry，并为特定任务
+// 动态注入只有该任务可见的工具（例如 leader-only 的 dispatch_sub_agent）。
+func (r *Registry) Clone() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := &Registry{
+		tools: make(map[string]Tool, len(r.tools)),
+		order: make([]string, len(r.order)),
+	}
+	copy(out.order, r.order)
+	for k, v := range r.tools {
+		out.tools[k] = v
+	}
+	return out
+}
+
 // Register 将工具加入 registry。若已存在同 FullName 的工具，将被静默覆盖。
 // 工具定义的任何 Aliases 也会被注册并指向同一 Tool 实例。
 func (r *Registry) Register(tool Tool) {

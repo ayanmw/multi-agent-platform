@@ -463,6 +463,7 @@ echo "  4. [已修复] root task agent_ids 已非空: resolveSession / SaveTask 
 echo "  5. [仍存] 子任务 status/steps 挂在 root taskID 下: engine.updateTask 用 e.taskID=rootTaskID"
 echo "     更新 root task 状态，子任务 (taskID_agentID) status 由 orchestrator.runAgent 在"
 echo "     完成后单独 UpdateTask 更新，但 steps 仍挂在 rootTaskID 下，子任务独立 steps 回放不足。"
+echo "     【Phase 7-H2 / MA5 跟踪中】计划在阶段3: handleGetTask 返回 child_tasks.steps + 前端回填。"
 echo "  6. [已修复] AgentBus 已在 sequential 模式下启用: multi_agent case 的 Strategy=sequential，"
 echo "     researcher 完成后通过 AgentBus 把结果发给 writer，writer 的 conversation 收到"
 echo "     '[Agent agent_researcher]: ...' 消息。"
@@ -470,8 +471,9 @@ echo "  7. [已修复] OutputTo 通用路由已启用: AgentSpec.OutputTo 声明
 echo "     即使 parallel 策略下，agent 完成后也会把结果发给 OutputTo 中的目标 agents。"
 echo "     AgentBus  queue 会自动处理目标尚未注册 handler 的情况。"
 echo "  8. [仍存] root task 状态由最后一个完成的 agent 决定: 多 agent 并行状态汇聚仍靠轮询。"
+echo "     【Phase 7-H2 / MA9 跟踪中】计划在阶段4: RunBlocking 汇聚后显式 UpdateTask 终态。"
 echo "  9. [可观测性] task_started 事件的 agent_id=\"orchestrator\"，与子 agent 事件混合，"
-echo "     前端需特殊处理。"
+echo "     前端需特殊处理。【Phase 7-H2 / MA6 跟踪中】阶段4 将发编排层 step 事件并独立编排 lane。"
 
 echo ""
 if [[ $FAIL -gt 0 ]]; then

@@ -401,7 +401,7 @@ else
       # 区分是 LLM 慢还是 root task status 不更新 bug
       S3_DONE_LOG=$(grep -E "\[Multi-Agent\] Task ${S3_TASK}: all agents completed" "${SERVER_LOG}" 2>/dev/null)
       if [[ -n "$S3_DONE_LOG" ]]; then
-        FINDINGS+=("[场景3] root task ${S3_TASK} 轮询 timeout，但 server log 已打印 'all agents completed'。说明 orchestrator.RunBlocking 已结束但 root task status 未更新为 completed/failed（engine.updateTask 更新的是 subTaskID=${S3_TASK}_agent_xxx 而非 rootTaskID）。这是已知后端 bug，见 multi-agent-smoke.sh FINDINGS。")
+        FINDINGS+=("[场景3] root task ${S3_TASK} 轮询 timeout，但 server log 已打印 'all agents completed'。说明 orchestrator.RunBlocking 已结束但 root task status 未更新为 completed/failed（engine.updateTask 更新的是 subTaskID=${S3_TASK}_agent_xxx 而非 rootTaskID）。【Phase 7-H2 / MA9 跟踪中】这是已知后端 bug，见 multi-agent-smoke.sh FINDINGS 与 roadmaps/ROADMAP.md Phase 7-H2 阶段4。")
       else
         FINDINGS+=("[场景3] root task ${S3_TASK} 90s 超时且 server log 无 'all agents completed'。可能 2 个 agent 并行真实 LLM 调用总耗时 >90s，或某个 agent 卡死。")
       fi
@@ -486,7 +486,7 @@ else
     record_result "4d Router 触发" "PASS" "日志命中: ${S4_ROUTER_LOG}"
   else
     record_result "4d Router 触发" "FAIL" "无 Router 日志 — EngineConfig 未注入 Router/Registry"
-    FINDINGS+=("[场景4][严重设计缺口] Router 未触发: main.go runAgentLoopWithTurn 构建 EngineConfig (main.go:1063-1101) 时未设置 Router/Registry/Providers 字段，engine.go:1115 条件 e.cfg.Router != nil && e.cfg.Registry != nil 永远为 false。Phase 6 Router 动态模型选择 / classifyIntent 意图分类在 chat 路径完全未生效。这是真实 LLM 路径下的一个死代码路径。")
+    FINDINGS+=("[场景4][严重设计缺口] Router 未触发: main.go runAgentLoopWithTurn 构建 EngineConfig (main.go:1063-1101) 时未设置 Router/Registry/Providers 字段，engine.go:1115 条件 e.cfg.Router != nil && e.cfg.Registry != nil 永远为 false。Phase 6 Router 动态模型选择 / classifyIntent 意图分类在 chat 路径完全未生效。这是真实 LLM 路径下的一个死代码路径。【Phase 7-H2 / MA8 跟踪中】")
   fi
 fi
 

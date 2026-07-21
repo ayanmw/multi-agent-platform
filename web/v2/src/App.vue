@@ -501,6 +501,8 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
       }
     } else {
       if (multiAgentEnabled.value && !text.startsWith('/')) {
+        // Phase 7-H2: multi-agent is also a root task; treat it like the
+        // first-turn case so it starts a new leader-driven task.
         await startMultiAgentTask(text, {
           sessionId: session.id,
           maxSteps: options.maxSteps,
@@ -519,8 +521,9 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
   }
 }
 
-// === Multi-Agent（暂不实现） ===
-// TODO: Phase 8 — 当 useMultiAgent workflow 组件迁移后再接入 startMultiAgentTask
+// === Multi-Agent lane helpers (leader-driven) ===
+// Worker lanes are created from WebSocket events. The TODO below refers to
+// a legacy workflow component migration and is no longer blocking.
 
 // === 项目/会话选择 ===
 async function handleProjectSelect(projectId: string) {

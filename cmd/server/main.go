@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/auth"
@@ -53,11 +52,6 @@ var cancelRegistry sync.Map
 // cancelRegistry 一致：root 任务用 taskID；子 agent 用 "taskID/agentID"。
 var engineRegistry sync.Map
 
-// leaderDispatchEnabled 控制 dispatch_sub_agent 工具是否可用。
-// 仅在 leader agent 运行期间置为 true；worker agent 运行时保持 false，
-// 从而保证即使 tool Registry 共享，worker 也无法越权派发子 agent。
-var leaderDispatchEnabled atomic.Bool
-
 // Package-level 进程可观测性状态 (Phase 7-C)。
 var (
 	// tracer 是共享的、无依赖的 trace span 收集器。
@@ -74,6 +68,13 @@ var (
 //
 // 当 db.DB 未初始化时仍是一个空 registry，避免 nil 解引用。
 var globalSkillRegistry *skill.Registry
+
+// globalOrchestrator 是 multi-agent orchestrator 的全局引用。
+//
+// runAgentLoopWithTurn 需要为每个 leader 动态注入 dispatch_sub_agent 工具，
+// 但函数签名已非常长。通过包级引用获取 orchestrator 与 dispatcher 是 Main 包
+// 内的合理折中（server 进程只有一个 orchestrator 实例）。
+var globalOrchestrator *orchestrator.Orchestrator
 
 // storeCancel 注册 task/agent 对应的取消函数。
 //
@@ -558,18 +559,13 @@ func main() {
 	// 在创建 dispatcher / tool registry 之前初始化 multi-agent orchestrator，
 	// 因为 dispatcher 依赖它。
 	orch := orchestrator.New(hub, cfg, nil, persist, nil, nil, modelRouter, modelRegistry, routerProviders)
+	globalOrchestrator = orch
 
-	// 用内置 tool 与 leader dispatch tool 初始化 tool registry。
+	// 用内置 tool 初始化基础 registry（不含 leader 专用工具）。
+	// leader 工具在 runAgentLoopWithTurn 中按 task 动态注入克隆后的 registry，
+	// 避免全局 registry 共享导致 worker/chat 看到 dispatch_sub_agent。
 	toolRegistry := tool.NewRegistry()
-	dispatcher := &orchestratorDispatcher{orch: orch}
-	resolveApproval := func(approvalID string, approved bool, reason string) error {
-		return runtime.ResolveDelegatedApproval(runtime.DelegatedApprovalDecision{
-			ApprovalID: approvalID,
-			Approved:   approved,
-			Reason:     reason,
-		})
-	}
-	tool.RegisterBuiltinsWithDispatcherAndLeaderTools(toolRegistry, dispatcher, leaderDispatchEnabled.Load, resolveApproval)
+	tool.RegisterBuiltins(toolRegistry)
 
 	// Phase web_search: 始终用配置好的实例替换占位的 core/web_search。
 	// DuckDuckGo 作为零 API key 的兜底方案，即使没配置任何 API provider，
@@ -717,7 +713,7 @@ func main() {
 		log.Println("execute_program: local execution")
 	}
 
-	log.Printf("Registered %d built-in tools (dispatch_sub_agent enabled for leader)", len(toolRegistry.List()))
+	log.Printf("Registered %d built-in tools (dispatch_sub_agent enabled per-leader)", len(toolRegistry.List()))
 
 	// Phase skill: 初始化 Skill 子系统。
 	// 三件套：Registry（内存）、Store（SQLite 持久化）、Loader（启动期加载）。
@@ -2090,9 +2086,24 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		observability.DefaultMetrics.RecordCost(record.CostCents)
 	}
 
-	// Phase 7-H：leader 运行期间启用 dispatch_sub_agent 权限；运行结束后关闭。
+	// Phase 7-H2：root agent 作为 leader，从 base registry 克隆并注入
+	// leader 专用工具（dispatch_sub_agent 与审批工具）。leaderSubTaskID
+	// 就是本次 taskID，直接绑定，避免全局 leaderDispatchEnabled 的单 leader
+	// 假设与跨 session 竞态问题。非 leader 继续使用共享的 base registry。
+	engineTools := tools
 	if role == runtime.AgentRoleLeader {
-		leaderDispatchEnabled.Store(true)
+		engineTools = tools.Clone()
+		dispatcher := &orchestratorDispatcher{orch: globalOrchestrator}
+		resolveApproval := func(approvalID string, approved bool, reason string) error {
+			return runtime.ResolveDelegatedApproval(runtime.DelegatedApprovalDecision{
+				ApprovalID: approvalID,
+				Approved:   approved,
+				Reason:     reason,
+			})
+		}
+		for _, t := range tool.NewLeaderTools(dispatcher, taskID, resolveApproval) {
+			engineTools.Register(t)
+		}
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
@@ -2179,7 +2190,7 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		// session 上下文填充。
 		SkillRegistry: globalSkillRegistry,
 		ActiveSkills:  GetEnabledSkillIDs(globalSkillRegistry),
-	}, tools, &hubAdapter{hub: hub}, taskID)
+	}, engineTools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
 		"task_id":    taskID,
@@ -2209,13 +2220,6 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 	storeEngine(taskID, agentID, engine)
 	defer removeCancel(taskID, agentID)
 	defer removeEngine(taskID, agentID)
-	// Phase 7-H：leader 运行结束（或失败退出）时，务必关闭 dispatch 权限，
-	// 避免后续 worker 复用同一个 tool Registry 时误开启。
-	defer func() {
-		if role == runtime.AgentRoleLeader {
-			leaderDispatchEnabled.Store(false)
-		}
-	}()
 
 	observability.DefaultMetrics.IncrTasksStarted()
 
