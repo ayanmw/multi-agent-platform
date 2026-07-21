@@ -107,6 +107,33 @@ type AgentResult struct {
 	Duration    int64  `json:"duration_ms"`
 }
 
+// WorkflowEdge 描述 DAG 中两个 agent 节点之间的依赖与可选执行条件。
+// From 是上游 agent 的 AgentID，To 是下游 agent 的 AgentID。
+// Condition 为空时表示“上游必须 completed”；非空时使用轻量 DSL 在运行时求值。
+type WorkflowEdge struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Condition string `json:"condition,omitempty"`
+}
+
+// WorkflowNode 是 DAG 中的单个 agent 节点。
+// 除了 agent 规格外，还声明直接依赖（Dependencies）与作用于本节点的
+// 执行条件（Condition）。当 AgentWorkflow.Edges 为空时，Dependencies
+// 用于隐式构造边。
+type WorkflowNode struct {
+	Agent        AgentSpec `json:"agent"`
+	Dependencies []string  `json:"dependencies,omitempty"`
+	Condition    string    `json:"condition,omitempty"`
+}
+
+// AgentWorkflow 是 Phase 7-H2 阶段 5 引入的 DAG 编排结构。
+// 它与扁平的 Agents/Strategy 向后兼容：Workflow 为 nil 时，编排器回退
+// 到原有 strategy 调度逻辑。
+type AgentWorkflow struct {
+	Nodes []WorkflowNode `json:"nodes"`
+	Edges []WorkflowEdge `json:"edges,omitempty"`
+}
+
 // Orchestrator 负责管理多个并发运行的 agent。
 //
 // # Lifecycle(生命周期)
@@ -334,9 +361,12 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 		wg.Wait()
 	}
 
-	// 所有子 agent 完成后，推导并持久化根任务的终态。根任务本身没有
-	// engine loop，它的状态反映整次 orchestration 的总体结果。这里显式
-	// UpdateTask 确保 /api/tasks?id=root 不再需要依靠轮询(MA9)。
+	return o.runBlockingCommon(rootTaskID, strategy, results, nextOrchStep, orchTraceCtx)
+}
+
+// runBlockingCommon 完成编排层事件、root 终态聚合与持久化。
+// 现有 RunBlocking 与新的 RunBlockingDAG 最终都调用它，避免重复代码。
+func (o *Orchestrator) runBlockingCommon(rootTaskID, strategy string, results []AgentResult, nextOrchStep func() int, orchTraceCtx *observability.TraceContext) []AgentResult {
 	rootStatus := "completed"
 	rootTokens := 0
 	resultItems := make([]map[string]any, 0, len(results))
@@ -395,6 +425,393 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 	}
 
 	return results
+}
+
+// evaluateWorkflowCondition 以当前已知结果评估轻量条件表达式。
+// 支持的语法：
+//   - 空字符串：true（表示无条件依赖，仅要求前置 agent 完成）
+//   - "<agent_id>.completed" / "<agent_id>.failed" / "<agent_id>.succeeded"：按前置节点状态判断
+//   - 用 "&&" / "||" 连接的多条子表达式
+//   - 可用圆括号分组
+// 返回 bool 与错误；解析失败时返回 false，并让上层回退为 false 以免阻塞。
+func evaluateWorkflowCondition(expr string, resultsByID map[string]AgentResult) bool {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return true
+	}
+
+	// 把 agent.status token 替换为布尔字面量，然后交给 govaluate 风格最直接的
+	// 方式：递归解析括号/&&/||，或如本项目避免新依赖，手写 token-based evaluator。
+	// 这里采用极简 tokenizer + shunting-yard + 常量求值。
+	tokens := tokenizeCondition(expr, resultsByID)
+	if len(tokens) == 0 {
+		return true
+	}
+
+	postfix, err := shuntingYard(tokens)
+	if err != nil {
+		log.Printf("[Orchestrator] condition parse error '%s': %v", expr, err)
+		return false
+	}
+	return evalPostfix(postfix)
+}
+
+// conditionToken 描述条件表达式中的最小单元。
+type conditionToken struct {
+	typ   string // "bool", "and", "or", "lparen", "rparen"
+	value bool   // 仅 typ == "bool" 时有效
+}
+
+// tokenizeCondition 把表达式拆分为 token。现在仅支持 <agent_id>.<status> 形式。
+func tokenizeCondition(expr string, resultsByID map[string]AgentResult) []conditionToken {
+	var tokens []conditionToken
+	expr = strings.TrimSpace(expr)
+	for expr != "" {
+		expr = strings.TrimSpace(expr)
+		if expr == "" {
+			break
+		}
+		switch {
+		case strings.HasPrefix(expr, "&&"):
+			tokens = append(tokens, conditionToken{typ: "and"})
+			expr = expr[2:]
+		case strings.HasPrefix(expr, "||"):
+			tokens = append(tokens, conditionToken{typ: "or"})
+			expr = expr[2:]
+		case strings.HasPrefix(expr, "("):
+			tokens = append(tokens, conditionToken{typ: "lparen"})
+			expr = expr[1:]
+		case strings.HasPrefix(expr, ")"):
+			tokens = append(tokens, conditionToken{typ: "rparen"})
+			expr = expr[1:]
+		default:
+			// 读取到下一个操作符或括号。
+			end := len(expr)
+			for i := 0; i < len(expr); i++ {
+				if expr[i] == '&' || expr[i] == '|' || expr[i] == '(' || expr[i] == ')' {
+					end = i
+					break
+				}
+			}
+			atom := strings.TrimSpace(expr[:end])
+			expr = expr[end:]
+			if atom == "" {
+				continue
+			}
+			parts := strings.SplitN(atom, ".", 2)
+			if len(parts) != 2 {
+				tokens = append(tokens, conditionToken{typ: "bool", value: false})
+				continue
+			}
+			res, ok := resultsByID[parts[0]]
+			value := false
+			if ok {
+				switch strings.ToLower(parts[1]) {
+				case "completed", "succeeded", "success":
+					value = res.Status == "completed"
+				case "failed":
+					value = res.Status == "failed"
+				default:
+					value = res.Status == "completed"
+				}
+			}
+			tokens = append(tokens, conditionToken{typ: "bool", value: value})
+		}
+	}
+	return tokens
+}
+
+// shuntingYard 把中缀 token 数组转换为后缀表达式，支持 && || 和括号。
+func shuntingYard(tokens []conditionToken) ([]conditionToken, error) {
+	precedence := map[string]int{"and": 1, "or": 0}
+	var out []conditionToken
+	var stack []conditionToken
+	for _, t := range tokens {
+		switch t.typ {
+		case "bool":
+			out = append(out, t)
+		case "lparen":
+			stack = append(stack, t)
+		case "rparen":
+			for len(stack) > 0 && stack[len(stack)-1].typ != "lparen" {
+				out = append(out, stack[len(stack)-1])
+				stack = stack[:len(stack)-1]
+			}
+			if len(stack) == 0 {
+				return nil, fmt.Errorf("mismatched parenthesis")
+			}
+			stack = stack[:len(stack)-1]
+		case "and", "or":
+			for len(stack) > 0 {
+				top := stack[len(stack)-1]
+				if top.typ == "lparen" || precedence[top.typ] < precedence[t.typ] {
+					break
+				}
+				out = append(out, top)
+				stack = stack[:len(stack)-1]
+			}
+			stack = append(stack, t)
+		default:
+			return nil, fmt.Errorf("unknown token type %s", t.typ)
+		}
+	}
+	for len(stack) > 0 {
+		if stack[len(stack)-1].typ == "lparen" {
+			return nil, fmt.Errorf("mismatched parenthesis")
+		}
+		out = append(out, stack[len(stack)-1])
+		stack = stack[:len(stack)-1]
+	}
+	return out, nil
+}
+
+// evalPostfix 求值后缀表达式。
+func evalPostfix(tokens []conditionToken) bool {
+	var stack []bool
+	for _, t := range tokens {
+		switch t.typ {
+		case "bool":
+			stack = append(stack, t.value)
+		case "and", "or":
+			if len(stack) < 2 {
+				return false
+			}
+			b := stack[len(stack)-1]
+			a := stack[len(stack)-2]
+			stack = stack[:len(stack)-2]
+			if t.typ == "and" {
+				stack = append(stack, a && b)
+			} else {
+				stack = append(stack, a || b)
+			}
+		default:
+			return false
+		}
+	}
+	if len(stack) != 1 {
+		return false
+	}
+	return stack[0]
+}
+
+// RunBlockingDAG 按 AgentWorkflow 的 DAG 拓扑调度执行 agent。
+// 只有所有依赖都完成（且满足 condition）时才启动下游 agent；如果某个依赖失败
+// 导致整个 workflow 无法继续，orchestrator 会把剩余节点标记为 skipped 并完成。
+func (o *Orchestrator) RunBlockingDAG(ctx context.Context, rootTaskID string, workflow *AgentWorkflow) []AgentResult {
+	if workflow == nil || len(workflow.Nodes) == 0 {
+		return nil
+	}
+
+	// Phase 7-H2: 为本次 orchestration 启动 root span。
+	var orchTraceCtx *observability.TraceContext
+	if o.tracer != nil {
+		orchTraceCtx = o.tracer.StartRoot(rootTaskID, "orchestrate-dag")
+	}
+
+	orchStepIdx := 1
+	nextOrchStep := func() int {
+		v := orchStepIdx
+		orchStepIdx++
+		return v
+	}
+
+	nodeMap := make(map[string]WorkflowNode, len(workflow.Nodes))
+	agentIDs := make([]string, 0, len(workflow.Nodes))
+	for _, n := range workflow.Nodes {
+		nodeMap[n.Agent.AgentID] = n
+		agentIDs = append(agentIDs, n.Agent.AgentID)
+	}
+
+	o.hub.SendEvent(event.NewEvent("decompose_done", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+		"strategy":    "dag",
+		"agent_count": len(workflow.Nodes),
+		"agent_ids":   agentIDs,
+		"workflow": map[string]any{
+			"edges": workflow.Edges,
+		},
+	}))
+
+	// 构造邻接表与入度计数。Edges 为空时从 node.Dependencies 隐式建边。
+	inDegree := make(map[string]int, len(workflow.Nodes))
+	outEdges := make(map[string][]WorkflowEdge, len(workflow.Nodes))
+	for _, n := range workflow.Nodes {
+		inDegree[n.Agent.AgentID] = 0
+	}
+	for _, n := range workflow.Nodes {
+		for _, dep := range n.Dependencies {
+			if _, ok := nodeMap[dep]; ok {
+				outEdges[dep] = append(outEdges[dep], WorkflowEdge{From: dep, To: n.Agent.AgentID, Condition: n.Condition})
+				inDegree[n.Agent.AgentID]++
+			}
+		}
+	}
+	for _, e := range workflow.Edges {
+		if _, ok := nodeMap[e.From]; ok {
+			if _, ok2 := nodeMap[e.To]; ok2 {
+				outEdges[e.From] = append(outEdges[e.From], e)
+				inDegree[e.To]++
+			}
+		}
+	}
+
+	results := make([]AgentResult, 0, len(workflow.Nodes))
+	resultsByID := make(map[string]AgentResult)
+	mu := sync.Mutex{}
+
+	// Kahn 算法调度：先执行入度为 0 的节点。依赖完成后再把满足条件的下游入度减一。
+	pending := make([]string, 0, len(workflow.Nodes))
+	for id, deg := range inDegree {
+		if deg == 0 {
+			pending = append(pending, id)
+		}
+	}
+
+	var runWg sync.WaitGroup
+	completedCh := make(chan string, len(workflow.Nodes))
+	skippedCh := make(chan string, len(workflow.Nodes))
+
+	// runOne 执行单个节点。
+	runOne := func(id string) {
+		defer runWg.Done()
+		n := nodeMap[id]
+		o.hub.SendEvent(event.NewEvent("agent_dispatched", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+			"agent_id":   n.Agent.AgentID,
+			"agent_name": n.Agent.Name,
+			"mode":       "dag",
+			"condition":  n.Condition,
+		}))
+		r := o.runAgent(ctx, rootTaskID, n.Agent, nextOrchStep)
+		mu.Lock()
+		results = append(results, r)
+		resultsByID[r.AgentID] = r
+		mu.Unlock()
+		o.hub.SendEvent(event.NewEvent("agent_completed", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+			"agent_id":     r.AgentID,
+			"agent_name":   r.Name,
+			"status":       r.Status,
+			"total_tokens": r.TotalTokens,
+			"duration_ms":  r.Duration,
+			"result":       r.Result,
+			"error":        r.Error,
+		}))
+		completedCh <- id
+	}
+
+	active := 0
+	for _, id := range pending {
+		runWg.Add(1)
+		go runOne(id)
+		active++
+	}
+
+	// doneCount 跟踪已完成/跳过的节点总数，防止 goroutine 泄漏。
+	doneCount := 0
+	totalNodes := len(workflow.Nodes)
+	for doneCount < totalNodes {
+		select {
+		case id := <-completedCh:
+			doneCount++
+			active--
+			mu.Lock()
+			res := resultsByID[id]
+			mu.Unlock()
+			for _, edge := range outEdges[id] {
+				// 依赖完成且满足边条件时才启动下游。
+				if res.Status != "completed" {
+					continue
+				}
+				// 节点自身 condition 与边 condition 同时满足。
+				nodeCondOK := evaluateWorkflowCondition(nodeMap[edge.To].Condition, resultsByID)
+				edgeCondOK := evaluateWorkflowCondition(edge.Condition, resultsByID)
+				if !nodeCondOK || !edgeCondOK {
+					// 条件不满足：计数器递减，若归零则置为 skipped。
+					mu.Lock()
+					inDegree[edge.To]--
+					deg := inDegree[edge.To]
+					mu.Unlock()
+					if deg == 0 {
+						doneCount++
+						o.hub.SendEvent(event.NewEvent("agent_completed", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+							"agent_id":    edge.To,
+							"agent_name":  nodeMap[edge.To].Agent.Name,
+							"status":      "skipped",
+							"skip_reason": "condition not satisfied",
+						}))
+						mu.Lock()
+						results = append(results, AgentResult{
+							AgentID:  edge.To,
+							Name:     nodeMap[edge.To].Agent.Name,
+							Status:   "skipped",
+							Result:   "condition not satisfied",
+						})
+						resultsByID[edge.To] = results[len(results)-1]
+						mu.Unlock()
+						skippedCh <- edge.To
+					}
+					continue
+				}
+				mu.Lock()
+				inDegree[edge.To]--
+				deg := inDegree[edge.To]
+				mu.Unlock()
+				if deg == 0 {
+					runWg.Add(1)
+					go runOne(edge.To)
+					active++
+				}
+			}
+		case id := <-skippedCh:
+			// skipped 节点本身不触发新的边，但要通知它的下游继续减入度。
+			doneCount++
+			for _, edge := range outEdges[id] {
+				mu.Lock()
+				inDegree[edge.To]--
+				deg := inDegree[edge.To]
+				mu.Unlock()
+				if deg == 0 {
+					doneCount++
+					o.hub.SendEvent(event.NewEvent("agent_completed", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+						"agent_id":    edge.To,
+						"agent_name":  nodeMap[edge.To].Agent.Name,
+						"status":      "skipped",
+						"skip_reason": "upstream skipped",
+					}))
+					mu.Lock()
+					results = append(results, AgentResult{
+						AgentID:  edge.To,
+						Name:     nodeMap[edge.To].Agent.Name,
+						Status:   "skipped",
+						Result:   "upstream skipped",
+					})
+					resultsByID[edge.To] = results[len(results)-1]
+					mu.Unlock()
+					skippedCh <- edge.To
+				}
+			}
+		case <-ctx.Done():
+			// 超时或被取消：停止产生新的 agent，已有的返回当前结果。
+			doneCount = totalNodes
+		}
+	}
+
+	close(completedCh)
+	close(skippedCh)
+	runWg.Wait()
+
+	// 确保 resultsByID 包含所有节点；缺失的视为 skipped（只在 ctx 取消时可能）。
+	for _, n := range workflow.Nodes {
+		if _, ok := resultsByID[n.Agent.AgentID]; !ok {
+			resultsByID[n.Agent.AgentID] = AgentResult{
+				AgentID: n.Agent.AgentID,
+				Name:    n.Agent.Name,
+				Status:  "skipped",
+				Result:  "workflow cancelled or timed out",
+			}
+			results = append(results, resultsByID[n.Agent.AgentID])
+		}
+	}
+
+	return o.runBlockingCommon(rootTaskID, "dag", results, nextOrchStep, orchTraceCtx)
 }
 
 // RunWithCallback 并发启动 agent，并在每个 agent 完成时调用 onResult。
@@ -863,14 +1280,20 @@ type TaskDecomposer struct{}
 
 // DecomposeResult 保存分解后的任务规范。
 type DecomposeResult struct {
-	// Agents 是要运行的 agent spec 列表。
+	// Agents 是要运行的 agent spec 列表。保留用于与旧版 API 和 rule-based
+	// 分解器向后兼容。
 	Agents []AgentSpec
 
 	// Strategy 描述 agent 之间的协调方式：
 	//   "parallel" —— 所有 agent 独立运行
 	//   "sequential" —— agent 依次运行，每个能看到上一个 agent 的输出
 	//   "pipeline" —— agent 通过链式传递数据（A → B → C）
+	//   "dag" —— 使用 Workflow 定义的 DAG 拓扑调度（Phase 7-H2 阶段 5）
 	Strategy string
+
+	// Workflow 是可选的 DAG 编排结构。当 Strategy == "dag" 或 Workflow 非
+	// nil 时使用 DAG 调度，否则回退到 Strategy 的 legacy 行为。
+	Workflow *AgentWorkflow `json:"workflow,omitempty"`
 }
 
 // Decompose 按 case 类型把用户请求拆分为 agent specs。

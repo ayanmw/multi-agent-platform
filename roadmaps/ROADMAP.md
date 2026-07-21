@@ -686,9 +686,9 @@ const activeTaskId = ref<string | null>(null)
 - [x] smoke 验证：前端出现 orchestrator 编排 lane，能看到拆分决策与派发过程
 
 #### 阶段 5（长期）— workflow DAG 表达力
-- [ ] decomposer 输出从扁平 `[]AgentSpec` 升级为带依赖/条件的 DAG
-- [ ] `RunBlocking` 按 DAG 调度（A 完成且满足条件才跑 C）
-- [ ] Leader 多轮 dispatch 的 observation 格式标准化
+- [x] decomposer 输出从扁平 `[]AgentSpec` 升级为带依赖/条件的 DAG
+- [x] `RunBlocking` 按 DAG 调度（A 完成且满足条件才跑 C）
+- [x] Leader 多轮 dispatch 的 observation 格式标准化
 
 #### 阶段 6（低优先级）— AgentBus 隔离 + Router 死代码（MA7 + MA8）
 - [ ] `internal/runtime/engine.go:703`：worker 改 `RegisterHandlerBySubTask`
@@ -745,3 +745,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
 | v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: `handleGetTask` 返回 child_tasks.steps + 前端 `loadTask` 回填 worker lane；新增 `TestHandleGetTaskChildSteps` 单测；smoke 验证同 v0.9.3 |
 | v0.9.5 Alpha | 2026-07-21 | Phase 7-H2 阶段 4: 编排层可观测事件(`decompose_done`/`agent_dispatched`/`agent_completed`) + root final_result worker 聚合摘要 + RunBlocking 显式 UpdateTask 终态(MA9)；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(14/0/3) 验证通过 |
+| v0.9.6 Alpha | 2026-07-21 | Phase 7-H2 阶段 5: workflow DAG 表达力落地 — `WorkflowNode/Edge/AgentWorkflow` 数据模型 + decomposer 解析 `workflow.nodes/edges/dependencies/condition` + `RunBlockingDAG` Kahn 拓扑调度(条件 DSL `<id>.completed\|\|.failed` + `&&/\|\|/()` + skipped 传播) + `/api/multi-agent` 自动切换 DAG/扁平路径(向后兼容) + `dispatch_sub_agent` observation 标准化(`summary`/`all_completed`/`completed_count`/`total_tokens`/`succeeded`/`result_truncated` + 4KB UTF-8 安全截断)；新增 `dispatch_observation_test.go` 5 例；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0) 验证通过 |

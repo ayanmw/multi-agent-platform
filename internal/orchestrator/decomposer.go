@@ -64,8 +64,12 @@ func (d *LLMDecomposer) Decompose(input, requestedStrategy string) (*DecomposeRe
 func buildDecompositionPrompt(input, strategy string) string {
 	return fmt.Sprintf(`Given the user request, break it into agent roles.
 Output strictly JSON with fields:
-- strategy: one of parallel/sequential/pipeline
+- strategy: one of parallel/sequential/pipeline/dag
 - agents: array of {agent_id, name, system_prompt, input, allowed_tools, output_to, model}
+- workflow: when strategy is "dag", include {nodes, edges}
+    - nodes: array of {agent: {agent_id, name, system_prompt, input, allowed_tools, output_to, model}, dependencies: [agent_id, ...], condition: optional expression}
+    - edges: optional array of {from: agent_id, to: agent_id, condition: optional expression}
+Condition expression syntax (lightweight): use uppercase status names and parenthes logical operators without spaces around operands, e.g. "parent_agent_id.completed" or "agent_a.completed&&agent_b.completed".
 Preferred strategy: %s
 Input: %s`, strategy, input)
 }
@@ -108,6 +112,26 @@ func parseDecomposeResponse(content, originalInput, requestedStrategy string) (*
 			OutputTo     StringSlice `json:"output_to"`
 			Model        string      `json:"model"`
 		} `json:"agents"`
+		Workflow *struct {
+			Nodes []struct {
+				Agent struct {
+					AgentID      string      `json:"agent_id"`
+					Name         string      `json:"name"`
+					SystemPrompt string      `json:"system_prompt"`
+					Input        string      `json:"input"`
+					AllowedTools []string    `json:"allowed_tools"`
+					OutputTo     StringSlice `json:"output_to"`
+					Model        string      `json:"model"`
+				} `json:"agent"`
+				Dependencies []string `json:"dependencies"`
+				Condition    string   `json:"condition"`
+			} `json:"nodes"`
+			Edges []struct {
+				From      string `json:"from"`
+				To        string `json:"to"`
+				Condition string `json:"condition"`
+			} `json:"edges"`
+		} `json:"workflow"`
 	}
 	if err := json.Unmarshal([]byte(content), &payload); err != nil {
 		return nil, err
@@ -118,6 +142,52 @@ func parseDecomposeResponse(content, originalInput, requestedStrategy string) (*
 	}
 	if payload.Strategy == "" {
 		payload.Strategy = "parallel"
+	}
+
+	// 优先用 workflow 构造 DAG 结果；同时回填 Agents 字段保证兼容性。
+	if payload.Workflow != nil && len(payload.Workflow.Nodes) > 0 {
+		nodes := make([]WorkflowNode, len(payload.Workflow.Nodes))
+		edges := make([]WorkflowEdge, 0, len(payload.Workflow.Edges))
+		agents := make([]AgentSpec, 0, len(payload.Workflow.Nodes))
+		for i, n := range payload.Workflow.Nodes {
+			a := n.Agent
+			if a.AgentID == "" {
+				a.AgentID = fmt.Sprintf("agent_%d", i+1)
+			}
+			if a.Name == "" {
+				a.Name = a.AgentID
+			}
+			if a.Input == "" {
+				a.Input = originalInput
+			}
+			spec := AgentSpec{
+				AgentID:      a.AgentID,
+				Name:         a.Name,
+				SystemPrompt: a.SystemPrompt,
+				Input:        a.Input,
+				AllowedTools: a.AllowedTools,
+				OutputTo:     a.OutputTo,
+				Model:        a.Model,
+			}
+			agents = append(agents, spec)
+			deps := make([]string, len(n.Dependencies))
+			copy(deps, n.Dependencies)
+			nodes[i] = WorkflowNode{
+				Agent:        spec,
+				Dependencies: deps,
+				Condition:    n.Condition,
+			}
+		}
+		for _, e := range payload.Workflow.Edges {
+			if e.From != "" && e.To != "" {
+				edges = append(edges, WorkflowEdge{From: e.From, To: e.To, Condition: e.Condition})
+			}
+		}
+		return &DecomposeResult{
+			Strategy: "dag",
+			Agents:   agents,
+			Workflow: &AgentWorkflow{Nodes: nodes, Edges: edges},
+		}, nil
 	}
 
 	specs := make([]AgentSpec, len(payload.Agents))

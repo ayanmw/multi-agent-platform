@@ -41,6 +41,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -167,6 +168,22 @@ func getMap(m map[string]any, key string) map[string]any {
 		return v
 	}
 	return nil
+}
+
+// truncateObservation 把可能很长的字符串截断到 maxBytes 上限，供 observation 回喂
+// 给 LLM 时控制上下文体积。截断时按字节计数（UTF-8 安全：只在 rune 边界截断），
+// 并追加 "...[truncated]" 标记，让 LLM 明确知道内容被裁剪、需要时可主动追取全文。
+// maxBytes <= 0 时不截断，原样返回。
+func truncateObservation(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	// 回退到最后一个完整的 rune 边界，避免截断 UTF-8 多字节字符。
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "...[truncated]"
 }
 
 // resolvePath 对工具输入路径做规范化。绝对路径会被 Clean 后原样返回。
@@ -570,8 +587,8 @@ func RegisterBuiltins(registry *Registry) {
 }
 
 // SubAgentDispatcher 是 leader agent 派发子 agent 的抽象。
-// 在 Phase 7-H 中，工具层只依赖该接口，具体实现由 cmd/server 注入，避免
-// tool 包与 orchestrator 包形成双向依赖。
+// 工具层只依赖该接口，具体实现由 cmd/server 注入，避免 tool 包与
+// orchestrator 包形成双向依赖。
 type SubAgentDispatcher interface {
 	Dispatch(ctx context.Context, leaderSubTaskID string, strategy string, agents []SubAgentSpec) ([]SubAgentResult, error)
 }
@@ -736,24 +753,59 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, leaderSubTaskID stri
 				return nil, fmt.Errorf("dispatch failed: %w", err)
 			}
 
-			// 返回可 JSON 序列化摘要，便于 observation 直接喂给 LLM。
+			// Phase 7-H2 阶段 5：标准化 observation，供 leader 多轮 dispatch 决策。
+			// 设计要点（leader 可能在一次任务里多次调用本工具，每轮 observation 都会
+			// 进入其对话历史，因此必须紧凑且自解释）：
+			//   - summary：一句话顶层摘要，leader 可仅凭它判断本轮是否完成、是否需要
+			//     再派发后续 agent，而不必逐条扫描 results。
+			//   - all_completed / completed_count：快速成功标志，避免 leader 逐条比对
+			//     status 字符串（也规避 LLM 把 "skipped" 误判为成功的风险）。
+			//   - 每个 result 携带 succeeded bool 与截断后的 result 文本：worker 输出
+			//     可能极长（如 read_file 大文件），不截断会撑爆 leader 上下文。完整
+			//     长度通过 result_truncated 标记暴露，leader 知道何时需要主动追取全文。
+			//   - total_tokens：本轮所有 worker 的 token 汇总，便于 leader 在多轮
+			//     dispatch 中感知累计成本。
+			const maxResultBytes = 4000
 			resultItems := make([]map[string]any, 0, len(results))
+			completedCount := 0
+			totalTokens := 0
 			for _, r := range results {
+				if r.Status == "completed" {
+					completedCount++
+				}
+				totalTokens += r.TotalTokens
 				resultItems = append(resultItems, map[string]any{
-					"agent_id":     r.AgentID,
-					"status":       r.Status,
-					"result":       r.Result,
-					"total_tokens": r.TotalTokens,
-					"error":        r.Error,
-					"duration_ms":  r.Duration,
+					"agent_id":         r.AgentID,
+					"name":             r.Name,
+					"status":           r.Status,
+					"succeeded":        r.Status == "completed",
+					"result":           truncateObservation(r.Result, maxResultBytes),
+					"result_truncated": len(r.Result) > maxResultBytes,
+					"total_tokens":     r.TotalTokens,
+					"error":            r.Error,
+					"duration_ms":      r.Duration,
 				})
 			}
 
+			allCompleted := len(results) > 0 && completedCount == len(results)
+			nonCompleted := len(results) - completedCount
+			summary := fmt.Sprintf("dispatched %d sub-agent(s) with strategy=%s; %d completed, %d failed/skipped",
+				len(agents), strategy, completedCount, nonCompleted)
+			if len(results) == 0 {
+				summary = fmt.Sprintf("dispatched %d sub-agent(s) with strategy=%s; no results returned", len(agents), strategy)
+			} else if allCompleted {
+				summary = fmt.Sprintf("dispatched %d sub-agent(s) with strategy=%s; all completed", len(agents), strategy)
+			}
+
 			return map[string]any{
-				"dispatched":  true,
-				"agent_count": len(agents),
-				"strategy":    strategy,
-				"results":     resultItems,
+				"dispatched":      true,
+				"agent_count":     len(agents),
+				"strategy":        strategy,
+				"all_completed":   allCompleted,
+				"completed_count": completedCount,
+				"total_tokens":    totalTokens,
+				"summary":         summary,
+				"results":         resultItems,
 			}, nil
 		},
 	).WithTags("orchestration")

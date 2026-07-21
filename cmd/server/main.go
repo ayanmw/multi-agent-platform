@@ -1556,9 +1556,10 @@ func main() {
 			return
 		}
 
-		// 把任务分解为 agent spec
+		// 把任务分解为 agent spec。当 result.Workflow 非 nil 时，使用 DAG 调度。
 		var specs []orchestrator.AgentSpec
 		strategy := "parallel"
+		var workflow *orchestrator.AgentWorkflow
 		if len(req.Agents) > 0 {
 			specs = enrichAgentSpecAllowedTools(req.Agents)
 		} else {
@@ -1575,6 +1576,10 @@ func main() {
 			}
 			specs = result.Agents
 			strategy = result.Strategy
+			workflow = result.Workflow
+			if workflow != nil {
+				strategy = "dag"
+			}
 		}
 
 		// 若提供了全局 MaxSteps 覆盖则应用
@@ -1649,7 +1654,7 @@ func main() {
 			"strategy":    strategy,
 		}))
 
-		// 按请求的协调策略启动 agent。
+		// 按请求的协调策略启动 agent。workflow 存在时使用 DAG 调度。
 		go func() {
 			// Multi-agent orchestration 超时默认 10 分钟。若每个 spec 都有
 			// 相同的 TimeoutSeconds 覆盖，则取最小正值作为统一 deadline，
@@ -1671,7 +1676,11 @@ func main() {
 			storeCancel(taskID, "orchestrator", cancel)
 			defer removeCancel(taskID, "orchestrator")
 			defer cancel()
-			orch.RunBlocking(ctx, taskID, strategy, specs)
+			if strategy == "dag" && workflow != nil {
+				orch.RunBlockingDAG(ctx, taskID, workflow)
+			} else {
+				orch.RunBlocking(ctx, taskID, strategy, specs)
+			}
 			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
 			log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
 		}()
