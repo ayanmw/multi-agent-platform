@@ -1,14 +1,16 @@
 <!-- TodoPanel.vue — v2 Session 级 TODO 列表面板
 
      功能：
-       - 展示当前 session 的 TODO 列表（按活跃/优先级排序）
+       - 展示当前 session 的 TODO 树形列表（支持嵌套子任务）
        - 支持新增 TODO
-       - 支持快速改状态（pending → in_progress → done）
+       - 支持快速改状态（pending → in_progress → done），父任务可级联完成子任务
        - 支持点击展开编辑内容与删除
+       - 支持拖拽排序与层级调整（顶层 ↔ 子任务）
+       - 支持折叠/展开子任务
        - 支持清理已完成（done + cancelled）
 
      数据流：
-       打开面板时调用 loadTodos(sessionId) 主动拉取；
+       打开面板时调用 loadTodoTree(sessionId) 主动拉取树形结构；
        todo_list_changed WebSocket 事件通过 useTodoStore 实时同步。
 
      样式说明：
@@ -18,7 +20,7 @@
        --font-mono / --space-* / --radius-*，与 ManageContent 内其它 tab 风格一致。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, h, defineComponent, type PropType } from 'vue'
 import { useTodoStore } from '@/composables/useTodoStore'
 import type { Todo, TodoStatus, TodoPriority } from '@/types/todo'
 
@@ -26,9 +28,18 @@ const props = defineProps<{
   sessionId: string
 }>()
 
-const { todosOf, loadTodos, createTodo, updateTodo, updateTodoStatus, deleteTodo, clearCompleted } = useTodoStore()
+const {
+  todosOf,
+  loadTodoTree,
+  createTodo,
+  updateTodo,
+  updateTodoStatus,
+  reorderTodos,
+  deleteTodo,
+  clearCompleted,
+} = useTodoStore()
 
-/** 当前 session 的 TODO 列表（已排序） */
+/** 当前 session 的 TODO 树形列表（已从 store 排序）。 */
 const todos = computed(() => todosOf(props.sessionId))
 
 /** 新增输入框绑定 */
@@ -56,7 +67,8 @@ async function load(sid: string) {
   loading.value = true
   error.value = ''
   try {
-    await loadTodos(sid)
+    // 使用树形加载接口，支持嵌套子任务展示。
+    await loadTodoTree(sid)
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Load failed'
   } finally {
@@ -65,12 +77,12 @@ async function load(sid: string) {
 }
 
 /** 创建新 TODO */
-async function handleCreate() {
+async function handleCreate(parentTodoId?: string) {
   const title = newTitle.value.trim()
   if (!title || !props.sessionId) return
   isCreating.value = true
   try {
-    await createTodo(props.sessionId, title, { priority: newPriority.value })
+    await createTodo(props.sessionId, title, { priority: newPriority.value, parentTodoId })
     newTitle.value = ''
     newPriority.value = 1
   } catch (err) {
@@ -88,8 +100,18 @@ async function handleQuickStatus(todo: Todo) {
     done: 'pending',
     cancelled: 'in_progress',
   }
+  const target = next[todo.status]
   try {
-    await updateTodoStatus(props.sessionId, todo.id, next[todo.status])
+    const hasChildren = (todo.children?.length ?? 0) > 0
+    const cascade = hasChildren && (target === 'done' || target === 'cancelled')
+      ? confirm(`Also mark ${todo.children?.length} subtask(s) as ${statusLabel(target)}?`)
+      : false
+    await updateTodoStatus(props.sessionId, todo.id, target)
+    if (cascade) {
+      for (const child of todo.children || []) {
+        await updateTodoStatus(props.sessionId, child.id, target)
+      }
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Status update failed'
   }
@@ -182,6 +204,269 @@ function priorityLabel(priority: number): string {
 const hasCompleted = computed(() =>
   todos.value.some(t => t.status === 'done' || t.status === 'cancelled')
 )
+
+// ========== Drag & Drop ==========
+/** 当前被拖拽的 todo id。 */
+const draggingId = ref<string | null>(null)
+/** 拖拽放置时目标父级 id（空字符串表示顶层）。 */
+const dragOverParentId = ref<string | null>(null)
+/** 拖拽放置目标索引，用于占位线提示。 */
+const dragOverIndex = ref<number | null>(null)
+
+function onDragStart(todo: Todo, e: DragEvent) {
+  draggingId.value = todo.id
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', todo.id)
+  }
+}
+
+function onDragOver(parentId: string, index: number, e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'move'
+  }
+  dragOverParentId.value = parentId
+  dragOverIndex.value = index
+}
+
+function onDragLeave() {
+  dragOverParentId.value = null
+  dragOverIndex.value = null
+}
+
+async function onDrop(targetParentId: string, targetIndex: number, e: DragEvent) {
+  e.preventDefault()
+  const draggedId = draggingId.value
+  if (!draggedId || !props.sessionId) {
+    resetDrag()
+    return
+  }
+
+  const moves = buildMoveList(draggedId, targetParentId, targetIndex)
+  if (moves.length > 0) {
+    try {
+      await reorderTodos(props.sessionId, moves)
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Reorder failed'
+    }
+  }
+
+  resetDrag()
+}
+
+function resetDrag() {
+  draggingId.value = null
+  dragOverParentId.value = null
+  dragOverIndex.value = null
+}
+
+/**
+ * 根据拖拽结果生成批量 moves。
+ * 策略：将被拖拽项插入到目标位置，同 parent 下其它项重新计算 sort_order。
+ * 为了简化，这里使用列表索引作为 sort_order；真实场景下可以预留更大间隔。
+ */
+function buildMoveList(draggedId: string, targetParentId: string, targetIndex: number): Array<{ id: string; parentTodoId: string; sortOrder: number }> {
+  const flat = flattenTodos(todos.value)
+  const draggedIndex = flat.findIndex(t => t.id === draggedId)
+  if (draggedIndex < 0) return []
+
+  const dragged = flat[draggedIndex]
+  // 避免把父任务拖进自己的子任务里（形成环）。
+  if (wouldCreateCycle(draggedId, targetParentId, flat)) return []
+
+  // 从扁平列表中移除被拖拽项
+  const withoutDragged = flat.filter(t => t.id !== draggedId)
+  // 计算在目标 parent 下的插入位置
+  const sameParent = withoutDragged.filter(t => t.parent_todo_id === targetParentId)
+  const beforeTarget = sameParent.slice(0, targetIndex)
+  const afterTarget = sameParent.slice(targetIndex)
+
+  const reorderedSameParent = [...beforeTarget, dragged, ...afterTarget]
+  const moves: Array<{ id: string; parentTodoId: string; sortOrder: number }> = []
+  reorderedSameParent.forEach((t, idx) => {
+    moves.push({ id: t.id, parentTodoId: targetParentId, sortOrder: idx })
+  })
+  return moves
+}
+
+/** 把树形 todo 列表拍平（仅顶层顺序 + 子任务）。 */
+function flattenTodos(items: Todo[]): Todo[] {
+  const result: Todo[] = []
+  function walk(list: Todo[]) {
+    for (const t of list) {
+      result.push(t)
+      if (t.children?.length) walk(t.children)
+    }
+  }
+  walk(items)
+  return result
+}
+
+/** 判断把 draggedId 设为 targetParentId 的子任务是否会形成循环。 */
+function wouldCreateCycle(draggedId: string, targetParentId: string, flat: Todo[]): boolean {
+  if (!targetParentId) return false
+  let current = targetParentId
+  const byId = new Map(flat.map(t => [t.id, t]))
+  while (current) {
+    if (current === draggedId) return true
+    const t = byId.get(current)
+    if (!t) break
+    current = t.parent_todo_id
+  }
+  return false
+}
+
+/** 折叠状态管理：记录被收起 parent 的 id 集合。 */
+const collapsed = ref<Set<string>>(new Set())
+
+function toggleCollapse(todoId: string) {
+  if (collapsed.value.has(todoId)) {
+    collapsed.value.delete(todoId)
+  } else {
+    collapsed.value.add(todoId)
+  }
+}
+
+/** 判断当前拖拽区域是否应该显示占位线。 */
+function isDropIndicator(parentId: string, index: number): boolean {
+  return dragOverParentId.value === parentId && dragOverIndex.value === index
+}
+
+// TodoItemList 是内部使用的树形子组件，复用同一文件减少拆分成本。
+// 它负责渲染一层 todo 并递归渲染 children，同时处理本层的拖拽放置区。
+const TodoItemList: any = defineComponent({
+  name: 'TodoItemList',
+  props: {
+    items: { type: Array as PropType<Todo[]>, required: true },
+    sessionId: { type: String, required: true },
+    editingId: { type: String, default: null },
+    draggingId: { type: String, default: null },
+    collapsed: { type: Object as PropType<Set<string>>, required: true },
+    parentId: { type: String, default: '' },
+  },
+  emits: ['dragStart', 'dragOver', 'dragLeave', 'drop', 'toggleStatus', 'startEdit', 'saveEdit', 'cancelEdit', 'delete', 'toggleCollapse', 'createSub'],
+  setup(props, { emit }) {
+    return () => {
+      const list = props.items
+      return h('ul', { class: 'todo-list', 'data-parent-id': props.parentId || 'root' }, [
+        // 顶层放置区：在第一个项目之前插入。
+        h('li', {
+          class: ['todo-drop-zone', { active: isDropIndicator(props.parentId, 0) }],
+          onDragover: (e: DragEvent) => emit('dragOver', props.parentId, 0, e),
+          onDragleave: () => emit('dragLeave'),
+          onDrop: (e: DragEvent) => emit('drop', props.parentId, 0, e),
+        }, h('span', { class: 'todo-drop-line' })),
+        ...list.flatMap((todo, index) => {
+          const isEditing = props.editingId === todo.id
+          const hasChildren = (todo.children?.length ?? 0) > 0
+          const isCollapsed = hasChildren && props.collapsed.has(todo.id)
+          return [
+            h('li', {
+              key: todo.id,
+              class: ['todo-item', { 'todo-item-terminal': todo.status === 'done' || todo.status === 'cancelled', dragging: props.draggingId === todo.id }],
+              draggable: true,
+              onDragstart: (e: DragEvent) => emit('dragStart', todo, e),
+            }, [
+              // 折叠按钮
+              hasChildren
+                ? h('button', {
+                    class: 'todo-collapse-btn',
+                    title: isCollapsed ? 'Expand' : 'Collapse',
+                    onClick: () => emit('toggleCollapse', todo.id),
+                  }, isCollapsed ? '▶' : '▼')
+                : h('span', { class: 'todo-collapse-placeholder' }),
+
+              h('button', {
+                class: ['todo-status-badge', statusClass(todo.status)],
+                onClick: () => emit('toggleStatus', todo),
+                title: `Click to change status (currently ${statusLabel(todo.status)})`,
+              }, statusLabel(todo.status)),
+
+              isEditing
+                ? h('div', { class: 'todo-edit-form' }, [
+                    h('input', {
+                      class: 'todo-edit-input',
+                      type: 'text',
+                      value: editTitle.value,
+                      onInput: (e: Event) => { editTitle.value = (e.target as HTMLInputElement).value },
+                      onKeydown: (e: KeyboardEvent) => {
+                        if (e.key === 'Enter') emit('saveEdit', todo)
+                        if (e.key === 'Escape') emit('cancelEdit')
+                      },
+                    }),
+                    h('textarea', {
+                      class: 'todo-edit-desc',
+                      rows: 2,
+                      placeholder: 'Description (optional)',
+                      value: editDescription.value,
+                      onInput: (e: Event) => { editDescription.value = (e.target as HTMLTextAreaElement).value },
+                    }),
+                    h('select', {
+                      class: 'todo-edit-priority',
+                      value: editPriority.value,
+                      onChange: (e: Event) => { editPriority.value = Number((e.target as HTMLSelectElement).value) as TodoPriority },
+                    }, [
+                      h('option', { value: 1 }, 'Low'),
+                      h('option', { value: 2 }, 'Medium'),
+                      h('option', { value: 3 }, 'High'),
+                    ]),
+                    h('div', { class: 'todo-edit-actions' }, [
+                      h('button', { class: 'todo-save-btn', onClick: () => emit('saveEdit', todo) }, 'Save'),
+                      h('button', { class: 'todo-cancel-btn', onClick: () => emit('cancelEdit') }, 'Cancel'),
+                    ]),
+                  ])
+                : h('div', { class: 'todo-content', onClick: () => emit('startEdit', todo) }, [
+                    h('div', { class: 'todo-title-row' }, [
+                      h('span', { class: ['todo-item-title', { 'todo-title-done': todo.status === 'done' }] }, todo.title),
+                      h('span', { class: ['todo-priority', `priority-${todo.priority}`] }, priorityLabel(todo.priority)),
+                    ]),
+                    todo.description ? h('div', { class: 'todo-item-desc' }, todo.description) : null,
+                  ]),
+
+              h('button', {
+                class: 'todo-delete-btn',
+                onClick: (e: Event) => { e.stopPropagation(); emit('delete', todo) },
+                title: 'Delete',
+              }, '×'),
+            ]),
+
+            // 子任务递归列表
+            hasChildren && !isCollapsed
+              ? h(TodoItemList, {
+                  items: todo.children,
+                  sessionId: props.sessionId,
+                  editingId: props.editingId,
+                  draggingId: props.draggingId,
+                  collapsed: props.collapsed,
+                  parentId: todo.id,
+                  onDragStart: (todoArg: Todo, e: DragEvent) => emit('dragStart', todoArg, e),
+                  onDragOver: (parentId: string, idx: number, e: DragEvent) => emit('dragOver', parentId, idx, e),
+                  onDragLeave: () => emit('dragLeave'),
+                  onDrop: (parentId: string, idx: number, e: DragEvent) => emit('drop', parentId, idx, e),
+                  onToggleStatus: (t: Todo) => emit('toggleStatus', t),
+                  onStartEdit: (t: Todo) => emit('startEdit', t),
+                  onSaveEdit: (t: Todo) => emit('saveEdit', t),
+                  onCancelEdit: () => emit('cancelEdit'),
+                  onDelete: (t: Todo) => emit('delete', t),
+                  onToggleCollapse: (id: string) => emit('toggleCollapse', id),
+                  onCreateSub: (parentId: string) => emit('createSub', parentId),
+                })
+              : null,
+
+            // 当前项目之后的放置区
+            h('li', {
+              class: ['todo-drop-zone', { active: isDropIndicator(props.parentId, index + 1) }],
+              onDragover: (e: DragEvent) => emit('dragOver', props.parentId, index + 1, e),
+              onDragleave: () => emit('dragLeave'),
+              onDrop: (e: DragEvent) => emit('drop', props.parentId, index + 1, e),
+            }, h('span', { class: 'todo-drop-line' })),
+          ]
+        }),
+      ])
+    }
+  },
+})
 </script>
 
 <template>
@@ -192,7 +477,7 @@ const hasCompleted = computed(() =>
         class="todo-create-input"
         type="text"
         placeholder="Add a new todo..."
-        @keydown.enter="handleCreate"
+        @keydown.enter="handleCreate()"
       />
       <select v-model="newPriority" class="todo-create-priority" title="Priority">
         <option :value="1">Low</option>
@@ -202,7 +487,7 @@ const hasCompleted = computed(() =>
       <button
         class="todo-create-btn"
         :disabled="!newTitle.trim() || isCreating"
-        @click="handleCreate"
+        @click="handleCreate()"
       >
         Add
       </button>
@@ -216,68 +501,26 @@ const hasCompleted = computed(() =>
       No active TODOs for this session.
     </div>
 
-    <ul v-else class="todo-list">
-      <li
-        v-for="todo in todos"
-        :key="todo.id"
-        :class="['todo-item', { 'todo-item-terminal': todo.status === 'done' || todo.status === 'cancelled' }]"
-      >
-        <button
-          class="todo-status-badge"
-          :class="statusClass(todo.status)"
-          @click="handleQuickStatus(todo)"
-          :title="`Click to change status (currently ${statusLabel(todo.status)})`"
-        >
-          {{ statusLabel(todo.status) }}
-        </button>
-
-        <div v-if="editingId === todo.id" class="todo-edit-form">
-          <input
-            v-model="editTitle"
-            class="todo-edit-input"
-            type="text"
-            @keydown.enter="handleSaveEdit(todo)"
-            @keydown.escape="cancelEdit"
-          />
-          <textarea
-            v-model="editDescription"
-            class="todo-edit-desc"
-            rows="2"
-            placeholder="Description (optional)"
-          ></textarea>
-          <select v-model="editPriority" class="todo-edit-priority">
-            <option :value="1">Low</option>
-            <option :value="2">Medium</option>
-            <option :value="3">High</option>
-          </select>
-          <div class="todo-edit-actions">
-            <button class="todo-save-btn" @click="handleSaveEdit(todo)">Save</button>
-            <button class="todo-cancel-btn" @click="cancelEdit">Cancel</button>
-          </div>
-        </div>
-
-        <div v-else class="todo-content" @click="startEdit(todo)">
-          <div class="todo-title-row">
-            <span class="todo-item-title" :class="{ 'todo-title-done': todo.status === 'done' }">
-              {{ todo.title }}
-            </span>
-            <span class="todo-priority" :class="`priority-${todo.priority}`">
-              {{ priorityLabel(todo.priority) }}
-            </span>
-          </div>
-          <div v-if="todo.description" class="todo-item-desc">{{ todo.description }}</div>
-        </div>
-
-        <button
-          v-if="editingId !== todo.id"
-          class="todo-delete-btn"
-          @click.stop="handleDelete(todo)"
-          title="Delete"
-        >
-          ×
-        </button>
-      </li>
-    </ul>
+    <TodoItemList
+      v-else
+      :items="todos"
+      :session-id="props.sessionId"
+      :editing-id="editingId"
+      :dragging-id="draggingId"
+      :collapsed="collapsed"
+      parent-id=""
+      @drag-start="onDragStart"
+      @drag-over="onDragOver"
+      @drag-leave="onDragLeave"
+      @drop="onDrop"
+      @toggle-status="handleQuickStatus"
+      @start-edit="startEdit"
+      @save-edit="handleSaveEdit"
+      @cancel-edit="cancelEdit"
+      @delete="handleDelete"
+      @toggle-collapse="toggleCollapse"
+      @create-sub="handleCreate"
+    />
 
     <div v-if="hasCompleted" class="todo-footer">
       <button class="todo-clear-btn" @click="handleClearCompleted">
@@ -389,6 +632,9 @@ const hasCompleted = computed(() =>
 }
 .todo-item:hover {
   background: rgba(255, 255, 255, 0.02);
+}
+.todo-item.dragging {
+  opacity: 0.4;
 }
 .todo-item-terminal {
   opacity: 0.6;
@@ -578,5 +824,47 @@ const hasCompleted = computed(() =>
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border-active);
+}
+
+.todo-collapse-btn,
+.todo-collapse-placeholder {
+  flex-shrink: 0;
+  width: 1.1rem;
+  text-align: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  padding: 0;
+  margin-top: 4px;
+}
+.todo-collapse-placeholder {
+  cursor: default;
+}
+
+.todo-drop-zone {
+  list-style: none;
+  height: 4px;
+  margin: 2px 0;
+  padding: 0;
+  position: relative;
+  transition: height 0.1s;
+}
+.todo-drop-zone.active {
+  height: 12px;
+}
+.todo-drop-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: transparent;
+  border-radius: 1px;
+  transform: translateY(-50%);
+}
+.todo-drop-zone.active .todo-drop-line {
+  background: var(--accent-running, #00e5ff);
 }
 </style>

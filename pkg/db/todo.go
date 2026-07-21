@@ -200,7 +200,44 @@ func ListTodosByTask(taskID string) ([]todo.Todo, error) {
 	return items, rows.Err()
 }
 
-// DeleteCompletedTodosBySession 删除某 session 下所有已完成（done）的 Todo。
+// Reorder 批量更新一组 todo 的 parent_todo_id 与 sort_order。
+// 在同一个事务中执行：1) 读取当前记录校验 session；2) 逐一更新。
+func Reorder(sessionID string, moves []todo.TodoMove) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for i, m := range moves {
+		if m.ID == "" {
+			return fmt.Errorf("move[%d]: id is required", i)
+		}
+		var existingSession string
+		row := tx.QueryRow(`SELECT session_id FROM todos WHERE id = ?`, m.ID)
+		if err := row.Scan(&existingSession); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("todo %s not found", m.ID)
+			}
+			return err
+		}
+		if existingSession != sessionID {
+			return fmt.Errorf("todo %s does not belong to session %s", m.ID, sessionID)
+		}
+		parentID := sql.NullString{}
+		if m.ParentTodoID != "" {
+			parentID = sql.NullString{String: m.ParentTodoID, Valid: true}
+		}
+		if _, err := tx.Exec(`UPDATE todos SET parent_todo_id = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
+			parentID, m.SortOrder, time.Now().Unix(), m.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 func DeleteCompletedTodosBySession(sessionID string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")

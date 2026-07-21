@@ -212,6 +212,24 @@ func (m *mockTodoDBStore) DeleteAllTodosBySession(sessionID string) error {
 	return nil
 }
 
+// Reorder 批量更新 parent_todo_id 与 sort_order（内存实现）。
+func (m *mockTodoDBStore) Reorder(sessionID string, moves []todo.TodoMove) error {
+	for _, mv := range moves {
+		t, ok := m.todos[mv.ID]
+		if !ok {
+			return fmt.Errorf("todo %s not found", mv.ID)
+		}
+		if t.SessionID != sessionID {
+			return fmt.Errorf("todo %s does not belong to session %s", mv.ID, sessionID)
+		}
+		t.ParentTodoID = mv.ParentTodoID
+		t.SortOrder = mv.SortOrder
+		t.UpdatedAt = time.Now().Unix()
+		m.todos[mv.ID] = t
+	}
+	return nil
+}
+
 // mockEventBus 是 todo.EventBus 的最小实现，只记录发送过的事件。
 type mockEventBus struct {
 	events []event.Event

@@ -173,6 +173,51 @@ export function useTodoStore() {
     // WebSocket 事件会负责最终状态同步
   }
 
+  /** 批量调整 todo 的 parent_todo_id 与 sort_order（拖拽排序/嵌套子任务）。 */
+  async function reorderTodos(
+    sessionId: string,
+    moves: Array<{ id: string; parentTodoId: string; sortOrder: number }>
+  ): Promise<void> {
+    const body = {
+      session_id: sessionId,
+      moves: moves.map(m => ({
+        id: m.id,
+        parent_todo_id: m.parentTodoId,
+        sort_order: m.sortOrder,
+      })),
+    }
+    const resp = await fetch('/api/todos/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(`Failed to reorder todos: ${resp.status} ${text}`)
+    }
+    // WebSocket 事件会负责最终状态同步
+  }
+
+  /** 从后端加载树形 TODO 列表（含 children）。 */
+  async function loadTodoTree(sessionId: string): Promise<void> {
+    if (!sessionId || loadingSessions.has(sessionId)) return
+    loadingSessions.add(sessionId)
+    try {
+      const resp = await fetch(`/api/todos?session_id=${encodeURIComponent(sessionId)}&tree=1`)
+      if (!resp.ok) {
+        const text = await resp.text()
+        throw new Error(`Failed to load todo tree: ${resp.status} ${text}`)
+      }
+      const data = (await resp.json()) as { todos: Todo[] }
+      setTodos(sessionId, data.todos || [])
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to load todo tree')
+      throw err
+    } finally {
+      loadingSessions.delete(sessionId)
+    }
+  }
+
   /**
    * 判断 TODO 是否处于终态。
    */
@@ -231,16 +276,22 @@ export function useTodoStore() {
     todosBySession.value[sessionId] = list.filter(t => t.id !== todoId)
   }
 
-  /** 排序：未完成的优先，其次按优先级降序，再按 created_at 升序。 */
+  /** 排序：未完成的优先，其次按优先级降序，再按 created_at 升序；递归排序 children。 */
   function sortTodos(todos: Todo[]): Todo[] {
     const terminal: TodoStatus[] = ['done', 'cancelled']
-    return [...todos].sort((a, b) => {
+    const sorted = [...todos].sort((a, b) => {
       const aDone = terminal.includes(a.status) ? 1 : 0
       const bDone = terminal.includes(b.status) ? 1 : 0
       if (aDone !== bDone) return aDone - bDone
       if (b.priority !== a.priority) return b.priority - a.priority
       return a.created_at - b.created_at
     })
+    for (const t of sorted) {
+      if (t.children?.length) {
+        t.children = sortTodos(t.children)
+      }
+    }
+    return sorted
   }
 
   return {
@@ -248,9 +299,11 @@ export function useTodoStore() {
     todosOf,
     setTodos,
     loadTodos,
+    loadTodoTree,
     createTodo,
     updateTodo,
     updateTodoStatus,
+    reorderTodos,
     deleteTodo,
     clearCompleted,
     activeCount,

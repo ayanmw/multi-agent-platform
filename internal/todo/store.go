@@ -22,6 +22,13 @@ type DBStore interface {
 	ListTodosByTask(taskID string) ([]Todo, error)
 	DeleteCompletedTodosBySession(sessionID string) error
 	DeleteAllTodosBySession(sessionID string) error
+	// Reorder 批量更新一组 todo 的 parent_todo_id 与 sort_order，用于拖拽排序/层级调整。
+	Reorder(sessionID string, moves []TodoMove) error
+}
+
+// ReorderInput 定义 Service.Reorder 的输入参数。
+type ReorderInput struct {
+	Moves []TodoMove
 }
 
 // Store 是 DBStore 之上的一层薄封装，提供与业务语义更贴近的方法。
@@ -72,6 +79,11 @@ func (s *Store) DeleteCompletedBySession(sessionID string) error {
 // DeleteAllBySession 删除某 session 下全部 Todo。
 func (s *Store) DeleteAllBySession(sessionID string) error {
 	return s.db.DeleteAllTodosBySession(sessionID)
+}
+
+// Reorder 委托给底层 DBStore 的批量排序接口。
+func (s *Store) Reorder(sessionID string, moves []TodoMove) error {
+	return s.db.Reorder(sessionID, moves)
 }
 
 // Ensure sql.ErrNoRows 在 Store 层仍可被外部比较（不引入外部包）。

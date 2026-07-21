@@ -132,6 +132,23 @@ func (m *mockTodoDBStore) DeleteAllTodosBySession(sessionID string) error {
 	return nil
 }
 
+// Reorder 批量更新 parent_todo_id 与 sort_order（内存实现）。
+func (m *mockTodoDBStore) Reorder(sessionID string, moves []todo.TodoMove) error {
+	for _, mv := range moves {
+		t, ok := m.byID[mv.ID]
+		if !ok {
+			return errors.New("todo not found: " + mv.ID)
+		}
+		if t.SessionID != sessionID {
+			return errors.New("todo does not belong to session")
+		}
+		t.ParentTodoID = mv.ParentTodoID
+		t.SortOrder = mv.SortOrder
+		m.byID[mv.ID] = t
+	}
+	return nil
+}
+
 // 确保 sql.ErrNoRows 在 mock 层也可被外部比较。
 var _ = sql.ErrNoRows
 
@@ -401,3 +418,45 @@ func TestTodoClear(t *testing.T) {
 		t.Fatalf("expected 1 active todo, got %+v", listResp.Todos)
 	}
 }
+
+// TestTodoReorder 验证 POST /api/todos/reorder 成功与循环依赖失败场景。
+func TestTodoReorder(t *testing.T) {
+	svc := setupTodoService(t)
+	mux := http.NewServeMux()
+	registerTodoRoutes(mux, svc)
+
+	a, _ := svc.Create("s-reorder", "task-1", "A", "", "", 1)
+	b, _ := svc.Create("s-reorder", "task-1", "B", "", "", 1)
+	c, _ := svc.Create("s-reorder", "task-1", "C", "", "", 1)
+
+	// 1. 合法 reorder：B 拖为 A 子任务，C 排到顶层第一。
+	payload, _ := json.Marshal(map[string]any{
+		"session_id": "s-reorder",
+		"moves": []map[string]any{
+			{"id": b.ID, "parent_todo_id": a.ID, "sort_order": 0},
+			{"id": c.ID, "parent_todo_id": "", "sort_order": 0},
+			{"id": a.ID, "parent_todo_id": "", "sort_order": 1},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/reorder", bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("合法 reorder 期望 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. 循环依赖应返回 400。
+	cyclePayload, _ := json.Marshal(map[string]any{
+		"session_id": "s-reorder",
+		"moves": []map[string]any{
+			{"id": a.ID, "parent_todo_id": b.ID, "sort_order": 0},
+		},
+	})
+	cycleReq := httptest.NewRequest(http.MethodPost, "/api/todos/reorder", bytes.NewReader(cyclePayload))
+	cycleRec := httptest.NewRecorder()
+	mux.ServeHTTP(cycleRec, cycleReq)
+	if cycleRec.Code != http.StatusBadRequest {
+		t.Fatalf("循环依赖期望 400, got %d: %s", cycleRec.Code, cycleRec.Body.String())
+	}
+}
+

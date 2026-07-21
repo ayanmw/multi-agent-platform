@@ -25,7 +25,7 @@ type Migration struct {
 
 // 所有 migration，按时间顺序排列。
 // 新的 migration 必须追加到列表末尾，禁止重排或删除已有条目。
-var migrations = []Migration{
+var migrations =deduplicateMigrations([]Migration{
 	// v1：初始 schema —— 即 database.go createTables() 中定义的所有表。
 	// 本 migration 是 no-op，因为 createTables() 已负责初始建表。
 	// 仅用于给 schema_migrations 表播种，以便后续 migration 能正常执行。
@@ -372,7 +372,56 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 			Description: "Reset agent_default tools whitelist to allow all tools",
 			SQL:         `UPDATE agents SET tools='[]' WHERE id='agent_default';`,
 		},
+
+		// v23：由 pkg/db/todo.go init() 注册，创建 todos 表。此处保留空位避免版本冲突。
+		{
+			Version:     23,
+			Description: "Placeholder for todos table migration (registered in pkg/db/todo.go)",
+			SQL:         `SELECT 1`,
+		},
+
+		// v24：由 pkg/db/skill.go init() 注册，创建 skills 表。此处保留空位避免版本冲突。
+		{
+			Version:     24,
+			Description: "Placeholder for skills table migration (registered in pkg/db/skill.go)",
+			SQL:         `SELECT 1`,
+		},
+
+		// v25：展开 todos 表 parent_todo_id 外键能力，确保有索引。
+		// v23 创建表时已包含 parent_todo_id 列，本迁移用于在旧数据库上补建索引。
+		{
+			Version:     25,
+			Description: "Ensure todos parent_todo_id index exists for nested subtasks",
+			SQL: `CREATE INDEX IF NOT EXISTS idx_todos_parent_todo_id ON todos(parent_todo_id);
+CREATE INDEX IF NOT EXISTS idx_todos_priority_sort_order_created_at ON todos(priority DESC, sort_order ASC, created_at ASC);`,
+		},
+	})
+
+// deduplicateMigrations 按 version 去重，保留第一次出现的条目。
+// 用于处理多个 init() 从不同包向 migrations 切片追加同版本 placeholder 的情况。
+// 注意：真实 migration（SQL 非 SELECT 1）优先于 placeholder；
+// 因此先按 version 分组，若存在真实 migration 则取用真实项，否则保留第一项。
+func deduplicateMigrations(list []Migration) []Migration {
+	seen := make(map[int]bool)
+	byVersion := make(map[int]Migration)
+	for _, m := range list {
+		existing, ok := byVersion[m.Version]
+		if !ok || (m.SQL != "SELECT 1" && existing.SQL == "SELECT 1") {
+			byVersion[m.Version] = m
+		}
 	}
+	var cleaned []Migration
+	for _, m := range list {
+		if seen[m.Version] {
+			continue
+		}
+		if best, ok := byVersion[m.Version]; ok {
+			cleaned = append(cleaned, best)
+			seen[m.Version] = true
+		}
+	}
+	return cleaned
+}
 
 // createMigrationsTable 确保 schema_migrations 追踪表存在。
 func createMigrationsTable() error {
@@ -422,7 +471,10 @@ func RunMigrations() error {
 		return fmt.Errorf("read applied migrations: %w", err)
 	}
 
-	for _, m := range migrations {
+	// 对 migrations 切片按 version 去重，防止多个 init() 注册同版本号。
+	uniqueMigrations := deduplicateMigrations(migrations)
+
+	for _, m := range uniqueMigrations {
 		if applied[m.Version] {
 			continue // 已应用
 		}

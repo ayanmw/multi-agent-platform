@@ -12,9 +12,10 @@ import (
 // registerTodoRoutes 把 Todo 管理 REST API 路由挂载到 mux。
 //
 // 路由总览：
-//   GET    /api/todos              — 列出 session 下 todos（?session_id=&status=&include_done=）
+//   GET    /api/todos              — 列出 session 下 todos（?session_id=&status=&include_done=&tree=）
 //   POST   /api/todos              — 创建 todo
 //   POST   /api/todos/clear        — 批量清理 session 下 todos
+//   POST   /api/todos/reorder      — 批量调整 todo 层级/排序
 //   GET    /api/todos/:id          — 单个 todo 详情
 //   PUT    /api/todos/:id          — 更新非 status 字段
 //   PATCH  /api/todos/:id/status   — 独立更新 status
@@ -22,14 +23,22 @@ import (
 //
 // 所有 handler 直接操作传入的 todo.Service，避免与全局变量耦合。
 func registerTodoRoutes(mux *http.ServeMux, todoSvc *todo.Service) {
-	// /api/todos/clear 必须比 /api/todos/ 更精确先注册，
-	// 否则 Go 的 ServeMux 会把 /clear 当成 :id 处理。
+	// /api/todos/clear 与 /api/todos/reorder 必须比 /api/todos/ 更精确先注册，
+	// 否则 Go 的 ServeMux 会把路径当成 :id 处理。
 	mux.HandleFunc("/api/todos/clear", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
 		handleClearTodos(w, r, todoSvc)
+	})
+
+	mux.HandleFunc("/api/todos/reorder", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		handleReorderTodos(w, r, todoSvc)
 	})
 
 	mux.HandleFunc("/api/todos", func(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +91,10 @@ type todoCreateRequest struct {
 	Priority     int    `json:"priority"`
 }
 
-// handleListTodos 处理 GET /api/todos?session_id=xxx&status=&include_done=。
+// handleListTodos 处理 GET /api/todos?session_id=xxx&status=&include_done=&tree=。
 //
 // session_id 必填；status 为单个状态过滤；include_done 默认 false，
-// 表示过滤掉 done/cancelled 等终态。
+// 表示过滤掉 done/cancelled 等终态；tree=1 时返回树形结构。
 func handleListTodos(w http.ResponseWriter, r *http.Request, todoSvc *todo.Service) {
 	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 	if sessionID == "" {
@@ -103,18 +112,29 @@ func handleListTodos(w http.ResponseWriter, r *http.Request, todoSvc *todo.Servi
 		includeDone = v == "true" || v == "1" || v == "yes"
 	}
 
-	todos, err := todoSvc.List(sessionID, statusFilter, includeDone)
+	treeMode := false
+	if v := strings.TrimSpace(r.URL.Query().Get("tree")); v != "" {
+		treeMode = v == "true" || v == "1" || v == "yes"
+	}
+
+	var items []todo.Todo
+	var err error
+	if treeMode {
+		items, err = todoSvc.GetTree(sessionID)
+	} else {
+		items, err = todoSvc.List(sessionID, statusFilter, includeDone)
+	}
 	if err != nil {
 		writeJSONError(w, "list todos: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if todos == nil {
-		todos = []todo.Todo{}
+	if items == nil {
+		items = []todo.Todo{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"todos": todos,
+		"todos": items,
 	})
 }
 
@@ -161,6 +181,43 @@ func handleGetTodo(w http.ResponseWriter, r *http.Request, todoSvc *todo.Service
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(t)
+}
+
+// todoReorderRequest 是 POST /api/todos/reorder 的请求体。
+type todoReorderRequest struct {
+	SessionID string         `json:"session_id"`
+	Moves     []todo.TodoMove `json:"moves"`
+}
+
+// handleReorderTodos 处理 POST /api/todos/reorder，批量调整 todo 的 parent 与顺序。
+func handleReorderTodos(w http.ResponseWriter, r *http.Request, todoSvc *todo.Service) {
+	var req todoReorderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.SessionID) == "" {
+		writeJSONError(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Moves) == 0 {
+		writeJSONError(w, "moves is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := todoSvc.Reorder(req.SessionID, req.Moves); err != nil {
+		// Service 已做循环检测与跨 session 校验；返回 400 便于前端展示错误。
+		writeJSONError(w, "reorder todos: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"reordered":  true,
+		"session_id": req.SessionID,
+		"moves":      len(req.Moves),
+	})
 }
 
 // todoUpdateRequest 是 PUT /api/todos/:id 的请求体。

@@ -168,6 +168,29 @@ func (m *mockDBStore) DeleteAllTodosBySession(sessionID string) error {
 	return nil
 }
 
+// Reorder 内存实现：批量更新 parent_todo_id 与 sort_order，并校验 session 归属。
+func (m *mockDBStore) Reorder(sessionID string, moves []TodoMove) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, mv := range moves {
+		if mv.ID == "" {
+			return fmt.Errorf("move[%d]: id is required", i)
+		}
+		t, ok := m.todos[mv.ID]
+		if !ok {
+			return fmt.Errorf("todo %s not found", mv.ID)
+		}
+		if t.SessionID != sessionID {
+			return fmt.Errorf("todo %s does not belong to session %s", mv.ID, sessionID)
+		}
+		t.ParentTodoID = mv.ParentTodoID
+		t.SortOrder = mv.SortOrder
+		t.UpdatedAt = time.Now().Unix()
+		m.todos[mv.ID] = t
+	}
+	return nil
+}
+
 // sortTodos 提供与真实 SQLite 一致的简单排序逻辑，仅用于测试断言。
 func sortTodos(items []Todo) {
 	if len(items) <= 1 {
@@ -454,3 +477,56 @@ func TestService_ListAndListActiveBySession(t *testing.T) {
 		t.Fatalf("done filter 返回错误")
 	}
 }
+
+// TestService_Reorder 验证 Reorder 可以调整 parent 与 sort_order，并拒绝循环依赖与跨 session parent。
+func TestService_Reorder(t *testing.T) {
+	store := newMockDBStore()
+	bus := &fakeEventBus{}
+	svc := NewService(store, bus)
+
+	// 创建三个顶层 todo：a, b, c。
+	a, _ := svc.Create("session-r", "task-1", "A", "", "", 1)
+	b, _ := svc.Create("session-r", "task-1", "B", "", "", 1)
+	c, _ := svc.Create("session-r", "task-1", "C", "", "", 1)
+
+	// 1. 把 B 拖为 A 的子任务，C 排到顶层第一。
+	err := svc.Reorder("session-r", []TodoMove{
+		{ID: b.ID, ParentTodoID: a.ID, SortOrder: 0},
+		{ID: c.ID, ParentTodoID: "", SortOrder: 0},
+		{ID: a.ID, ParentTodoID: "", SortOrder: 1},
+	})
+	if err != nil {
+		t.Fatalf("合法 reorder 失败: %v", err)
+	}
+	gotB, _ := store.GetTodo(b.ID)
+	if gotB.ParentTodoID != a.ID {
+		t.Fatalf("B 的 parent 应为 A, got %q", gotB.ParentTodoID)
+	}
+	gotC, _ := store.GetTodo(c.ID)
+	if gotC.SortOrder != 0 {
+		t.Fatalf("C 的 sort_order 应为 0, got %d", gotC.SortOrder)
+	}
+
+	// 2. 试图把 A 拖进 B（B 已是 A 的子任务），应形成循环，失败。
+	err = svc.Reorder("session-r", []TodoMove{
+		{ID: a.ID, ParentTodoID: b.ID, SortOrder: 0},
+	})
+	if err == nil {
+		t.Fatal("应拒绝循环依赖")
+	}
+
+	// 3. 跨 session parent 应被拒绝。
+	other, _ := svc.Create("session-other", "task-1", "Other", "", "", 1)
+	err = svc.Reorder("session-r", []TodoMove{
+		{ID: a.ID, ParentTodoID: other.ID, SortOrder: 0},
+	})
+	if err == nil {
+		t.Fatal("应拒绝跨 session parent")
+	}
+
+	// 验证广播了多次 todo_list_changed。
+	if len(bus.TodoListChangedEvents()) < 1 {
+		t.Fatalf("应至少广播 1 次 todo_list_changed, got %d", len(bus.TodoListChangedEvents()))
+	}
+}
+

@@ -2811,3 +2811,4 @@ func (dbStoreAdapter) DeleteCompletedTodosBySession(sessionID string) error {
 	return db.DeleteCompletedTodosBySession(sessionID)
 }
 func (dbStoreAdapter) DeleteAllTodosBySession(sessionID string) error { return db.DeleteAllTodosBySession(sessionID) }
+func (dbStoreAdapter) Reorder(sessionID string, moves []todo.TodoMove) error { return db.Reorder(sessionID, moves) }

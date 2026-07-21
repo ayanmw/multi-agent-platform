@@ -27,6 +27,7 @@ type UpdateInput struct {
 	SortOrder    *int
 	ParentTodoID *string
 	ActiveTaskID *string
+	CascadeDone  *bool
 }
 
 // Service 是 Todo 领域的业务逻辑入口。
@@ -77,6 +78,7 @@ func (s *Service) Create(sessionID, taskID, title, description, parentTodoID str
 // Update 更新 Todo 的非状态字段。
 //
 // 只有 UpdateInput 中非 nil 的字段才会被更新，status 由 UpdateStatus 独立处理。
+// 提供 CascadeDone 选项：当把父任务设为 done/cancelled 时，同时完成其所有子任务。
 func (s *Service) Update(todoID string, updates UpdateInput) (*Todo, error) {
 	t, err := s.store.Get(todoID)
 	if err != nil {
@@ -108,12 +110,47 @@ func (s *Service) Update(todoID string, updates UpdateInput) (*Todo, error) {
 	if err := s.store.Update(t); err != nil {
 		return nil, fmt.Errorf("update todo: %w", err)
 	}
+
+	// 级联完成子任务：当 todo 进入终态且 CascadeDone=true 时，递归完成所有子任务。
+	if updates.CascadeDone != nil && *updates.CascadeDone && t.Status.IsTerminal() {
+		if err := s.cascadeStatus(t.SessionID, t.ID, t.Status); err != nil {
+			return nil, fmt.Errorf("cascade done: %w", err)
+		}
+	}
+
 	updated, err := s.store.Get(t.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read updated todo: %w", err)
 	}
 	s.broadcast(updated.SessionID, updated.CreatedByTaskID, updated.ActiveTaskID)
 	return &updated, nil
+}
+
+// cascadeStatus 递归把指定父 todo 下的所有子任务（及子任务的子任务）同步为同一终态。
+func (s *Service) cascadeStatus(sessionID, parentID string, status TodoStatus) error {
+	children, err := s.store.ListBySession(sessionID, nil, true)
+	if err != nil {
+		return err
+	}
+	var direct []Todo
+	for _, c := range children {
+		if c.ParentTodoID == parentID {
+			direct = append(direct, c)
+		}
+	}
+	for _, c := range direct {
+		if !c.Status.IsTerminal() {
+			c.Status = status
+			c.UpdatedAt = time.Now().Unix()
+			if err := s.store.Update(c); err != nil {
+				return err
+			}
+			if err := s.cascadeStatus(sessionID, c.ID, status); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // UpdateStatus 独立更新 Todo 状态。
@@ -154,6 +191,102 @@ func (s *Service) Delete(todoID string) error {
 	}
 	s.broadcast(t.SessionID, t.CreatedByTaskID, t.ActiveTaskID)
 	return nil
+}
+
+// Reorder 批量调整一组 Todo 的层级关系与排序位置。
+//
+// moves 中的每个元素指定 todo 的新 parent_todo_id 与 sort_order。
+// 写入前会校验：目标 parent 必须存在、属于同一 session，并且不能形成循环依赖。
+// 操作完成后广播 todo_list_changed 事件。
+func (s *Service) Reorder(sessionID string, moves []TodoMove) error {
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+
+	// 加载当前 session 下全部 active todo 作为校验上下文。
+	current, err := s.store.ListBySession(sessionID, nil, false)
+	if err != nil {
+		return fmt.Errorf("load todos for validation: %w", err)
+	}
+
+	// 把 moves 的修改应用到校验用的对象上，同时校验每个 move 的合法性。
+	future := simulateMoves(current, moves)
+	for _, m := range moves {
+		// 目标 parent 非空时必须属于同一 session。
+		if m.ParentTodoID != "" {
+			parent, ok := future[m.ParentTodoID]
+			if !ok {
+				return fmt.Errorf("parent todo %s not found", m.ParentTodoID)
+			}
+			if parent.SessionID != sessionID {
+				return fmt.Errorf("parent todo %s does not belong to session %s", m.ParentTodoID, sessionID)
+			}
+		}
+		// 被移动的 todo 必须存在，且 seller 已在 store.Reorder 中校验 session;
+		// 这里只校验循环依赖。
+		if moved, ok := future[m.ID]; ok && wouldCreateCycle(m.ID, m.ParentTodoID, future) {
+			return fmt.Errorf("reorder would create cycle for todo %s", moved.ID)
+		}
+	}
+
+	if err := s.store.Reorder(sessionID, moves); err != nil {
+		return fmt.Errorf("reorder todos: %w", err)
+	}
+	s.broadcast(sessionID, "", "")
+	return nil
+}
+
+// simulateMoves 返回把 moves 应用到当前列表后的 id→Todo 映射，用于校验。
+func simulateMoves(current []Todo, moves []TodoMove) map[string]Todo {
+	byID := make(map[string]Todo, len(current))
+	for _, t := range current {
+		byID[t.ID] = t
+	}
+	for _, m := range moves {
+		if t, ok := byID[m.ID]; ok {
+			t.ParentTodoID = m.ParentTodoID
+			t.SortOrder = m.SortOrder
+			byID[t.ID] = t
+		}
+	}
+	return byID
+}
+
+// wouldCreateCycle 判断把 draggedId 设为 targetParentId 的子任务是否会形成循环。
+func wouldCreateCycle(draggedID, targetParentID string, byID map[string]Todo) bool {
+	if targetParentID == "" {
+		return false
+	}
+	current := targetParentID
+	seen := make(map[string]bool)
+	for current != "" {
+		if current == draggedID {
+			return true
+		}
+		if seen[current] {
+			return true
+		}
+		seen[current] = true
+		t, ok := byID[current]
+		if !ok {
+			break
+		}
+		current = t.ParentTodoID
+	}
+	return false
+}
+
+// GetTree 返回某 session 下所有 active（非终态）Todo 的树形结构，
+// 适合前端一次性展示完整层级。
+func (s *Service) GetTree(sessionID string) ([]Todo, error) {
+	flat, err := s.store.ListBySession(sessionID, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return BuildTree(flat), nil
 }
 
 // Get 读取单个 Todo。

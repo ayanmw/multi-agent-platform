@@ -21,6 +21,8 @@ export interface Todo {
   created_at: number
   updated_at: number
   completed_at?: number | null
+  /** 树形序列化时后端填充的子任务 */
+  children?: Todo[]
 }
 
 /** todo_list_changed 事件 data 结构 */
@@ -48,7 +50,15 @@ export interface UpdateTodoRequest {
   parent_todo_id?: string
 }
 
-/** 更新 TODO 状态请求 */
+/** 批量排序/层级调整请求 */
+export interface ReorderTodosRequest {
+  session_id: string
+  moves: Array<{
+    id: string
+    parent_todo_id: string
+    sort_order: number
+  }>
+}
 export interface UpdateTodoStatusRequest {
   status: TodoStatus
 }

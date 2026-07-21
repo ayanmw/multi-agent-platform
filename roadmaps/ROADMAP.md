@@ -568,7 +568,7 @@ const activeTaskId = ref<string | null>(null)
 - [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
 - [x] 前端 v2 TODO 面板在 `web/v2/` 的 Manage Dialog 中集成（Create/Toggle Status/Edit/Delete/ClearCompleted）
 - [x] 前端 v2 TODO 未完成计数徽标（TopBar Manage 按钮）与输入条 TODO 堆积提示
-- [ ] TODO 拖拽排序与嵌套子任务 UI 展示（已规划，下一步实施）
+- [x] TODO 拖拽排序与嵌套子任务 UI 展示（拖入子任务、级联完成、折叠展开、循环检测）
 - [x] todo/* 工具默认受通用 ToolWhitelist/TagPolicy 约束，无需单独审批门控；已在前端备注说明
 
 ---

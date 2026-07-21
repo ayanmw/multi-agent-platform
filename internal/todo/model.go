@@ -38,9 +38,37 @@ type Todo struct {
 	CreatedAt       int64      `json:"created_at"`
 	UpdatedAt       int64      `json:"updated_at"`
 	CompletedAt     *int64     `json:"completed_at,omitempty"`
+	// Children 是树形序列化时的派生子任务，数据库不直接存储该字段。
+	Children []Todo `json:"children,omitempty"`
+}
+
+// TodoMove 表示一次拖拽排序/层级调整操作。
+// 用于批量更新 todo 的 parent_todo_id 与 sort_order。
+type TodoMove struct {
+	ID           string `json:"id"`
+	ParentTodoID string `json:"parent_todo_id"`
+	SortOrder    int    `json:"sort_order"`
 }
 
 // IsTerminal 返回该状态是否为终态（done 或 cancelled）。
 func (s TodoStatus) IsTerminal() bool {
 	return s == StatusDone || s == StatusCancelled
+}
+
+// BuildTree 将扁平 Todo 列表构建为按 parent_todo_id 分组的树形结构。
+// TopLevel 包含所有 parent_todo_id 为空或者不存在的 todo；Children 按给定的顺序展开。
+func BuildTree(todos []Todo) []Todo {
+	byParent := make(map[string][]Todo)
+	for _, t := range todos {
+		byParent[t.ParentTodoID] = append(byParent[t.ParentTodoID], t)
+	}
+	var walk func(parentID string) []Todo
+	walk = func(parentID string) []Todo {
+		children := byParent[parentID]
+		for i := range children {
+			children[i].Children = walk(children[i].ID)
+		}
+		return children
+	}
+	return walk("")
 }
