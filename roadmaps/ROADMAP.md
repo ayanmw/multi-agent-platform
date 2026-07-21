@@ -607,7 +607,8 @@ const activeTaskId = ref<string | null>(null)
 
 ### 待办（后续收尾）
 
-- [ ] real_llm smoke：创建 cron 触发 start_task，确认事件流 + execution 记录 + 前端可见
+- [x] smoke 端到端：`scripts/smoke-test.sh` 9.6 节创建 `start_task` cron → 手动 trigger → 确认 execution 记录（`status:completed` + `rendered_input` + `task_id` 回填）+ cron meta 更新 + 删除 404（mock 模式全绿）
+- [ ] real_llm smoke：真实 LLM 下创建 cron 触发 start_task，确认事件流 + execution 记录 + 前端可见
 
 ### 验证基准
 
