@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import ContextWindowPanel from './ContextWindowPanel.vue'
+import { useFlyoutResize } from '@/composables/useFlyoutResize'
 import { useTaskStore } from '@/composables/useTaskStore'
 import type { TaskState } from '@/types/events'
 import type { AgentRecord } from '@/composables/useAgentStore'
@@ -70,29 +71,43 @@ watch(
 const panelRef = ref<HTMLElement | null>(null)
 const flyoutStyle = ref<Record<string, string>>({})
 
+// === 可调节尺寸 ===
+// Context 内容通常较长，固定宽度极易截断；提供手柄让用户拖大并持久化。
+const { size, isResizing, startResize, resetSize } = useFlyoutResize(
+  'map_v2_context_flyout_size',
+  { minWidth: 320, maxWidth: 860, minHeight: 280, maxHeightRatio: 0.88 },
+  panelRef,
+)
+
 function computePosition() {
   const rect = props.anchorRect
   const el = panelRef.value
   if (!rect || !el) return
-  const width = Math.min(420, window.innerWidth - 24)
+  const w = size.value.width
+  const width = w ?? Math.min(420, window.innerWidth - 24)
   let left = rect.left
   if (left + width > window.innerWidth - 12) {
     left = window.innerWidth - width - 12
   }
+  if (left < 12) left = 12
   const bottom = window.innerHeight - rect.top + 8
-  const maxHeight = Math.floor(window.innerHeight * 0.72)
+
   flyoutStyle.value = {
     left: `${left}px`,
     bottom: `${bottom}px`,
-    width: `${width}px`,
-    maxHeight: `${maxHeight}px`,
+    maxHeight: `${Math.floor(window.innerHeight * 0.88)}px`,
   }
+  if (w != null) flyoutStyle.value.width = `${w}px`
 }
 
 watch(() => props.open, (open) => {
   if (open) nextTick(computePosition)
 })
 watch(() => props.anchorRect, () => {
+  if (props.open) nextTick(computePosition)
+})
+// 用户拖拽改变宽度后重新计算定位，防止越界。
+watch(() => size.value.width, () => {
   if (props.open) nextTick(computePosition)
 })
 
@@ -102,7 +117,7 @@ function close() {
 
 // 点击外部或按 Esc 关闭浮窗，提升操作效率。
 function handleDocClick(e: MouseEvent) {
-  if (!props.open) return
+  if (!props.open || isResizing.value) return
   const target = e.target as Node
   if (panelRef.value && !panelRef.value.contains(target)) {
     close()
@@ -170,7 +185,15 @@ onUnmounted(() => {
       role="dialog"
       aria-label="Context Window"
       :style="flyoutStyle"
+      :class="{ 'is-resizing': isResizing }"
     >
+      <!-- 顶部高度调节手柄：上拖增加高度 -->
+      <div
+        class="flyout-resize-handle flyout-resize-h"
+        title="拖拽调节高度"
+        @pointerdown="(e) => startResize(e, 'h')"
+      />
+
       <div class="context-flyout-header">
         <div class="context-flyout-title">
           <span class="context-icon">🪟</span>
@@ -183,6 +206,12 @@ onUnmounted(() => {
               <option v-for="opt in subTaskOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
             </select>
           </label>
+          <button
+            class="context-reset-btn"
+            :class="{ hidden: size.width == null && size.height == null }"
+            title="恢复自适应大小"
+            @click="resetSize"
+          >⤢</button>
           <button class="context-close-btn" title="关闭" @click="close">×</button>
         </div>
       </div>
@@ -213,6 +242,13 @@ onUnmounted(() => {
           :sub-task-id="selectedSubTaskId"
         />
       </div>
+
+      <!-- 右侧宽度调节手柄：右拖增加宽度 -->
+      <div
+        class="flyout-resize-handle flyout-resize-w"
+        title="拖拽调节宽度"
+        @pointerdown="(e) => startResize(e, 'w')"
+      />
     </div>
   </Transition>
 </template>
@@ -220,9 +256,12 @@ onUnmounted(() => {
 <style scoped>
 .context-flyout {
   position: fixed;
-  /* 动态由 JS 计算 left / bottom */
+  /* 动态由 JS 计算 left / bottom / width / height */
   display: flex;
   flex-direction: column;
+  /* 默认内容自适应：宽度按内容收缩但有 max 兜底，高度由内容增长。 */
+  max-width: 860px;
+  min-width: 320px;
   background: var(--bg-elevated, #181c24);
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   border-radius: 12px;
@@ -230,6 +269,73 @@ onUnmounted(() => {
   overflow: hidden;
   z-index: 50;
   font-family: var(--font-mono, monospace);
+}
+
+/* 拖拽期间禁用过渡，避免尺寸跳变迟滞。 */
+.context-flyout.is-resizing {
+  transition: none !important;
+}
+
+.context-flyout.is-resizing * {
+  cursor: ns-resize !important;
+}
+
+/* 调节手柄：极简的隐形热区，hover 才显形。 */
+.flyout-resize-handle {
+  position: absolute;
+  z-index: 2;
+  user-select: none;
+}
+
+.flyout-resize-h {
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flyout-resize-h::after {
+  content: '';
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-default, rgba(255, 255, 255, 0.18));
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.context-flyout:hover .flyout-resize-h::after {
+  opacity: 1;
+}
+
+.flyout-resize-w {
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: ew-resize;
+}
+
+.flyout-resize-w::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: var(--border-default, rgba(255, 255, 255, 0.18));
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.context-flyout:hover .flyout-resize-w::after {
+  opacity: 1;
 }
 
 .context-flyout-header {
@@ -301,6 +407,37 @@ onUnmounted(() => {
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
+.context-reset-btn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.context-reset-btn.hidden {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+}
+
+.context-reset-btn:hover {
+  background: var(--bg-hover, #202632);
+  color: var(--accent-running, #00e5ff);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
 .context-close-btn:hover {
   background: var(--bg-hover, #202632);
   color: var(--text-primary, #e8ebf0);
@@ -366,6 +503,11 @@ onUnmounted(() => {
   }
 
   .context-flyout-title span:last-child {
+    display: none;
+  }
+
+  /* 移动端空间有限，隐藏手柄，保持全宽自适应。 */
+  .flyout-resize-handle {
     display: none;
   }
 }

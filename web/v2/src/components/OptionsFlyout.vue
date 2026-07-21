@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { useFlyoutResize } from '@/composables/useFlyoutResize'
 
 /**
  * OptionsFlyout — CommandBar 的 Options 按钮弹出的浮窗面板
@@ -49,23 +50,35 @@ const timeoutSecondsValue = ref(props.timeoutSeconds)
 const multiAgentValue = ref(props.multiAgent)
 const selectedAgentId = ref<string>(props.agents?.[0]?.id ?? '')
 
+// === 可调节尺寸 ===
+// 浮窗锚定在底部向上展开：顶部手柄上拖调高度，右手柄右拖调宽度。
+// size 中为 null 的维度由 CSS max-width/max-height 兜底，按内容自适应。
+const { size, isResizing, startResize, resetSize } = useFlyoutResize(
+  'map_v2_options_flyout_size',
+  { minWidth: 280, maxWidth: 720, minHeight: 220, maxHeightRatio: 0.86 },
+  panelRef,
+)
+
 function computePosition() {
   const rect = props.anchorRect
   const el = panelRef.value
   if (!rect || !el) return
-  const width = Math.min(320, window.innerWidth - 24)
+  const w = size.value.width
+  // 自适应时给一个内容驱动的上限，避免横向溢出视口。
+  const width = w ?? Math.min(320, window.innerWidth - 24)
   let left = rect.left
   if (left + width > window.innerWidth - 12) {
     left = window.innerWidth - width - 12
   }
+  if (left < 12) left = 12
   const bottom = window.innerHeight - rect.top + 8
-  const maxHeight = Math.floor(window.innerHeight * 0.62)
+
   flyoutStyle.value = {
     left: `${left}px`,
     bottom: `${bottom}px`,
-    width: `${width}px`,
-    maxHeight: `${maxHeight}px`,
+    maxHeight: `${Math.floor(window.innerHeight * 0.86)}px`,
   }
+  if (w != null) flyoutStyle.value.width = `${w}px`
 }
 
 watch(() => props.open, (open) => {
@@ -83,6 +96,11 @@ watch(() => props.open, (open) => {
 })
 
 watch(() => props.anchorRect, () => {
+  if (props.open) nextTick(computePosition)
+})
+
+// 用户拖拽改变尺寸后重新计算定位，防止宽度变化后越界。
+watch(() => size.value.width, () => {
   if (props.open) nextTick(computePosition)
 })
 
@@ -111,7 +129,7 @@ function close() {
 }
 
 function handleDocClick(e: MouseEvent) {
-  if (!props.open) return
+  if (!props.open || isResizing.value) return
   const target = e.target as Node
   if (panelRef.value && !panelRef.value.contains(target)) {
     close()
@@ -149,10 +167,26 @@ onUnmounted(() => {
       role="dialog"
       aria-label="Task options"
       :style="flyoutStyle"
+      :class="{ 'is-resizing': isResizing }"
     >
+      <!-- 顶部高度调节手柄：上拖增加高度 -->
+      <div
+        class="flyout-resize-handle flyout-resize-h"
+        title="拖拽调节高度"
+        @pointerdown="(e) => startResize(e, 'h')"
+      />
+
       <div class="options-flyout-header">
         <span class="options-title">⚙ Options</span>
-        <button class="options-close" title="关闭" @click="close">×</button>
+        <div class="options-header-actions">
+          <button
+            class="options-reset"
+            :class="{ hidden: size.width == null && size.height == null }"
+            title="恢复自适应大小"
+            @click="resetSize"
+          >⤢</button>
+          <button class="options-close" title="关闭" @click="close">×</button>
+        </div>
       </div>
 
       <div class="options-body">
@@ -222,6 +256,13 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- 右侧宽度调节手柄：右拖增加宽度 -->
+      <div
+        class="flyout-resize-handle flyout-resize-w"
+        title="拖拽调节宽度"
+        @pointerdown="(e) => startResize(e, 'w')"
+      />
     </div>
   </Transition>
 </template>
@@ -229,9 +270,12 @@ onUnmounted(() => {
 <style scoped>
 .options-flyout {
   position: fixed;
-  /* 动态由 JS 计算 left / bottom */
+  /* 动态由 JS 计算 left / bottom / width / height */
   display: flex;
   flex-direction: column;
+  /* 默认内容自适应：宽度按内容收缩但有 max 兜底，高度由内容增长。 */
+  max-width: 720px;
+  min-width: 280px;
   background: var(--bg-elevated, #181c24);
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   border-radius: 12px;
@@ -239,6 +283,110 @@ onUnmounted(() => {
   overflow: hidden;
   z-index: 50;
   font-family: var(--font-mono, monospace);
+}
+
+/* 拖拽期间禁用过渡，避免尺寸跳变迟滞；放大点击关闭判定容差。 */
+.options-flyout.is-resizing {
+  transition: none !important;
+}
+
+.options-flyout.is-resizing * {
+  cursor: ns-resize !important;
+}
+
+/* 调节手柄：极简的隐形热区，hover 才显形，避免打扰默认外观。 */
+.flyout-resize-handle {
+  position: absolute;
+  z-index: 2;
+  user-select: none;
+}
+
+.flyout-resize-h {
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flyout-resize-h::after {
+  content: '';
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-default, rgba(255, 255, 255, 0.18));
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.options-flyout:hover .flyout-resize-h::after {
+  opacity: 1;
+}
+
+.flyout-resize-w {
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: ew-resize;
+}
+
+.flyout-resize-w::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--border-default, rgba(255, 255, 255, 0.18));
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.options-flyout:hover .flyout-resize-w::after {
+  opacity: 1;
+}
+
+.options-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.options-reset {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.options-reset.hidden {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+}
+
+.options-reset:hover {
+  background: var(--bg-hover, #202632);
+  color: var(--accent-running, #00e5ff);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
 }
 
 .options-flyout-header {
@@ -469,6 +617,11 @@ onUnmounted(() => {
     left: 12px !important;
     width: auto !important;
     bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px) + 10px) !important;
+  }
+
+  /* 移动端空间有限，隐藏手柄与重置按钮，保持全宽自适应。 */
+  .flyout-resize-handle {
+    display: none;
   }
 }
 
