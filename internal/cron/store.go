@@ -48,9 +48,9 @@ func NewStore(db DBStore) *Store {
 
 // 以下方法转调 DBStore，错误透传。
 
-func (s *Store) InsertCron(c Cron) error     { return s.db.InsertCron(c) }
-func (s *Store) UpdateCron(c Cron) error     { return s.db.UpdateCron(c) }
-func (s *Store) UpdateScheduleMeta(c Cron) error { return s.db.UpdateCronScheduleMeta(c) }
+func (s *Store) InsertCron(c Cron) error         { return s.db.InsertCron(c) }
+func (s *Store) UpdateCron(c Cron) error         { return s.db.UpdateCron(c) }
+func (s *Store) UpdateCronScheduleMeta(c Cron) error { return s.db.UpdateCronScheduleMeta(c) }
 func (s *Store) DeleteCron(id string) error  { return s.db.DeleteCron(id) }
 func (s *Store) GetCron(id string) (Cron, error) { return s.db.GetCron(id) }
 func (s *Store) ListCrons(f ListFilter) ([]Cron, error) { return s.db.ListCrons(f) }
