@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )
