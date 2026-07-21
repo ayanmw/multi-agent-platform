@@ -28,6 +28,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/anmingwei/multi-agent-platform/internal/todo"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
@@ -746,7 +747,22 @@ func main() {
 	// 可以直接读取当前已启用的 skill 列表并注入 EngineConfig。
 	globalSkillRegistry = skillRegistry
 
-	// Phase 5: 用于 agent 间通信的 AgentBus。
+	// Phase 7: 初始化 Todo 子系统。
+	// Todo 属于 session，跨 task 共享，需尽早创建 service 以便将 LLM 工具
+	// 注册进 tool registry。EventBus 复用 hubAdapter，写入后自动广播
+	// todo_list_changed 事件给前端和同 session 的其它 agent。
+	var todoSvc *todo.Service
+	if db.DB != nil {
+		todoSvc = todo.NewService(&dbStoreAdapter{}, &hubAdapter{hub: hub})
+		tool.RegisterTodoTools(toolRegistry, todoSvc)
+		log.Printf("Todo subsystem: service initialized with %d todo tool(s)", 6)
+	} else {
+		log.Println("Todo subsystem: disabled (no database)")
+	}
+
+	// Phase 7: 在创建 dispatcher / tool registry 之后注册 Todo REST API。
+	registerTodoRoutes(http.DefaultServeMux, todoSvc)
+
 	// AgentBus 在所有 agent 之间共享，允许 agent 在执行期间互相发送消息。
 	agentBus := orchestrator.NewAgentBus()
 	agentBusAdapter := orchestrator.NewAgentBusAdapter(agentBus)
@@ -2760,3 +2776,22 @@ func fileExists(fsys fs.FS, path string) bool {
 	f.Close()
 	return true
 }
+
+// dbStoreAdapter 把 pkg/db 中的 Todo CRUD 函数适配为 internal/todo.DBStore 接口。
+//
+// 用它而不是让 internal/todo 直接 import pkg/db，是为了打破
+// tool -> todo -> db -> skill -> tool 的 import cycle。
+type dbStoreAdapter struct{}
+
+func (dbStoreAdapter) InsertTodo(t todo.Todo) error             { return db.InsertTodo(t) }
+func (dbStoreAdapter) UpdateTodo(t todo.Todo) error             { return db.UpdateTodo(t) }
+func (dbStoreAdapter) DeleteTodo(id string) error               { return db.DeleteTodo(id) }
+func (dbStoreAdapter) GetTodo(id string) (todo.Todo, error)    { return db.GetTodo(id) }
+func (dbStoreAdapter) ListTodosBySession(sessionID string, statusFilter []todo.TodoStatus, includeDone bool) ([]todo.Todo, error) {
+	return db.ListTodosBySession(sessionID, statusFilter, includeDone)
+}
+func (dbStoreAdapter) ListTodosByTask(taskID string) ([]todo.Todo, error) { return db.ListTodosByTask(taskID) }
+func (dbStoreAdapter) DeleteCompletedTodosBySession(sessionID string) error {
+	return db.DeleteCompletedTodosBySession(sessionID)
+}
+func (dbStoreAdapter) DeleteAllTodosBySession(sessionID string) error { return db.DeleteAllTodosBySession(sessionID) }
