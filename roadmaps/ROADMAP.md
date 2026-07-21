@@ -573,7 +573,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 7-cron: Cron / 定时器子系统 🚧 前端收尾 (2026-07-21)
+## Phase 7-cron: Cron / 定时器子系统 ✅ 完成 (2026-07-22)
 
 **目标**: 为平台新增独立定时器子系统 `internal/cron/`，支持 Agent tool + Web UI 双入口创建，4 种 action_type，完全事件化。调度基于 `robfig/cron/v3`（秒级 6 域）。
 
@@ -608,7 +608,7 @@ const activeTaskId = ref<string | null>(null)
 ### 待办（后续收尾）
 
 - [x] smoke 端到端：`scripts/smoke-test.sh` 9.6 节创建 `start_task` cron → 手动 trigger → 确认 execution 记录（`status:completed` + `rendered_input` + `task_id` 回填）+ cron meta 更新 + 删除 404（mock 模式全绿）
-- [ ] real_llm smoke：真实 LLM 下创建 cron 触发 start_task，确认事件流 + execution 记录 + 前端可见
+- [x] real_llm smoke：`scripts/real-llm-smoke.sh` 场景 6 创建 `start_task` cron → 手动 trigger → 真实 LLM 下 task 达终态（completed）+ execution 回填 task_id + execution 记录终态 + cron meta 更新（trigger_count/last_triggered_at）+ WS 事件流完整（cron_triggered → cron_execution_started → cron_execution_completed）；全 22 项 PASS / 0 FAIL
 
 ### 验证基准
 
@@ -828,3 +828,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.10.0 Alpha | 2026-07-21 | Session 级 TODO 子系统: `todos` 表 + `internal/todo` Service + `todo/*` Agent Tools 6 个 + `/api/todos` REST API + Engine system prompt 注入 Active TODO + 单元/E2E 测试 + 拖拽排序/嵌套子任务 + 树形拖拽渲染 |
 | v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
 | v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
+| v0.11.2 Alpha | 2026-07-22 | Phase 7-cron 收尾: smoke 端到端双覆盖 — `smoke-test.sh` 9.6 节(mock) + `real-llm-smoke.sh` 场景 6(真实 LLM)；新增 node 内置 WebSocket 订阅器采集 WS 事件流断言 cron_triggered→started→completed；real-llm-smoke 22 项全 PASS / 0 FAIL |
