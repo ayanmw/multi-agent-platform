@@ -62,6 +62,8 @@ export function defaultAgentRequest(): AgentRequest {
 export interface ToolInfo {
   name: string
   description: string
+  namespace?: string
+  short_name?: string
 }
 
 /** Singleton state shared across all consumers */

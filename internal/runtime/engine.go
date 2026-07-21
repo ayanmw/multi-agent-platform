@@ -1434,33 +1434,51 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		"content": "Thinking...",
 	}))
 
-	// 从 registry 构建 tool 定义。每个 tool 的名字、描述和 JSON Schema
-	// 参数都发给 LLM，让它决定调用哪个 tool、传什么参数。若 registry 为
-	// 空，LLM 会以纯文本模式工作（无法调用 tool）。
+	// =========================================================================
+	// 根据 AllowedTools 白名单从 registry 筛选 tool 定义。
+	//
+	// 每个 tool 的名字、描述和 JSON Schema 参数都发给 LLM，让它决定调用
+	// 哪个 tool、传什么参数。若 registry 为空，LLM 会以纯文本模式工作
+	// （无法调用 tool）。
 	//
 	// Phase 7-I：若 TaskContract.AllowedTools 已指定，只向 LLM 暴露这些
 	// tool。这阻止 agent 推理它无权执行的 tool，并使 prompt 保持精简。
 	// AllowedTools 为空时保留旧行为（所有 tool 可见）。
+	//
+	// 同时收集 exposed / hidden 列表，发送 system_info(type=tool_visibility)，
+	// 让前端清楚知道本次 think 步骤中哪些工具对 LLM 可见、哪些被白名单隐藏。
+	// =========================================================================
 	toolDefs := make([]llm.ToolDef, 0)
 	allowed := make(map[string]struct{}, len(e.cfg.Contract.AllowedTools))
 	for _, name := range e.cfg.Contract.AllowedTools {
 		allowed[name] = struct{}{}
 	}
+	var exposedTools []string
+	var hiddenTools []string
 	for _, t := range e.tools.List() {
+		fn := t.FullName()
 		if len(allowed) > 0 {
-			if _, ok := allowed[t.FullName()]; !ok {
+			if _, ok := allowed[fn]; !ok {
+				hiddenTools = append(hiddenTools, fn)
 				continue
 			}
 		}
+		exposedTools = append(exposedTools, fn)
 		toolDefs = append(toolDefs, llm.ToolDef{
 			Type: "function",
 			Function: llm.FunctionDefinition{
-				Name:        t.FullName(),
+				Name:        fn,
 				Description: t.Description(),
 				Parameters:  t.Parameters(),
 			},
 		})
 	}
+	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+		"type":          "tool_visibility",
+		"allowed_tools": e.cfg.Contract.AllowedTools,
+		"exposed":       exposedTools,
+		"hidden":        hiddenTools,
+	}))
 
 	// =========================================================================
 	// Phase 6 Router：动态模型选择

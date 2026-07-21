@@ -362,8 +362,17 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 		CREATE INDEX IF NOT EXISTS idx_audit_records_actor ON audit_records(actor);
 		CREATE INDEX IF NOT EXISTS idx_audit_records_target ON audit_records(target);
 		CREATE INDEX IF NOT EXISTS idx_audit_records_timestamp ON audit_records(timestamp DESC);`,
-	},
-}
+		},
+
+		// v22：
+		// agent_default 的 tools 白名单从写死 3 个修复为“空 = 全部允许”，
+		// 避免新工具（core/*、skill/*、mcp__*、dispatch_sub_agent 等）默认被隐藏。
+		{
+			Version:     22,
+			Description: "Reset agent_default tools whitelist to allow all tools",
+			SQL:         `UPDATE agents SET tools='[]' WHERE id='agent_default';`,
+		},
+	}
 
 // createMigrationsTable 确保 schema_migrations 追踪表存在。
 func createMigrationsTable() error {

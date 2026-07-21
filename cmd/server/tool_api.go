@@ -183,11 +183,16 @@ func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.
 	result := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
 		entry := map[string]any{
-			"name":        t.Name(),
+			// Phase 7-I：前端需要看到真实的 FullName（如 core/list_dir、skill/list）
+			// 才能正确配置 agent.tools 白名单并与 Engine 的 AllowedTools 精确匹配。
+			"name":        t.FullName(),
 			"description": t.Description(),
 			"parameters":  t.Parameters(),
 			"builtin":     toolRegistry.IsBuiltin(t.Name()),
 		}
+		// 额外保留短名与 namespace，便于 UI 分组与展示
+		entry["short_name"] = t.Name()
+		entry["namespace"] = t.Namespace()
 		// 对动态 tool 附带类型特定信息
 		if dt, ok := t.(*tool.DynamicTool); ok {
 			entry["type"] = string(dt.ToolType())

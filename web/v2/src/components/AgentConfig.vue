@@ -9,7 +9,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest } from '../composables/useAgentStore'
+import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest, type ToolInfo } from '../composables/useAgentStore'
 
 const {
   agents,
@@ -46,8 +46,32 @@ const testResult = ref<{ ok: boolean; message: string } | null>(null)
 // Computed: is the form in edit mode?
 const isEditing = computed(() => editingId.value !== null)
 
-// Available tool names as a simple array for checkboxes
-const toolNames = computed(() => availableTools.value.map(t => t.name))
+// 按 namespace 对工具分组，方便展示与全选操作
+const toolsByNamespace = computed(() => {
+  const groups: Record<string, ToolInfo[]> = {}
+  for (const t of availableTools.value) {
+    const ns = t.namespace || '(global)'
+    if (!groups[ns]) groups[ns] = []
+    groups[ns].push(t)
+  }
+  return groups
+})
+
+const allToolNames = computed(() => availableTools.value.map(t => t.name))
+
+const allSelected = computed(() => {
+  if (allToolNames.value.length === 0) return false
+  return allToolNames.value.every(name => form.value.tools.includes(name))
+})
+
+/** 全选或取消全选所有工具 */
+function toggleSelectAll() {
+  if (allSelected.value) {
+    form.value.tools = []
+  } else {
+    form.value.tools = [...allToolNames.value]
+  }
+}
 
 onMounted(() => {
   loadAgents().catch(() => {})
@@ -377,22 +401,44 @@ function formatDate(iso: string): string {
           <!-- Tools selection -->
           <div class="form-group">
             <label class="form-label">Tools</label>
-            <div v-if="toolNames.length === 0" class="text-muted" style="font-size:12px;">
+            <div v-if="allToolNames.length === 0" class="text-muted" style="font-size:12px;">
               No tools available. Tools are provided by the server.
             </div>
-            <div v-else class="tools-checkbox-grid">
-              <label
-                v-for="tool in toolNames"
-                :key="tool"
-                class="tool-checkbox"
+            <div v-else>
+              <div class="tools-actions">
+                <button
+                  type="button"
+                  class="btn-select-all"
+                  @click="toggleSelectAll"
+                >
+                  {{ allSelected ? 'Deselect All' : 'Select All' }}
+                </button>
+                <span class="tools-hint">
+                  Empty selection = allow all tools
+                </span>
+              </div>
+              <div
+                v-for="(group, namespace) in toolsByNamespace"
+                :key="namespace"
+                class="tool-namespace-group"
               >
-                <input
-                  type="checkbox"
-                  :checked="form.tools.includes(tool)"
-                  @change="toggleTool(tool)"
-                />
-                <span>{{ tool }}</span>
-              </label>
+                <div class="tool-namespace-label">{{ namespace }}</div>
+                <div class="tools-checkbox-grid">
+                  <label
+                    v-for="tool in group"
+                    :key="tool.name"
+                    class="tool-checkbox"
+                    :title="tool.description"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="form.tools.includes(tool.name)"
+                      @change="toggleTool(tool.name)"
+                    />
+                    <span>{{ tool.name }}</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -876,7 +922,48 @@ function formatDate(iso: string): string {
   color:var(--accent-danger);
 }
 
-/* Tools checkboxes */
+/* Tools selection */
+.tools-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.btn-select-all {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-select-all:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tools-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.tool-namespace-group {
+  margin-bottom: 0.625rem;
+}
+
+.tool-namespace-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
 .tools-checkbox-grid {
   display:flex;
   flex-wrap:wrap;

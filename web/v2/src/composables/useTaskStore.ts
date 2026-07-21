@@ -5,7 +5,7 @@ import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
 import type { SessionStatus } from './useSessionStore'
-import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData } from '@/types/events'
+import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData, ToolVisibilityData } from '@/types/events'
 import type { EvaluationResult } from '@/types/case'
 
 // 模块级引用，用于最近修改记录
@@ -538,19 +538,33 @@ export function useTaskStore() {
             pendingApproval.value.taskId,
             pendingApproval.value.agentId,
           )
-        } else if (infoType === 'agent_message_sent' || infoType === 'agent_message_received') {
+        } else if (infoType === 'tool_visibility') {
+          const v = evt.data as unknown as ToolVisibilityData
           const task = taskCache.value[evt.task_id]
-          if (task) {
-            if (!task.agentMessages) {
-              task.agentMessages = []
+          if (!task) break
+          const agentId = evt.agent_id || 'agent_default'
+          if (!task.agents[agentId]) {
+            task.agents[agentId] = {
+              id: agentId,
+              name: agentId,
+              model: 'unknown',
+              steps: [],
+              color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
             }
-            task.agentMessages.push({
-              type: infoType,
-              from_agent: (evt.data.from_agent as string) || evt.agent_id || 'unknown',
-              to_agent: (evt.data.to_agent as string) || 'unknown',
-              msg_type: (evt.data.msg_type as string) || 'observation',
-              content: (evt.data.content as string) || '',
-            } as AgentBusEventData)
+          }
+          const hidden = Array.isArray(v.hidden) ? v.hidden : []
+          // 仅在白名单实际隐藏了工具时才展示提示，避免空态刷屏。
+          if (hidden.length > 0) {
+            task.agents[agentId].steps.push({
+              index: task.agents[agentId].steps.length,
+              type: 'observation',
+              status: 'completed',
+              thinking: formatToolVisibilityMessage(v),
+              toolCall: null,
+              tokens: 0,
+              durationMs: 0,
+              startedAt: Date.now(),
+            })
           }
         }
         break
@@ -1113,6 +1127,27 @@ export function useTaskStore() {
       approval_id: approvalId,
     })
     pendingApproval.value = null
+  }
+
+  /** 将 tool_visibility 数据格式化为用户可读的信息文本 */
+  function formatToolVisibilityMessage(v: ToolVisibilityData): string {
+    const exposed = Array.isArray(v.exposed) ? v.exposed : []
+    const hidden = Array.isArray(v.hidden) ? v.hidden : []
+    const allowed = Array.isArray(v.allowed_tools) ? v.allowed_tools : []
+    const lines: string[] = []
+    if (allowed.length === 0) {
+      lines.push(`✅ 当前 agent 未设置工具白名单，已暴露全部 ${exposed.length} 个工具。`)
+    } else {
+      lines.push(`🔒 当前 agent 配置了工具白名单（${allowed.length} 个），本次暴露 ${exposed.length} 个、隐藏 ${hidden.length} 个。`)
+    }
+    if (hidden.length > 0) {
+      lines.push('')
+      lines.push('以下工具被隐藏，如需使用请在 Agent 配置中勾选：')
+      for (const name of hidden) {
+        lines.push(`  • ${name}`)
+      }
+    }
+    return lines.join('\n')
   }
 
   return {

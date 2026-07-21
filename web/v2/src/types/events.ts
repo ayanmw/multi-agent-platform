@@ -180,6 +180,17 @@ export interface ContextWindowSnapshotData {
  */
 export type TaskStatus = 'idle' | 'running' | 'completed' | 'failed'
 
+/** Tool visibility info emitted by Engine before each think() */
+export interface ToolVisibilityData {
+  type: 'tool_visibility'
+  /** 显式配置的白名单；空数组表示未限制 */
+  allowed_tools: string[]
+  /** 本次 think 实际暴露给 LLM 的工具 FullName 列表 */
+  exposed: string[]
+  /** 因白名单被隐藏的工具 FullName 列表 */
+  hidden: string[]
+}
+
 /** AgentBus message event data (Phase 7-E) */
 export interface AgentBusEventData {
   type: 'agent_message_sent' | 'agent_message_received'
@@ -189,7 +200,6 @@ export interface AgentBusEventData {
   content: string
 }
 
-/** The top-level task state */
 export interface TaskState {
   id: string
   /** Session ID — available after DB hydration, optional for real-time tasks */

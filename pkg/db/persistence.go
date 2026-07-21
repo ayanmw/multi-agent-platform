@@ -603,8 +603,10 @@ func SeedDefaultAgent() error {
 		return nil // default agent 已存在
 	}
 
-	// 创建 default agent
-	toolsJSON := `["run_shell","write_file","read_file"]`
+	// 创建 default agent。
+	// 默认 tools 为空数组：空白名单表示允许使用注册表中的全部工具，
+	// 这样新增工具后无需再手动编辑 default agent。
+	var toolsJSON = `[]`
 	_, err = DB.Exec(
 		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
