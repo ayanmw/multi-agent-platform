@@ -680,10 +680,10 @@ const activeTaskId = ref<string | null>(null)
 - [x] smoke 验证：`scripts/multi-agent-smoke.sh` 12/0/0；`scripts/real-llm-smoke.sh` 14/0/3，场景 3 在 71s 完成（真实 LLM researcher 耗时较长），status=completed
 
 #### 阶段 4 — 编排层可观测（MA6 + MA9）
-- [ ] `internal/orchestrator/orchestrator.go`：发编排层 step 事件（`decompose_done` / `agent_dispatched` / `agent_completed`），挂在 root task、`agent_id="orchestrator"`
-- [ ] root `final_result` 从 `"all agents completed"` 改为各 worker 结果聚合摘要
-- [ ] root task 终态由 `RunBlocking` 汇聚显式 `UpdateTask`，不再依赖轮询（MA9）
-- [ ] smoke 验证：前端出现 orchestrator 编排 lane，能看到拆分决策与派发过程
+- [x] `internal/orchestrator/orchestrator.go`：发编排层 step 事件（`decompose_done` / `agent_dispatched` / `agent_completed`），挂在 root task、`agent_id="orchestrator"`
+- [x] root `final_result` 从 `"all agents completed"` 改为各 worker 结果聚合摘要
+- [x] root task 终态由 `RunBlocking` 汇聚显式 `UpdateTask`，不再依赖轮询（MA9）
+- [x] smoke 验证：前端出现 orchestrator 编排 lane，能看到拆分决策与派发过程
 
 #### 阶段 5（长期）— workflow DAG 表达力
 - [ ] decomposer 输出从扁平 `[]AgentSpec` 升级为带依赖/条件的 DAG
@@ -712,7 +712,7 @@ const activeTaskId = ref<string | null>(null)
 
 - [x] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
 - [x] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，`status=completed` 与 `agent_count=2` 一致（18s 完成）
-- [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + Traces 面板均有数据
+- [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + orchestrator lane + Traces 面板均有数据
 
 ---
 
@@ -744,3 +744,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
 | v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
 | v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: `handleGetTask` 返回 child_tasks.steps + 前端 `loadTask` 回填 worker lane；新增 `TestHandleGetTaskChildSteps` 单测；smoke 验证同 v0.9.3 |
+| v0.9.5 Alpha | 2026-07-21 | Phase 7-H2 阶段 4: 编排层可观测事件(`decompose_done`/`agent_dispatched`/`agent_completed`) + root final_result worker 聚合摘要 + RunBlocking 显式 UpdateTask 终态(MA9)；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(14/0/3) 验证通过 |

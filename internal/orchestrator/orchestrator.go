@@ -35,7 +35,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,6 +220,26 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 		orchTraceCtx = o.tracer.StartRoot(rootTaskID, "orchestrate")
 	}
 
+	// Phase 7-H2 MA6: 编排层 step 事件计数器，用于在 root task 下生成连续的
+	// orchestrator step_index。从 1 开始，避免与 task_started/tracer 等事件混淆。
+	orchStepIdx := 1
+	nextOrchStep := func() int {
+		v := orchStepIdx
+		orchStepIdx++
+		return v
+	}
+
+	// 发送 decompose_done 事件，让前端知道 orchestrator 已拿到拆分决策。
+	agentIDs := make([]string, len(specs))
+	for i, s := range specs {
+		agentIDs[i] = s.AgentID
+	}
+	o.hub.SendEvent(event.NewEvent("decompose_done", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+		"strategy":    strategy,
+		"agent_count": len(specs),
+		"agent_ids":   agentIDs,
+	}))
+
 	// Phase 7-C: "pipeline" 通过 OutputTo 链式转发实现，底层复用 parallel 调度。
 	if strategy == "pipeline" {
 		for i := 0; i < len(specs)-1; i++ {
@@ -230,7 +253,23 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 		// 这样的链路，writer 会把 researcher 的输出作为 user message 看到并
 		// 进入自己的对话历史。
 		for i, spec := range specs {
-			results[i] = o.runAgent(ctx, rootTaskID, spec)
+			o.hub.SendEvent(event.NewEvent("agent_dispatched", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+				"agent_id":   spec.AgentID,
+				"agent_name": spec.Name,
+				"mode":       "sequential",
+				"sequence":   i,
+			}))
+			results[i] = o.runAgent(ctx, rootTaskID, spec, nextOrchStep)
+			// agent_completed 事件携带 worker summary，供前端编排 lane 展示。
+			o.hub.SendEvent(event.NewEvent("agent_completed", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+				"agent_id":     spec.AgentID,
+				"agent_name":   spec.Name,
+				"status":       results[i].Status,
+				"total_tokens": results[i].TotalTokens,
+				"duration_ms":  results[i].Duration,
+				"result":       results[i].Result,
+				"error":        results[i].Error,
+			}))
 			if i+1 < len(specs) && results[i].Status == "completed" && o.agentBus != nil {
 				next := specs[i+1]
 				o.agentBus.SendMessage(runtime.AgentMessage{
@@ -250,7 +289,25 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 			wg.Add(1)
 			go func(idx int, s AgentSpec) {
 				defer wg.Done()
-				results[idx] = o.runAgent(ctx, rootTaskID, s)
+				o.hub.SendEvent(event.NewEvent("agent_dispatched", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+					"agent_id":   s.AgentID,
+					"agent_name": s.Name,
+					"mode":       "parallel",
+					"sequence":   idx,
+				}))
+
+				results[idx] = o.runAgent(ctx, rootTaskID, s, nextOrchStep)
+
+				// agent_completed 事件携带 worker summary，供前端编排 lane 展示。
+				o.hub.SendEvent(event.NewEvent("agent_completed", rootTaskID, "orchestrator", nextOrchStep(), map[string]any{
+					"agent_id":     s.AgentID,
+					"agent_name":   s.Name,
+					"status":       results[idx].Status,
+					"total_tokens": results[idx].TotalTokens,
+					"duration_ms":  results[idx].Duration,
+					"result":       results[idx].Result,
+					"error":        results[idx].Error,
+				}))
 				// 把结果转发给 OutputTo 中声明的目标 agent，即使在
 				// parallel 下也一样。AgentBus 会在目标尚未注册 handler 时把消息入队。
 				if results[idx].Status == "completed" && o.agentBus != nil {
@@ -278,21 +335,44 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 	}
 
 	// 所有子 agent 完成后，推导并持久化根任务的终态。根任务本身没有
-	// engine loop，它的状态反映整次 orchestration 的总体结果，这样
-	// /api/tasks?id=root 就不会再停留在 "running"，可以被轮询到完成。
+	// engine loop，它的状态反映整次 orchestration 的总体结果。这里显式
+	// UpdateTask 确保 /api/tasks?id=root 不再需要依靠轮询(MA9)。
 	rootStatus := "completed"
-	var rootResult string
-	var rootTokens int
+	rootTokens := 0
+	resultItems := make([]map[string]any, 0, len(results))
 	for _, r := range results {
 		rootTokens += r.TotalTokens
 		if r.Status != "completed" {
 			rootStatus = "failed"
 		}
+		resultItems = append(resultItems, map[string]any{
+			"agent_id":     r.AgentID,
+			"agent_name":   r.Name,
+			"status":       r.Status,
+			"total_tokens": r.TotalTokens,
+			"duration_ms":  r.Duration,
+			"result":       r.Result,
+			"error":        r.Error,
+		})
 	}
+
+	// Phase 7-H2 MA6: root final_result 由各 worker 结果聚合为可读摘要，
+	// 不再是空壳 "all agents completed"。失败情况下保留可读短语以便 UI 展示。
+	var rootResult string
 	if rootStatus == "failed" {
 		rootResult = "one or more child agents failed"
+		var failed []string
+		for _, r := range results {
+			if r.Status != "completed" {
+				failed = append(failed, fmt.Sprintf("%s: %s", r.AgentID, r.Error))
+			}
+		}
+		if len(failed) > 0 {
+			rootResult += "\n" + strings.Join(failed, "\n")
+		}
 	} else {
-		rootResult = "all agents completed"
+		summary, _ := json.Marshal(resultItems)
+		rootResult = "All agents completed. Worker summaries:\n" + string(summary)
 	}
 	if o.persist != nil {
 		if err := o.persist.UpdateTask(rootTaskID, rootStatus, rootResult, rootTokens); err != nil {
@@ -325,11 +405,15 @@ func (o *Orchestrator) RunBlocking(ctx context.Context, rootTaskID string, strat
 func (o *Orchestrator) RunWithCallback(ctx context.Context, rootTaskID string, specs []AgentSpec, onResult func(AgentResult)) {
 	var wg sync.WaitGroup
 
+	// RunWithCallback 无需编排层 step 事件；透传一个 no-op 计数器保持
+	// runAgent 签名一致，避免调用方无感知破坏。
+	noopOrchStep := func() int { return 0 }
+
 	for _, spec := range specs {
 		wg.Add(1)
 		go func(s AgentSpec) {
 			defer wg.Done()
-			result := o.runAgent(ctx, rootTaskID, s)
+			result := o.runAgent(ctx, rootTaskID, s, noopOrchStep)
 			onResult(result)
 		}(spec)
 	}
@@ -344,7 +428,7 @@ func (o *Orchestrator) RunWithCallback(ctx context.Context, rootTaskID string, s
 // rootTaskID + "_" + spec.AgentID 推导得到。我们会同时持久化任务行及其
 // meta 行，使 parent_task_id 指回根任务，从而能通过
 // QueryChildTasks(rootTaskID) 查到。
-func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec AgentSpec) AgentResult {
+func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec AgentSpec, _ func() int) AgentResult {
 	start := time.Now()
 
 	// 构建该 agent 的 contract

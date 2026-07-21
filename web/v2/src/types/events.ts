@@ -47,6 +47,10 @@ export type EventType =
   | 'mcp_tools_changed'
   // Trace span events (Phase 7-C)
   | 'trace_span'
+  // Multi-agent orchestration step events (Phase 7-H2)
+  | 'decompose_done'
+  | 'agent_dispatched'
+  | 'agent_completed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

@@ -401,11 +401,13 @@ else
     else
       record_result "3a 编排达终态" "FAIL" "status=${S3_STATUS}（300s 超时）"
       # 区分是 LLM 慢还是 root task status 不更新 bug
-      S3_DONE_LOG=$(grep -E "\[Multi-Agent\] Task ${S3_TASK}: all agents completed" "${SERVER_LOG}" 2>/dev/null)
+      # Phase 7-H2 MA9 修复后：root task 由 RunBlocking 显式 UpdateTask，不再需要
+      # 用 "all agents completed" 这种 server log 字符串作为旁证。
+      S3_DONE_LOG=$(grep -E "\[Multi-Agent\] Task ${S3_TASK}:" "${SERVER_LOG}" 2>/dev/null | tail -1)
       if [[ -n "$S3_DONE_LOG" ]]; then
-        FINDINGS+=("[场景3] root task ${S3_TASK} 轮询 timeout，但 server log 已打印 'all agents completed'。说明 orchestrator.RunBlocking 已结束但 root task status 未更新为 completed/failed（engine.updateTask 更新的是 subTaskID=${S3_TASK}_agent_xxx 而非 rootTaskID）。【Phase 7-H2 / MA9 跟踪中】这是已知后端 bug，见 multi-agent-smoke.sh FINDINGS 与 roadmaps/ROADMAP.md Phase 7-H2 阶段4。")
+        FINDINGS+=("[场景3] root task ${S3_TASK} 轮询 timeout，但 server log 已打印 orchestration 结束日志：${S3_DONE_LOG}。说明 orchestrator.RunBlocking 已结束但 root task status 可能未正确更新，需检查 persist.UpdateTask 是否成功。")
       else
-        FINDINGS+=("[场景3] root task ${S3_TASK} 300s 超时且 server log 无 'all agents completed'。可能 2 个 agent 并行真实 LLM 调用总耗时 >300s，或某个 agent 卡死。")
+        FINDINGS+=("[场景3] root task ${S3_TASK} 300s 超时且 server log 无 orchestration 结束日志。可能 2 个 agent 并行真实 LLM 调用总耗时 >300s，或某个 agent 卡死。")
       fi
     fi
 

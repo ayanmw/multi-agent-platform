@@ -423,6 +423,40 @@ export function useTaskStore() {
         break
       }
 
+      case 'decompose_done':
+      case 'agent_dispatched':
+      case 'agent_completed': {
+        // Phase 7-H2 MA6: 编排层事件以 agent_id="orchestrator" 到达，统一在
+        // 独立的 orchestrator lane 中展示为 observation 步骤，避免混入 worker
+        // agent 的步骤列表。
+        const orchId = 'orchestrator'
+        if (!task.agents[orchId]) {
+          task.agents[orchId] = {
+            id: orchId,
+            name: 'Orchestrator',
+            model: 'orchestrator',
+            steps: [],
+            color: '#ff6b6b',
+          }
+        }
+        const title = evt.type === 'decompose_done'
+          ? `Decomposed into ${(evt.data.agent_count as number) || 0} agent(s)`
+          : evt.type === 'agent_dispatched'
+            ? `Dispatched ${(evt.data.agent_id as string) || 'agent'}`
+            : `Completed ${(evt.data.agent_id as string) || 'agent'} (${(evt.data.status as string) || 'unknown'})`
+        task.agents[orchId].steps.push({
+          index: task.agents[orchId].steps.length,
+          type: 'observation',
+          status: 'completed',
+          thinking: title,
+          toolCall: null,
+          tokens: 0,
+          durationMs: (evt.data.duration_ms as number) || 0,
+          startedAt: Date.now(),
+        })
+        break
+      }
+
       case 'task_completed': {
         task.status = 'completed'
         task.finalResult = (evt.data.result as string) || null
