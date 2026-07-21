@@ -317,6 +317,45 @@ req DELETE /api/mock/scripts/smoke-custom
 req POST /api/mock/reset
 
 # =============================================================================
+# 9.5 Cron / 定时器子系统
+# =============================================================================
+print_section "9.5 Cron / 定时器"
+# 列表（空）
+req GET /api/crons
+# 先建一个 session 供 notify_session 写消息用（cron trigger 时需要有效 session）
+CRON_SESS_RAW=$(curl -s -X POST "${BASE}/api/sessions" -H 'Content-Type: application/json' \
+           --data '{"user_input":"cron smoke session","project_id":"default"}' 2>/dev/null)
+CRON_SESS_ID=$(jget "${CRON_SESS_RAW}" "session_id" "id")
+# 创建一个 interval=1h 的 notify_session cron（mock 模式不依赖 LLM，trigger 即写消息+发事件）
+CRON_RAW=$(curl -s -X POST "${BASE}/api/crons" -H 'Content-Type: application/json' \
+  --data "{\"name\":\"smoke-cron\",\"schedule_type\":\"interval\",\"cron_expr\":\"1h\",\"action_type\":\"notify_session\",\"action_payload\":{\"session_id\":\"${CRON_SESS_ID}\",\"message\":\"smoke ping {{.Count}}\"}}" 2>/dev/null)
+echo "    create resp: $(echo "${CRON_RAW}" | head -c 200)"
+CRON_ID=$(jget "${CRON_RAW}" "id")
+if [[ -n "${CRON_ID}" ]]; then
+  req GET "/api/crons/${CRON_ID}"
+  # 状态切换：disable → enable → pause → resume
+  req POST "/api/crons/${CRON_ID}/disable"
+  req POST "/api/crons/${CRON_ID}/enable"
+  req POST "/api/crons/${CRON_ID}/pause"
+  req POST "/api/crons/${CRON_ID}/resume"
+  # 手动触发（notify_session 完成，不依赖 LLM）
+  req POST "/api/crons/${CRON_ID}/trigger" '{}'
+  sleep 0.5
+  # 执行历史
+  req GET "/api/crons/${CRON_ID}/executions"
+  req GET "/api/crons/executions"
+  req DELETE "/api/crons/executions?cron_id=${CRON_ID}"
+  # 删除 cron
+  req DELETE "/api/crons/${CRON_ID}"
+  # 删除后 GET 应 404
+  reqExpect GET "/api/crons/${CRON_ID}" 404
+else
+  FAIL=$((FAIL+1)); echo "[FAIL] Cron 依赖端点 — 未拿到 cron id"; PROBLEMS+=("POST /api/crons 未返回 id")
+fi
+# 校验失败：缺 name 应 400
+reqExpect POST /api/crons 400 '{"schedule_type":"interval","cron_expr":"1h","action_type":"notify_session","action_payload":{"session_id":"s","message":"m"}}'
+
+# =============================================================================
 # 10. WebSocket 握手（仅验证 101 升级）
 # =============================================================================
 print_section "10. WebSocket 握手"
