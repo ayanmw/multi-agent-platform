@@ -15,7 +15,7 @@
     activeTaskId: the task currently selected in the main UI.
 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
 import type { ContextSnapshotMessage } from '../types/events'
 
@@ -25,11 +25,15 @@ const props = defineProps<{
   subTaskId?: string
 }>()
 
-const emit = defineEmits<{
-  refresh: []
-}>()
-
-const { currentSnapshot, setActiveTaskId, subTaskSnapshots } = useContextWindow()
+// 快照有两个来源，组件必须同时支持两者，否则历史/idle 会话会永远停在
+// "Waiting for the next agent think step..." 空态：
+//   1. WebSocket `context_window_snapshot` 事件 —— 仅 Engine 运行时才有，
+//      由 useContextWindow 的 onEvent 写入 currentSnapshot / subTaskSnapshots。
+//   2. REST `GET /api/tasks/:id/context_window` —— 任何时候都可拉取，是
+//      历史/idle task 重建上下文窗口的唯一来源。
+// 组件用 fetchSnapshot 自包含地走来源 2，不再依赖"父组件必须绑 @refresh
+// 并自己实现 fetcher"这种隐式契约（该契约在 UI-v2 重构时丢失过一次）。
+const { currentSnapshot, setActiveTaskId, subTaskSnapshots, fetchSnapshot } = useContextWindow()
 // 7-G: When a sub-task is selected, prefer its isolated snapshot from the store.
 const latest = computed(() => {
   if (props.subTaskId && subTaskSnapshots.value[props.subTaskId]) {
@@ -48,12 +52,14 @@ function clearLoadingTimer() {
   }
 }
 
+// 拉取当前视图对应的快照：subTaskId 非空走子 agent 槽位，否则走 root。
+// 包一层 loading 态用于按钮 spinner；组件卸载时由 onUnmounted 清理定时器。
 async function requestRefresh() {
   if (!props.activeTaskId) return
   isLoading.value = true
   clearLoadingTimer()
   try {
-    emit('refresh')
+    await fetchSnapshot(props.activeTaskId, props.subTaskId || undefined)
   } finally {
     // 保持 spinner 一小段时间，避免闪烁；组件卸载时由 onUnmounted 清理。
     loadingTimer = setTimeout(() => { isLoading.value = false }, 300)
@@ -64,19 +70,26 @@ onUnmounted(() => {
   clearLoadingTimer()
 })
 
-// Keep the composable's active task in sync with the prop.
-// Immediate: true also covers the initial mount, so we do not need an extra
-// onMounted refresh. Both running would double-emit 'refresh' and fetch the
-// snapshot twice for the same task.
+// activeTaskId 变化（含初次挂载）时同步 composable 的 active task，并立即
+// 拉取一次快照。immediate:true 覆盖初始挂载，因此无需额外 onMounted。
+// 注意：必须无条件拉取，不能只在 `!currentSnapshot.value` 时拉——否则从
+// 已有快照的任务切到历史任务时，currentSnapshot 已被 setActiveTaskId 清空，
+// 但若曾经缓存过同名 key 仍可能误判，且历史任务永远没有 WS 事件补填。
 watch(
   () => props.activeTaskId,
   (taskId) => {
     setActiveTaskId(taskId)
-    if (taskId && !currentSnapshot.value) {
-      requestRefresh()
-    }
+    if (taskId) requestRefresh()
   },
   { immediate: true },
+)
+
+// 切换子 agent 实例时拉取该实例的快照；空值表示回到 root 视图。
+watch(
+  () => props.subTaskId,
+  () => {
+    if (props.activeTaskId) requestRefresh()
+  },
 )
 
 const usagePercent = computed(() => {
