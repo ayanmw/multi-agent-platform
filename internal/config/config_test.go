@@ -369,6 +369,61 @@ func TestLoadEnvParsing(t *testing.T) {
 			}
 		})
 	})
+
+	// Cron 子系统默认值：未设置任何 CRON_* 环境变量时使用默认值。
+	t.Run("CRON_defaults", func(t *testing.T) {
+		withCleanEnv(t, func(t *testing.T) {
+			// withCleanEnv 不清 CRON_*，这里显式清掉以保证基线。
+			for _, k := range []string{"CRON_ENABLED", "CRON_ALLOWED_TOOLS", "CRON_WEBHOOK_TIMEOUT_SECONDS", "CRON_MAX_EXECUTION_RESULT_CHARS"} {
+				t.Setenv(k, "")
+				os.Unsetenv(k)
+			}
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.CronEnabled {
+				t.Fatalf("expected CronEnabled=true, got false")
+			}
+			wantTools := []string{"run_shell", "read_file", "write_file", "fetch_url"}
+			if !reflect.DeepEqual(cfg.CronAllowedTools, wantTools) {
+				t.Fatalf("CronAllowedTools: got %v want %v", cfg.CronAllowedTools, wantTools)
+			}
+			if cfg.CronWebhookTimeoutSeconds != 10 {
+				t.Fatalf("CronWebhookTimeoutSeconds: got %d want 10", cfg.CronWebhookTimeoutSeconds)
+			}
+			if cfg.CronMaxResultChars != 2000 {
+				t.Fatalf("CronMaxResultChars: got %d want 2000", cfg.CronMaxResultChars)
+			}
+		})
+	})
+
+	t.Run("CRON_ENABLED_false", func(t *testing.T) {
+		withCleanEnv(t, func(t *testing.T) {
+			t.Setenv("CRON_ENABLED", "false")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.CronEnabled {
+				t.Fatalf("expected CronEnabled=false, got true")
+			}
+		})
+	})
+
+	t.Run("CRON_ALLOWED_TOOLS_overrides", func(t *testing.T) {
+		withCleanEnv(t, func(t *testing.T) {
+			t.Setenv("CRON_ALLOWED_TOOLS", "run_shell, fetch_url ")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			want := []string{"run_shell", "fetch_url"}
+			if !reflect.DeepEqual(cfg.CronAllowedTools, want) {
+				t.Fatalf("CronAllowedTools: got %v want %v", cfg.CronAllowedTools, want)
+			}
+		})
+	})
 }
 
 func TestLoadMCPPreinstallConfig(t *testing.T) {
