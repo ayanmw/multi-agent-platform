@@ -246,6 +246,11 @@ func DeleteCron(id string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	// modernc.org/sqlite 默认未开启 foreign_keys pragma，ON DELETE CASCADE
+	// 不会自动生效，因此这里手动先删 executions 再删 cron，保证级联语义。
+	if _, err := DB.Exec(`DELETE FROM cron_executions WHERE cron_id=?`, id); err != nil {
+		return err
+	}
 	res, err := DB.Exec(`DELETE FROM crons WHERE id=?`, id)
 	if err != nil {
 		return err
