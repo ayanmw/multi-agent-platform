@@ -1023,7 +1023,7 @@ func main() {
 					// mock 模式下简化 prompt，避免 mock provider 被过长文本干扰。
 					leaderSystemPrompt = "You are the Leader agent. Use dispatch_sub_agent when delegation is needed."
 				}
-				runAgentLoopWithTurn(hub, taskID, "leader", leaderSystemPrompt, leaderInput, cfg, toolRegistry, persist, harness.DefaultContract(leaderInput), sessionID, approvalHandler, "", agentBusAdapter, checkpointMgr, 0, "", "", costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+				runAgentLoopWithTurn(hub, taskID, "leader", leaderSystemPrompt, leaderInput, cfg, toolRegistry, persist, harness.DefaultContract(leaderInput), sessionID, approvalHandler, "", agentBusAdapter, checkpointMgr, 0, "", "", costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
 				removeCancel(taskID, "leader")
 				removeEngine(taskID, "leader")
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
@@ -1142,7 +1142,7 @@ func main() {
 			// Phase 7-C: 为本任务创建 root trace context 并透传给 Engine。
 			rootTraceCtx := tracer.StartRoot(taskID, "task")
 			traceRegistry.Store(taskID, rootTraceCtx)
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx)
+			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -1192,7 +1192,7 @@ func main() {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat —— 一个 session 内的多轮对话
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
 			return
 		}
 		// GET /api/sessions/{id}/messages —— session 消息历史
@@ -1451,7 +1451,7 @@ func main() {
 	// CaseCard 前端使用的薄代理。委托给与 POST /api/tasks 相同的
 	// chat-action 逻辑，case_id 从请求体中提取。
 	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
-		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
 	})
 
 	// MCP 管理 API：动态 add / enable / disable / remove。
@@ -1951,8 +1951,8 @@ func projectRulesPrompt(sessionID string) string {
 // 或请求未指向预设 case 时被忽略。
 // modelRouter/routerProviders 激活 Engine 中的 Phase 6 Router；传 nil
 // 则回退到旧的单模型路径。
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, rootTraceCtx...)
+func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service, rootTraceCtx ...*observability.TraceContext) {
+	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx...)
 }
 
 // runAgentLoopWithTurn 在一个多轮 session 内执行一次 chat 请求的完整
@@ -1962,7 +1962,7 @@ func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, 
 // 为空时 provider 回退到关键词匹配。
 // modelRouter 是可选的 Phase 6 Router；非 nil 时（配合 routerProviders）
 // Engine 会在每次 LLM 调用前分类 intent 并选择模型 tier。
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, rootTraceCtx ...*observability.TraceContext) {
+func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service, rootTraceCtx ...*observability.TraceContext) {
 	isRoot := turnIndex == 0
 
 	// Phase 7-H：root agent 默认作为 leader，拥有子 agent 派发与工作流定义权限。
@@ -2206,6 +2206,22 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		// session 上下文填充。
 		SkillRegistry: globalSkillRegistry,
 		ActiveSkills:  GetEnabledSkillIDs(globalSkillRegistry),
+		// Phase 7 TODO: 把当前 session 的 active todos 注入 system prompt。
+		// todoSvc 为 nil（DB 未初始化）或 sessionID 为空时跳过。
+		ActiveTodos: func() string {
+			if todoSvc == nil || sessionID == "" {
+				return ""
+			}
+			activeTodos, err := todoSvc.ListActiveBySession(sessionID)
+			if err != nil {
+				observability.DefaultLogger.Warn("todo", "failed to load active todos for system prompt", map[string]any{
+					"session_id": sessionID,
+					"error":      err.Error(),
+				})
+				return ""
+			}
+			return todo.FormatActiveTodos(activeTodos)
+		}(),
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

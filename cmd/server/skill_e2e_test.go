@@ -164,7 +164,7 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, nil, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService)
+			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, nil, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, nil)
 			return
 		}
 		// 其它 sessions 子路径（messages / workspace 等）本次测试不涉及，

@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-21
-> **当前版本**: v0.8.0 Alpha（Skill 系统 + MCP 按 agent 可见性 + contract limits 闭环）
+> **当前版本**: v0.10.0 Alpha（Session 级 TODO 子系统落地）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase UI-v2 🚧 (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton)
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)
 ```
 
 ---
@@ -539,6 +539,38 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase TODO: Session 级 TODO 子系统 ✅ 已完成 (2026-07-21)
+
+**目标**: 让 LLM Agent 与前端共享同一个 session 级 TODO 列表，支持创建/更新状态/列出/删除/清理，并自动广播变更事件与注入 system prompt。
+
+### 交付物
+- [x] `pkg/db/todo.go`: `todos` 表迁移（v23）+ CRUD/SQLite 持久化
+- [x] `internal/todo/model.go`: `Todo` / `TodoStatus` 领域模型，`IsTerminal` 行为
+- [x] `internal/todo/store.go`: `DBStore` 接口，`Store` 薄封装，打破 import cycle
+- [x] `internal/todo/service.go`: `Service` 业务层，`Create/Update/UpdateStatus/Delete/List/ListByTask/ClearAll`，写入后广播 `todo_list_changed`
+- [x] `internal/todo/service.go`: `FormatActiveTodos` 渲染 markdown 列表供 Engine 注入
+- [x] `internal/tool/todo.go`: 6 个 Agent Tools（`todo/create`、`todo/update`、`todo/update_status`、`todo/delete`、`todo/list`、`todo/clear_all`）
+- [x] `cmd/server/api_todo.go`: `/api/todos` REST API（GET/POST/PUT/PATCH/DELETE/Clear）
+- [x] `cmd/server/main.go`: 初始化 `todo.Service`、注册 Tools、挂载 REST 路由、注入 `EngineConfig.ActiveTodos`
+- [x] `internal/runtime/engine.go`: `EngineConfig.ActiveTodos` 字段；`NewEngine` 将其追加到 system prompt
+- [x] 事件：写入操作通过 hub 广播 `todo_list_changed`（含当前 active todos）
+- [x] 单元测试：`internal/todo/service_test.go`、`internal/tool/todo_test.go`、`cmd/server/api_todo_test.go`
+- [x] Engine 注入测试：`internal/runtime/engine_todo_test.go`
+- [x] 无回归：`TestSkillPromptInjectedE2E` 仍通过
+
+### 验证标准
+- `go build ./...` 通过
+- `go test ./... -count=1 -timeout 120s` 通过
+- Skill E2E 测试通过
+
+### 已知限制 / 后续规划
+- [ ] 前端 TODO 面板尚未实现（当前仅后端 API + Agent Tools + prompt 注入）
+- [ ] TODO 变更事件 `todo_list_changed` 未在前端 `useTaskStore` 中处理
+- [ ] 不支持 TODO 拖拽排序与嵌套子任务 UI 展示
+- [ ] 未接入审批/PolicyGate（todo 工具默认受现有 ToolWhitelist/TagPolicy 约束）
+
+---
+
 ## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
 **目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
@@ -740,3 +772,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
 | v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
+| v0.10.0 Alpha | 2026-07-21 | Session 级 TODO 子系统: `todos` 表 + `internal/todo` Service + `todo/*` Agent Tools 6 个 + `/api/todos` REST API + Engine system prompt 注入 Active TODO + 单元/E2E 测试 |
