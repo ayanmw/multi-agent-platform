@@ -8,6 +8,30 @@ import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData, ToolVisibilityData } from '@/types/events'
 import type { EvaluationResult } from '@/types/case'
 
+//Persisted step → Step converter shared between root steps and child steps.
+function persistedStepToStep(s: any, taskStartedAt: number): Step {
+  const stepType: StepType =
+    s.type === 'tool_call' ? 'tool_call' :
+    s.type === 'observation' ? 'observation' : 'think'
+  return {
+    index: s.step_index,
+    type: stepType,
+    status: (s.status as StepStatus) || 'completed',
+    thinking: stepType === 'think' ? (s.content || '') : '',
+    toolCall: stepType === 'tool_call' ? {
+      name: s.tool_name || 'unknown',
+      input: s.tool_input || {},
+      output: s.tool_output || '',
+      duration: s.duration_ms || 0,
+    } : null,
+    tokens: s.token_used || 0,
+    durationMs: s.duration_ms || 0,
+    // Persisted steps lack per-step timestamps; use the task start time as
+    // a common baseline so the timeline shows a real start point instead of 0.
+    startedAt: taskStartedAt,
+  }
+}
+
 // 模块级引用，用于最近修改记录
 const { addItem: addRecentMod } = useRecentMods()
 const currentSessionId = ref<string>('')
@@ -960,6 +984,20 @@ export function useTaskStore() {
         session_id: string
         parent_task_id: string
         is_root: boolean
+        steps: Array<{
+          id: string
+          task_id: string
+          agent_id: string
+          step_index: number
+          type: string
+          status: string
+          content: string
+          tool_name: string
+          tool_input: Record<string, unknown>
+          tool_output: string
+          duration_ms: number
+          token_used: number
+        }>
       }>
       evaluation: {
         case_id: string
@@ -1028,44 +1066,28 @@ export function useTaskStore() {
         id: agentId,
         name: agentId,
         model: 'unknown',
-        steps: agentSteps.map((s): Step => {
-          const stepType: StepType =
-            s.type === 'tool_call' ? 'tool_call' :
-            s.type === 'observation' ? 'observation' : 'think'
-          return {
-            index: s.step_index,
-            type: stepType,
-            status: (s.status as StepStatus) || 'completed',
-            thinking: stepType === 'think' ? (s.content || '') : '',
-            toolCall: stepType === 'tool_call' ? {
-              name: s.tool_name || 'unknown',
-              input: s.tool_input || {},
-              output: s.tool_output || '',
-              duration: s.duration_ms || 0,
-            } : null,
-            tokens: s.token_used || 0,
-            durationMs: s.duration_ms || 0,
-            // Persisted steps lack per-step timestamps; use the task start time as
-            // a common baseline so the timeline shows a real start point instead of 0.
-            startedAt: taskState.startedAt,
-          }
-        }),
+        steps: agentSteps.map((s) => persistedStepToStep(s, taskState.startedAt)),
         color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
       }
 
       taskState.agents[agentId] = agentState
     }
 
-    // Also process child tasks — add their agents too
+    // Phase 7-H2 MA5: 回填子任务的 steps。
+    // 后端现在为每个 child task 返回独立的 steps 数组。如果当前 taskState
+    // 里还没有对应的 agent/lane，则新建一个并把 steps 填进去，避免 worker
+    // lane 显示 "No steps yet"。
     for (const childTask of childTasks) {
+      const childSteps = childTask.steps || []
       if (childTask.agent_ids) {
         for (const aid of childTask.agent_ids) {
           if (!taskState.agents[aid]) {
+            const sorted = [...childSteps].sort((a, b) => a.step_index - b.step_index)
             taskState.agents[aid] = {
               id: aid,
               name: aid,
               model: 'unknown',
-              steps: [],
+              steps: sorted.map((s) => persistedStepToStep(s, taskState.startedAt)),
               color: AGENT_COLORS[colorIdx++ % AGENT_COLORS.length],
             }
           }

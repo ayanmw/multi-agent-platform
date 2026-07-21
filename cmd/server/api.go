@@ -235,8 +235,17 @@ func handleListTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
+// ChildTaskDetail 在 TaskRecord 基础上附带子任务的 steps，用于 root task
+// 详情一次性返回完整的子任务执行历史。
+type ChildTaskDetail struct {
+	db.TaskRecord
+	Steps []db.StepRecord `json:"steps"`
+}
+
 // handleGetTask 返回单个任务及其步骤（GET /api/tasks?id=xxx）。
 // 若存在关联的 case evaluation，则以向后兼容的方式放在 "evaluation" key 下。
+// Phase 7-H2 MA5: 返回的 child_tasks 每个元素都附带自己的 steps 数组，
+// 让前端在刷新/历史回放时能把子 agent 的步骤回填到对应 worker lane。
 func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
 	log.Printf("[API] GET /api/tasks?id=%s", taskID)
@@ -277,11 +286,15 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	for _, s := range steps {
 		stepIDs[s.ID] = true
 	}
+
+	// Phase 7-H2 MA5: 为每个 child task 查询并附加 steps；同时把 root 尚未收集
+	// 到的子步骤合并进 root steps，保证既有 UI（只看 root.steps）也能完整展示。
+	childDetails := make([]ChildTaskDetail, 0, len(childTasks))
 	for _, ct := range childTasks {
 		childSteps, cErr := db.QueryStepsByTask(ct.ID)
 		if cErr != nil {
 			log.Printf("[API] GET /api/tasks?id=%s: child steps query error for %s: %v", taskID, ct.ID, cErr)
-			continue
+			childSteps = []db.StepRecord{}
 		}
 		for _, cs := range childSteps {
 			if !stepIDs[cs.ID] {
@@ -289,6 +302,10 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 				stepIDs[cs.ID] = true
 			}
 		}
+		childDetails = append(childDetails, ChildTaskDetail{
+			TaskRecord: ct,
+			Steps:      childSteps,
+		})
 	}
 	// 合并后的步骤按 step_index 排序以保证连贯顺序
 	sort.SliceStable(steps, func(i, j int) bool { return steps[i].StepIndex < steps[j].StepIndex })
@@ -305,7 +322,7 @@ func handleGetTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"task":        task,
 		"steps":       steps,
-		"child_tasks": childTasks,
+		"child_tasks": childDetails,
 		"evaluation":  eval,
 	})
 }

@@ -675,9 +675,9 @@ const activeTaskId = ref<string | null>(null)
 - [ ] smoke 验证：chat + multi-agent 都能在 Traces tab 看到 span 树，`agent_id` 列非空
 
 #### 阶段 3 — child steps 回填（MA5）
-- [ ] `cmd/server/api.go` `handleGetTask`：`child_tasks` 每个 child 附带其 `steps`（按 child id 批量查询）
-- [ ] `web/v2/src/composables/useTaskStore.ts` `loadTask`：处理 child_tasks 时把 child steps 填进对应 worker lane
-- [ ] smoke 验证：multi-agent 完成后刷新 / 历史回放 → 每个 worker lane 有 step 卡片
+- [x] `cmd/server/api.go` `handleGetTask`：新增 `ChildTaskDetail` 包装类型，`child_tasks` 每个 child 附带其 `steps`（按 child id 查询）
+- [x] `web/v2/src/composables/useTaskStore.ts` `loadTask`：后端 child_task 类型声明增加 `steps` 字段；新增 `persistedStepToStep` 转换函数；处理 child_tasks 时如果对应 agent lane 不存在则新建并把 child steps 填进去
+- [x] smoke 验证：`scripts/multi-agent-smoke.sh` 12/0/0；`scripts/real-llm-smoke.sh` 14/0/3，场景 3 在 71s 完成（真实 LLM researcher 耗时较长），status=completed
 
 #### 阶段 4 — 编排层可观测（MA6 + MA9）
 - [ ] `internal/orchestrator/orchestrator.go`：发编排层 step 事件（`decompose_done` / `agent_dispatched` / `agent_completed`），挂在 root task、`agent_id="orchestrator"`
@@ -743,3 +743,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
 | v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
+| v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: `handleGetTask` 返回 child_tasks.steps + 前端 `loadTask` 回填 worker lane；新增 `TestHandleGetTaskChildSteps` 单测；smoke 验证同 v0.9.3 |
