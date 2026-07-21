@@ -566,8 +566,9 @@ const activeTaskId = ref<string | null>(null)
 ### 已知限制 / 后续规划
 - [x] 前端 v1 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
 - [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
-- [ ] 前端 v2 TODO 面板在 `web/v2/` 的 Inspector/Dock 中集成（当前 v1 已完成，v2 待接入）
-- [ ] TODO 拖拽排序与嵌套子任务 UI 展示
+- [x] 前端 v2 TODO 面板在 `web/v2/` 的 Manage Dialog 中集成（Create/Toggle Status/Edit/Delete/ClearCompleted）
+- [x] 前端 v2 TODO 未完成计数徽标（TopBar Manage 按钮）与输入条 TODO 堆积提示
+- [ ] TODO 拖拽排序与嵌套子任务 UI 展示（已规划，下一步实施）
 - [x] todo/* 工具默认受通用 ToolWhitelist/TagPolicy 约束，无需单独审批门控；已在前端备注说明
 
 ---

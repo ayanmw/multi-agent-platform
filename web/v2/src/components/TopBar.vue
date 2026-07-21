@@ -2,6 +2,9 @@
 import StatusIndicator from './StatusIndicator.vue'
 import VersionSwitcher from './VersionSwitcher.vue'
 import ThemePalette from './ThemePalette.vue'
+import { useTodoStore } from '@/composables/useTodoStore'
+import { useSessionStore } from '@/composables/useSessionStore'
+import { computed } from 'vue'
 
 /**
  * 顶部状态栏
@@ -49,6 +52,12 @@ const emit = defineEmits<{
   (e: 'toggle-keyboard-tips'): void
   (e: 'toggle-manage'): void
 }>()
+
+// TODO Badge: 展示当前 session 下未完成的 TODO 数量，高优先级数量 >0 时用危险色提示。
+const { activeCount, highPriorityCount } = useTodoStore()
+const { activeSession } = useSessionStore()
+const todoBadgeCount = computed(() => activeSession.value ? activeCount(activeSession.value.id) : 0)
+const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(activeSession.value.id) > 0 : false)
 </script>
 
 <template>
@@ -82,6 +91,14 @@ const emit = defineEmits<{
         @click="emit('toggle-manage')"
       >
         🎛
+        <span
+          v-if="todoBadgeCount > 0"
+          class="todo-badge"
+          :class="{ 'todo-badge--urgent': todoBadgeUrgent }"
+          :title="`${todoBadgeCount} active TODO${todoBadgeCount > 1 ? 's' : ''}${todoBadgeUrgent ? ', high priority pending' : ''}`"
+        >
+          {{ todoBadgeCount }}
+        </span>
         <span class="manage-caret">▼</span>
       </button>
 
@@ -185,6 +202,31 @@ const emit = defineEmits<{
   width: auto;
   padding: 0 8px;
   gap: 3px;
+  position: relative;
+}
+
+.todo-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-running);
+  color: var(--text-on-accent, #0b0d10);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.todo-badge--urgent {
+  background: var(--accent-danger);
+  color: #fff;
 }
 
 .manage-toggle.active {

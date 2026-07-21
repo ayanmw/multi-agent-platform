@@ -173,7 +173,39 @@ export function useTodoStore() {
     // WebSocket 事件会负责最终状态同步
   }
 
-  /** 替换本地列表中的某条 todo。 */
+  /**
+   * 判断 TODO 是否处于终态。
+   */
+  function isTerminal(todo: Todo): boolean {
+    return todo.status === 'done' || todo.status === 'cancelled'
+  }
+
+  /**
+   * 获取某个 session 下未完成的 TODO 数量（含 pending / in_progress）。
+   * zero 表示当前无需提醒。
+   */
+  function activeCount(sessionId: string): number {
+    return (todosBySession.value[sessionId] || []).filter(t => !isTerminal(t)).length
+  }
+
+  /**
+   * 获取某个 session 下高优先级（priority === 3）且未完成的 TODO 数量。
+   */
+  function highPriorityCount(sessionId: string): number {
+    return (todosBySession.value[sessionId] || []).filter(
+      t => !isTerminal(t) && t.priority === 3
+    ).length
+  }
+
+  /**
+   * 获取某个 session 下最早创建的未完成 TODO。
+   * 用于判断是否长期挂起。
+   */
+  function oldestActive(sessionId: string): Todo | undefined {
+    const list = (todosBySession.value[sessionId] || []).filter(t => !isTerminal(t))
+    if (list.length === 0) return undefined
+    return list.reduce((oldest, t) => (t.created_at < oldest.created_at ? t : oldest))
+  }
   function replaceTodo(sessionId: string, todo: Todo) {
     const list = todosBySession.value[sessionId] || []
     const idx = list.findIndex(t => t.id === todo.id)
@@ -221,5 +253,8 @@ export function useTodoStore() {
     updateTodoStatus,
     deleteTodo,
     clearCompleted,
+    activeCount,
+    highPriorityCount,
+    oldestActive,
   }
 }
