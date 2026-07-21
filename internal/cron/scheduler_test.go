@@ -49,9 +49,34 @@ func (s *fakeStore) ListCrons(f ListFilter) ([]Cron, error) {
 	return out, nil
 }
 func (s *fakeStore) InsertExecution(e Execution) error    { s.executions = append(s.executions, e); return nil }
-func (s *fakeStore) UpdateExecution(e Execution) error    { return nil }
+func (s *fakeStore) UpdateExecution(e Execution) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ex := range s.executions {
+		if ex.ID == e.ID {
+			s.executions[i] = e
+			return nil
+		}
+	}
+	s.executions = append(s.executions, e)
+	return nil
+}
 func (s *fakeStore) GetExecution(id string) (Execution, error) { return Execution{}, nil }
-func (s *fakeStore) ListExecutions(f ExecListFilter) ([]Execution, error) { return s.executions, nil }
+func (s *fakeStore) ListExecutions(f ExecListFilter) ([]Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Execution
+	for _, e := range s.executions {
+		if f.CronID != "" && e.CronID != f.CronID {
+			continue
+		}
+		if f.Status != "" && string(e.Status) != f.Status {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
 func (s *fakeStore) CleanExecutions(f CleanFilter) (int, error) { return 0, nil }
 
 // fakeExec 计数 Execute 调用，供断言"到点触发"。
