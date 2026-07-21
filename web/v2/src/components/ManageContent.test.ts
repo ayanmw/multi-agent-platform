@@ -158,6 +158,7 @@ async function mountInspector() {
         AgentConfig: EmptyStub,
         ProjectConfig: EmptyStub,
         SkillPanel: EmptyStub,
+        CronManager: EmptyStub,
       },
     },
   })

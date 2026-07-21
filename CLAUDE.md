@@ -217,6 +217,12 @@ cron_execution_skipped / cron_missed / cron_notification
 
 事件 `TaskID` 填 `cron_id`，`AgentID` 填触发 agent_id 或 `"cron"`。单元/集成测试见 `internal/cron/*_test.go` 与 `cmd/server/cron_api_test.go`。
 
+### 前端触发方式（web/v2）
+
+- **管理 tab**：`ManageFlyout` / `ManageTabs` 新增 `cron` 项，`ManageContent` 在 `cron` tab 渲染 `CronManager.vue`（列表 + 状态切换 + 手动触发 + 删除），新建/编辑走 `CronForm.vue`，执行历史走 `CronExecutions.vue`。`focusCronId` prop 支持从侧栏一键直达并展开某条 cron 的历史。
+- **右侧侧栏**：`CronDockPanel.vue` 作为桌面/平板右栏可折叠面板，只读展示当前定时器与实时 `cron_*` 触发流（`useCronEvents.ts` 订阅 WS），`@open-manage` 跳转管理 tab。`TopBar.vue` 的 ⏰ 按钮控制其开合。
+- **数据层**：`web/v2/src/types/cron.ts` 镜像后端领域模型；`composables/useCrons.ts` 封装 `/api/crons*` REST 调用；`composables/useCronEvents.ts` 把 `cron_*` 事件映射到本地 reactive 列表。`types/events.ts` 追加 14 个 `cron_*` EventType。
+
 ---
 
 

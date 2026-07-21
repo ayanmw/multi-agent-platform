@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import ManageTabs from './ManageTabs.vue'
 import SkillPanel from './SkillPanel.vue'
 import TodoPanel from './TodoPanel.vue'
+import CronManager from './CronManager.vue'
 import CaseFilter from './CaseFilter.vue'
 import CaseCard from './CaseCard.vue'
 import CaseDetailModal from './CaseDetailModal.vue'
@@ -45,6 +46,8 @@ const emit = defineEmits<{
 const props = defineProps<{
   /** 大 Dialog 打开时希望直接定位的 tab（一次性消费）。 */
   initialTab?: string
+  /** 打开 cron tab 时希望直接聚焦/展开历史的 cron id（一次性消费）。 */
+  focusCronId?: string
 }>()
 
 const activeTab = ref(props.initialTab || 'memory')
@@ -246,6 +249,10 @@ function handleMemorySelect(id: string) {
 
       <div v-else-if="activeTab === 'skills'" class="tab-pane">
         <SkillPanel :skills="skills" @trigger="handleTriggerSkill" />
+      </div>
+
+      <div v-else-if="activeTab === 'cron'" class="tab-pane">
+        <CronManager :focus-cron-id="props.focusCronId" />
       </div>
 
       <div v-else-if="activeTab === 'traces'" class="tab-pane">

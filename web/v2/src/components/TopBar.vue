@@ -33,6 +33,8 @@ withDefaults(
     taskStatusLabel?: string
     showInspectorToggle?: boolean
     manageOpen?: boolean
+    /** Cron 侧边面板是否展开（用于高亮 TopBar 按钮） */
+    cronOpen?: boolean
   }>(),
   {
     status: 'idle',
@@ -40,6 +42,7 @@ withDefaults(
     taskStatusLabel: '',
     showInspectorToggle: false,
     manageOpen: false,
+    cronOpen: false,
   },
 )
 
@@ -51,6 +54,8 @@ const emit = defineEmits<{
   (e: 'toggle-mcp'): void
   (e: 'toggle-keyboard-tips'): void
   (e: 'toggle-manage'): void
+  /** 切换右侧 Cron 侧边面板 */
+  (e: 'toggle-cron'): void
 }>()
 
 // TODO Badge: 展示当前 session 下未完成的 TODO 数量，高优先级数量 >0 时用危险色提示。
@@ -82,6 +87,12 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
       <button class="icon-btn" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
       <button class="icon-btn" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
       <button class="icon-btn" title="Keyboard Tips" @click="emit('toggle-keyboard-tips')">⌨</button>
+      <button
+        class="icon-btn"
+        :class="{ active: cronOpen }"
+        title="Cron 定时器侧栏"
+        @click="emit('toggle-cron')"
+      >⏰</button>
 
       <!-- Manage 下拉按钮：位于 TopBar 最右侧，点击弹出管理浮窗 -->
       <button

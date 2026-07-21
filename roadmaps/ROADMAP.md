@@ -573,7 +573,7 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 7-cron: Cron / 定时器子系统 🚧 进行中 (2026-07-21)
+## Phase 7-cron: Cron / 定时器子系统 🚧 前端收尾 (2026-07-21)
 
 **目标**: 为平台新增独立定时器子系统 `internal/cron/`，支持 Agent tool + Web UI 双入口创建，4 种 action_type，完全事件化。调度基于 `robfig/cron/v3`（秒级 6 域）。
 
@@ -596,14 +596,18 @@ const activeTaskId = ref<string | null>(null)
 - [x] 单元测试：`internal/cron/*_test.go`（model/template/action/executor/scheduler/service/tools）
 - [x] 集成测试：`cmd/server/cron_api_test.go`（httptest + 临时 SQLite，覆盖创建/列表/详情/状态切换/手动触发 notify_session/执行历史/清理/删除/404/校验失败）
 
-### 待办（前端 v2）
+### 交付物（前端 v2 已完成）
 
-- [ ] `web/v2/src/types/cron.ts` + `useCrons.ts` + `useCronEvents.ts`
-- [ ] `CronManager.vue` + `CronForm.vue` + `CronExecutions.vue`
-- [ ] ManageFlyout cron tab + `CronDockPanel.vue` + `App.vue` 接入
-- [ ] `web/v2/src/types/events.ts` 追加 `cron_*` EventType
+- [x] `web/v2/src/types/cron.ts` + `composables/useCrons.ts` + `composables/useCronEvents.ts`（类型 + REST 列表/创建/更新/删除/状态切换/手动触发 + WS 事件流接入）
+- [x] `web/v2/src/types/events.ts` 追加 14 个 `cron_*` EventType
+- [x] `CronManager.vue` + `CronForm.vue` + `CronExecutions.vue`（管理列表/创建编辑表单/执行历史，含 15 + CronForm + CronExecutions 单测）
+- [x] ManageFlyout cron 菜单项 + `ManageTabs.vue` cron tab + `ManageContent.vue` 接入 `CronManager`（支持 `focusCronId` 直达展开）
+- [x] `CronDockPanel.vue` 右侧可折叠侧栏（只读定时器 + 实时触发流，一键跳转管理 tab）+ `TopBar.vue` ⏰ 按钮 + `App.vue` 桌面/平板双栏接入
+- [x] 构建验证：`go test ./...` 全绿；`cd web/v2 && npm run test`（123 例通过）`npm run build`（167 modules 构建通过）
+
+### 待办（后续收尾）
+
 - [ ] real_llm smoke：创建 cron 触发 start_task，确认事件流 + execution 记录 + 前端可见
-- [ ] `go test ./...` 全绿；`cd web/v2 && npm run test -- --run && npm run build` 全绿
 
 ### 验证基准
 
@@ -822,3 +826,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.7 Alpha | 2026-07-21 | Phase 7-H2 阶段 6: AgentBus 隔离 + Router 死代码闭环 — worker Engine 改 `RegisterHandlerBySubTask`(此前 agentID-only 注册导致并发 session 同名 worker 串台) + `handleRecoverCheckpoint` EngineConfig 补 `Router/Registry/Providers`(恢复路径也触发 `model_routed`)；新增 `TestAgentBus_ConcurrentSameAgentIDDifferentSubTask`/`TestAgentBus_WorkerUnregisterBySubTask`；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0，含 4d Router 触发 PASS) 验证通过 |
 | v0.10.0 Alpha | 2026-07-21 | Session 级 TODO 子系统: `todos` 表 + `internal/todo` Service + `todo/*` Agent Tools 6 个 + `/api/todos` REST API + Engine system prompt 注入 Active TODO + 单元/E2E 测试 + 拖拽排序/嵌套子任务 + 树形拖拽渲染 |
 | v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
+| v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
