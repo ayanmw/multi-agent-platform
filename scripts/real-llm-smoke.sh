@@ -39,6 +39,9 @@ TIMINGS=()        # 每场景耗时
 LLM_OK="unknown"  # LLM 可达性：unknown/yes/no（场景1后判定，no 则后续场景跳过）
 
 cleanup() {
+  if [[ -n "${WS_PID}" ]] && kill -0 "${WS_PID}" 2>/dev/null; then
+    kill "${WS_PID}" 2>/dev/null || true
+  fi
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     if [[ "${KEEP_SERVER:-0}" != "1" ]]; then
       kill "${SERVER_PID}" 2>/dev/null
@@ -48,6 +51,7 @@ cleanup() {
   if [[ "${KEEP_LOGS:-0}" != "1" ]]; then
     rm -f "${DB_PATH}" "${SERVER_BIN}" "${SERVER_LOG}" 2>/dev/null
     rm -f /tmp/real-llm-*-resp-$$ 2>/dev/null
+    rm -f "${WS_EVENTS}" "${WS_EVENTS}.err" 2>/dev/null
   fi
 }
 trap cleanup EXIT
@@ -214,6 +218,32 @@ fi
 echo "[setup] 服务就绪 OK"
 echo "  服务启动日志（前 15 行）："
 head -15 "${SERVER_LOG}" | sed 's/^/    /'
+
+# ---- 订阅 WS 事件流（后台 node 进程，把所有事件 type 写入 WS_EVENTS 文件）------
+# 真实 LLM 路径下，cron 事件走 hub.SendEvent → 广播到 WS；hub 本身不打日志，
+# 故场景 6 用 WS 订阅而非 grep server log 来断言 cron 事件流。
+# 用 node 22+ 内置的全局 WebSocket（无需 npm ws 包，避免 require 解析路径问题）。
+WS_EVENTS="/tmp/real-llm-ws-events-$$.ndjson"
+: > "${WS_EVENTS}"
+WS_PID=$!
+node -e "
+  const out = process.argv[1], base = process.argv[2], fs = require('fs');
+  const ws = new WebSocket(base + '/ws?session_id=real-llm-smoke');
+  let fd;
+  ws.addEventListener('open',  () => { fd = fs.openSync(out, 'a'); fs.writeSync(fd, '__ws_open__\n'); });
+  ws.addEventListener('message', m => {
+    try { const e = JSON.parse(m.data); if (fd === undefined) fd = fs.openSync(out, 'a'); fs.writeSync(fd, (e.type || '?') + '\n'); } catch (x) {}
+  });
+  ws.addEventListener('error', e => { fs.writeFileSync(out + '.err', String(e.message || e) + '\n', { flag: 'a' }); });
+  setInterval(() => {}, 1000); // 保活，由父脚本 cleanup 时 kill
+" "${WS_EVENTS}" "${BASE}" >/dev/null 2>&1 &
+WS_PID=$!
+sleep 1
+if grep -q "__ws_open__" "${WS_EVENTS}" 2>/dev/null; then
+  echo "[setup] WS 订阅已连接 (PID=${WS_PID}, events -> ${WS_EVENTS}, via node built-in WebSocket)"
+else
+  echo "[setup] WS 订阅未连上 (PID=${WS_PID})，错误: $(cat "${WS_EVENTS}.err" 2>/dev/null | head -1)。场景 6 事件流断言可能 FAIL"
+fi
 
 # =============================================================================
 # 场景 1：单 agent + 诱导 write_file tool_call
@@ -518,6 +548,96 @@ else
     record_result "5a case 任务达终态" "PASS" "status=${S5_STATUS}, elapsed=${S5_ELAPSED}s, case=${S5_CASE}"
   else
     record_result "5a case 任务达终态" "FAIL" "status=${S5_STATUS}（超时）"
+  fi
+fi
+
+# =============================================================================
+# 场景 6：Cron start_task 端到端（真实 LLM 触发 task + execution 记录 + 事件流）
+# =============================================================================
+print_section "场景 6: Cron start_task 端到端 (真实 LLM)"
+if [[ "$LLM_OK" != "yes" ]]; then
+  record_result "6a cron start_task 达终态" "SKIP" "LLM 不可达（场景1 未通过），跳过场景6"
+else
+  # 创建一个 start_task action 的 cron（agent_default 为启动时种入的默认 agent）。
+  # schedule_type=interval + cron_expr=1h 保证不会自动到点触发，仅靠手动 trigger 跑一次。
+  S6_CREATE=$(curl -s -X POST "${BASE}/api/crons" -H 'Content-Type: application/json' \
+    --data '{"name":"real-llm-cron-task","schedule_type":"interval","cron_expr":"1h","action_type":"start_task","action_payload":{"agent_id":"agent_default","input":"用一句话解释什么是 cron 定时任务","max_steps":3}}' 2>/dev/null | tr -d '\r')
+  S6_CRON_ID=$(jval "$S6_CREATE" "id")
+  echo "  POST /api/crons -> cron_id=${S6_CRON_ID}"
+  if [[ -z "$S6_CRON_ID" ]]; then
+    record_result "6a cron start_task 达终态" "FAIL" "未拿到 cron_id，resp=$(printf '%s' "$S6_CREATE" | head -c 120)"
+  else
+    # 手动触发一次。trigger 响应体即为 execution 对象（含 task_id / status）。
+    S6_TRIG=$(curl -s -X POST "${BASE}/api/crons/${S6_CRON_ID}/trigger" \
+      -H 'Content-Type: application/json' --data '{}' 2>/dev/null | tr -d '\r')
+    S6_EXEC_ID=$(jval "$S6_TRIG" "id")
+    S6_TASK_FROM_EXEC=$(jval "$S6_TRIG" "task_id")
+    echo "  trigger -> exec_id=${S6_EXEC_ID}, task_id=${S6_TASK_FROM_EXEC}"
+    if [[ -z "$S6_TASK_FROM_EXEC" ]]; then
+      record_result "6a cron start_task 达终态" "FAIL" "execution 未回填 task_id，trig=$(printf '%s' "$S6_TRIG" | head -c 160)"
+      FINDINGS+=("[场景6] cron trigger 响应未含 task_id：start_task action 未成功启动 task，查 server log 的 startChatTask 错误。")
+    else
+      record_result "6b execution 回填 task_id" "PASS" "task_id=${S6_TASK_FROM_EXEC}"
+      # 轮询该 task 到终态（真实 LLM）
+      S6_RESULT=$(poll_task "$S6_TASK_FROM_EXEC" 90)
+      S6_STATUS=$(echo "$S6_RESULT" | awk '{print $1}')
+      S6_ELAPSED=$(echo "$S6_RESULT" | awk '{print $2}')
+      TIMINGS+=("场景6 cron start_task: ${S6_ELAPSED}s (status=${S6_STATUS})")
+      echo "  轮询结果: status=${S6_STATUS}, elapsed=${S6_ELAPSED}s"
+      if [[ "$S6_STATUS" == "completed" || "$S6_STATUS" == "failed" ]]; then
+        record_result "6a cron start_task 达终态" "PASS" "status=${S6_STATUS}, elapsed=${S6_ELAPSED}s"
+      else
+        record_result "6a cron start_task 达终态" "FAIL" "status=${S6_STATUS}（90s 超时）"
+        FINDINGS+=("[场景6] cron 启动的 task ${S6_TASK_FROM_EXEC} 90s 未达终态 (status=${S6_STATUS})。")
+      fi
+
+      # execution 记录应反映该 task 的最终状态（completed/failed），且 result_summary 非空。
+      # trigger 时 execution.status=running；task 终态后 executor 会更新 execution。
+      # 这里给 executor 一点时间落库，再拉 execution 历史。
+      sleep 1
+      S6_EXECS=$(curl -s "${BASE}/api/crons/${S6_CRON_ID}/executions?limit=5" 2>/dev/null | tr -d '\r')
+      S6_EXEC_STATUS=$(jrun "$S6_EXECS" "console.log((d[0] && d[0].status) || '')")
+      S6_EXEC_TASK=$(jrun "$S6_EXECS" "console.log((d[0] && d[0].task_id) || '')")
+      S6_EXEC_SUMMARY=$(jrun "$S6_EXECS" "console.log((d[0] && d[0].result_summary) || '')")
+      echo "  execution: status=${S6_EXEC_STATUS}, task_id=${S6_EXEC_TASK}, summary=${S6_EXEC_SUMMARY:0:60}"
+      if [[ "$S6_EXEC_STATUS" == "completed" || "$S6_EXEC_STATUS" == "failed" ]] && [[ "$S6_EXEC_TASK" == "$S6_TASK_FROM_EXEC" ]]; then
+        record_result "6c execution 记录终态" "PASS" "exec status=${S6_EXEC_STATUS}, task_id 匹配"
+      else
+        record_result "6c execution 记录终态" "FAIL" "exec status=${S6_EXEC_STATUS}, task_id=${S6_EXEC_TASK}（期望 ${S6_TASK_FROM_EXEC}）"
+        FINDINGS+=("[场景6] execution 记录未正确反映 task 终态：exec.status=${S6_EXEC_STATUS}, exec.task_id=${S6_EXEC_TASK}。可能 executor 未在 task 结束后更新 execution。")
+      fi
+
+      # cron meta：trigger_count 应 >=1，last_triggered_at 非空
+      S6_CRON_DETAIL=$(curl -s "${BASE}/api/crons/${S6_CRON_ID}" 2>/dev/null | tr -d '\r')
+      S6_COUNT=$(jval "$S6_CRON_DETAIL" "trigger_count")
+      S6_LAST=$(jval "$S6_CRON_DETAIL" "last_triggered_at")
+      if [[ "$S6_COUNT" =~ ^[0-9]+$ ]] && [[ "$S6_COUNT" -ge 1 ]] && [[ -n "$S6_LAST" ]]; then
+        record_result "6d cron meta 更新" "PASS" "trigger_count=${S6_COUNT}, last_triggered_at=${S6_LAST:0:19}"
+      else
+        record_result "6d cron meta 更新" "FAIL" "trigger_count=${S6_COUNT}, last_triggered_at=${S6_LAST}"
+      fi
+
+      # 事件流：订阅 WS（场景开头已连接 ${WS_PID}），在 cron trigger 前后各采
+      # 一段时间窗口，从 ${WS_EVENTS} 文件里 grep cron_* 事件计数。
+      # 真实 LLM 下 start_task 触发后 executor 应发：
+      #   cron_triggered → cron_execution_started → (task 终态后) cron_execution_completed|failed
+      # 注意：grep -c 无匹配时打印 0 且退出码 1，故不能再用 `|| echo 0`（会叠加成 "0\n0"）。
+      S6_EVT_TRIGGER=$(grep -c "cron_triggered" "${WS_EVENTS}" 2>/dev/null); S6_EVT_TRIGGER=${S6_EVT_TRIGGER:-0}
+      S6_EVT_STARTED=$(grep -c "cron_execution_started" "${WS_EVENTS}" 2>/dev/null); S6_EVT_STARTED=${S6_EVT_STARTED:-0}
+      S6_EVT_END=$(grep -cE "cron_execution_completed|cron_execution_failed" "${WS_EVENTS}" 2>/dev/null); S6_EVT_END=${S6_EVT_END:-0}
+      S6_WS_TOTAL=$(wc -l < "${WS_EVENTS}" 2>/dev/null); S6_WS_TOTAL=${S6_WS_TOTAL:-0}
+      echo "  事件计数(WS): triggered=${S6_EVT_TRIGGER}, started=${S6_EVT_STARTED}, end=${S6_EVT_END}, ws_total=${S6_WS_TOTAL}"
+      if [[ "$S6_EVT_TRIGGER" =~ ^[0-9]+$ ]] && [[ "$S6_EVT_TRIGGER" -ge 1 ]] && [[ "$S6_EVT_STARTED" -ge 1 ]] && [[ "$S6_EVT_END" -ge 1 ]]; then
+        record_result "6e cron 事件流完整" "PASS" "triggered=${S6_EVT_TRIGGER}, started=${S6_EVT_STARTED}, end=${S6_EVT_END}"
+      else
+        record_result "6e cron 事件流完整" "FAIL" "triggered=${S6_EVT_TRIGGER}, started=${S6_EVT_STARTED}, end=${S6_EVT_END}, ws_total=${S6_WS_TOTAL}（期望三者均 >=1）"
+        FINDINGS+=("[场景6] cron 事件流不完整：triggered=${S6_EVT_TRIGGER}/started=${S6_EVT_STARTED}/end=${S6_EVT_END}（WS 总帧数 ${S6_WS_TOTAL}）。若 ws_total=0 说明 WS 订阅未连上；若 ws_total>0 但 cron_*=0 说明 executor 未发事件或事件名变更。")
+      fi
+    fi
+
+    # 清理 cron（级联删 executions）
+    curl -s -X DELETE "${BASE}/api/crons/${S6_CRON_ID}" >/dev/null 2>&1
+    echo "  清理 cron ${S6_CRON_ID}"
   fi
 fi
 

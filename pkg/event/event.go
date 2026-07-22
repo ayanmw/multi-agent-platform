@@ -27,6 +27,24 @@ const (
 
 	// EventTraceSpan 在一个 trace span 结束时发出，前端据此实时渲染调用树。
 	EventTraceSpan = "trace_span"
+
+	// Cron 子系统事件常量。定时器的所有状态变更与触发都通过这些事件广播，
+	// 前端据此实时渲染 cron 列表与执行流。事件 TaskID 字段填 cron_id，
+	// AgentID 填触发该次执行的 agent_id（start_task 时）或 "cron"。
+	EventCronCreated            = "cron_created"
+	EventCronUpdated            = "cron_updated"
+	EventCronDeleted            = "cron_deleted"
+	EventCronEnabled            = "cron_enabled"
+	EventCronDisabled           = "cron_disabled"
+	EventCronPaused             = "cron_paused"
+	EventCronResumed            = "cron_resumed"
+	EventCronTriggered          = "cron_triggered"
+	EventCronExecutionStarted   = "cron_execution_started"
+	EventCronExecutionCompleted = "cron_execution_completed"
+	EventCronExecutionFailed    = "cron_execution_failed"
+	EventCronExecutionSkipped   = "cron_execution_skipped"
+	EventCronMissed             = "cron_missed"
+	EventCronNotification       = "cron_notification"
 )
 
 // Event 表示通过 WebSocket 发送的结构化事件

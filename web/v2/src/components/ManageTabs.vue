@@ -28,6 +28,7 @@ const tabs = [
   { id: 'agents', label: 'Agents' },
   { id: 'project', label: 'Project' },
   { id: 'skills', label: 'Skills' },
+  { id: 'cron', label: 'Cron' },
   { id: 'traces', label: 'Traces' },
 ] as const
 

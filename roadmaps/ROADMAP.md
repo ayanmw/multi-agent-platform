@@ -573,6 +573,50 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase 7-cron: Cron / 定时器子系统 ✅ 完成 (2026-07-22)
+
+**目标**: 为平台新增独立定时器子系统 `internal/cron/`，支持 Agent tool + Web UI 双入口创建，4 种 action_type，完全事件化。调度基于 `robfig/cron/v3`（秒级 6 域）。
+
+### 交付物（后端已完成）
+
+- [x] `pkg/event/event.go`: 14 个 `cron_*` 事件常量
+- [x] `internal/config/config.go`: `CronEnabled` / `CronAllowedTools` / `CronWebhookTimeoutSeconds` / `CronMaxResultChars` 配置字段
+- [x] `pkg/db/cron.go`: `crons` + `cron_executions` 表 migration v26 + DBStore 的 pkg/db 侧 CRUD 实现（INTEGER unix 时间 + JSON payload）
+- [x] `internal/cron/model.go`: 领域模型（Cron / Execution / ScheduleType / ActionType / Status / Payload 子结构 + IsValid）
+- [x] `internal/cron/store.go`: DBStore 接口 + Store 薄封装 + EventBus 接口（打破 cron→db 循环依赖）
+- [x] `internal/cron/template.go`: `text/template` 渲染（Now/PrevTrigger/PrevStatus/PrevResult/Count/CronID/CronName）+ RenderMap 递归渲染
+- [x] `internal/cron/action.go`: ActionRunner 四种 action（start_task / script / webhook / notify_session），TaskStarter + SessionMessageWriter 注入
+- [x] `internal/cron/scheduler.go`: robfig/cron 包装 + 启动加载 + 增量同步 + once 用 time.AfterFunc
+- [x] `internal/cron/executor.go`: 单次触发编排（串行 skip / 模板渲染 / 发事件 / 记 execution / 更新 cron meta）
+- [x] `internal/cron/service.go`: Service CRUD + 状态机 + 校验（schedule_type/action_type/cron_expr/payload 必填字段）+ 手动触发
+- [x] `internal/cron/tools.go`: 4 个 Agent Tools（cron/create / cron/list / cron/delete / cron/trigger）
+- [x] `cmd/server/main.go`: 抽 `startChatTask` 闭包（chat action 与 cron start_task 共用启动链路）；初始化 cron Store→Runner→Executor→Scheduler→Service；注册 Agent Tools + REST API
+- [x] `cmd/server/cron_api.go`: `RegisterCronAPI(mux, svc)` 注册 `/api/crons*` 全部端点 + 适配器（cronDBStoreAdapter / cronSessionMsgWriter / cronExecutorAdapter）
+- [x] `pkg/db/cron.go` `DeleteCron`: 手动先删 executions 再删 cron，绕过 modernc sqlite 默认未开 foreign_keys pragma 导致 ON DELETE CASCADE 不生效
+- [x] 单元测试：`internal/cron/*_test.go`（model/template/action/executor/scheduler/service/tools）
+- [x] 集成测试：`cmd/server/cron_api_test.go`（httptest + 临时 SQLite，覆盖创建/列表/详情/状态切换/手动触发 notify_session/执行历史/清理/删除/404/校验失败）
+
+### 交付物（前端 v2 已完成）
+
+- [x] `web/v2/src/types/cron.ts` + `composables/useCrons.ts` + `composables/useCronEvents.ts`（类型 + REST 列表/创建/更新/删除/状态切换/手动触发 + WS 事件流接入）
+- [x] `web/v2/src/types/events.ts` 追加 14 个 `cron_*` EventType
+- [x] `CronManager.vue` + `CronForm.vue` + `CronExecutions.vue`（管理列表/创建编辑表单/执行历史，含 15 + CronForm + CronExecutions 单测）
+- [x] ManageFlyout cron 菜单项 + `ManageTabs.vue` cron tab + `ManageContent.vue` 接入 `CronManager`（支持 `focusCronId` 直达展开）
+- [x] `CronDockPanel.vue` 右侧可折叠侧栏（只读定时器 + 实时触发流，一键跳转管理 tab）+ `TopBar.vue` ⏰ 按钮 + `App.vue` 桌面/平板双栏接入
+- [x] 构建验证：`go test ./...` 全绿；`cd web/v2 && npm run test`（123 例通过）`npm run build`（167 modules 构建通过）
+
+### 待办（后续收尾）
+
+- [x] smoke 端到端：`scripts/smoke-test.sh` 9.6 节创建 `start_task` cron → 手动 trigger → 确认 execution 记录（`status:completed` + `rendered_input` + `task_id` 回填）+ cron meta 更新 + 删除 404（mock 模式全绿）
+- [x] real_llm smoke：`scripts/real-llm-smoke.sh` 场景 6 创建 `start_task` cron → 手动 trigger → 真实 LLM 下 task 达终态（completed）+ execution 回填 task_id + execution 记录终态 + cron meta 更新（trigger_count/last_triggered_at）+ WS 事件流完整（cron_triggered → cron_execution_started → cron_execution_completed）；全 22 项 PASS / 0 FAIL
+
+### 验证基准
+
+- `go build ./...` / `go test ./... -count=1` 全绿
+- `cmd/server/cron_api_test.go` 5 例通过（创建/列表/详情、状态切换、手动触发+执行历史、删除+404、校验失败）
+
+---
+
 ## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
 **目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
@@ -782,3 +826,6 @@ const activeTaskId = ref<string | null>(null)
 | v0.9.6 Alpha | 2026-07-21 | Phase 7-H2 阶段 5: workflow DAG 表达力落地 — `WorkflowNode/Edge/AgentWorkflow` 数据模型 + decomposer 解析 `workflow.nodes/edges/dependencies/condition` + `RunBlockingDAG` Kahn 拓扑调度(条件 DSL `<id>.completed\|\|.failed` + `&&/\|\|/()` + skipped 传播) + `/api/multi-agent` 自动切换 DAG/扁平路径(向后兼容) + `dispatch_sub_agent` observation 标准化(`summary`/`all_completed`/`completed_count`/`total_tokens`/`succeeded`/`result_truncated` + 4KB UTF-8 安全截断)；新增 `dispatch_observation_test.go` 5 例；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0) 验证通过 |
 | v0.9.7 Alpha | 2026-07-21 | Phase 7-H2 阶段 6: AgentBus 隔离 + Router 死代码闭环 — worker Engine 改 `RegisterHandlerBySubTask`(此前 agentID-only 注册导致并发 session 同名 worker 串台) + `handleRecoverCheckpoint` EngineConfig 补 `Router/Registry/Providers`(恢复路径也触发 `model_routed`)；新增 `TestAgentBus_ConcurrentSameAgentIDDifferentSubTask`/`TestAgentBus_WorkerUnregisterBySubTask`；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0，含 4d Router 触发 PASS) 验证通过 |
 | v0.10.0 Alpha | 2026-07-21 | Session 级 TODO 子系统: `todos` 表 + `internal/todo` Service + `todo/*` Agent Tools 6 个 + `/api/todos` REST API + Engine system prompt 注入 Active TODO + 单元/E2E 测试 + 拖拽排序/嵌套子任务 + 树形拖拽渲染 |
+| v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
+| v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
+| v0.11.2 Alpha | 2026-07-22 | Phase 7-cron 收尾: smoke 端到端双覆盖 — `smoke-test.sh` 9.6 节(mock) + `real-llm-smoke.sh` 场景 6(真实 LLM)；新增 node 内置 WebSocket 订阅器采集 WS 事件流断言 cron_triggered→started→completed；real-llm-smoke 22 项全 PASS / 0 FAIL |

@@ -53,6 +53,21 @@ export type EventType =
   | 'agent_completed'
   // TODO subsystem events
   | 'todo_list_changed'
+  // Cron subsystem events (Phase 7-cron)
+  | 'cron_created'
+  | 'cron_updated'
+  | 'cron_deleted'
+  | 'cron_enabled'
+  | 'cron_disabled'
+  | 'cron_paused'
+  | 'cron_resumed'
+  | 'cron_triggered'
+  | 'cron_execution_started'
+  | 'cron_execution_completed'
+  | 'cron_execution_failed'
+  | 'cron_execution_skipped'
+  | 'cron_missed'
+  | 'cron_notification'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

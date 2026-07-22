@@ -53,6 +53,16 @@ type Config struct {
 	EnableSandbox bool   // SANDBOX_ENABLE
 	SandboxImage  string // SANDBOX_IMAGE
 
+	// Cron 子系统配置。
+	// CronEnabled 总开关，false 时 scheduler 不启动（仍可通过 REST/API 创建 cron，只是不会自动触发）。
+	// CronAllowedTools 限制 script action 可调用的 tool 名白名单，复用现有 run_shell 等 tool 的 sandbox/policy。
+	// CronWebhookTimeoutSeconds webhook action 的 HTTP 超时。
+	// CronMaxResultChars execution.result_summary 的截断长度，避免长结果撑爆存储与前端。
+	CronEnabled               bool
+	CronAllowedTools          []string
+	CronWebhookTimeoutSeconds int
+	CronMaxResultChars        int
+
 	// WebSearch 配置映射到用于选择 provider 与 API key 的环境变量。
 	// 在 Load() 中加载,以便 server 能接入 core/web_search 工具。
 	// DuckDuckGo 是零 key 的兜底方案;其他所有 provider 默认关闭。
@@ -183,6 +193,18 @@ func Load() (*Config, error) {
 	if v := os.Getenv("SANDBOX_IMAGE"); v != "" {
 		cfg.SandboxImage = v
 	}
+
+	// Cron 子系统配置：默认启用，白名单含常用只读/执行 tool。
+	cfg.CronEnabled = true
+	if v := os.Getenv("CRON_ENABLED"); v != "" {
+		cfg.CronEnabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	cfg.CronAllowedTools = []string{"run_shell", "read_file", "write_file", "fetch_url"}
+	if v := os.Getenv("CRON_ALLOWED_TOOLS"); v != "" {
+		cfg.CronAllowedTools = splitAndTrim(v)
+	}
+	cfg.CronWebhookTimeoutSeconds = parseEnvIntDefault("CRON_WEBHOOK_TIMEOUT_SECONDS", 10)
+	cfg.CronMaxResultChars = parseEnvIntDefault("CRON_MAX_EXECUTION_RESULT_CHARS", 2000)
 
 	// WebSearch provider 配置。
 	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {

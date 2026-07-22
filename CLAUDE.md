@@ -143,6 +143,88 @@ POST   /api/skills/:id/disable                # 禁用
 
 ---
 
+## Cron / 定时器系统
+
+Cron 是与 skill / tool / memory 平级的独立子系统，提供三类入口：Agent Tool（LLM 运行时创建）、REST API（Web UI 管理）、Event Bus（每次状态变更与触发都广播 `cron_*` 事件）。调度基于 `github.com/robfig/cron/v3`（秒级 6 域）。
+
+### 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| `ScheduleType` | `cron`（6 域秒级表达式）/ `interval`（`30s`/`5m` 转成 `@every`）/ `once`（`time.AfterFunc`，到点触发后自动移除） |
+| `ActionType` | `start_task`（启动 Agent task，复用 chat 链路）/ `script`（白名单 tool 调用）/ `webhook`（HTTP 回调）/ `notify_session`（向 session 广播 + 写 session_messages） |
+| `Status` | `enabled` / `disabled` / `paused` |
+| `ExecStatus` | `running` / `completed` / `failed` / `skipped`（并发重叠跳过）/ `missed`（离线错过） |
+| `TemplateContext` | 渲染 `action_payload` 的模板变量：`{{.Now}} {{.PrevTrigger}} {{.PrevStatus}} {{.PrevResult}} {{.Count}} {{.CronID}} {{.CronName}}` |
+| 串行 skip | `AllowConcurrent=false` 且上一轮仍在跑时，记一条 `skipped` execution 并发 `cron_execution_skipped` 事件 |
+
+### 关键文件
+
+```
+internal/cron/
+  model.go       # 领域模型（Cron / Execution / ScheduleType / ActionType / Status / Payload 子结构）
+  store.go       # DBStore 接口 + Store 薄封装 + EventBus 接口（打破 cron→db 循环依赖）
+  template.go    # text/template 渲染（Now/PrevTrigger/PrevStatus/PrevResult/Count/CronID/CronName）
+  action.go      # ActionRunner：4 种 action 执行（TaskStarter / SessionMessageWriter 注入）
+  executor.go    # Executor：单次触发编排（串行 skip / 模板渲染 / 发事件 / 记 execution）
+  scheduler.go   # Scheduler：robfig/cron 包装 + 启动加载 + 增量同步 + once AfterFunc
+  service.go     # Service：CRUD + 状态机 + 校验 + 手动触发，CRUD 后通知 Scheduler
+  tools.go       # cron/create, cron/list, cron/delete, cron/trigger Agent Tools
+  events.go      # cron_* 事件构造 helper（事件常量在 pkg/event）
+pkg/db/cron.go   # crons + cron_executions 表 migration v26 + DBStore 的 pkg/db 侧实现
+cmd/server/cron_api.go  # startChatTask 复用函数 + /api/crons* REST handler + 适配器
+```
+
+### 注入与接入
+
+- `cmd/server/main.go` 在 DB 可用时构造：`cronStore` → `ActionRunner`（注入 `toolRegistry` / `cfg.CronAllowedTools` 白名单 / `startChatTask` 作为 `TaskStarter` / `db` 作为 `SessionMessageWriter`）→ `Executor` → `Scheduler`（`cfg.CronEnabled` 时启动加载 enabled cron）→ `Service`，再注册 Agent Tools + REST API。
+- `startChatTask` 是从 `/api/tasks` chat action 抽出的可复用闭包，捕获 main 局部依赖；`cron/start_task` action 经 `cronTaskStarter` 适配后调用它，input 加 `[cron:<id>:<name>]` 溯源前缀。
+- `CRON_ENABLED=false` 时 `Scheduler` 为 nil，仍可 CRUD 与手动触发，只是不会自动到点触发。
+- 适配器：`cronDBStoreAdapter`（db→cron.DBStore）、`cronSessionMsgWriter`（写 session_messages）、`cronExecutorAdapter`（ExecutorPort2 无 ctx 桥接）。
+
+### REST API
+
+```
+GET    /api/crons                       # 列表（?status=&action_type=&source=&q=）
+POST   /api/crons                       # 创建
+GET    /api/crons/:id                   # 详情
+PUT    /api/crons/:id                   # 更新（部分字段）
+DELETE /api/crons/:id                   # 删除（手动级联 executions，因 modernc sqlite 默认未开 foreign_keys）
+POST   /api/crons/:id/enable|disable|pause|resume   # 状态切换
+POST   /api/crons/:id/trigger           # 手动触发（body: {override_input?}）
+GET    /api/crons/:id/executions        # 该 cron 的执行历史（?limit=&offset=&status=）
+GET    /api/crons/executions            # 全局执行历史（?cron_id=&status=&limit=&offset=）
+DELETE /api/crons/executions            # 清理执行历史（?cron_id=&status=）
+```
+
+### Agent Tools
+
+| Tool | 说明 |
+|------|------|
+| `cron/create` (alias `cron_create`) | 创建并启用一个定时器，返回新 cron |
+| `cron/list` | 列出当前定时器（可按 status 过滤） |
+| `cron/delete` | 按 ID 删除定时器 |
+| `cron/trigger` | 手动触发一次执行（可 override_input 覆盖 start_task input） |
+
+### 事件类型
+
+```
+cron_created / cron_updated / cron_deleted
+cron_enabled / cron_disabled / cron_paused / cron_resumed
+cron_triggered / cron_execution_started / cron_execution_completed / cron_execution_failed
+cron_execution_skipped / cron_missed / cron_notification
+```
+
+事件 `TaskID` 填 `cron_id`，`AgentID` 填触发 agent_id 或 `"cron"`。单元/集成测试见 `internal/cron/*_test.go` 与 `cmd/server/cron_api_test.go`。
+
+### 前端触发方式（web/v2）
+
+- **管理 tab**：`ManageFlyout` / `ManageTabs` 新增 `cron` 项，`ManageContent` 在 `cron` tab 渲染 `CronManager.vue`（列表 + 状态切换 + 手动触发 + 删除），新建/编辑走 `CronForm.vue`，执行历史走 `CronExecutions.vue`。`focusCronId` prop 支持从侧栏一键直达并展开某条 cron 的历史。
+- **右侧侧栏**：`CronDockPanel.vue` 作为桌面/平板右栏可折叠面板，只读展示当前定时器与实时 `cron_*` 触发流（`useCronEvents.ts` 订阅 WS），`@open-manage` 跳转管理 tab。`TopBar.vue` 的 ⏰ 按钮控制其开合。
+- **数据层**：`web/v2/src/types/cron.ts` 镜像后端领域模型；`composables/useCrons.ts` 封装 `/api/crons*` REST 调用；`composables/useCronEvents.ts` 把 `cron_*` 事件映射到本地 reactive 列表。`types/events.ts` 追加 14 个 `cron_*` EventType。
+
+---
+
 
 所有前后端通信统一为 `AgentEvent` JSON，关键事件类型：
 

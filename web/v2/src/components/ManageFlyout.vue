@@ -33,6 +33,7 @@ const menuItems = [
   { id: 'agents', label: 'Agents', icon: '⚙' },
   { id: 'project', label: 'Project', icon: '🏗' },
   { id: 'skills', label: 'Skills', icon: '✨' },
+  { id: 'cron', label: 'Cron', icon: '⏰' },
   { id: 'traces', label: 'Traces', icon: '📡' },
 ] as const
 

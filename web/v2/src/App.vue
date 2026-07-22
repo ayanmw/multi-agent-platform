@@ -10,6 +10,7 @@ import RowResizer from './components/RowResizer.vue'
 import CommandBar from './components/CommandBar.vue'
 import ContextFlyout from './components/ContextFlyout.vue'
 import ManageFlyout from './components/ManageFlyout.vue'
+import CronDockPanel from './components/CronDockPanel.vue'
 import MobileNav from './components/MobileNav.vue'
 import TimelineTrack from './components/TimelineTrack.vue'
 import Toast from './components/Toast.vue'
@@ -164,6 +165,8 @@ const inspectorInitialTab = ref<string>('memory')
 // Context 与 Manage 浮窗开关状态
 const contextFlyoutOpen = ref(false)
 const manageFlyoutOpen = ref(false)
+// 右侧 Cron 侧边面板（可折叠），桌面/平板均可用。
+const rightCronOpen = ref(false)
 const commandBarRef = ref<InstanceType<typeof CommandBar> | null>(null)
 const contextAnchorRect = ref<DOMRect | null>(null)
 
@@ -196,6 +199,14 @@ function openInspectorDialog(tab?: string) {
 }
 function closeInspectorDialog() {
   inspectorDialogOpen.value = false
+}
+
+/** 打开管理大 Dialog 并定位到 cron tab；可携带 focusCronId 供 CronManager 直接展开某条。 */
+const inspectorFocusCronId = ref('')
+function openCronManage(cronId?: string) {
+  inspectorInitialTab.value = 'cron'
+  inspectorFocusCronId.value = cronId || ''
+  inspectorDialogOpen.value = true
 }
 
 // === 当前任务/会话派生状态 ===
@@ -817,12 +828,14 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       :task-status-label="taskStatusLabel"
       :show-inspector-toggle="showInspectorToggle"
       :manage-open="manageFlyoutOpen"
+      :cron-open="rightCronOpen"
       @toggle-left-dock="toggleLeftDock"
       @toggle-recent-mods="showRecentMods"
       @toggle-model-prices="modelPricesVisible = true"
       @toggle-mcp="mcpServerDialogVisible = true"
       @toggle-keyboard-tips="showTips = true"
       @toggle-manage="manageFlyoutOpen = !manageFlyoutOpen"
+      @toggle-cron="rightCronOpen = !rightCronOpen"
     />
 
     <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽 -->
@@ -917,6 +930,14 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles" @reopen="toggleRightFiles">
         <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
+
+      <!-- 右侧 Cron 侧边面板：只读相关定时器 + 实时触发流，可一键跳转管理 tab -->
+      <CronDockPanel
+        :open="rightCronOpen"
+        :session-id="activeSessionId || ''"
+        @update:open="rightCronOpen = $event"
+        @open-manage="openCronManage"
+      />
     </div>
 
     <!-- 平板双栏布局 -->
@@ -1005,9 +1026,15 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       >
         <SessionFiles :session-id="activeSessionId || ''" />
       </DockPanel>
-    </div>
 
-    <!-- 移动端单视图 -->
+      <!-- 平板端同样提供 Cron 侧边面板 -->
+      <CronDockPanel
+        :open="rightCronOpen"
+        :session-id="activeSessionId || ''"
+        @update:open="rightCronOpen = $event"
+        @open-manage="openCronManage"
+      />
+    </div>
     <div v-else class="layout-mobile">
       <main v-if="activeMobileTab === 'stage'" class="main-stage mobile-tab-view" @scroll="handleMainScroll">
         <div v-if="sessionTurns.length === 0" class="placeholder-panel">
@@ -1100,6 +1127,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             <div class="inspector-dialog-body">
               <ManageContent
                 :initial-tab="inspectorInitialTab"
+                :focus-cron-id="inspectorFocusCronId"
                 @run-case="handleRunCase"
                 @trigger-skill="handleTriggerSkill"
               />

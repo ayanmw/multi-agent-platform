@@ -21,6 +21,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
+	"github.com/anmingwei/multi-agent-platform/internal/cron"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/memory"
@@ -803,6 +804,50 @@ func main() {
 	// Phase 7: 在创建 dispatcher / tool registry 之后注册 Todo REST API。
 	registerTodoRoutes(http.DefaultServeMux, todoSvc)
 
+	// Phase 7-cron: 初始化 Cron 子系统（定时器）。
+	// 依赖顺序：Store(pkg/db 实现) → ActionRunner(注入 toolRegistry + 白名单 +
+	// startChatTask 作为 TaskStarter + db 作为 SessionMessageWriter) →
+	// Executor → Scheduler(启动加载 enabled cron) → Service →
+	// 注册 Agent Tools + REST API。
+	//
+	// 仅在 DB 可用且 cfg.CronEnabled 时启动 Scheduler；CRON_ENABLED=false 时
+	// 仍构造 Service（可 CRUD/手动触发），但 Scheduler 为 nil——到点不会自动触发。
+	// 与 todo/skill 一样，EventBus 复用 hubAdapter，写入即广播到前端。
+	var cronSched *cron.Scheduler
+	if db.DB != nil {
+		cronStore := cron.NewStore(&cronDBStoreAdapter{})
+		bus := &hubAdapter{hub: hub}
+		runner := cron.NewActionRunner(cron.ActionRunnerConfig{
+			Tools:          toolRegistry,
+			AllowedTools:   cfg.CronAllowedTools,
+			WebhookTimeout: time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
+			MaxResultChars: cfg.CronMaxResultChars,
+			Bus:            bus,
+			StartTask:      cronTaskStarter,
+			MessageWriter:  &cronSessionMsgWriter{},
+		})
+		executor := cron.NewExecutor(cronStore, runner, bus, cfg.CronMaxResultChars)
+		// Service 通过 ExecutorPort2(无 ctx 版本) 调用 ExecuteOnce；
+		// Executor 实现带 ctx，这里用 adapter 丢弃 ctx 桥接。
+		execAdapter := &cronExecutorAdapter{exec: executor}
+		if cfg.CronEnabled {
+			cronSched = cron.NewScheduler(cronStore, executor, bus)
+			if err := cronSched.Start(context.Background()); err != nil {
+				observability.DefaultLogger.Warn("cron", "scheduler start failed, auto-trigger disabled", map[string]any{"error": err.Error()})
+			} else {
+				log.Printf("Cron subsystem: scheduler started")
+			}
+		} else {
+			log.Println("Cron subsystem: scheduler disabled (CRON_ENABLED=false)")
+		}
+		globalCronService = cron.NewService(cronStore, cronSched, execAdapter, bus)
+		cron.RegisterCronTools(toolRegistry, globalCronService)
+		RegisterCronAPI(http.DefaultServeMux, globalCronService)
+		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
+	} else {
+		log.Println("Cron subsystem: disabled (no database)")
+	}
+
 	// AgentBus 在所有 agent 之间共享，允许 agent 在执行期间互相发送消息。
 	agentBus := orchestrator.NewAgentBus()
 	agentBusAdapter := orchestrator.NewAgentBusAdapter(agentBus)
@@ -956,11 +1001,12 @@ func main() {
 			return
 		}
 
-		var contract harness.TaskContract
+		// 解析预设 case：把 case 的默认 input / system prompt / max_steps /
+		// timeout 继承到请求字段上（contract 由 startChatTask 内部按 CaseID
+		// 重新构建，这里不再持有局部 contract 变量）。
 		caseID := r.URL.Query().Get("case")
 		if caseID != "" {
 			if c := lookupCase(caseID); c != nil {
-				contract = c.Contract
 				// 请求未提供 input 时使用 case 的默认 input
 				if req.Input == "" {
 					req.Input = c.DefaultInput
@@ -1092,13 +1138,13 @@ func main() {
 			})
 
 		case "chat":
-			// 检查是否指定了预设 case —— 在校验请求前加载其 contract、
-			// 默认 input 与 system prompt。
+			// 检查是否指定了预设 case —— 在校验请求前加载其默认 input 与
+			// system prompt。contract 由 startChatTask 内部按 CaseID 重新构建，
+			// 这里只继承 input / system prompt / max_steps / timeout 到请求字段。
 			// req.MaxSteps 已在上方校验并钳制。
 			caseID := r.URL.Query().Get("case")
 			if caseID != "" {
 				if c := lookupCase(caseID); c != nil {
-					contract = c.Contract
 					// 请求未提供 input 时使用 case 的默认 input
 					if req.Input == "" {
 						req.Input = c.DefaultInput
@@ -1124,77 +1170,149 @@ func main() {
 				return
 			}
 
-			agentID := req.AgentID
-			if agentID == "" {
-				agentID = "agent_default"
+			sessionID, taskID, err := startChatTask(startChatTaskOpts{
+				AgentID:        req.AgentID,
+				Input:          req.Input,
+				SystemPrompt:   req.SystemPrompt,
+				SessionID:      req.SessionID,
+				MaxSteps:       req.MaxSteps,
+				TimeoutSeconds: req.TimeoutSeconds,
+				Scope:          req.Scope,
+				AllowedTools:   req.AllowedTools,
+				TokenBudget:    req.TokenBudget,
+				CostBudgetUSD:  req.CostBudgetUSD,
+				CaseID:         caseID,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
 			}
-
-			systemPrompt := req.SystemPrompt
-			if systemPrompt == "" {
-				systemPrompt = "You are a helpful AI assistant with access to tools. " +
-					"When you need to run commands, read files, or write files, use the available tools. " +
-					"Always explain your reasoning before using tools. " +
-					"After using tools, analyze the results and continue until the task is complete."
-			}
-
-			if contract.Goal == "" {
-				contract = harness.DefaultContract(req.Input)
-			}
-			// 请求显式提供时覆盖 MaxSteps (>0)
-			if req.MaxSteps > 0 {
-				contract.MaxSteps = req.MaxSteps
-			}
-			// 请求显式提供时覆盖 timeout (>0)。
-			if req.TimeoutSeconds > 0 {
-				contract.TimeoutSeconds = req.TimeoutSeconds
-			}
-			// 请求体提供时覆盖 TaskContract 字段 ——
-			// 让前端能驱动 PolicyChain（scope、tools、预算、timeout）。
-			if req.Scope != "" {
-				if !isAllowedScope(req.Scope, cfg.ContractLimits.Scopes) {
-					http.Error(w, fmt.Sprintf("scope %q is not allowed", req.Scope), http.StatusBadRequest)
-					return
-				}
-				contract.Scope = req.Scope
-			}
-			if len(req.AllowedTools) > 0 {
-				contract.AllowedTools = req.AllowedTools
-			} else if tools := agentAllowedTools(agentID); len(tools) > 0 {
-				contract.AllowedTools = tools
-			}
-			if req.TokenBudget > 0 {
-				contract.TokenBudget = req.TokenBudget
-			}
-			if req.CostBudgetUSD > 0 {
-				contract.CostBudgetUSD = req.CostBudgetUSD
-			}
-
-			// 从过往经验为本任务构建 Working Memory。
-			// project 级 rules 文本（project.config.rules）追加在 Working Memory 之后，
-			// 作为项目级约定注入到 agent 的 system prompt。
-			workingMemory := ""
-			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-				workingMemory = memRecall.FormatForSystemPrompt(wm)
-			}
-			workingMemory += projectRulesPrompt(req.SessionID)
-
-			taskID := newTaskID()
-			// Phase 7-C: 为本任务创建 root trace context 并透传给 Engine。
-			rootTraceCtx := tracer.StartRoot(taskID, "task")
-			traceRegistry.Store(taskID, rootTraceCtx)
-			go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, toolRegistry, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"session_id": req.SessionID,
+				"session_id": sessionID,
 				"task_id":    taskID,
-				"agent_id":   agentID,
-				"action":     "chat",
+				"agent_id":   func() string {
+					if req.AgentID != "" {
+						return req.AgentID
+					}
+					return "agent_default"
+				}(),
+				"action": "chat",
 			})
 
 		default:
 			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
 		}
+	}
+
+	// startChatTask 在 handleTasksRoot 之外以闭包形式定义，捕获 main() 局部
+	// 依赖（cfg / toolRegistry / persist / hub / approvalHandler / memRecall /
+	// agentBusAdapter / checkpointMgr / costRepo / modelRegistry / modelRouter /
+	// routerProviders / caseService / todoSvc / tracer），让 /api/tasks 的 chat
+	// action 与 cron 的 start_task action 共用同一条任务启动链路，避免复制
+	// 20+ 参数的 runAgentLoop 调用。定义放在 handleTasksRoot 之后，确保引用的
+	// 所有局部变量都已声明。
+	startChatTask = func(opts startChatTaskOpts) (sessionID, taskID string, err error) {
+		if opts.Input == "" {
+			return "", "", errors.New("input is required for chat action")
+		}
+
+		agentID := opts.AgentID
+		if agentID == "" {
+			agentID = "agent_default"
+		}
+
+		systemPrompt := opts.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = "You are a helpful AI assistant with access to tools. " +
+				"When you need to run commands, read files, or write files, use the available tools. " +
+				"Always explain your reasoning before using tools. " +
+				"After using tools, analyze the results and continue until the task is complete."
+		}
+
+		// lookupCase 按 ID 解析用例：优先走 caseService（同时覆盖内置用例与
+		// SQLite 持久化的自定义用例），当 caseService 不可用时退回只含内置用例的
+		// cases.Get。逻辑与 handleTasksRoot 中的 lookupCase 一致。
+		lookupCase := func(caseID string) *cases.Case {
+			if caseID == "" {
+				return nil
+			}
+			if caseService != nil {
+				c, err := caseService.Get(caseID)
+				if err != nil || c == nil {
+					return nil
+				}
+				return c
+			}
+			return cases.Get(caseID)
+		}
+
+		var contract harness.TaskContract
+		if opts.CaseID != "" {
+			if c := lookupCase(opts.CaseID); c != nil {
+				contract = c.Contract
+				if opts.SystemPrompt == "" {
+					systemPrompt = c.SystemPrompt
+				}
+				if opts.MaxSteps <= 0 {
+					opts.MaxSteps = c.Contract.MaxSteps
+				}
+				if opts.TimeoutSeconds <= 0 {
+					opts.TimeoutSeconds = c.Contract.TimeoutSeconds
+				}
+			}
+		}
+
+		if contract.Goal == "" {
+			contract = harness.DefaultContract(opts.Input)
+		}
+		if opts.MaxSteps > 0 {
+			contract.MaxSteps = opts.MaxSteps
+		}
+		if opts.TimeoutSeconds > 0 {
+			contract.TimeoutSeconds = opts.TimeoutSeconds
+		}
+		if opts.Scope != "" {
+			if !isAllowedScope(opts.Scope, cfg.ContractLimits.Scopes) {
+				return "", "", fmt.Errorf("scope %q is not allowed", opts.Scope)
+			}
+			contract.Scope = opts.Scope
+		}
+		if len(opts.AllowedTools) > 0 {
+			contract.AllowedTools = opts.AllowedTools
+		} else if tools := agentAllowedTools(agentID); len(tools) > 0 {
+			contract.AllowedTools = tools
+		}
+		if opts.TokenBudget > 0 {
+			contract.TokenBudget = opts.TokenBudget
+		}
+		if opts.CostBudgetUSD > 0 {
+			contract.CostBudgetUSD = opts.CostBudgetUSD
+		}
+
+		// 复用或新建 session。
+		sid, tid, err := resolveSession(opts.SessionID, opts.Input, persist)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve session: %w", err)
+		}
+
+		// Working Memory + project rules。
+		workingMemory := ""
+		if memRecall != nil {
+			if wm, err := memRecall.BuildWorkingMemory("default", sid, opts.Input, 3); err == nil {
+				workingMemory = memRecall.FormatForSystemPrompt(wm)
+			}
+		}
+		workingMemory += projectRulesPrompt(sid)
+
+		// Phase 7-C: root trace context。
+		rootTraceCtx := tracer.StartRoot(tid, "task")
+		traceRegistry.Store(tid, rootTraceCtx)
+
+		go runAgentLoop(hub, tid, agentID, systemPrompt, opts.Input, cfg, toolRegistry, persist, contract, sid, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, opts.CaseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx)
+
+		return sid, tid, nil
 	}
 
 	// Phase 7-C: 可观测性 REST endpoint。
@@ -2868,3 +2986,66 @@ func (dbStoreAdapter) DeleteCompletedTodosBySession(sessionID string) error {
 }
 func (dbStoreAdapter) DeleteAllTodosBySession(sessionID string) error { return db.DeleteAllTodosBySession(sessionID) }
 func (dbStoreAdapter) Reorder(sessionID string, moves []todo.TodoMove) error { return db.Reorder(sessionID, moves) }
+
+// cronDBStoreAdapter 把 pkg/db 中的 cron CRUD 函数适配为 cron.DBStore 接口。
+//
+// 与 dbStoreAdapter 同理：用 adapter 而非让 internal/cron 直接 import pkg/db，
+// 避免循环依赖（pkg/db 已 import internal/cron 用于 Cron/Execution 类型）。
+type cronDBStoreAdapter struct{}
+
+func (cronDBStoreAdapter) InsertCron(c cron.Cron) error            { return db.InsertCron(c) }
+func (cronDBStoreAdapter) UpdateCron(c cron.Cron) error            { return db.UpdateCron(c) }
+func (cronDBStoreAdapter) UpdateCronScheduleMeta(c cron.Cron) error {
+	return db.UpdateCronScheduleMeta(c)
+}
+func (cronDBStoreAdapter) DeleteCron(id string) error                { return db.DeleteCron(id) }
+func (cronDBStoreAdapter) GetCron(id string) (cron.Cron, error)      { return db.GetCron(id) }
+func (cronDBStoreAdapter) ListCrons(f cron.ListFilter) ([]cron.Cron, error) {
+	return db.ListCrons(f)
+}
+func (cronDBStoreAdapter) InsertExecution(e cron.Execution) error    { return db.InsertExecution(e) }
+func (cronDBStoreAdapter) UpdateExecution(e cron.Execution) error    { return db.UpdateExecution(e) }
+func (cronDBStoreAdapter) GetExecution(id string) (cron.Execution, error) {
+	return db.GetExecution(id)
+}
+func (cronDBStoreAdapter) ListExecutions(f cron.ExecListFilter) ([]cron.Execution, error) {
+	return db.ListExecutions(f)
+}
+func (cronDBStoreAdapter) CleanExecutions(f cron.CleanFilter) (int, error) {
+	return db.CleanExecutions(f)
+}
+
+// cronSessionMsgWriter 适配 cron.SessionMessageWriter：把 notify_session 的
+// 消息写入 session_messages 表。用 role="system"，turn_index 取当前 session
+// 消息数作追加顺序，task_id 留空（定时通知不绑定具体 task）。
+type cronSessionMsgWriter struct{}
+
+func (cronSessionMsgWriter) InsertSystemMessage(sessionID, content string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	// 用当前消息数作为 turn_index，保持追加顺序；查询失败则用 0。
+	turn := 0
+	if existing, err := db.QuerySessionMessages(sessionID); err == nil {
+		turn = len(existing)
+	}
+	return db.InsertSessionMessage(db.SessionMessageRecord{
+		ID:        "cronmsg_" + uuid.New().String(),
+		SessionID: sessionID,
+		TurnIndex: turn,
+		Role:      "system",
+		Content:   content,
+		CreatedAt: time.Now(),
+	})
+}
+
+// cronExecutorAdapter 把 *cron.Executor（ExecuteOnce 带 ctx）适配为
+// cron.ExecutorPort2（ExecuteOnce 无 ctx），供 Service 通过统一接口调用。
+// cron 内部手动触发不需要外部 ctx（Executor 自己控制生命周期），这里丢弃 ctx。
+type cronExecutorAdapter struct {
+	exec *cron.Executor
+}
+
+func (a *cronExecutorAdapter) ExecuteOnce(cronID, overrideInput string) (*cron.Execution, error) {
+	return a.exec.ExecuteOnce(context.Background(), cronID, overrideInput)
+}

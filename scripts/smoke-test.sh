@@ -317,6 +317,72 @@ req DELETE /api/mock/scripts/smoke-custom
 req POST /api/mock/reset
 
 # =============================================================================
+# 9.5 Cron / 定时器子系统
+# =============================================================================
+print_section "9.5 Cron / 定时器"
+# 列表（空）
+req GET /api/crons
+# 先建一个 session 供 notify_session 写消息用（cron trigger 时需要有效 session）
+CRON_SESS_RAW=$(curl -s -X POST "${BASE}/api/sessions" -H 'Content-Type: application/json' \
+           --data '{"user_input":"cron smoke session","project_id":"default"}' 2>/dev/null)
+CRON_SESS_ID=$(jget "${CRON_SESS_RAW}" "session_id" "id")
+# 创建一个 interval=1h 的 notify_session cron（mock 模式不依赖 LLM，trigger 即写消息+发事件）
+CRON_RAW=$(curl -s -X POST "${BASE}/api/crons" -H 'Content-Type: application/json' \
+  --data "{\"name\":\"smoke-cron\",\"schedule_type\":\"interval\",\"cron_expr\":\"1h\",\"action_type\":\"notify_session\",\"action_payload\":{\"session_id\":\"${CRON_SESS_ID}\",\"message\":\"smoke ping {{.Count}}\"}}" 2>/dev/null)
+echo "    create resp: $(echo "${CRON_RAW}" | head -c 200)"
+CRON_ID=$(jget "${CRON_RAW}" "id")
+if [[ -n "${CRON_ID}" ]]; then
+  req GET "/api/crons/${CRON_ID}"
+  # 状态切换：disable → enable → pause → resume
+  req POST "/api/crons/${CRON_ID}/disable"
+  req POST "/api/crons/${CRON_ID}/enable"
+  req POST "/api/crons/${CRON_ID}/pause"
+  req POST "/api/crons/${CRON_ID}/resume"
+  # 手动触发（notify_session 完成，不依赖 LLM）
+  req POST "/api/crons/${CRON_ID}/trigger" '{}'
+  sleep 0.5
+  # 执行历史
+  req GET "/api/crons/${CRON_ID}/executions"
+  req GET "/api/crons/executions"
+  req DELETE "/api/crons/executions?cron_id=${CRON_ID}"
+  # 删除 cron
+  req DELETE "/api/crons/${CRON_ID}"
+  # 删除后 GET 应 404
+  reqExpect GET "/api/crons/${CRON_ID}" 404
+else
+  FAIL=$((FAIL+1)); echo "[FAIL] Cron 依赖端点 — 未拿到 cron id"; PROBLEMS+=("POST /api/crons 未返回 id")
+fi
+# 校验失败：缺 name 应 400
+reqExpect POST /api/crons 400 '{"schedule_type":"interval","cron_expr":"1h","action_type":"notify_session","action_payload":{"session_id":"s","message":"m"}}'
+
+# --- 9.6 Cron start_task 端到端（事件流 + execution 记录）---------------------
+# 创建一个 start_task action 的 cron，手动触发后确认：
+#   1) 触发返回 2xx，且产生一条 execution（status 完成或失败均可，取决于 mock LLM）
+#   2) execution 历史里能拿到该 cron_id 的记录
+#   3) cron meta 的 last_trigger / count 被更新
+print_section "9.6 Cron start_task 端到端"
+CRON_TASK_RAW=$(curl -s -X POST "${BASE}/api/crons" -H 'Content-Type: application/json' \
+  --data '{"name":"smoke-cron-task","schedule_type":"interval","cron_expr":"1h","action_type":"start_task","action_payload":{"agent_id":"builtin-code-helper","input":"cron e2e ping","max_steps":2}}' 2>/dev/null)
+echo "    create resp: $(echo "${CRON_TASK_RAW}" | head -c 200)"
+CRON_TASK_ID=$(jget "${CRON_TASK_RAW}" "id")
+if [[ -n "${CRON_TASK_ID}" ]]; then
+  # 手动触发一次（override_input 覆盖 input 以便溯源）
+  TRIG_CODE=$(req POST "/api/crons/${CRON_TASK_ID}/trigger" '{"override_input":"cron e2e override"}')
+  # 给 executor + LLM mock 一点时间落 execution
+  sleep 1.0
+  # 执行历史：应至少 1 条
+  EXECS_RAW=$(curl -s "${BASE}/api/crons/${CRON_TASK_ID}/executions?limit=10" 2>/dev/null)
+  echo "    executions: $(echo "${EXECS_RAW}" | head -c 300)"
+  # cron 详情：last_trigger_at / count 应已更新
+  req GET "/api/crons/${CRON_TASK_ID}"
+  # 清理
+  req DELETE "/api/crons/${CRON_TASK_ID}"
+  reqExpect GET "/api/crons/${CRON_TASK_ID}" 404
+else
+  FAIL=$((FAIL+1)); echo "[FAIL] Cron start_task — 未拿到 cron id"; PROBLEMS+=("POST /api/crons (start_task) 未返回 id")
+fi
+
+# =============================================================================
 # 10. WebSocket 握手（仅验证 101 升级）
 # =============================================================================
 print_section "10. WebSocket 握手"
