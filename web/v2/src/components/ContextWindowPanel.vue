@@ -92,6 +92,34 @@ watch(
   },
 )
 
+// 当前点击 messages 列表中某条 prompt 时弹出的对话框状态。
+const promptDialog = ref<{
+  open: boolean
+  role: string
+  ordinal: string
+  content: string
+  reasoning: string | undefined
+}>({
+  open: false,
+  role: '',
+  ordinal: '',
+  content: '',
+  reasoning: undefined,
+})
+
+function openPromptDialog(msg: ContextSnapshotMessage, idx: number) {
+  promptDialog.value = {
+    open: true,
+    role: msg.role,
+    ordinal: messageOrdinal(idx),
+    content: msg.content || '(empty content)',
+    reasoning: msg.reasoning,
+  }
+}
+function closePromptDialog() {
+  promptDialog.value.open = false
+}
+
 const usagePercent = computed(() => {
   if (!latest.value) return 0
   const ratio = latest.value.estimated_usage_ratio
@@ -300,45 +328,62 @@ const ringDash = computed(() => {
           <span class="section-meta">{{ latest.messages.length }} total</span>
         </div>
         <div class="timeline">
-          <details
+          <div
             v-for="(msg, idx) in latest.messages"
             :key="idx"
             class="message-item"
           >
-            <summary class="message-summary">
+            <div class="message-row" @click="openPromptDialog(msg, idx)">
               <span class="message-ordinal">{{ messageOrdinal(idx) }}</span>
               <span
                 class="message-dot"
                 :style="{ background: roleColor(msg.role), boxShadow: roleGlow(msg.role) }"
               />
               <span class="message-role">{{ roleMeta[msg.role]?.label || msg.role }}</span>
-              <span class="message-preview">{{ truncate(msg.content, 58) }}</span>
+              <span class="message-preview" :title="msg.content">{{ truncate(msg.content, 58) }}</span>
               <span class="message-tokens">{{ formatTokens(msg.estimated_tokens) }} tok</span>
               <span class="message-ratio">{{ (messageRatio(msg) * 100).toFixed(0) }}%</span>
-              <span class="message-chevron" />
-            </summary>
-            <div class="message-body">
-              <div v-if="msg.reasoning" class="reasoning-block">
-                <div class="block-label">Reasoning</div>
-                <pre class="block-content reasoning-text">{{ msg.reasoning }}</pre>
-              </div>
-              <div v-if="msg.tool_call_id || (msg.tool_calls && msg.tool_calls.length)" class="tool-meta">
-                <span v-if="msg.tool_call_id" class="tool-chip">
-                  tool_call_id: {{ msg.tool_call_id }}
-                </span>
-                <span v-if="msg.tool_calls && msg.tool_calls.length" class="tool-chip">
-                  tool_calls: {{ msg.tool_calls.length }}
-                </span>
-              </div>
-              <div class="content-block">
-                <div class="block-label">Content</div>
-                <pre class="block-content content-text">{{ msg.content || '(empty content)' }}</pre>
-              </div>
+              <span class="message-icon">🔍</span>
             </div>
-          </details>
+          </div>
         </div>
       </section>
     </template>
+
+    <!-- Prompt 详情弹窗：点击 message preview 后打开，自动伸缩显示完整 prompt -->
+    <Teleport to="body">
+      <Transition name="prompt-dialog">
+        <div
+          v-if="promptDialog.open"
+          class="prompt-dialog-overlay"
+          @click.self="closePromptDialog"
+        >
+          <div class="prompt-dialog-panel">
+            <div class="prompt-dialog-header">
+              <div class="prompt-dialog-title">
+                <span
+                  class="prompt-dialog-dot"
+                  :style="{ background: roleColor(promptDialog.role), boxShadow: roleGlow(promptDialog.role) }"
+                />
+                <span>{{ roleMeta[promptDialog.role]?.label || promptDialog.role }} Prompt</span>
+                <span class="prompt-dialog-ordinal">#{{ promptDialog.ordinal }}</span>
+              </div>
+              <button class="prompt-dialog-close" title="关闭" @click="closePromptDialog">×</button>
+            </div>
+            <div class="prompt-dialog-body">
+              <div v-if="promptDialog.reasoning" class="prompt-block reasoning-block">
+                <div class="block-label">Reasoning</div>
+                <pre class="block-content reasoning-text">{{ promptDialog.reasoning }}</pre>
+              </div>
+              <div class="prompt-block content-block">
+                <div class="block-label">Content</div>
+                <pre class="block-content content-text">{{ promptDialog.content }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -748,19 +793,14 @@ const ringDash = computed(() => {
   background:transparent;
 }
 
-.message-summary {
+.message-row {
   cursor:pointer;
   padding:0.75rem 0.875rem;
   display:grid;
   grid-template-columns:1.875rem 0.75rem auto 5rem 2.875rem 1.125rem;
   align-items:center;
   gap:0.75rem;
-  list-style:none;
   user-select:none;
-}
-
-.message-summary::-webkit-details-marker {
-  display:none;
 }
 
 .message-ordinal {
@@ -805,42 +845,133 @@ const ringDash = computed(() => {
   text-align:right;
 }
 
-.message-chevron {
+.message-icon {
   width:1.125rem;
   height:1.125rem;
   display:grid;
   place-items:center;
   color:var(--text-muted);
-  transition:transform 0.2s ease;
-}
-
-.message-chevron::before {
-  content:'▸';
   font-size:0.75rem;
+  transition:color 0.15s;
 }
 
-.message-item[open] .message-chevron {
-  transform:rotate(90deg);
+.message-row:hover .message-icon {
+  color:var(--accent-running);
 }
 
-.message-body {
-  padding:0 0.875rem 0.875rem;
+/* Prompt 详情弹窗 */
+.prompt-dialog-overlay {
+  position:fixed;
+  inset:0;
+  background:rgba(0, 0, 0, 0.72);
+  backdrop-filter:blur(3px);
+  z-index:210;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+
+.prompt-dialog-panel {
+  width:auto;
+  min-width:320px;
+  max-width:min(900px, 90vw);
+  max-height:min(800px, 85vh);
+  background:var(--bg-canvas, #0b0d10);
+  border:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius:14px;
   display:flex;
   flex-direction:column;
-  gap:0.75rem;
-  animation:expand 0.25s ease;
-  transform-origin:top;
+  overflow:hidden;
+  box-shadow:0 30px 90px rgba(0, 0, 0, 0.7);
 }
 
-@keyframes expand {
-  from { opacity:0; transform:translateY(-0.375rem); }
-  to { opacity:1; transform:translateY(0); }
+.prompt-dialog-header {
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 18px;
+  border-bottom:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background:var(--bg-elevated, #181c24);
 }
 
-.reasoning-block,
-.content-block {
+.prompt-dialog-title {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-family:var(--font-display, 'Chakra Petch', sans-serif);
+  font-size:0.85rem;
+  font-weight:600;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  color:var(--text-primary, #e8ebf0);
+}
+
+.prompt-dialog-dot {
+  width:0.625rem;
+  height:0.625rem;
+  border-radius:50%;
+  flex-shrink:0;
+}
+
+.prompt-dialog-ordinal {
+  font-family:var(--font-mono, monospace);
+  font-size:0.65rem;
+  color:var(--text-muted);
+  background:var(--border-subtle);
+  padding:2px 7px;
+  border-radius:10px;
+  text-transform:none;
+  letter-spacing:0;
+}
+
+.prompt-dialog-close {
+  width:28px;
+  height:28px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:transparent;
+  border:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius:6px;
+  color:var(--text-secondary, #9aa3b2);
+  font-size:18px;
+  line-height:1;
+  cursor:pointer;
+  transition:background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.prompt-dialog-close:hover {
+  background:var(--bg-hover, #202632);
+  color:var(--text-primary, #e8ebf0);
+  border-color:var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.prompt-dialog-body {
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+  padding:18px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.prompt-block {
   border-radius: var(--radius-lg);
   overflow:hidden;
+}
+
+.prompt-dialog-enter-active,
+.prompt-dialog-leave-active {
+  transition:opacity 0.2s ease;
+}
+
+.prompt-dialog-enter-from,
+.prompt-dialog-leave-to {
+  opacity:0;
 }
 
 .reasoning-block {
@@ -868,12 +999,11 @@ const ringDash = computed(() => {
   padding:0.625rem 0.75rem;
   margin:0;
   font-family:var(--font-mono, monospace);
-  font-size:11.0.312rem;
+  font-size:0.75rem;
   line-height:1.55;
   color:var(--text-primary);
   white-space:pre-wrap;
   word-break:break-word;
-  max-height:25rem;
   overflow-y:auto;
 }
 
@@ -881,41 +1011,43 @@ const ringDash = computed(() => {
   color:var(--accent-tool);
 }
 
-.tool-meta {
-  display:flex;
-  flex-wrap:wrap;
-  gap:0.5rem;
-}
-
-.tool-chip {
-  font-family:var(--font-mono, monospace);
-  font-size:0.625rem;
-  color:var(--text-secondary);
-  padding:0.312rem 0.5rem;
-  border-radius: var(--radius-md);
-  background:var(--border-subtle);
-  border:1px solid var(--border-default);
-}
-
 /* Scrollbar for the panel */
 .timeline::-webkit-scrollbar,
-.block-content::-webkit-scrollbar {
+.block-content::-webkit-scrollbar,
+.prompt-dialog-body::-webkit-scrollbar {
   width:0.375rem;
 }
 
 .timeline::-webkit-scrollbar-track,
-.block-content::-webkit-scrollbar-track {
+.block-content::-webkit-scrollbar-track,
+.prompt-dialog-body::-webkit-scrollbar-track {
   background:transparent;
 }
 
 .timeline::-webkit-scrollbar-thumb,
-.block-content::-webkit-scrollbar-thumb {
+.block-content::-webkit-scrollbar-thumb,
+.prompt-dialog-body::-webkit-scrollbar-thumb {
   background:var(--border-default);
   border-radius: var(--radius-sm);
 }
 
 .timeline::-webkit-scrollbar-thumb:hover,
-.block-content::-webkit-scrollbar-thumb:hover {
+.block-content::-webkit-scrollbar-thumb:hover,
+.prompt-dialog-body::-webkit-scrollbar-thumb:hover {
   background:rgba(255, 255, 255, 0.16);
+}
+
+@media (max-width: 767px) {
+  .prompt-dialog-overlay {
+    padding:12px;
+  }
+
+  .prompt-dialog-panel {
+    width:100vw;
+    max-width:none;
+    height:100vh;
+    max-height:none;
+    border-radius:0;
+  }
 }
 </style>

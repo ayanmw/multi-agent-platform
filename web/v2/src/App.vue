@@ -1362,9 +1362,13 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
   flex-shrink: 0;
   height: var(--cmd-h, 64px);
   min-height: var(--cmd-h, 64px);
+  max-height: var(--cmd-h, 64px);
   overflow: hidden;
   background: var(--bg-panel, #11141a);
   border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .command-area :deep(.command-bar) {
@@ -1376,17 +1380,23 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 }
 
 .command-area :deep(.command-main) {
-  align-items: flex-start;
+  align-items: stretch;
   height: 100%;
   padding-top: 6px;
   padding-bottom: 6px;
   box-sizing: border-box;
 }
 
+.command-area :deep(.command-left),
+.command-area :deep(.command-right) {
+  align-self: center;
+}
+
 .command-area :deep(.command-input) {
   min-height: 0;
   max-height: 100%;
   align-self: stretch;
+  box-sizing: border-box;
 }
 
 .mobile-tab-view {

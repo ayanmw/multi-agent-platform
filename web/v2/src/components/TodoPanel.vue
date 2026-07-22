@@ -538,21 +538,26 @@ const TodoItemList: any = defineComponent({
   padding: var(--space-md);
   gap: var(--space-md);
   overflow: hidden;
+  background: var(--bg-panel);
 }
 
 .todo-create {
   display: flex;
   gap: var(--space-sm);
   flex-shrink: 0;
+  padding: var(--space-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
 }
 
 .todo-create-input {
   flex: 1;
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
-  font-size: 0.8rem;
-  padding: var(--space-sm);
+  font-size: 0.85rem;
+  padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-md);
   outline: none;
   font-family: var(--font-mono);
@@ -563,11 +568,11 @@ const TodoItemList: any = defineComponent({
 
 .todo-create-priority,
 .todo-edit-priority {
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   font-size: 0.75rem;
-  padding: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-md);
   outline: none;
 }
@@ -607,7 +612,7 @@ const TodoItemList: any = defineComponent({
   padding: var(--space-xl);
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   flex-shrink: 0;
 }
 
@@ -617,21 +622,27 @@ const TodoItemList: any = defineComponent({
   padding: 0;
   overflow-y: auto;
   flex: 1;
+  padding-right: 0.25rem;
 }
 
 .todo-item {
   display: flex;
   align-items: flex-start;
   gap: var(--space-sm);
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--border-default);
-  transition: background 0.1s;
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  margin-bottom: var(--space-sm);
+  transition: background 0.1s, border-color 0.1s, transform 0.1s;
 }
 .todo-item:last-child {
-  border-bottom: none;
+  margin-bottom: 0;
 }
 .todo-item:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-panel);
+  border-color: var(--border-active);
+  transform: translateY(-1px);
 }
 .todo-item.dragging {
   opacity: 0.4;
@@ -668,6 +679,7 @@ const TodoItemList: any = defineComponent({
   flex: 1;
   min-width: 0;
   cursor: pointer;
+  padding: 0 0.125rem;
 }
 
 .todo-title-row {
@@ -677,7 +689,7 @@ const TodoItemList: any = defineComponent({
 }
 
 .todo-item-title {
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -690,7 +702,7 @@ const TodoItemList: any = defineComponent({
   font-size: 0.6rem;
   font-weight: 700;
   font-family: var(--font-display);
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 8px;
   flex-shrink: 0;
   text-transform: uppercase;
@@ -701,7 +713,7 @@ const TodoItemList: any = defineComponent({
 .priority-1 { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 
 .todo-item-desc {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--text-secondary);
   margin-top: var(--space-xs);
   white-space: pre-wrap;
@@ -737,10 +749,10 @@ const TodoItemList: any = defineComponent({
 }
 
 .todo-edit-input {
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   padding: var(--space-sm);
   border-radius: var(--radius-md);
   outline: none;
@@ -751,7 +763,7 @@ const TodoItemList: any = defineComponent({
 }
 
 .todo-edit-desc {
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
   font-size: 0.75rem;
@@ -838,6 +850,12 @@ const TodoItemList: any = defineComponent({
   cursor: pointer;
   padding: 0;
   margin-top: 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.todo-collapse-btn:hover {
+  color: var(--text-primary);
+  background: var(--border-subtle);
 }
 .todo-collapse-placeholder {
   cursor: default;
@@ -866,5 +884,29 @@ const TodoItemList: any = defineComponent({
 }
 .todo-drop-zone.active .todo-drop-line {
   background: var(--accent-running, #00e5ff);
+}
+
+/* 子任务缩进与视觉层级 */
+.todo-list .todo-list .todo-item {
+  margin-left: var(--space-md);
+  margin-bottom: var(--space-xs);
+  background: rgba(255, 255, 255, 0.015);
+}
+.todo-list .todo-list .todo-item:last-child {
+  margin-bottom: 0;
+}
+
+.todo-list::-webkit-scrollbar {
+  width: 0.375rem;
+}
+.todo-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.todo-list::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--radius-sm);
+}
+.todo-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 </style>

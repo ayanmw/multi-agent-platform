@@ -292,6 +292,7 @@ watch(
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
+  min-height: 28px;
   margin: -4px -14px 10px;
   background: rgba(0, 229, 255, 0.08);
   border-top: 1px solid rgba(0, 229, 255, 0.18);
@@ -299,6 +300,7 @@ watch(
   color: var(--accent-running, #00e5ff);
   font-size: 0.72rem;
   font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
 }
 
 .todo-notice--urgent {
@@ -340,7 +342,7 @@ watch(
 
 .command-main {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   min-height: 42px;
   height: 100%;
@@ -352,6 +354,7 @@ watch(
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  align-self: center;
 }
 
 .options-toggle {
@@ -468,10 +471,11 @@ watch(
     flex-wrap: wrap;
     gap: 6px;
     min-height: 40px;
+    align-items: stretch;
   }
 
   .command-input {
-    min-height: 48px;
+    min-height: 40px;
     font-size: 16px; /* prevent iOS zoom */
   }
 
