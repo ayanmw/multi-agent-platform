@@ -295,9 +295,55 @@ watch(
 // 会让现有 turn 内部内容长高而不增加 turn 数，于是滚动失效。
 // 现在改为：用 task 版本号指纹（status + steps 长度 + totalTokens + 各 agent 步数和）
 // 触发滚动；若用户主动向上离开底部则暂停，直到回到底部或点回底部。
+//
+// 切换 session 的滚动位置记忆（7/22）：
+// - 首次进入某 session：直接 instant 跳到最新（不再 smooth 动画，避免长历史"滚很久"）。
+// - 用户手动改过位置并离开该 session：把 scrollTop 记到 localStorage，下次切回时还原。
+// - 一旦用户又滚到最底部（最新位置），删除该 session 的记录，下次回退为"默认最新"。
 const mainRef = ref<HTMLElement | null>(null)
 const autoScrollPaused = ref(false)
 const BOTTOM_THRESHOLD = 80
+
+// localStorage key：按 session 记忆主舞台滚动位置。value 为 Record<taskId, number>。
+const STORAGE_KEY_SCROLL_POS = 'map_v2_main_scroll_pos'
+
+/** 读取已记忆的全部滚动位置快照。SSR / 解析失败时回退为空对象。 */
+function loadScrollPosMap(): Record<string, number> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY_SCROLL_POS)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 把单条 session 的滚动位置写回 localStorage（merge 后整体写回，避免覆盖其它 session）。 */
+function saveScrollPos(taskId: string, pos: number) {
+  if (typeof window === 'undefined') return
+  try {
+    const map = loadScrollPosMap()
+    map[taskId] = pos
+    window.localStorage.setItem(STORAGE_KEY_SCROLL_POS, JSON.stringify(map))
+  } catch {
+    // localStorage 不可用（隐私模式 / 配额满）时静默放弃，不影响主流程。
+  }
+}
+
+/** 删除单条 session 的滚动位置记忆（用户回到底部时调用）。 */
+function clearScrollPos(taskId: string) {
+  if (typeof window === 'undefined') return
+  try {
+    const map = loadScrollPosMap()
+    if (!(taskId in map)) return
+    delete map[taskId]
+    window.localStorage.setItem(STORAGE_KEY_SCROLL_POS, JSON.stringify(map))
+  } catch {
+    // 静默放弃。
+  }
+}
 
 function checkNearBottom(): boolean {
   const el = mainRef.value
@@ -305,10 +351,19 @@ function checkNearBottom(): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 }
 
-function scrollToBottom() {
+// 切换 session 时是否处于"还原固定位置"模式。该模式下，内容后续长高触发的指纹 watch
+// 不应自动滚到底（否则会把刚还原的位置冲掉）。首次指纹变化后即清除该标志。
+const restoringPos = ref(false)
+
+/**
+ * 滚动到底部（最新位置）。
+ * @param instant 切换 session 首次定位用 instant，避免长历史 smooth 动画耗时过久；
+ *                日常新增消息自动跟随仍用 smooth 以保留观感。
+ */
+function scrollToBottom(instant = false) {
   const el = mainRef.value
   if (!el) return
-  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  el.scrollTo({ top: el.scrollHeight, behavior: instant ? 'auto' : 'smooth' })
   autoScrollPaused.value = false
 }
 
@@ -316,6 +371,9 @@ function handleMainScroll() {
   const near = checkNearBottom()
   if (near) {
     autoScrollPaused.value = false
+    // 用户回到底部（最新位置）→ 删除该 session 的位置记忆，下次默认"最新"。
+    const tid = activeTaskId.value
+    if (tid) clearScrollPos(tid)
   } else if (!autoScrollPaused.value) {
     autoScrollPaused.value = true
   }
@@ -346,16 +404,48 @@ watch(
 watch(
   taskFingerprint,
   () => {
+    // 还原固定位置模式下，内容长高是异步填充导致的，不应冲掉刚还原的位置；
+    // 首次指纹变化即认为填充完成，清除该标志，后续正常自动跟随。
+    if (restoringPos.value) {
+      restoringPos.value = false
+      return
+    }
     if (!autoScrollPaused.value) {
       nextTick(scrollToBottom)
     }
   },
 )
 
-// 切换 session/task 时重置暂停状态并尝试滚动到底
-watch(activeTaskId, () => {
+// 切换 session/task 时：保存旧位置记忆 → 还原新位置（有记忆则用，无则跳最新 instant）。
+// 用 (newId, oldId) 形态，在 DOM patch 前读旧 session 的 scrollTop 仍是安全的。
+watch(activeTaskId, (newId, oldId) => {
+  // 旧 session 不在底部时，把当前位置记到 localStorage；在底部则不记（下次默认最新）。
+  if (oldId) {
+    const el = mainRef.value
+    if (el && !checkNearBottom()) {
+      saveScrollPos(oldId, el.scrollTop)
+    } else if (el) {
+      clearScrollPos(oldId)
+    }
+  }
+
   autoScrollPaused.value = false
-  nextTick(scrollToBottom)
+  restoringPos.value = false
+
+  if (!newId) return
+  const remembered = loadScrollPosMap()[newId]
+  nextTick(() => {
+    const el = mainRef.value
+    if (!el) return
+    if (typeof remembered === 'number') {
+      // 有固定位置记忆 → instant 还原，并置位还原模式抑制后续指纹 watch 自动滚底。
+      el.scrollTo({ top: remembered, behavior: 'auto' })
+      restoringPos.value = true
+    } else {
+      // 无记忆 → instant 跳到最新（避免长历史 smooth 动画滚很久）。
+      scrollToBottom(true)
+    }
+  })
 })
 
 // === 页面加载：连接 WS，加载项目/会话/Agent/Case ===
@@ -398,6 +488,22 @@ onUnmounted(() => {
   disconnect()
 })
 
+// 页面卸载前保存当前 session 的滚动位置，避免直接关闭/刷新丢失最后一次手动定位。
+// （回到底部的不记，下次默认最新。）
+function persistCurrentScrollPos() {
+  const tid = activeTaskId.value
+  const el = mainRef.value
+  if (!tid || !el) return
+  if (checkNearBottom()) {
+    clearScrollPos(tid)
+  } else {
+    saveScrollPos(tid, el.scrollTop)
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', persistCurrentScrollPos)
+}
+
 // 快捷键：Ctrl+M 打开最近修改
 function handleGlobalKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
@@ -410,6 +516,9 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('beforeunload', persistCurrentScrollPos)
+  }
 })
 
 // === 全局滚轮：在标题/空白处滚动时驱动主舞台滚动，
@@ -864,7 +973,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 
       <section class="center-column" :style="{ '--cmd-h': commandAreaHeight + 'px' }">
         <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
-          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
+          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom()">
             Auto-scroll paused — click to resume
           </div>
 
@@ -964,7 +1073,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 
       <section class="center-column center-column--tablet">
         <main ref="mainRef" class="main-stage" @scroll="handleMainScroll">
-          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom">
+          <div v-if="autoScrollPaused" class="scroll-paused-hint" @click="scrollToBottom()">
             Auto-scroll paused — click to resume
           </div>
 
