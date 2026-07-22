@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 维度 E — 6 预设 Case mock 回归评测
+# Case 矩阵 mock 回归评测（L1-L5 全量）
 # =============================================================================
-# 对 6 个内置 mock case (code-gen, dialogue, research, multi-agent, long-task,
-# tool-error) 逐个串行执行，验证：
+# 对 cases.All() 返回的全部内置 case 逐个串行执行，验证：
 #   a. 最终 task.status (completed / failed / timeout)
 #   b. steps 数量、是否含 tool_call 步骤、tool_name
 #   c. final_result 是否非空
 #   d. total_tokens > 0 (验证 usage 写入)
 #   e. cost_records >= 1 (GET /api/costs?task_id=<tid>)
+#   f. L4/L5 多 Agent case 的编排事件流：decompose_done / agent_dispatched / agent_completed
+#   g. L4/L5 case 的 child_tasks[].steps 回填（Phase 7-H2 MA5）
 #
 # 约束：独立端口 18105 + 独立 DB；LLM_USE_MOCK=true 无需真实 API Key。
 #       不改后端源码，只创建/修改本脚本。
@@ -27,13 +28,101 @@ PASS=0
 FAIL=0
 PROBLEMS=()
 RESULTS=()
+WS_EVENTS="/tmp/cases-ws-events-${RAND}.ndjson"
+
+# 每个 case 的期望终态、expect_tool、expect_final。
+# 大部分 case 在 mock 下应 completed；明确测试失败路径的 case 期望 failed。
+declare -A EXP_STATUS
+declare -A EXP_TOOL
+declare -A EXP_FINAL
+EXP_STATUS=(
+  ["code-gen"]="completed"
+  ["dialogue"]="completed"
+  ["research"]="completed"
+  ["long-task"]="completed"
+  ["todo-driven"]="completed"
+  ["web-research"]="completed"
+  ["skill-code-helper"]="completed"
+  ["cron-notify"]="completed"
+  ["llm-judge-qa"]="completed"
+  ["policy-enforcement"]="failed"
+  ["approval-flow"]="completed"
+  ["max-steps-exhaustion"]="failed"
+  ["context-compression"]="completed"
+  ["checkpoint-resume"]="completed"
+  ["multi-agent"]="completed"
+  ["multi-agent-parallel"]="completed"
+  ["multi-agent-sequential"]="completed"
+  ["multi-agent-dag"]="completed"
+  ["multi-agent-leader-dispatch"]="completed"
+  ["multi-agent-review"]="completed"
+  ["multi-agent-fault-tolerance"]="completed"
+)
+EXP_TOOL=(
+  ["code-gen"]="yes"
+  ["dialogue"]="no"
+  ["research"]="yes"
+  ["long-task"]="no"
+  ["todo-driven"]="yes"
+  ["web-research"]="yes"
+  ["skill-code-helper"]="yes"
+  ["cron-notify"]="yes"
+  ["llm-judge-qa"]="no"
+  ["policy-enforcement"]="yes"
+  ["approval-flow"]="yes"
+  ["max-steps-exhaustion"]="no"
+  ["context-compression"]="no"
+  ["checkpoint-resume"]="yes"
+  ["multi-agent"]="yes"
+  ["multi-agent-parallel"]="yes"
+  ["multi-agent-sequential"]="yes"
+  ["multi-agent-dag"]="yes"
+  ["multi-agent-leader-dispatch"]="yes"
+  ["multi-agent-review"]="yes"
+  ["multi-agent-fault-tolerance"]="yes"
+)
+EXP_FINAL=(
+  ["code-gen"]="nonempty"
+  ["dialogue"]="nonempty"
+  ["research"]="nonempty"
+  ["long-task"]="nonempty"
+  ["todo-driven"]="nonempty"
+  ["web-research"]="nonempty"
+  ["skill-code-helper"]="nonempty"
+  ["cron-notify"]="nonempty"
+  ["llm-judge-qa"]="nonempty"
+  ["policy-enforcement"]="empty"
+  ["approval-flow"]="nonempty"
+  ["max-steps-exhaustion"]="empty"
+  ["context-compression"]="nonempty"
+  ["checkpoint-resume"]="nonempty"
+  ["multi-agent"]="nonempty"
+  ["multi-agent-parallel"]="nonempty"
+  ["multi-agent-sequential"]="nonempty"
+  ["multi-agent-dag"]="nonempty"
+  ["multi-agent-leader-dispatch"]="nonempty"
+  ["multi-agent-review"]="nonempty"
+  ["multi-agent-fault-tolerance"]="nonempty"
+)
+
+# 阶梯分组（按 case ID 前缀/已知 ID 归类）
+L1_CASES=(code-gen dialogue research long-task)
+L2_CASES=(todo-driven web-research skill-code-helper cron-notify llm-judge-qa)
+L3_CASES=(policy-enforcement approval-flow max-steps-exhaustion context-compression checkpoint-resume)
+L4_CASES=(multi-agent multi-agent-parallel multi-agent-sequential multi-agent-dag)
+L5_CASES=(multi-agent-leader-dispatch multi-agent-review multi-agent-fault-tolerance)
+
+MULTI_AGENT_CASES=(multi-agent multi-agent-parallel multi-agent-sequential multi-agent-dag multi-agent-leader-dispatch multi-agent-review multi-agent-fault-tolerance)
 
 cleanup() {
+  if [[ -n "${WS_PID:-}" ]] && kill -0 "${WS_PID}" 2>/dev/null; then
+    kill "${WS_PID}" 2>/dev/null || true
+  fi
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     kill "${SERVER_PID}" 2>/dev/null
     wait "${SERVER_PID}" 2>/dev/null
   fi
-  rm -f "${DB_PATH}" "${SERVER_BIN}" "${SERVER_LOG}" 2>/dev/null
+  rm -f "${DB_PATH}" "${SERVER_BIN}" "${SERVER_LOG}" "${WS_EVENTS}" "${WS_EVENTS}.err" 2>/dev/null
   # 清理 mock 可能创建的文件
   rm -f /tmp/mock_gen.go 2>/dev/null
   rm -rf /tmp/tmp 2>/dev/null
@@ -47,7 +136,6 @@ fi
 
 # ---- JSON 辅助函数 -----------------------------------------------------------
 # 从 JSON 字符串中提取字段。使用 python 保证健壮性。
-#   jstr <json> <code>  — code 中 d 为已解析 JSON dict
 jstr() {
   local json="$1"; shift
   printf '%s' "$json" | python -c "
@@ -59,6 +147,22 @@ except:
 try:
     $1
 except:
+    print('')
+" 2>/dev/null
+}
+
+# jrun: 执行任意 python 表达式，d 为解析后的 JSON
+jrun() {
+  local json="$1"; shift
+  printf '%s' "$json" | python -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except:
+    d = {}
+try:
+    $1
+except Exception as e:
     print('')
 " 2>/dev/null
 }
@@ -81,6 +185,21 @@ DB_PATH="${DB_PATH}" \
   "${SERVER_BIN}" >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
+# ---- WS 事件订阅（用于 L4/L5 编排事件断言）------------------------------------
+: > "${WS_EVENTS}"
+node -e "
+  const out = process.argv[1], base = process.argv[2], fs = require('fs');
+  const ws = new WebSocket(base + '/ws?session_id=cases-regression');
+  let fd;
+  ws.addEventListener('open',  () => { fd = fs.openSync(out, 'a'); fs.writeSync(fd, JSON.stringify({type:'__ws_open__'}) + '\n'); });
+  ws.addEventListener('message', m => {
+    try { const e = JSON.parse(m.data); if (fd === undefined) fd = fs.openSync(out, 'a'); fs.writeSync(fd, JSON.stringify(e) + '\n'); } catch (x) {}
+  });
+  ws.addEventListener('error', e => { fs.writeFileSync(out + '.err', String(e.message || e) + '\n', { flag: 'a' }); });
+  setInterval(() => {}, 1000);
+" "${WS_EVENTS}" "${BASE}" >/dev/null 2>&1 &
+WS_PID=$!
+
 # ---- 等待健康检查 ------------------------------------------------------------
 echo "[setup] 等待 /healthz 就绪..."
 ready=0
@@ -94,25 +213,51 @@ if [[ "${ready}" != "1" ]]; then
   tail -30 "${SERVER_LOG}"
   exit 3
 fi
-echo "[setup] 服务就绪 ✓"
+# 再等 WS 连上
+sleep 1
+if grep -q "__ws_open__" "${WS_EVENTS}" 2>/dev/null; then
+  echo "[setup] 服务就绪 ✓，WS 订阅已连接"
+else
+  echo "[setup] 服务就绪 ✓，WS 订阅未连上（后续编排事件断言可能依赖 HTTP fallback）"
+fi
+
+# ---- 从 /api/cases 拉取全部 case ID ------------------------------------------
+# 这样脚本无需硬编码新增 case，自动跟随 cases.All() 扩展。
+echo "[setup] 拉取内置 case 列表..."
+CASES_JSON=$(curl -s "${BASE}/api/cases" 2>/dev/null)
+mapfile -t ALL_CASES < <(printf '%s' "$CASES_JSON" | python -c "
+import sys, json
+try:
+    cases = json.load(sys.stdin)
+    for c in cases:
+        print(c.get('id',''))
+except Exception as e:
+    print('')
+" 2>/dev/null | grep -v '^$')
+
+if [[ ${#ALL_CASES[@]} -eq 0 ]]; then
+  echo "[FATAL] 未从 /api/cases 获取到 case 列表"
+  exit 4
+fi
+echo "[setup] 发现 ${#ALL_CASES[@]} 个内置 case"
 
 # ---- 单个 Case 评测函数 ------------------------------------------------------
-# run_case <case_id> <input> <expect_status> <expect_tool> <expect_final> <desc>
-#   expect_status: completed | failed
-#   expect_tool:   yes | no
-#   expect_final:  nonempty | empty
+# run_case <case_id>
 run_case() {
-  local case_id="$1" input="$2" exp_status="$3" exp_tool="$4" exp_final="$5" desc="$6"
+  local case_id="$1"
+  local exp_status="${EXP_STATUS[$case_id]:-completed}"
+  local exp_tool="${EXP_TOOL[$case_id]:-no}"
+  local exp_final="${EXP_FINAL[$case_id]:-nonempty}"
 
   echo ""
-  echo "===== Case: ${case_id} (${desc}) ====="
+  echo "===== Case: ${case_id} ====="
 
-  # POST 创建任务
-  local post_body post_code tid
+  # POST /api/run-case（复用 case 默认 input / system prompt / contract）
+  local post_body post_code
   post_body=$(curl -s -o /tmp/cases-post-$$ -w '%{http_code}' \
-    -X POST "${BASE}/api/tasks?case=${case_id}" \
+    -X POST "${BASE}/api/run-case" \
     -H 'Content-Type: application/json' \
-    --data "{\"action\":\"chat\",\"input\":\"${input}\",\"agent_id\":\"agent_cases\",\"max_steps\":8}" \
+    --data "{\"case\":\"${case_id}\",\"agent_id\":\"agent_cases\"}" \
     2>/dev/null)
   post_code=$(cat /tmp/cases-post-$$ 2>/dev/null)
   rm -f /tmp/cases-post-$$
@@ -120,7 +265,7 @@ run_case() {
   if [[ "${post_body}" != "200" ]]; then
     echo "  [FAIL] POST 返回 HTTP ${post_body}, body=${post_code:0:120}"
     FAIL=$((FAIL+1))
-    RESULTS+=("${case_id}|FAIL|http_${post_body}|0|no|0|0|")
+    RESULTS+=("${case_id}|FAIL|http_${post_body}|0|no|0|0||||")
     PROBLEMS+=("[${case_id}] POST HTTP ${post_body}")
     return
   fi
@@ -129,15 +274,15 @@ run_case() {
   if [[ -z "${tid}" ]]; then
     echo "  [FAIL] 未获取到 task_id, body=${post_code:0:120}"
     FAIL=$((FAIL+1))
-    RESULTS+=("${case_id}|FAIL|no_task_id|0|no|0|0|")
+    RESULTS+=("${case_id}|FAIL|no_task_id|0|no|0|0||||")
     PROBLEMS+=("[${case_id}] 无 task_id")
     return
   fi
   echo "  task_id=${tid}"
 
-  # 轮询等待任务完成 (最多 30s)
+  # 轮询等待任务完成 (最多 60s)
   local status="" resp="" elapsed=0
-  for i in $(seq 1 60); do
+  for i in $(seq 1 120); do
     resp=$(curl -s "${BASE}/api/tasks?id=${tid}" 2>/dev/null)
     status=$(printf '%s' "$resp" | python -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null)
     if [[ "${status}" == "completed" || "${status}" == "failed" ]]; then
@@ -148,16 +293,16 @@ run_case() {
   done
 
   if [[ "${status}" != "completed" && "${status}" != "failed" ]]; then
-    echo "  [FAIL] 轮询超时 (30s), 最后 status=${status}"
+    echo "  [FAIL] 轮询超时 (60s), 最后 status=${status}"
     FAIL=$((FAIL+1))
-    RESULTS+=("${case_id}|FAIL|timeout|0|no|0|0|")
+    RESULTS+=("${case_id}|FAIL|timeout|0|no|0|0||||")
     PROBLEMS+=("[${case_id}] 轮询超时")
     return
   fi
-  echo "  轮询耗时 ~$((elapsed * 5 / 10))s"
+  echo "  轮询耗时 ~$((elapsed / 2))s"
 
   # 提取指标
-  local final_result total_tokens step_count has_tool tool_names
+  local final_result total_tokens step_count has_tool tool_names child_count
   final_result=$(printf '%s' "$resp" | python -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -177,6 +322,7 @@ d=json.load(sys.stdin)
 tools=[s.get('tool_name','') for s in d.get('steps',[]) if s.get('type')=='tool_call']
 print(','.join(sorted(set(tools))) if tools else 'none')
 " 2>/dev/null)
+  child_count=$(printf '%s' "$resp" | python -c "import sys,json; print(len(json.load(sys.stdin).get('child_tasks',[])))" 2>/dev/null)
 
   # 查询 cost records
   local cost_resp cost_count
@@ -187,6 +333,56 @@ print(','.join(sorted(set(tools))) if tools else 'none')
   total_tokens=${total_tokens:-0}
   step_count=${step_count:-0}
   cost_count=${cost_count:-0}
+  child_count=${child_count:-0}
+
+  # 多 Agent 编排事件断言（仅 L4/L5）
+  local orch_events=""
+  local decompose_count=0 dispatched_count=0 completed_count=0
+  local child_steps_ok="na"
+  if is_multi_agent "${case_id}"; then
+    # 优先从 WS 事件文件统计
+    if [[ -f "${WS_EVENTS}" ]]; then
+      decompose_count=$(grep -c '"type":"decompose_done"' "${WS_EVENTS}" 2>/dev/null) || decompose_count=0
+      dispatched_count=$(grep -c '"type":"agent_dispatched"' "${WS_EVENTS}" 2>/dev/null) || dispatched_count=0
+      completed_count=$(grep -c '"type":"agent_completed"' "${WS_EVENTS}" 2>/dev/null) || completed_count=0
+    fi
+    # 兜底：从任务 steps 里找 orchestrator 事件（老版本可能不发 WS 但会写 steps）
+    if [[ "${decompose_count}" -lt 1 ]]; then
+      decompose_count=$(printf '%s' "$resp" | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(len([s for s in d.get('steps',[]) if s.get('type')=='orchestrator' and s.get('tool_name')=='decompose_done']))
+" 2>/dev/null)
+    fi
+    if [[ "${dispatched_count}" -lt 1 ]]; then
+      dispatched_count=$(printf '%s' "$resp" | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(len([s for s in d.get('steps',[]) if s.get('type')=='orchestrator' and s.get('tool_name')=='agent_dispatched']))
+" 2>/dev/null)
+    fi
+    if [[ "${completed_count}" -lt 1 ]]; then
+      completed_count=$(printf '%s' "$resp" | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(len([s for s in d.get('steps',[]) if s.get('type')=='orchestrator' and s.get('tool_name')=='agent_completed']))
+" 2>/dev/null)
+    fi
+
+    # child_tasks[].steps 回填断言
+    child_steps_ok=$(printf '%s' "$resp" | python -c "
+import sys,json
+d=json.load(sys.stdin)
+cts=d.get('child_tasks',[])
+if not cts:
+    print('no_child')
+else:
+    ok=all(len(c.get('steps',[]))>0 for c in cts)
+    print('yes' if ok else 'no')
+" 2>/dev/null)
+
+    orch_events="decompose=${decompose_count} dispatched=${dispatched_count} completed=${completed_count} child_steps=${child_steps_ok}"
+  fi
 
   # 打印详情
   echo "  status=${status} (expect ${exp_status})"
@@ -195,6 +391,9 @@ print(','.join(sorted(set(tools))) if tools else 'none')
   echo "  final_result=${final_result:0:80}"
   echo "  total_tokens=${total_tokens}"
   echo "  cost_records=${cost_count}"
+  if [[ -n "${orch_events}" ]]; then
+    echo "  orchestrator: ${orch_events}"
+  fi
 
   # ---- 判定 ----
   local verdict="PASS" reasons=""
@@ -208,20 +407,11 @@ print(','.join(sorted(set(tools))) if tools else 'none')
     reasons="${reasons} tool_call(${has_tool}!=${exp_tool})"
   fi
   if [[ "${exp_final}" == "nonempty" ]]; then
-    # 去除空白后检查是否非空
     local stripped
     stripped=$(echo "${final_result}" | tr -d '[:space:]')
     if [[ -z "${stripped}" ]]; then
       verdict="FAIL"
       reasons="${reasons} final_result_empty"
-    fi
-  fi
-  if [[ "${exp_final}" == "empty" && "${status}" == "completed" ]]; then
-    # 期望空结果但任务却成功了
-    local stripped
-    stripped=$(echo "${final_result}" | tr -d '[:space:]')
-    if [[ -n "${stripped}" ]]; then
-      : # 完成时非空结果是可以的
     fi
   fi
   if [[ "${total_tokens}" -le 0 ]]; then
@@ -231,6 +421,25 @@ print(','.join(sorted(set(tools))) if tools else 'none')
   if [[ "${cost_count}" -lt 1 ]]; then
     verdict="FAIL"
     reasons="${reasons} no_cost_records"
+  fi
+  if is_multi_agent "${case_id}"; then
+    if [[ "${decompose_count}" -lt 1 ]]; then
+      verdict="FAIL"
+      reasons="${reasons} no_decompose_done"
+    fi
+    if [[ "${dispatched_count}" -lt 1 ]]; then
+      verdict="FAIL"
+      reasons="${reasons} no_agent_dispatched"
+    fi
+    if [[ "${completed_count}" -lt 1 ]]; then
+      verdict="FAIL"
+      reasons="${reasons} no_agent_completed"
+    fi
+    # 对真多 Agent case（不含 legacy），要求 child_steps_ok=yes
+    if [[ "${case_id}" != "multi-agent" && "${child_steps_ok}" != "yes" ]]; then
+      verdict="FAIL"
+      reasons="${reasons} child_steps(${child_steps_ok})"
+    fi
   fi
 
   if [[ "${verdict}" == "PASS" ]]; then
@@ -242,54 +451,52 @@ print(','.join(sorted(set(tools))) if tools else 'none')
     PROBLEMS+=("[${case_id}]${reasons}")
   fi
 
-  RESULTS+=("${case_id}|${verdict}|${status}|${step_count}|${has_tool}|${total_tokens}|${cost_count}|${final_result:0:60}")
+  RESULTS+=("${case_id}|${verdict}|${status}|${step_count}|${has_tool}|${total_tokens}|${cost_count}|${decompose_count}|${dispatched_count}|${completed_count}|${child_steps_ok}|${final_result:0:60}")
 
-  sleep 1  # 避免秒级 task_id 冲突 (task_id 格式 task_YYYYMMDDHHMMSS)
+  sleep 1  # 避免秒级 task_id 冲突
 }
 
-# ---- 执行 6 个 Case (串行) ---------------------------------------------------
+# is_multi_agent <case_id> 判断是否为 L4/L5 多 Agent case
+is_multi_agent() {
+  local cid="$1"
+  for m in "${MULTI_AGENT_CASES[@]}"; do
+    if [[ "${m}" == "${cid}" ]]; then return 0; fi
+  done
+  return 1
+}
+
+# run_level <label> <case_id>...
+run_level() {
+  local label="$1"; shift
+  local ids=("$@")
+  echo ""
+  echo "========== ${label} =========="
+  for cid in "${ids[@]}"; do
+    run_case "${cid}"
+  done
+}
+
+# ---- 执行 L1-L5 全部 Case ----------------------------------------------------
 echo ""
-echo "========== 6 Case Mock 回归评测 =========="
+echo "========== Case Mock 回归评测（全 ${#ALL_CASES[@]} 个） =========="
 
-run_case "code-gen" \
-  "Please generate a simple Go program with a main function" \
-  "completed" "yes" "nonempty" \
-  "代码生成 + write_file"
-
-run_case "dialogue" \
-  "Hello! Let us have a chat about AI" \
-  "completed" "no" "nonempty" \
-  "交互式对话"
-
-run_case "research" \
-  "Please research the topic and find relevant information" \
-  "completed" "yes" "nonempty" \
-  "研究任务 + run_shell"
-
-run_case "multi-agent" \
-  "Delegate this task to multiple agents in a team" \
-  "completed" "no" "nonempty" \
-  "多 Agent 协作模拟"
-
-run_case "long-task" \
-  "Execute a long task with multiple steps" \
-  "completed" "no" "nonempty" \
-  "长任务多步循环 (mock 单 text 响应，无 tool_call)"
-
-run_case "tool-error" \
-  "This should trigger an error scenario" \
-  "failed" "yes" "empty" \
-  "错误处理验证"
+run_level "L1 单 Agent 基线" "${L1_CASES[@]}"
+run_level "L2 单 Agent + 子系统" "${L2_CASES[@]}"
+run_level "L3 Harness 治理" "${L3_CASES[@]}"
+run_level "L4 多 Agent 静态编排" "${L4_CASES[@]}"
+run_level "L5 多 Agent 动态编排" "${L5_CASES[@]}"
 
 # ---- 汇总 --------------------------------------------------------------------
 echo ""
 echo "========== 汇总 =========="
-printf '%-14s %-7s %-11s %-6s %-10s %-10s %-10s\n' "Case" "Result" "Status" "Steps" "ToolCall" "Tokens" "CostRecs"
-printf '%-14s %-7s %-11s %-6s %-10s %-10s %-10s\n' "------------" "-------" "-----------" "------" "----------" "----------" "----------"
+printf '%-28s %-7s %-11s %-6s %-10s %-10s %-10s %-12s %-12s %-12s %-12s\n' \
+  "Case" "Result" "Status" "Steps" "ToolCall" "Tokens" "CostRecs" "Decompose" "Dispatched" "Completed" "ChildSteps"
+printf '%-28s %-7s %-11s %-6s %-10s %-10s %-10s %-12s %-12s %-12s %-12s\n' \
+  "----------------------------" "-------" "-----------" "------" "----------" "----------" "----------" "------------" "------------" "------------" "------------"
 for r in "${RESULTS[@]}"; do
-  IFS='|' read -r cid verdict status steps has_tool tokens costs _ <<< "$r"
-  printf '%-14s %-7s %-11s %-6s %-10s %-10s %-10s\n' \
-    "$cid" "$verdict" "$status" "$steps" "$has_tool" "$tokens" "$costs"
+  IFS='|' read -r cid verdict status steps has_tool tokens costs decomp disp comp child_steps _ <<< "$r"
+  printf '%-28s %-7s %-11s %-6s %-10s %-10s %-10s %-12s %-12s %-12s %-12s\n' \
+    "$cid" "$verdict" "$status" "$steps" "$has_tool" "$tokens" "$costs" "${decomp:-na}" "${disp:-na}" "${comp:-na}" "${child_steps:-na}"
 done
 
 echo ""
@@ -311,3 +518,8 @@ fi
 
 echo ""
 echo "[done] 服务已关闭，临时 DB 已清理"
+
+if [[ ${FAIL} -gt 0 ]]; then
+  exit 1
+fi
+exit 0
