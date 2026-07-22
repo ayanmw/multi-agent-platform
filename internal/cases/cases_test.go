@@ -39,27 +39,100 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return d
 }
 
-// TestAll 返回五个内置用例。
+// TestAll 返回所有内置用例，并校验 L1-L5 阶梯覆盖与基础字段。
 func TestAll(t *testing.T) {
 	cases := All()
-	if len(cases) != 5 {
-		t.Fatalf("expected 5 builtin cases, got %d", len(cases))
+	if len(cases) == 0 {
+		t.Fatal("expected builtin cases")
 	}
+
 	ids := map[string]bool{}
+	levelTags := map[string]bool{}
 	for _, c := range cases {
 		if c.ID == "" {
 			t.Errorf("case ID is empty")
 		}
+		if ids[c.ID] {
+			t.Errorf("duplicate case ID: %s", c.ID)
+		}
+		ids[c.ID] = true
 		if !c.IsBuiltin {
 			t.Errorf("case %s should be builtin", c.ID)
 		}
-		ids[c.ID] = true
-	}
-	expected := []string{"code-gen", "research", "multi-agent", "dialogue", "long-task"}
-	for _, id := range expected {
-		if !ids[id] {
-			t.Errorf("missing builtin case %s", id)
+		if c.Name == "" {
+			t.Errorf("case %s has empty name", c.ID)
 		}
+		if c.Category == "" {
+			t.Errorf("case %s has empty category", c.ID)
+		}
+		if c.SystemPrompt == "" {
+			t.Errorf("case %s has empty system_prompt", c.ID)
+		}
+		if c.Contract.Goal == "" {
+			t.Errorf("case %s has empty contract goal", c.ID)
+		}
+		if c.Contract.MaxSteps <= 0 {
+			t.Errorf("case %s has invalid max_steps: %d", c.ID, c.Contract.MaxSteps)
+		}
+		if len(c.Tags) == 0 {
+			t.Errorf("case %s has no tags", c.ID)
+		}
+		for _, tag := range c.Tags {
+			if tag == "L1" || tag == "L2" || tag == "L3" || tag == "L4" || tag == "L5" {
+				levelTags[tag] = true
+			}
+		}
+	}
+
+	for _, level := range []string{"L1", "L2", "L3", "L4", "L5"} {
+		if !levelTags[level] {
+			t.Errorf("missing case for level %s", level)
+		}
+	}
+
+	// 验收类型必须是 harness 预定义值
+	validCriterionTypes := map[string]bool{
+		"test_pass":        true,
+		"file_exists":      true,
+		"shell_exit_zero":  true,
+		"content_contains": true,
+		"llm_judge":        true,
+	}
+	for _, c := range cases {
+		for _, ac := range c.Contract.AcceptanceCriteria {
+			if !validCriterionTypes[string(ac.Type)] {
+				t.Errorf("case %s has unknown acceptance criterion type: %q", c.ID, ac.Type)
+			}
+		}
+	}
+
+	// 校验改造的 L1 case 不再只有 file_exists 验收
+	codeGen := Get("code-gen")
+	if codeGen == nil || len(codeGen.Contract.AcceptanceCriteria) == 0 {
+		t.Fatalf("code-gen case missing or has no acceptance criteria")
+	}
+	foundTestPass := false
+	for _, ac := range codeGen.Contract.AcceptanceCriteria {
+		if ac.Type == harness.AcceptTestPass {
+			foundTestPass = true
+		}
+	}
+	if !foundTestPass {
+		t.Errorf("code-gen case should include a test_pass acceptance criterion")
+	}
+
+	research := Get("research")
+	if research == nil || len(research.Contract.AcceptanceCriteria) == 0 {
+		t.Fatalf("research case missing or has no acceptance criteria")
+	}
+	foundContentContains := false
+	for _, ac := range research.Contract.AcceptanceCriteria {
+		if ac.Type == harness.AcceptContentContains {
+			foundContentContains = true
+		}
+	}
+	if !foundContentContains {
+		t.Errorf("research case should include a content_contains acceptance criterion")
 	}
 }
 
@@ -91,8 +164,8 @@ func TestServiceSeedsBuiltins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if count != 5 {
-		t.Fatalf("expected 5 seeded cases, got %d", count)
+	if count < len(All()) {
+		t.Fatalf("expected at least %d seeded cases, got %d", len(All()), count)
 	}
 
 	c, err := svc.Get("code-gen")
@@ -129,7 +202,7 @@ func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 		t.Fatalf("create case: %v", err)
 	}
 
-	// 在非空 DB 上重新 Init 应保留现有行（共 6 条）。
+	// 在非空 DB 上重新 Init 应保留现有行（内置 + 自定义 = len(All()) + 1 条）。
 	svc2, err := Init(d)
 	if err != nil {
 		t.Fatalf("re-init service: %v", err)
@@ -138,8 +211,9 @@ func TestServiceDoesNotReseedWhenNotEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if count != 6 {
-		t.Fatalf("expected 6 cases, got %d", count)
+	expected := len(All()) + 1
+	if count != expected {
+		t.Fatalf("expected %d cases, got %d", expected, count)
 	}
 }
 
