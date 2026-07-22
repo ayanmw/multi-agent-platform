@@ -244,11 +244,28 @@ type DBToolLoader struct { ... } // 从 pkg/db.QueryToolsV2 加载
 ```go
 package db
 
+// init 注册 v27 migration。因为新 schema 需要复合主键（namespace, name, version），
+// SQLite 无法 ALTER 主键，所以必须重建表。
 func init() {
     migrations = append(migrations, Migration{
         Version:     27,
-        Description: "Redefine tools table with namespace, version, source, execution_config",
-        SQL: `DROP TABLE IF EXISTS tools;
+        Description: "Back up and redefine tools table with namespace, version, source, execution_config",
+        Func: func(db *sql.DB) error {
+            // Step 1: 在 DROP 前打印所有历史数据，方便用户手动重新添加。
+            rows, err := db.Query(`SELECT name, description, schema, enabled, created_at FROM tools`)
+            if err == nil {
+                log.Printf("[migration v27] backing up old tools records before DROP:")
+                for rows.Next() {
+                    var name, description, schema, createdAt string
+                    var enabled bool
+                    if err := rows.Scan(&name, &description, &schema, &enabled, &createdAt); err == nil {
+                        log.Printf("[migration v27] OLD_TOOL: name=%q description=%q schema=%q enabled=%v created_at=%s", name, description, schema, enabled, createdAt)
+                    }
+                }
+                rows.Close()
+            }
+            // Step 2: 重建表。
+            _, err = db.Exec(`DROP TABLE IF EXISTS tools;
 CREATE TABLE tools (
     namespace TEXT DEFAULT '',
     name TEXT NOT NULL,
@@ -263,14 +280,17 @@ CREATE TABLE tools (
     PRIMARY KEY (namespace, name, version)
 );
 CREATE INDEX idx_tools_source ON tools(source);
-CREATE INDEX idx_tools_enabled ON tools(enabled);`,
+CREATE INDEX idx_tools_enabled ON tools(enabled);`)
+            return err
+        },
     })
 }
 ```
 
 **说明：**
 
-- v27 直接 DROP 旧表重建。旧表中只存了动态 tool，且 name 是全局唯一的，数据价值低；重建最简单可靠。
+- v27 重建表前先通过日志打印所有旧记录（`name / description / schema / enabled / created_at`），用户可据此手动重新添加工具。
+- 新 schema 使用复合主键 `(namespace, name, version)`，因此 SQLite 层面无法通过纯 `ALTER TABLE` 升级，必须重建。
 - 时间字段用 INTEGER unix 秒，与 cron/skills 保持一致。
 - 扩展 `ToolRecord`：
   ```go
