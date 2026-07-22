@@ -142,19 +142,24 @@ function sessionCount(group: { project: Project; sessions: Session[] }): number 
 }
 
 /**
- * 点击项目 header 的行为：
- * - 若点击的是当前未激活项目，切换项目（useSessionStore 会加载该项目 sessions）。
- * - 若点击的是当前已激活项目，则切换该分组的折叠/展开，让用户可以一键收起已展开的项目。
- * 折叠/展开仍可通过左侧独立的 collapse-btn 操作。
+ * 点击项目 header 的行为：选中并展开/收缩一次完成。
  *
- * 注意：切换项目不再自动展开/收起其它分组——多组可同时展开，状态完全手动控制。
+ * 设计取舍（7/22 调整）：
+ *   之前"未激活 → 选中；已激活 → 折叠/展开"要求首次点击只选中、再点一次才展开，
+ *   用户为看某 project 下的 session 要点两次，多余且反直觉。
+ *   现在统一为：点击 header 同时「选中该项目」并「切换该分组的折叠/展开」。
+ *   - 点击一个收起的 project：选中它 + 展开。
+ *   - 点击一个展开的 project：保持选中 + 收起。
+ *   - 再点一次收起的：仍选中 + 展开。
+ *   折叠/展开仍可通过左侧独立的 collapse-btn 单独操作（只切换不选中）。
+ *
+ * 注意：切换项目不会自动展开/收起其它分组——多组可同时展开，状态完全手动控制。
  */
 function handleProjectHeaderClick(projectId: string) {
-  if (projectId === props.activeProjectId) {
-    toggleCollapse(projectId)
-  } else {
+  if (projectId !== props.activeProjectId) {
     emit('select-project', projectId)
   }
+  toggleCollapse(projectId)
 }
 
 function statusClass(status: Session['status']): string {

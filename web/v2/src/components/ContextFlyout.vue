@@ -118,7 +118,13 @@ function close() {
 // 点击外部或按 Esc 关闭浮窗，提升操作效率。
 function handleDocClick(e: MouseEvent) {
   if (!props.open || isResizing.value) return
-  const target = e.target as Node
+  const target = e.target as Node | null
+  if (!target) return
+  // 二级弹窗（如 prompt 详情）通过 Teleport 渲染到 body，不在本浮窗 panelRef 内。
+  // 点击二级弹窗（含其内部文字/按钮）时不应误关一级浮窗，否则关闭二级后还要重新打开 Context。
+  // target 可能是文本节点（无 closest），先归一到其所属 Element 再判断。
+  const el = target instanceof Element ? target : target.parentElement
+  if (el && el.closest('.prompt-dialog-overlay')) return
   if (panelRef.value && !panelRef.value.contains(target)) {
     close()
   }
