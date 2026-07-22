@@ -1806,6 +1806,19 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		}
 	}
 
+	// Phase 7 TODO 修复：session_id 与 task_id 对 LLM 不公开（它们是平台内部
+	// 路由标识，从未出现在 system prompt 中），因此 LLM 调用 todo/* 这类需要
+	// session_id 的工具时无法正确传参——它会硬编码 "test-session" 之类占位值，
+	// 导致 todo 写入错误 session。这里在 tool 执行前自动用 Engine 持有的真实
+	// session_id / task_id 覆盖 LLM 传入的值。覆盖是无条件的：这些标识属于
+	// 平台路由层，LLM 没有也不应有权威性，始终以 Engine 的真实值为准。
+	if e.cfg.SessionID != "" {
+		args["session_id"] = e.cfg.SessionID
+	}
+	if e.taskID != "" {
+		args["task_id"] = e.taskID
+	}
+
 	// 发出 step 和 tool call 生命周期事件。UI 用这些事件展示：
 	//   - step_started：该 step 在 step 列表中变为 "running"
 	//   - tool_call_started：在卡片中展示 tool 名和参数

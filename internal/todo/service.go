@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/google/uuid"
 )
 
 // EventBus 是 Service 用来广播 todo_list_changed 事件的抽象。
@@ -53,6 +54,7 @@ func (s *Service) Create(sessionID, taskID, title, description, parentTodoID str
 		return nil, fmt.Errorf("title is required")
 	}
 	t := Todo{
+		ID:              uuid.New().String(), // Service 侧预先生成 ID，避免依赖 InsertTodo 回写（按值传递无法回写）
 		SessionID:       sessionID,
 		CreatedByTaskID: taskID,
 		ActiveTaskID:    taskID,
@@ -66,7 +68,7 @@ func (s *Service) Create(sessionID, taskID, title, description, parentTodoID str
 	if err := s.store.Create(t); err != nil {
 		return nil, fmt.Errorf("create todo: %w", err)
 	}
-	// InsertTodo 可能给 t 生成 ID，重新读取一次以拿到完整字段。
+	// InsertTodo 按 t.ID 落库，重新读取一次以拿到 DB 维护的时间戳等完整字段。
 	created, err := s.store.Get(t.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read created todo: %w", err)
