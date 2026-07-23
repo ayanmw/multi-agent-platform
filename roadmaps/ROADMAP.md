@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-23
-> **当前版本**: v0.10.1 Alpha（内置 Case 矩阵扩展到 21 个，mock 回归 21/21）
+> **当前版本**: v0.11.3 Alpha（内置 Case 矩阵扩展到 21 个 L1-L5 阶梯，mock 回归 21/21）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 (Skeleton)
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)
 ```
 
 ---
@@ -209,7 +209,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] TypeWriter 代码块复制按钮 + Tool output JSON 格式化/还原切换
 - [x] MetricsPanel 运行时长 + Agent 选择器占坑
 
-### extend-task-cases 增量（2026-07-23，OpenSpec change `extend-task-cases`）
+### extend-task-cases 增量（2026-07-23，OpenSpec change `extend-task-cases`，版本 v0.11.3 Alpha，commit `134426e`）
+> OpenSpec change 已归档至 `openspec/changes/archive/2026-07-23-extend-task-cases/`，并产出 `openspec/specs/task-cases/` 与 `openspec/specs/multi-agent-orchestration/` 两份能力规格。本增量属 Phase 3（Cases）的能力深化，挂在本节便于追溯。
 - [x] 内置 Case 矩阵从 5 个扩展到 21 个，覆盖 L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排五级阶梯
 - [x] 新增 L2：todo-driven、web-research、skill-code-helper、cron-notify、llm-judge-qa
 - [x] 新增 L3：policy-enforcement（PathTraversal 拦截）、approval-flow（AllowShellDangerous）、max-steps-exhaustion（步数耗尽 failed）、context-compression、checkpoint-resume
@@ -841,3 +842,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
 | v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
 | v0.11.2 Alpha | 2026-07-22 | Phase 7-cron 收尾: smoke 端到端双覆盖 — `smoke-test.sh` 9.6 节(mock) + `real-llm-smoke.sh` 场景 6(真实 LLM)；新增 node 内置 WebSocket 订阅器采集 WS 事件流断言 cron_triggered→started→completed；real-llm-smoke 22 项全 PASS / 0 FAIL |
+| v0.11.3 Alpha | 2026-07-23 | extend-task-cases: 内置 Case 矩阵 5→21（L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排）+ `cases_test.go` 完整性校验 + `internal/llm/mock_builtin.go` 22 个 mock 脚本（21 case + tool-error 回退）+ `mock_provider.go` selectScript 两档 CaseID 评分（精确 +1000 / 子串 +500，防 research 劫持）+ `scripts/cases-regression.sh` mock 回归 21/21（WS 重连订阅编排事件 + Windows PYTHONUTF8=1）；OpenSpec change 已归档 `openspec/changes/archive/2026-07-23-extend-task-cases/` 并产出 `task-cases` / `multi-agent-orchestration` 两份能力规格 |

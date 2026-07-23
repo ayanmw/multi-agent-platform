@@ -3,7 +3,51 @@
 > 本文档汇总 Multi-Agent Platform 的重要 bug 修复、体验优化与行为变更。
 > 与 `roadmaps/ROADMAP.md` 配合使用：路线图记录 Phase 级别的大事，本文档记录每次用户反馈驱动的具体改动。
 >
-> 最后更新：2026-07-11
+> 最后更新：2026-07-23
+
+---
+
+## 2026-07-23 内置 Case 矩阵扩展（extend-task-cases，v0.11.3 Alpha）
+
+> OpenSpec change `extend-task-cases`，已归档至 `openspec/changes/archive/2026-07-23-extend-task-cases/`。属 Phase 3（Cases）的能力深化，非用户反馈驱动，但因引入了 21 个内置 case 与 mock 回归基建，记录于此便于追溯。
+
+### 1. 内置 Case 矩阵 5 → 21（L1-L5 阶梯）
+
+**问题**
+`internal/cases/cases.go` 长期只有 5 个内置 case（code-gen / research / dialogue / long-task / multi-agent），无法覆盖 todo / skill / cron / harness 治理 / 多 Agent 静态与动态编排等已落地能力，回归脚本 `scripts/cases-regression.sh` 也只跑这 5 个。
+
+**改动**
+- 新增 16 个内置 case，与原有 5 个共同组成 L1-L5 五级阶梯：
+  - L1 单 Agent 基线：`code-gen` `dialogue` `research` `long-task`
+  - L2 单 Agent + 子系统：`todo-driven` `web-research` `skill-code-helper` `cron-notify` `llm-judge-qa`
+  - L3 Harness 治理：`policy-enforcement` `approval-flow` `max-steps-exhaustion` `context-compression` `checkpoint-resume`
+  - L4 多 Agent 静态编排：`multi-agent`(legacy) `multi-agent-parallel` `multi-agent-sequential` `multi-agent-dag`
+  - L5 多 Agent 动态编排：`multi-agent-leader-dispatch` `multi-agent-review` `multi-agent-fault-tolerance`
+- `internal/cases/cases_test.go` 增补完整性校验：ID 唯一、Name/Category/SystemPrompt/Goal 非空、MaxSteps>0、Tags 含阶梯标识、L1-L5 各级覆盖、验收类型属 harness 枚举。
+
+**涉及文件**
+`internal/cases/cases.go`, `internal/cases/cases_test.go`, `internal/harness/harness.go`
+
+### 2. Mock 回归基建 21/21 PASS
+
+**改动**
+- `internal/llm/mock_builtin.go`：`BuiltinMockScripts()` 从少数脚本扩展到 22 个（21 个 case 各一个精确 CaseID 脚本 + `tool-error` keyword 回退），每个脚本还原该 case 的真实 ReAct 行为（tool_call → 最终 text）。
+- `internal/llm/mock_provider.go` `selectScript`：CaseID 命中分两档——精确 `EqualFold` +1000、输入子串包含 +500。后者低于前者，防止 `research` 这类常见英文词 case ID 靠子串劫持其它 case 的 run-case 路径（`multi-agent-sequential` 的 input 含 "research" 曾被 research 脚本抢走）。新增 `TestSelectScriptCaseIDBeatsSubstring` 回归测试。
+- `scripts/cases-regression.sh`：
+  - 对全部 21 个 case 串行跑 mock 回归，断言 status / has_tool / final_result / total_tokens / cost_records；L4-L5 额外断言编排事件（`decompose_done` / `agent_dispatched` / `agent_completed`）与 `child_tasks[].steps` 回填。
+  - WS 订阅改为服务就绪后启动 + 带退避重连，捕获 orchestrator 仅经 `hub.SendEvent` 广播、不写 task steps 的编排事件。
+  - Windows 下强制 `export PYTHONUTF8=1`，修复 python stdin 默认 GBK 解码含中文的 `/api/tasks` 响应（如 `skill/list` 返回的 Skill DisplayName "代码助手"）导致 JSON 解析失败、轮询 status 恒空 → 误判超时。
+  - `max-steps-exhaustion` 等 `status=failed` 的 case 视为 PASS。
+
+**涉及文件**
+`internal/llm/mock_builtin.go`, `internal/llm/mock_provider.go`, `internal/llm/mock_provider_test.go`, `scripts/cases-regression.sh`
+
+### 验证
+- `go test ./internal/cases/... ./internal/llm/... ./internal/harness/... ./internal/orchestrator/...` ✅
+- `bash scripts/cases-regression.sh` 21/21 PASS ✅
+
+### 已知限制
+- `tasks.md` 第 9 部分（real-llm-smoke 9.1-9.4 代表性场景抽样）超出本次 mock 回归范围，保留为未勾项，作为潜在后续 change。
 
 ---
 
