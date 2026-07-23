@@ -620,63 +620,8 @@ func SeedDefaultAgent() error {
 	return nil
 }
 
-// ToolRecord 对应 tools 表，用于动态 tool 注册。
-type ToolRecord struct {
-	Name        string
-	Description string
-	Schema      map[string]any
-	Enabled     bool
-	CreatedAt   time.Time
-}
-
-// InsertTool 向 tools 表持久化一个新的动态 tool。
-func InsertTool(name, description string, schema map[string]any, enabled bool) error {
-	if DB == nil {
-		return fmt.Errorf("db not initialized")
-	}
-	schemaJSON, _ := json.Marshal(schema)
-	_, err := DB.Exec(
-		`INSERT INTO tools (name, description, schema, enabled) VALUES (?, ?, ?, ?)`,
-		name, description, string(schemaJSON), enabled,
-	)
-	return err
-}
-
-// DeleteTool 按 name 从 tools 表删除一个动态 tool。
-func DeleteTool(name string) error {
-	if DB == nil {
-		return fmt.Errorf("db not initialized")
-	}
-	_, err := DB.Exec(`DELETE FROM tools WHERE name=?`, name)
-	return err
-}
-
-// QueryTools 返回 tools 表中的全部 tool，按创建时间排序。
-func QueryTools() ([]ToolRecord, error) {
-	if DB == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-	rows, err := DB.Query(
-		`SELECT name, COALESCE(description,''), COALESCE(schema,'{}'), COALESCE(enabled,1), created_at
-		 FROM tools ORDER BY created_at DESC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tools []ToolRecord
-	for rows.Next() {
-		var tr ToolRecord
-		var schemaJSON string
-		if err := rows.Scan(&tr.Name, &tr.Description, &schemaJSON, &tr.Enabled, &tr.CreatedAt); err != nil {
-			return nil, err
-		}
-		json.Unmarshal([]byte(schemaJSON), &tr.Schema)
-		tools = append(tools, tr)
-	}
-	return tools, rows.Err()
-}
+// ToolRecord / InsertTool / DeleteTool / QueryTools 已迁移至 pkg/db/tool.go
+// （v27 tools 表 + 多版本/来源 schema）。保留此处空注释作为导航锚点。
 
 // ProjectRecord 对应 projects 表。
 // project 是顶层组织单元——每个 session 都隶属于某个 project。

@@ -11,6 +11,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -21,6 +22,9 @@ type Migration struct {
 	Version     int    // 单调递增的版本号
 	Description string // 人类可读的描述
 	SQL         string // 待执行的 DDL 语句
+	// Pre 在执行 SQL 语句之前调用，可访问底层 *sql.DB 做数据备份/打印等副作用。
+	// 为 nil 时跳过。典型用途：DROP 重建表前把旧记录打印到日志，方便用户手动恢复。
+	Pre func(*sql.DB) error
 }
 
 // 所有 migration，按时间顺序排列。
@@ -480,6 +484,15 @@ func RunMigrations() error {
 		}
 
 		log.Printf("[Migration] v%d: %s", m.Version, m.Description)
+
+		// 执行可选的 Pre 钩子（DROP 重建前打印旧数据等副作用）。
+		// Pre 失败只记录日志，不阻断迁移——数据备份是尽力而为，
+		// 不应让 schema 演进因打印日志失败而卡住。
+		if m.Pre != nil {
+			if err := m.Pre(DB); err != nil {
+				log.Printf("[Migration] v%d: pre-hook failed (continuing): %v", m.Version, err)
+			}
+		}
 
 		// SQLite 在单次 Exec 调用中不支持多条语句，
 		// 因此按分号拆分后逐条执行。
