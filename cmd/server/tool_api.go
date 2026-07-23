@@ -55,38 +55,6 @@ func (s *appServer) handleRegisterTool(w http.ResponseWriter, r *http.Request) {
 		req.Name = fmt.Sprintf("dynamic_tool_%03d", counter)
 	}
 
-	// 创建并配置 DynamicTool，用于取得 CanonicalName 及后续注册。
-	dt := tool.NewDynamicTool(req.Name, req.Description, req.Parameters, tool.DynamicToolType(req.Type))
-	switch req.Type {
-	case "shell":
-		if req.Command == "" {
-			http.Error(w, "command is required for shell-type tools", http.StatusBadRequest)
-			return
-		}
-		dt.SetCommand(req.Command)
-	case "http":
-		if req.URL == "" {
-			http.Error(w, "url is required for http-type tools", http.StatusBadRequest)
-			return
-		}
-		if req.Method == "" {
-			req.Method = "GET"
-		}
-		dt.SetHTTP(req.URL, req.Method)
-	case "inline":
-		if req.Code == "" {
-			http.Error(w, "code is required for inline-type tools", http.StatusBadRequest)
-			return
-		}
-		dt.SetCode(req.Code)
-	}
-
-	// 检查 CanonicalName 冲突：同一 namespace/name@version 不能重复注册。
-	if _, exists := toolRegistry.Get(dt.CanonicalName()); exists {
-		http.Error(w, fmt.Sprintf("tool with canonical name '%s' already exists", dt.CanonicalName()), http.StatusConflict)
-		return
-	}
-
 	// 未提供 description 时使用默认值
 	if req.Description == "" {
 		req.Description = fmt.Sprintf("Dynamic tool: %s (%s)", req.Name, req.Type)
@@ -100,20 +68,50 @@ func (s *appServer) handleRegisterTool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 注册到全局 tool registry（立即对 agent 可用）
-	toolRegistry.Register(dt)
-
-	// 构造 execution_config_json：含 type 与对应执行字段
 	execConfig := map[string]any{"type": req.Type}
 	switch req.Type {
 	case "shell":
+		if req.Command == "" {
+			http.Error(w, "command is required for shell-type tools", http.StatusBadRequest)
+			return
+		}
 		execConfig["command"] = req.Command
 	case "http":
+		if req.URL == "" {
+			http.Error(w, "url is required for http-type tools", http.StatusBadRequest)
+			return
+		}
+		if req.Method == "" {
+			req.Method = "GET"
+		}
 		execConfig["url"] = req.URL
 		execConfig["method"] = req.Method
 	case "inline":
+		if req.Code == "" {
+			http.Error(w, "code is required for inline-type tools", http.StatusBadRequest)
+			return
+		}
 		execConfig["code"] = req.Code
 	}
+
+	// 使用带版本号的 descriptor 构造 DynamicTool，确保 CanonicalName 与持久化记录一致。
+	dt := tool.NewDynamicToolFromDescriptor(tool.ToolDescriptor{
+		Name:            req.Name,
+		Description:     req.Description,
+		Parameters:      req.Parameters,
+		Source:          tool.ToolSourceLocalDB,
+		Version:         "1.0.0",
+		ExecutionConfig: execConfig,
+	})
+
+	// 检查 CanonicalName 冲突：同一 namespace/name@version 不能重复注册。
+	if _, exists := toolRegistry.Get(dt.CanonicalName()); exists {
+		http.Error(w, fmt.Sprintf("tool with canonical name '%s' already exists", dt.CanonicalName()), http.StatusConflict)
+		return
+	}
+
+	// 注册到全局 tool registry（立即对 agent 可用）
+	toolRegistry.Register(dt)
 
 	// 持久化到 SQLite 的 v27 tools 表。
 	if err := db.InsertToolV2(db.ToolRecord{
@@ -184,9 +182,12 @@ func currentActor(r *http.Request) string {
 	}
 	return "apikey:" + key
 }
+
+// handleListTools 处理 GET /api/tools —— 列出当前已注册的全部 tool
 // （包括内置与动态 tool）。每个 tool 返回时附带其 metadata，
 // 以及一个 "builtin" 标志，指示它是否为受保护的内置 tool。
-func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
+func (s *appServer) handleListTools(w http.ResponseWriter, r *http.Request) {
+	toolRegistry := s.toolRegistry
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
@@ -272,7 +273,7 @@ func (s *appServer) handleDeleteTool(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
 		"name":    name,
 		"message": fmt.Sprintf("Tool '%s' unregistered successfully", name),

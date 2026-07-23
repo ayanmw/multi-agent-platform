@@ -469,7 +469,7 @@ func (s *appServer) registerRoutes() {
 			}
 			s.handleRegisterTool(w, r)
 		case http.MethodGet:
-			handleListTools(w, r, toolRegistry)
+			s.handleListTools(w, r)
 		case http.MethodDelete:
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
