@@ -64,5 +64,5 @@
 
 - [x] 9.1 更新 `CLAUDE.md`:项目结构补 `internal/workspace/`、`internal/tool/worktree.go`、sessions 表 `active_worktree_id`、worktree Agent Tools + REST API、`worktree_*` 事件、`WORKTREE_ENABLED` 配置;扩展 Phase 表新增一行
 - [x] 9.2 更新 `roadmaps/ROADMAP.md`:版本历史与状态表
-- [ ] 9.3 提交 Git(信息格式 `Phase ...: workspace worktree 隔离`)
-- [ ] 9.4 `openspec-verify-change` → `openspec-archive-change`(归档到 `openspec/changes/archive/`)
+- [x] 9.3 提交 Git(信息格式 `Phase ...: workspace worktree 隔离`)
+- [x] 9.4 `openspec-verify-change` → `openspec-archive-change`(归档到 `openspec/changes/archive/`)
