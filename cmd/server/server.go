@@ -487,20 +487,8 @@ func (s *appServer) registerRoutes() {
 	})
 
 	// Phase 5: 任务恢复的 Checkpoint API endpoint
-	http.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
-		}
-		handleListCheckpoints(w, r, checkpointMgr)
-	})
-	http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr, modelRegistry, modelRouter, routerProviders)
-	})
+	http.HandleFunc("/api/checkpoints", s.handleListCheckpoints)
+	http.HandleFunc("/api/checkpoints/recover", s.handleRecoverCheckpoint)
 
 	// Memory API (Phase 6 / Phase 5-B)
 	memGateway := harness.NewPromotionGate(memDB)

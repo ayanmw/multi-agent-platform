@@ -126,6 +126,241 @@ func (r *AgentRunner) RunSync(ctx context.Context, spec AgentRunSpec) {
 	r.runAgentLoopWithTurn(spec)
 }
 
+// RecoverSpec 描述一次 checkpoint 恢复请求。
+type RecoverSpec struct {
+	TaskID string
+}
+
+// Recover 从 checkpoint 恢复一个 Engine 并在后台 goroutine 中继续运行。
+// 与旧的 handleRecoverCheckpoint 不同，它走统一的 AgentDeps，补齐 EngineConfig
+// 中 skill / session message writer / workspace / todos 等字段，恢复后的 agent
+// 不再退化。返回恢复的 agentID。
+func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, error) {
+	cm := r.Deps.CheckpointMgr
+	if cm == nil {
+		return "", fmt.Errorf("checkpoint manager not available")
+	}
+	cp, err := cm.Load(spec.TaskID)
+	if err != nil {
+		return "", fmt.Errorf("load checkpoint: %w", err)
+	}
+
+	cfg := r.Deps.Cfg
+	hub := r.Hub
+	// checkpoint 未保存 sessionID/workspace，按 taskID 反查 session。
+	sessionID := ""
+	if task, err := db.QueryTaskByID(spec.TaskID); err == nil && task != nil {
+		sessionID = task.SessionID
+	}
+
+	// 再允许额外 10 步（若 checkpoint 本身 MaxSteps 更大，也会被 Engine 保留）。
+	contract := harness.DefaultContract("resume")
+	contract.MaxSteps = cp.StepIdx + 10
+
+	caseID := ""
+
+	// 复用 chat 路径的 provider 解析逻辑；失败时回退 nil，Engine 会再创建默认 provider。
+	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	if err != nil {
+		log.Printf("[AgentRunner.Recover] failed to create provider for task=%s: %v", spec.TaskID, err)
+		provider = nil
+	}
+
+	progressManager := harness.NewProgressManager()
+	tokenBudgetRule := &harness.TokenBudgetRule{}
+	costBudgetRule := harness.NewCostBudgetRule()
+	policyChain := harness.NewPolicyChain(
+		&harness.PathTraversalRule{},
+		&harness.FileScopeRule{},
+		&harness.DangerousCommandRule{},
+		harness.NewApprovalRule(r.Deps.ApprovalHandler),
+		harness.NewTagPolicyRule(r.Deps.Tools.ToolTags),
+		tokenBudgetRule,
+		&harness.ToolWhitelistRule{},
+		costBudgetRule,
+	)
+	policyGate := harness.NewPolicyGate(policyChain, contract)
+
+	// 为恢复路径构建与 chat 路径一致的成本/指标回调。
+	onUsage := func(model string, profile *llm.ModelProfile, usage llm.Usage) {
+		observability.DefaultMetrics.RecordLLMCall(
+			uint64(usage.PromptTokens),
+			uint64(usage.CompletionTokens),
+			uint64(usage.TotalTokens),
+		)
+		if profile == nil || profile.Provider == "unknown" {
+			if p := r.Deps.ModelRegistry.Get(model); p != nil {
+				profile = p
+			}
+		}
+		costTracker := cost.NewCostTracker(cost.WithRegistry(r.Deps.ModelRegistry))
+		projectID := "default"
+		if sessionID != "" {
+			if sess, err := db.QuerySessionByID(sessionID); err == nil {
+				projectID = sess.ProjectID
+			}
+		}
+		record := costTracker.BuildRecordFromProfile(
+			spec.TaskID, sessionID, projectID, cp.AgentID,
+			0, model, profile, usage,
+		)
+		if record.CostUSD > 0 {
+			costBudgetRule.SetCost(record.CostUSD)
+		}
+		if r.Deps.CostRepo != nil {
+			if err := r.Deps.CostRepo.Insert(record); err != nil {
+				observability.DefaultLogger.Warn("cost", "failed to persist cost record", map[string]any{
+					"task_id": spec.TaskID,
+					"error":   err.Error(),
+				})
+			}
+		}
+		observability.DefaultMetrics.RecordCost(record.CostCents)
+	}
+
+	// 恢复路径的 workspace：按反查出的 session 决定。
+	workspaceDir := ""
+	if sessionID != "" {
+		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
+			workspaceDir = wsSess.WorkspaceDir
+			if workspaceDir == "" && wsSess.ProjectID != "" {
+				if proj, projErr := db.QueryProjectByID(wsSess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
+					workspaceDir = proj.WorkingDirectory
+				}
+			}
+		}
+	}
+
+	// 恢复路径的 working memory 与 active todos：与 chat 路径保持一致。
+	workingMemory := ""
+	if r.Deps.MemRecall != nil && sessionID != "" {
+		if wm, err := r.Deps.MemRecall.BuildWorkingMemory("default", sessionID, "", 3); err == nil {
+			workingMemory = r.Deps.MemRecall.FormatForSystemPrompt(wm)
+		}
+	}
+	workingMemory += projectRulesPrompt(sessionID)
+
+	rootTraceCtx := tracer.StartRoot(spec.TaskID, "recover")
+	traceRegistry.Store(spec.TaskID, rootTraceCtx)
+
+	engineCfg := runtime.EngineConfig{
+		AgentID:           cp.AgentID,
+		SystemPrompt:      "You are recovering from a checkpoint. Continue the task from where you left off.",
+		Model:             cfg.LLMModel,
+		Endpoint:          cfg.LLMEndpoint,
+		APIKey:            cfg.LLMAPIKey,
+		Provider:          provider,
+		CaseID:            caseID,
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		MaxSteps:          contract.MaxSteps,
+		Persistence:       r.Deps.Persist,
+		PolicyGate:        policyGate,
+		Progress:          progressManager,
+		Contract:          contract,
+		ApprovalHandler:   r.Deps.ApprovalHandler,
+		AgentBus:          r.Deps.AgentBus,
+		CheckpointManager: cm,
+		Router:            r.Deps.ModelRouter,
+		Registry:          r.Deps.ModelRegistry,
+		Providers:         r.Deps.RouterProviders,
+		EvaluationRepository: func() runtime.EvaluationRepository {
+			if r.Deps.CaseService == nil {
+				return nil
+			}
+			return r.Deps.CaseService.Repository()
+		}(),
+		SessionMessageWriter: func(msg runtime.SessionMessageRecord) error {
+			var toolCallsJSON string
+			if msg.ToolCalls != "" {
+				toolCallsJSON = msg.ToolCalls
+			}
+			return db.InsertSessionMessage(db.SessionMessageRecord{
+				ID:         "msg_" + uuid.New().String(),
+				SessionID:  sessionID,
+				TaskID:     msg.TaskID,
+				TurnIndex:  msg.TurnIndex,
+				Role:       msg.Role,
+				Content:    msg.Content,
+				ToolCallID: msg.ToolCallID,
+				ToolCalls:  toolCallsJSON,
+				TokenCount: msg.TokenCount,
+			})
+		},
+		WorkspaceDir:          workspaceDir,
+		OnLLMUsage:            onUsage,
+		SkillRegistry:         globalSkillRegistry,
+		ActiveSkills:          GetEnabledSkillIDs(globalSkillRegistry),
+		Tracer:                tracer,
+		RootTraceCtx:          rootTraceCtx,
+		LLMLatencyRecorder:    func(latency time.Duration) { observability.DefaultMetrics.RecordLLMLatency(latency) },
+		ToolLatencyRecorder:   func(latency time.Duration) { observability.DefaultMetrics.RecordToolLatency(latency) },
+		SubTaskID:             spec.TaskID,
+		Role:                  runtime.AgentRoleLeader,
+		CanDispatchSubAgents:  true,
+		CanDefineWorkflow:     true,
+		ApproverMode:          "user",
+		ActiveTodos: func() string {
+			if r.Deps.TodoSvc == nil || sessionID == "" {
+				return ""
+			}
+			activeTodos, err := r.Deps.TodoSvc.ListActiveBySession(sessionID)
+			if err != nil {
+				observability.DefaultLogger.Warn("todo", "failed to load active todos for recovery", map[string]any{
+					"session_id": sessionID,
+					"error":      err.Error(),
+				})
+				return ""
+			}
+			return todo.FormatActiveTodos(activeTodos)
+		}(),
+		WorkingMemory: workingMemory,
+	}
+
+	engine := runtime.RecoverFromCheckpoint(cp, engineCfg, r.Deps.Tools, &hubAdapter{hub: hub}, spec.TaskID)
+
+	// 与旧行为保持一致：启动 engine 后删除 checkpoint（避免重复恢复）。
+	// 失败只记日志，不阻断恢复。
+	if err := cm.Delete(spec.TaskID); err != nil {
+		log.Printf("[AgentRunner.Recover] failed to delete checkpoint %s: %v", spec.TaskID, err)
+	}
+
+	hub.SendEvent(event.NewEvent("task_started", spec.TaskID, cp.AgentID, cp.StepIdx, map[string]any{
+		"task_id":      spec.TaskID,
+		"agent_id":     cp.AgentID,
+		"recovered":    true,
+		"step_idx":     cp.StepIdx,
+		"total_tokens": cp.TotalTokens,
+	}))
+
+	go func() {
+		ctx := context.Background()
+		cancel := context.CancelFunc(func() {})
+		if contract.TimeoutSeconds > 0 {
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(contract.TimeoutSeconds)*time.Second)
+		} else {
+			ctx, cancel = context.WithCancel(ctx)
+		}
+		defer cancel()
+
+		result, totalTokens, err := engine.Run(ctx, "")
+		if err != nil {
+			log.Printf("[Recovery %s] Agent loop failed: %v", spec.TaskID, err)
+			failureReason := err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				failureReason = "task_timeout"
+			}
+			hub.SendEvent(event.NewEvent("task_failed", spec.TaskID, cp.AgentID, 0, map[string]any{
+				"reason": failureReason,
+			}))
+			return
+		}
+		log.Printf("[Recovery %s] Completed. Tokens: %d, Result: %s", spec.TaskID, totalTokens, truncate(result, 100))
+	}()
+
+	return cp.AgentID, nil
+}
+
 // makeRunnerDeps 把 chat / cron / multi-agent / session-chat / run-case 等入口
 // 共用的那组"非全局"依赖，连同包级全局（globalSkillRegistry / globalOrchestrator /
 // tracer）一起组装成 AgentDeps。
