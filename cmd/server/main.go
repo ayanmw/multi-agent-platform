@@ -41,6 +41,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// handleTasksRoot 是 /api/tasks 的 POST 入口（chat / multi-agent / stream-demo
+// action）。以闭包形式在 main() 中赋值，捕获 main 局部依赖；声明为包级变量
+// 让 server.go 的 registerRoutes 也能引用同一个闭包。Phase 8-A Task 9 会把它
+// 改为 appServer 方法 + AgentRunner，届时此变量可移除。
+var handleTasksRoot func(http.ResponseWriter, *http.Request)
+
 // cancelRegistry 把 task_id 映射到当前运行中 agent loop 的 context.CancelFunc。
 // WebSocket 控制消息可以查找并调用这些函数来取消任务。访问由 sync.Map 同步。
 //
@@ -801,8 +807,7 @@ func main() {
 		log.Println("Todo subsystem: disabled (no database)")
 	}
 
-	// Phase 7: 在创建 dispatcher / tool registry 之后注册 Todo REST API。
-	registerTodoRoutes(http.DefaultServeMux, todoSvc)
+	// Todo REST API 注册移至 appServer.registerRoutes（Phase 8-A）。
 
 	// Phase 7-cron: 初始化 Cron 子系统（定时器）。
 	// 依赖顺序：Store(pkg/db 实现) → ActionRunner(注入 toolRegistry + 白名单 +
@@ -842,7 +847,8 @@ func main() {
 		}
 		globalCronService = cron.NewService(cronStore, cronSched, execAdapter, bus)
 		cron.RegisterCronTools(toolRegistry, globalCronService)
-		RegisterCronAPI(http.DefaultServeMux, globalCronService)
+		// Cron REST API 注册移至 appServer.registerRoutes（Phase 8-A），
+		// 通过 globalCronService 包级变量引用。
 		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
 	} else {
 		log.Println("Cron subsystem: disabled (no database)")
@@ -881,79 +887,12 @@ func main() {
 	orch.SetAgentBus(agentBusAdapter)
 	orch.SetPersistence(persist)
 
-	// WebSocket 入口
-	http.HandleFunc("/ws", ws.ServeWS(hub))
-
-	// 把原始的 /api/tasks POST handler 保存为闭包，便于在精确的 /api/tasks
-	// （以及历史上的 /api/tasks/）两处复用。
-	var handleTasksRoot func(http.ResponseWriter, *http.Request)
-	_ = handleTasksRoot // 避免注册位置移动后出现"声明未使用"错误
-
-	// API: 启动一个真实 Agent Loop 的 chat 任务、列出任务、获取任务详情、
-	// 拉取 context window 快照、创建新任务。
-	//
-	// 我们把 "/api/tasks/" 注册在 "/api/tasks" 之前，以便子资源路径
-	// （如 /api/tasks/:id/context_window）能被更具体的 handler 匹配。
-	// Go 的 ServeMux 会先匹配精确前缀，但旧的合并 handler 依赖 root
-	// handler 内部检查 r.URL.Path，在 SPA fallback 改动后嵌套路径不能
-	// 被可靠路由，因此这里显式分注册。
-	http.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
-		if path == "" {
-			http.Error(w, "task ID required", http.StatusNotFound)
-			return
-		}
-
-		if strings.HasSuffix(path, "/context_window") {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			id := strings.TrimSuffix(path, "/context_window")
-			handleGetTaskContextWindow(w, r, id)
-			return
-		}
-
-		// Phase 7-B: GET /api/tasks/:id/agent-messages —— 任务的 AgentBus 历史。
-		if strings.HasSuffix(path, "/agent-messages") {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			id := strings.TrimSuffix(path, "/agent-messages")
-			handleGetAgentMessages(w, r, id)
-			return
-		}
-
-		// GET /api/tasks/:id —— 单个任务详情
-		if r.Method == http.MethodGet {
-			r.URL.RawQuery = "id=" + path
-			handleGetTask(w, r)
-			return
-		}
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
-	})
-
-	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
-		// 精确的 /api/tasks （或 /api/tasks/）是根入口。
-		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
-			// GET /api/tasks —— 列出最近任务，或通过 ?id=xxx 获取单个任务。
-			if r.Method == http.MethodGet {
-				if r.URL.Query().Get("id") != "" {
-					handleGetTask(w, r)
-					return
-				}
-				handleListTasks(w, r)
-				return
-			}
-			handleTasksRoot(w, r)
-			return
-		}
-
-		// 其它未处理的路径一律返回 404。
-		http.Error(w, "task ID required", http.StatusNotFound)
-	})
-
+	// handleTasksRoot 是 /api/tasks 的 POST 入口闭包（chat / multi-agent /
+	// stream-demo action）。它捕获下方声明的 main() 局部依赖（cfg / toolRegistry /
+	// persist / hub / approvalHandler / memRecall / agentBusAdapter / checkpointMgr /
+	// costRepo / modelRegistry / modelRouter / routerProviders / caseService / todoSvc /
+	// orch / routerClassifier），赋值后被 server.go 的 registerRoutes 通过包级变量
+	// 引用。Phase 8-A Task 9 会把它改为 appServer 方法 + AgentRunner。
 	handleTasksRoot = func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1315,608 +1254,36 @@ func main() {
 		return sid, tid, nil
 	}
 
-	// Phase 7-C: 可观测性 REST endpoint。
-	http.HandleFunc("/api/audit", handleAudit)
-	http.HandleFunc("/api/traces", handleTraces)
-	http.HandleFunc("/api/replay/tasks/", handleReplay)
-	http.HandleFunc("/api/replay/events", func(w http.ResponseWriter, r *http.Request) {
-		handleReplayEvents(w, r, hub)
-	})
-
-	// Contract 限制 endpoint：暴露服务端强制的 task contract 边界。
-	// GET /api/contract-limits
-	http.HandleFunc("/api/contract-limits", handleContractLimits(cfg))
-
-	// Agent CRUD API
-	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
-		// Agent 写操作仅 admin 可执行。
-		if r.Method != http.MethodGet && !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-			return
-		}
-		handleAgents(w, r)
-	})
-	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-			return
-		}
-		handleAgentByID(w, r)
-	})
-
-	// Session API
-	http.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		handleSessions(w, r)
-	})
-	http.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		// POST /api/sessions/{id}/chat —— 一个 session 内的多轮对话
-		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
-			return
-		}
-		// GET /api/sessions/{id}/messages —— session 消息历史
-		if strings.HasSuffix(path, "/messages") {
-			sessionID := strings.TrimSuffix(path, "/messages")
-			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionMessages(w, r, sessionID)
-			return
-		}
-		// GET /api/sessions/{id}/workspace/dir —— 返回 workspace 路径与 auto 标志
-		if strings.HasSuffix(path, "/workspace/dir") {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			sessionID := strings.TrimSuffix(path, "/workspace/dir")
-			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			sess, err := db.QuerySessionByID(sessionID)
-			if err != nil {
-				http.Error(w, "session not found: "+err.Error(), http.StatusNotFound)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"session_id":     sessionID,
-				"workspace_dir":  sess.WorkspaceDir,
-				"workspace_auto": sess.WorkspaceAuto,
-			})
-			return
-		}
-		// GET /api/sessions/{id}/workspace-browse —— 供前端使用的 workspace 浏览信息
-		if strings.HasSuffix(path, "/workspace-browse") {
-			sessionID := strings.TrimSuffix(path, "/workspace-browse")
-			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionWorkspaceBrowse(w, r, sessionID)
-			return
-		}
-		// GET /api/sessions/{id}/workspace-tree?path=<rel> — 列出 session workspace 下
-		// 指定相对子目录的文件树（单层 + 目录可递归展开）。仅限本 session 工作目录，
-		// 服务端做 path traversal 校验。供 UI v2 右侧文件浏览器使用。
-		if strings.HasSuffix(path, "/workspace-tree") {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			sessionID := strings.TrimSuffix(path, "/workspace-tree")
-			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionWorkspaceTree(w, r, sessionID)
-			return
-		}
-		handleSessionByID(w, r)
-	})
-
-	// Project API
-	http.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
-		handleProjects(w, r)
-	})
-	http.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
-		handleProjectByID(w, r)
-	})
-
-	// Phase 6-D: Cost 查询 API（task/session/project/daily 聚合）。
-	// 数据从 CostRepository 读取，因此包含已持久化的记录。
-	http.HandleFunc("/api/costs", func(w http.ResponseWriter, r *http.Request) {
-		handleCostQuery(w, r, costRepo)
-	})
-
-	// Phase 6-D: Health check endpoint（JSON，检查 DB + WS hub）。
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		status := map[string]any{
-			"status":    "ok",
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"checks": map[string]any{
-				"websocket": map[string]string{"status": "ok"},
-			},
-		}
-		dbStatus := "ok"
-		if db.DB != nil {
-			if err := db.DB.Ping(); err != nil {
-				dbStatus = "error: " + err.Error()
-				status["status"] = "degraded"
-			}
-		} else {
-			dbStatus = "not initialized"
-		}
-		status["checks"].(map[string]any)["database"] = map[string]string{"status": dbStatus}
-
-		w.Header().Set("Content-Type", "application/json")
-		if status["status"] == "ok" {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-		json.NewEncoder(w).Encode(status)
-	})
-
-	// Phase 6-D: Prometheus 文本格式的 Metrics endpoint。
-	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprint(w, observability.DefaultMetrics.PrometheusText())
-	})
-
-	// 保留旧的纯文本 health check 以向后兼容。
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
-	})
-
-	// Auth API endpoint（API key 管理）
-	if authAPI == nil {
-		authAPI = auth.NewAuthAPI(authStore)
+	// 路由注册：Phase 8-A 把全部 http.HandleFunc 收敛到 appServer.registerRoutes。
+	server := &appServer{
+		cfg:              cfg,
+		hub:              hub,
+		toolRegistry:     toolRegistry,
+		persist:          persist,
+		approvalHandler:  approvalHandler,
+		memRecall:        memRecall,
+		agentBusAdapter:  agentBusAdapter,
+		checkpointMgr:    checkpointMgr,
+		memDB:            memDB,
+		costRepo:         costRepo,
+		modelRegistry:    modelRegistry,
+		modelRouter:      modelRouter,
+		routerProviders:  routerProviders,
+		caseService:      caseService,
+		todoSvc:          todoSvc,
+		skillRegistry:    skillRegistry,
+		skillStore:       skillStore,
+		mcpManager:       mcpManager,
+		orch:             orch,
+		mockStore:        mockStore,
+		authAPI:          authAPI,
+		authStore:        authStore,
+		vectorStore:      vectorStore,
+		embedProvider:    embedProvider,
+		routerClassifier: routerClassifier,
 	}
-	if authStore != nil {
-		authAPI.RegisterRoutes(http.DefaultServeMux)
-	}
+	server.registerRoutes()
 
-	// Mock 脚本管理 API（Phase 6 mock provider）。
-	// RegisterMockRoutes 在上面的 mock store 初始化之后调用
-	// （见 "Phase mock" 块）。该 store 在管理 API 与 MockProvider 之间
-	// 通过 llm.DefaultMockStore 共享。
-	RegisterMockRoutes(http.DefaultServeMux, mockStore, llm.BuiltinMockScripts())
-
-	// 模型价格管理 API —— 查看/更新 ModelRegistry 价格。
-	// GET  /api/models/prices         —— 列出所有 profile 的 InputPrice/OutputPrice
-	// PUT  /api/models/prices/{model} —— 更新某模型的价格（仅运行时，重启后重置）
-	// 该 registry 与接入 EngineConfig 和 CostTracker 的是同一个共享实例，
-	// 因此这里的价格改动对后续所有 cost record 立即生效。
-	RegisterModelPriceRoutes(http.DefaultServeMux, modelRegistry)
-
-	// Version API：从 version.txt 返回当前版本号
-	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-cache")
-		json.NewEncoder(w).Encode(map[string]string{
-			"version": version.Version,
-		})
-	})
-
-	// Session workspace 静态文件服务 —— /s/{session_id}/...
-	// 让前端一键访问生成的 HTML/图片等资源。
-	http.HandleFunc("/s/", func(w http.ResponseWriter, r *http.Request) {
-		// 从 /s/{session_id}/... 中提取 session_id
-		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
-		if len(pathParts) == 0 || pathParts[0] == "" {
-			http.Error(w, "session_id required", http.StatusBadRequest)
-			return
-		}
-		sessionID := pathParts[0]
-
-		// 查 session 以验证存在并取回 workspace_dir
-		sess, err := db.QuerySessionByID(sessionID)
-		if err != nil {
-			http.Error(w, "session not found or no workspace", http.StatusNotFound)
-			return
-		}
-
-		workspaceDir := sess.WorkspaceDir
-		if workspaceDir == "" && sess.ProjectID != "" {
-			if proj, projErr := db.QueryProjectByID(sess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
-				workspaceDir = proj.WorkingDirectory
-			}
-		}
-		if workspaceDir == "" {
-			http.Error(w, "session not found or no workspace", http.StatusNotFound)
-			return
-		}
-
-		// 安全：确保解析后的路径仍位于 workspace dir 内
-		requestPath := filepath.Join(workspaceDir, filepath.Join(pathParts[1:]...))
-		cleanPath := filepath.Clean(requestPath)
-		workspaceRoot := filepath.Clean(workspaceDir)
-		if !strings.HasPrefix(cleanPath, workspaceRoot) {
-			http.Error(w, "path traversal detected", http.StatusForbidden)
-			return
-		}
-
-		// 提供文件服务
-		http.ServeFile(w, r, cleanPath)
-	})
-
-	// Cases API：对预设与自定义 case 的完整 CRUD。
-	// GET /api/cases —— 列出所有 case，支持按 tag/category 过滤
-	// POST /api/cases —— 创建自定义 case
-	http.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			if caseService == nil {
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(cases.All())
-				return
-			}
-			handleListCases(w, r, caseService)
-		case http.MethodPost:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-				return
-			}
-			handleCreateCase(w, r, caseService)
-		default:
-			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
-		}
-	})
-	// GET /api/cases/{id} —— 单个 case
-	// PUT /api/cases/{id} —— 更新自定义 case
-	// DELETE /api/cases/{id} —— 删除自定义 case
-	// GET /api/cases/{id}/evaluations/{task_id} —— task+case 配对的评估结果
-	http.HandleFunc("/api/cases/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/api/cases/")
-		if path == "" || path == "/" {
-			http.Error(w, "case ID required", http.StatusBadRequest)
-			return
-		}
-
-		parts := strings.Split(path, "/")
-		id := parts[0]
-
-		// GET /api/cases/{id}/evaluations/{task_id}
-		if len(parts) >= 2 && parts[1] == "evaluations" {
-			handleGetCaseEvaluation(w, r, id, caseService)
-			return
-		}
-
-		// 既有的 /api/cases/{id} GET/PUT/DELETE
-		if len(parts) > 1 {
-			http.Error(w, "invalid case resource", http.StatusNotFound)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			if caseService == nil {
-				c := cases.Get(id)
-				if c == nil {
-					http.Error(w, "case not found", http.StatusNotFound)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(c)
-				return
-			}
-			handleGetCase(w, r, id, caseService)
-		case http.MethodPut:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-				return
-			}
-			handleUpdateCase(w, r, id, caseService)
-		case http.MethodDelete:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-				return
-			}
-			handleDeleteCase(w, r, id, caseService)
-		default:
-			http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
-		}
-	})
-
-	// Run Case 代理：POST /api/run-case
-	// CaseCard 前端使用的薄代理。委托给与 POST /api/tasks 相同的
-	// chat-action 逻辑，case_id 从请求体中提取。
-	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
-		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
-	})
-
-	// MCP 管理 API：动态 add / enable / disable / remove。
-	registerMCPRoutes(http.DefaultServeMux, mcpManager)
-
-	// Phase skill: 注册 Skill REST API。
-	// 路由实现集中在 api_skill.go，hub 用于广播 skill 状态变化事件。
-	registerSkillRoutes(http.DefaultServeMux, hub, skillStore, skillRegistry)
-
-	// 动态 Tool 注册 API (Phase 2+)
-	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-				return
-			}
-			handleRegisterTool(w, r, toolRegistry)
-		case http.MethodGet:
-			handleListTools(w, r, toolRegistry)
-		case http.MethodDelete:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
-				return
-			}
-			handleDeleteTool(w, r, toolRegistry)
-		default:
-			http.Error(w, "GET, POST, or DELETE only", http.StatusMethodNotAllowed)
-		}
-	})
-
-	// Multi-Agent orchestration endpoint (Phase 4)
-	// POST /api/multi-agent —— 并发运行多个 agent
-	http.HandleFunc("/api/multi-agent", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req struct {
-			Input          string                   `json:"input"`
-			CaseType       string                   `json:"case_type"`       // "multi_agent"、"code_gen" 或空
-			MaxSteps       int                      `json:"max_steps"`       // 覆盖所有 agent 的最大步数
-			TimeoutSeconds int                      `json:"timeout_seconds"` // 覆盖所有 agent 的超时
-			SessionID      string                   `json:"session_id"`
-			Agents         []orchestrator.AgentSpec `json:"agents"` // 直接给出的 agent spec（可选）
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// 按服务端强制的 contract 限制校验请求。
-		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
-			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
-			return
-		}
-		if req.MaxSteps < 1 {
-			// 未显式指定 max_steps —— 对 multi-agent 请求回退到服务端默认值。
-			req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
-		}
-		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
-			req.MaxSteps = cfg.ContractLimits.MaxSteps
-		}
-		if req.TimeoutSeconds < 0 {
-			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
-			return
-		}
-		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
-			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
-			return
-		}
-		if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
-			http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
-			return
-		}
-
-		if req.Input == "" && len(req.Agents) == 0 {
-			http.Error(w, "input or agents is required", http.StatusBadRequest)
-			return
-		}
-
-		// 把任务分解为 agent spec。当 result.Workflow 非 nil 时，使用 DAG 调度。
-		var specs []orchestrator.AgentSpec
-		strategy := "parallel"
-		var workflow *orchestrator.AgentWorkflow
-		if len(req.Agents) > 0 {
-			specs = enrichAgentSpecAllowedTools(req.Agents)
-		} else {
-			var decomposer orchestrator.Decomposer
-			if cfg.LLMUseMock {
-				decomposer = orchestrator.NewTaskDecomposer()
-			} else {
-				decomposer = orchestrator.NewLLMDecomposer(cfg, routerClassifier)
-			}
-			result, err := decomposer.Decompose(req.Input, req.CaseType)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			specs = result.Agents
-			strategy = result.Strategy
-			workflow = result.Workflow
-			if workflow != nil {
-				strategy = "dag"
-			}
-		}
-
-		// 若提供了全局 MaxSteps 覆盖则应用
-		if req.MaxSteps > 0 {
-			if req.MaxSteps > cfg.ContractLimits.MaxSteps {
-				req.MaxSteps = cfg.ContractLimits.MaxSteps
-			}
-			for i := range specs {
-				if specs[i].Contract == nil {
-					contract := harness.DefaultContract(specs[i].Input)
-					specs[i].Contract = &contract
-				}
-				specs[i].Contract.MaxSteps = req.MaxSteps
-			}
-		}
-
-		// 若提供了全局 TimeoutSeconds 覆盖则应用。
-		if req.TimeoutSeconds > 0 {
-			for i := range specs {
-				if specs[i].Contract == nil {
-					contract := harness.DefaultContract(specs[i].Input)
-					specs[i].Contract = &contract
-				}
-				specs[i].Contract.TimeoutSeconds = req.TimeoutSeconds
-			}
-		}
-
-			// 为本次 orchestration 中的所有 agent 构建 Working Memory。
-			// project 级 rules 文本（project.config.rules）会被追加到 Working Memory
-			// 之后，作为项目级约定注入到所有子 agent 的 system prompt。
-			workingMemory := ""
-			if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-				workingMemory = memRecall.FormatForSystemPrompt(wm)
-			}
-			workingMemory += projectRulesPrompt(req.SessionID)
-			for i := range specs {
-				specs[i].WorkingMemory = workingMemory
-			}
-
-		// 解析或创建 session
-		sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		agentIDs := make([]string, len(specs))
-		for i, s := range specs {
-			agentIDs[i] = s.AgentID
-		}
-
-		// 持久化 orchestrator task
-		if persist != nil {
-			persist.SaveTask(taskID, req.Input, agentIDs)
-			persist.SaveTaskMeta(taskID, sessionID, "", true)
-			// 把 root task 绑定到 session，让前端刷新后仍能加载
-			if sessionID != "" {
-				sess, err := db.QuerySessionByID(sessionID)
-				if err == nil && sess.RootTaskID == "" {
-					db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
-				}
-			}
-		}
-
-		// 发送 orchestrator task started 事件
-		hub.SendEvent(event.NewEvent("task_started", taskID, "orchestrator", 0, map[string]any{
-			"task_id":     taskID,
-			"session_id":  sessionID,
-			"input":       req.Input,
-			"agent_ids":   agentIDs,
-			"agent_count": len(specs),
-			"strategy":    strategy,
-		}))
-
-		// 按请求的协调策略启动 agent。workflow 存在时使用 DAG 调度。
-		go func() {
-			// Multi-agent orchestration 超时默认 10 分钟。若每个 spec 都有
-			// 相同的 TimeoutSeconds 覆盖，则取最小正值作为统一 deadline，
-			// 让任务失败可预测；否则回退到硬编码的 10 分钟默认值。
-			var timeout time.Duration = 10 * time.Minute
-			minTimeout := 0
-			for _, s := range specs {
-				if s.Contract != nil && s.Contract.TimeoutSeconds > 0 {
-					if minTimeout == 0 || s.Contract.TimeoutSeconds < minTimeout {
-						minTimeout = s.Contract.TimeoutSeconds
-					}
-				}
-			}
-			if minTimeout > 0 {
-				timeout = time.Duration(minTimeout) * time.Second
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			storeCancel(taskID, "orchestrator", cancel)
-			defer removeCancel(taskID, "orchestrator")
-			defer cancel()
-			if strategy == "dag" && workflow != nil {
-				orch.RunBlockingDAG(ctx, taskID, workflow)
-			} else {
-				orch.RunBlocking(ctx, taskID, strategy, specs)
-			}
-			db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
-			log.Printf("[Multi-Agent] Task %s: all agents completed", taskID)
-		}()
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"session_id":  sessionID,
-			"task_id":     taskID,
-			"agent_count": len(specs),
-			"agent_ids":   agentIDs,
-			"max_steps":   req.MaxSteps,
-			"status":      "started",
-		})
-	})
-
-	// Phase 5: 任务恢复的 Checkpoint API endpoint
-	// GET /api/checkpoints —— 列出所有可恢复任务
-	http.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
-		}
-		handleListCheckpoints(w, r, checkpointMgr)
-	})
-	// POST /api/checkpoints/recover —— 从 checkpoint 恢复任务
-	http.HandleFunc("/api/checkpoints/recover", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		handleRecoverCheckpoint(w, r, hub, cfg, toolRegistry, persist, approvalHandler, agentBusAdapter, checkpointMgr, modelRegistry, modelRouter, routerProviders)
-	})
-
-	// Memory API (Phase 6 / Phase 5-B)
-	// GET  /api/memories?scope=...&tier=...&type=...&status=...&project=...&limit=...&offset=...
-	// POST /api/memories —— 创建 memory
-	// GET  /api/memories/{id} —— 获取 memory
-	// PUT  /api/memories/{id} —— 更新 memory 的 content/confidence/status
-	// DELETE /api/memories/{id} —— 删除 memory
-	// PUT  /api/memories/{id}/scope —— 更新 memory scope
-	// POST /api/memories/{id}/embed —— 生成并存储 embedding
-	// GET  /api/memories/stats —— 项目 memory 统计
-	// POST /api/memories/promote —— 手动触发晋升
-	// GET  /api/memories/recall?task=xxx&project=default&max=3 —— 召回预览
-	memGateway := harness.NewPromotionGate(memDB)
-	http.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handleListMemories(w, r)
-		case http.MethodPost:
-			handleCreateMemory(w, r, hub, vectorStore, embedProvider)
-		default:
-			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
-		}
-	})
-	http.HandleFunc("/api/memories/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/api/memories/")
-		// POST /api/memories/promote —— 手动触发晋升
-		if path == "promote" {
-			if r.Method != http.MethodPost {
-				http.Error(w, "POST only", http.StatusMethodNotAllowed)
-				return
-			}
-			handlePromoteMemories(w, r, memGateway)
-			return
-		}
-		// GET /api/memories/recall?task=xxx&project=default&max=3
-		if path == "recall" {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			handleRecallPreview(w, r, memRecall)
-			return
-		}
-		// GET /api/memories/stats?project=default
-		if path == "stats" {
-			if r.Method != http.MethodGet {
-				http.Error(w, "GET only", http.StatusMethodNotAllowed)
-				return
-			}
-			handleMemoryStats(w, r)
-			return
-		}
-		// /api/memories/{id}/scope 或 /api/memories/{id} 或 /api/memories/{id}/embed
-		parts := strings.Split(path, "/")
-		id := parts[0]
-		if id == "" {
-			http.Error(w, "memory ID required", http.StatusBadRequest)
-			return
-		}
-		switch {
-		case len(parts) == 2 && parts[1] == "scope" && r.Method == http.MethodPut:
-			handleUpdateMemoryScope(w, r, id)
-		case len(parts) == 2 && parts[1] == "embed" && r.Method == http.MethodPost:
-			handleMemoryEmbed(w, r, id, hub, vectorStore, embedProvider)
-		case len(parts) == 1:
-			handleMemoryByID(w, r, id, hub, vectorStore, embedProvider)
-		default:
-			http.Error(w, "unsupported memory operation", http.StatusMethodNotAllowed)
-		}
-	})
 	// 从嵌入式文件系统提供 Vue SPA（生产模式）。
 	// 开发模式下用户可运行 `cd web && npm run dev` 使用 Vite 的 dev server
 	// 与 HMR。构建 Go binary 时使用嵌入式 dist/。
