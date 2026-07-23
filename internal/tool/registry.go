@@ -153,6 +153,12 @@ func (r *Registry) registerLocked(tool Tool) {
 // Execute 以 registry key 或 FullName 标识并使用所提供的输入运行该工具。
 // 当传入 FullName 且有多个版本时返回错误，调用方应使用 CanonicalName 精确指定版本。
 func (r *Registry) Execute(name string, input map[string]any) (any, error) {
+	return r.ExecuteWithCtx(name, ExecuteContext{}, input)
+}
+
+// ExecuteWithCtx 与 Execute 相同，但允许调用方为本次执行注入 ExecuteContext（如工作目录）。
+// 优先使用带 context 的执行入口：BuiltinTool 与 DynamicTool 会接收 ctx，其他 Tool 回退到 Execute。
+func (r *Registry) ExecuteWithCtx(name string, ctx ExecuteContext, input map[string]any) (any, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	if !ok {
@@ -167,7 +173,14 @@ func (r *Registry) Execute(name string, input map[string]any) (any, error) {
 	if tool == nil {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
-	return tool.Execute(input)
+	switch t := tool.(type) {
+	case *BuiltinTool:
+		return t.executeWithCtx(ctx, input)
+	case *DynamicTool:
+		return t.executeWithCtx(ctx, input)
+	default:
+		return t.Execute(input)
+	}
 }
 
 // List 返回所有已注册工具的快照（不含别名）。返回的 slice 是副本，

@@ -107,6 +107,11 @@ func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
 	return t.executor(ExecuteContext{}, input)
 }
 
+// executeWithCtx 允许 Registry 显式注入 ExecuteContext（如工作目录）后执行工具。
+func (t *BuiltinTool) executeWithCtx(ctx ExecuteContext, input map[string]any) (any, error) {
+	return t.executor(ctx, input)
+}
+
 // Version 返回工具的版本标识符。BuiltinTool 默认无版本，返回空字符串。
 func (t *BuiltinTool) Version() string { return "" }
 
@@ -213,21 +218,41 @@ func truncateObservation(s string, maxBytes int) string {
 }
 
 // resolvePath 对工具输入路径做规范化。绝对路径会被 Clean 后原样返回。
-// 相对路径会先尝试基于 input["workdir"] 解析，若不存在则回退到进程工作目录。
+// 相对路径会先尝试基于 input["workdir"] 解析，若不存在则回退到 ctx.Workdir，
+// 最后再回到进程工作目录。
 //
 // 调用方应在调用 resolvePath 之前先通过 isPathTraversal 检查，以防止
 // 通过 ".." 段进行 directory traversal。
-func resolvePath(path string, input map[string]any) string {
+func resolvePathWithCtx(path string, input map[string]any, ctx ExecuteContext) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
-	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
+	workdir, _ := input["workdir"].(string)
+	if workdir == "" {
+		workdir = ctx.Workdir
+	}
+	if workdir != "" {
 		return filepath.Clean(filepath.Join(workdir, path))
 	}
 	if wd, err := os.Getwd(); err == nil {
 		return filepath.Clean(filepath.Join(wd, path))
 	}
 	return filepath.Clean(path)
+}
+
+// resolvePath 是 resolvePathWithCtx 的兼容封装，用于不携带 ExecuteContext 的调用点。
+func resolvePath(path string, input map[string]any) string {
+	return resolvePathWithCtx(path, input, ExecuteContext{})
+}
+
+// workdirFromInputOrCtx 返回 input["workdir"] 与 ctx.Workdir 的优先级合并结果，
+// input 中显式指定的 workdir 优先。
+func workdirFromInputOrCtx(input map[string]any, ctx ExecuteContext) string {
+	workdir, _ := input["workdir"].(string)
+	if workdir == "" {
+		workdir = ctx.Workdir
+	}
+	return workdir
 }
 
 // ---------------------------------------------------------------------------
@@ -268,14 +293,14 @@ func NewRunShellTool() *BuiltinTool {
 			},
 			"required": []string{"command"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(ctx, input) },
 	}
 }
 
 // executeShell 是 run_shell 工具的 executor 函数。
 // 它解析 shell 二进制文件、创建带超时的 context，并通过 exec.CommandContext
 // 运行命令。结果包含 stdout、stderr 与 exit_code。
-func executeShell(input map[string]any) (any, error) {
+func executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	cmdStr, ok := input["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command must be a string")
@@ -303,13 +328,17 @@ func executeShell(input map[string]any) (any, error) {
 		timeoutMs = int(t)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	execCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, shell, shellFlag, cmdStr)
+	cmd := exec.CommandContext(execCtx, shell, shellFlag, cmdStr)
 
-	// 如提供 workdir 则设置工作目录。
-	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
+	// 设置工作目录顺序：input["workdir"] > ctx.Workdir > 进程 CWD。
+	workdir, _ := input["workdir"].(string)
+	if workdir == "" {
+		workdir = ctx.Workdir
+	}
+	if workdir != "" {
 		cmd.Dir = workdir
 	}
 
@@ -322,7 +351,7 @@ func executeShell(input map[string]any) (any, error) {
 
 	if err != nil {
 		// 显式检查 context 超时/取消。
-		if ctx.Err() != nil {
+		if execCtx.Err() != nil {
 			result["exit_code"] = -1
 			result["stderr"] = fmt.Sprintf("command timed out after %d ms", timeoutMs)
 			return result, nil
@@ -369,7 +398,7 @@ func NewWriteFileTool() *BuiltinTool {
 			},
 			"required": []string{"path", "content"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeWriteFile(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeWriteFile(ctx, input) },
 	}
 }
 
@@ -389,7 +418,7 @@ func isPathTraversal(path string) bool {
 
 // executeWriteFile 是 write_file 工具的 executor 函数。
 // 它校验路径、创建父目录并写入内容。
-func executeWriteFile(input map[string]any) (any, error) {
+func executeWriteFile(ctx ExecuteContext, input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
@@ -406,11 +435,11 @@ func executeWriteFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// 如提供 workdir，则将相对路径解析到 workdir 之下。当 workdir 为空
-	// （session 未绑定 workspace_dir）时，回退到当前工作目录，确保
-	// 相对路径仍能以可预期方式解析。
+	// 如提供 workdir，则将相对路径解析到 workdir 之下。优先取 input["workdir"]，
+	// 未显式提供时回退到 ctx.Workdir，最后回到进程工作目录。
 	if !filepath.IsAbs(path) {
-		if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
+		workdir := workdirFromInputOrCtx(input, ctx)
+		if workdir != "" {
 			path = filepath.Join(workdir, path)
 		} else {
 			wd, _ := os.Getwd()
@@ -486,14 +515,14 @@ func NewReadFileTool() *BuiltinTool {
 			},
 			"required": []string{"path"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeReadFile(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeReadFile(ctx, input) },
 	}
 }
 
 // executeReadFile 是 read_file 工具的 executor 函数。
 // 它打开文件，读取最多 max_bytes 字节（默认 1 MB），然后对结果内容
 // 应用可选的行 offset 与 limit 过滤。
-func executeReadFile(input map[string]any) (any, error) {
+func executeReadFile(ctx ExecuteContext, input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
@@ -504,8 +533,10 @@ func executeReadFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// 如提供 workdir，则将相对路径解析到 workdir 之下。
-	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
+	// 如提供 workdir，则将相对路径解析到 workdir 之下。优先取 input["workdir"]，
+	// 未显式提供时回退到 ctx.Workdir。
+	workdir := workdirFromInputOrCtx(input, ctx)
+	if workdir != "" && !filepath.IsAbs(path) {
 		path = filepath.Join(workdir, path)
 	}
 

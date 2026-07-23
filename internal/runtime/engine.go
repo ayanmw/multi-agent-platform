@@ -1844,6 +1844,12 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// 影响用户体验的瓶颈。
 	// DEBUG log.Printf("[Engine] executeTool %s with parsed args: %+v", tc.Function.Name, args)
 	start := time.Now()
+	// 构造供 tool 执行用的 ExecuteContext，把 session 工作目录透传下去。
+	// 同时保留 args["workdir"] 作为兼容性回退（已存在的测试/PolicyGate 回调依赖）。
+	toolCtx := tool.ExecuteContext{}
+	if e.cfg.WorkspaceDir != "" {
+		toolCtx.Workdir = e.cfg.WorkspaceDir
+	}
 	// 若配置了 PolicyGate 则经由它；否则直接执行。PolicyGate 在允许
 	// tool 执行前会按 policy chain（FileScopeRule、PathTraversalRule 等）
 	// 检查 tool call。
@@ -1851,10 +1857,10 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	var execErr error
 	if e.gate != nil {
 		result, execErr = e.gate.Execute(tc.Function.Name, args, func(input map[string]any) (any, error) {
-			return e.tools.Execute(tc.Function.Name, input)
+			return e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, input)
 		})
 	} else {
-		result, execErr = e.tools.Execute(tc.Function.Name, args)
+		result, execErr = e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, args)
 	}
 	duration := time.Since(start).Milliseconds()
 	if e.cfg.ToolLatencyRecorder != nil {
@@ -2117,7 +2123,11 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	// 直接执行工具（不经过 PolicyGate，因为用户已批准）
 	execStart := time.Now()
-	result, execErr := e.tools.Execute(tc.Function.Name, args)
+	toolCtx := tool.ExecuteContext{}
+	if e.cfg.WorkspaceDir != "" {
+		toolCtx.Workdir = e.cfg.WorkspaceDir
+	}
+	result, execErr := e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, args)
 	execDuration := time.Since(execStart).Milliseconds()
 
 	if execErr != nil {
