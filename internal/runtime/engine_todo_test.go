@@ -110,6 +110,9 @@ type echoCaptureTool struct {
 func (t echoCaptureTool) Namespace() string                    { return "" }
 func (t echoCaptureTool) Name() string                         { return "echo_capture" }
 func (t echoCaptureTool) FullName() string                     { return "echo_capture" }
+func (t echoCaptureTool) Version() string                      { return "" }
+func (t echoCaptureTool) Source() string                       { return "builtin" }
+func (t echoCaptureTool) CanonicalName() string                { return "echo_capture" }
 func (t echoCaptureTool) Aliases() []string                    { return nil }
 func (t echoCaptureTool) Description() string                  { return "test echo tool" }
 func (t echoCaptureTool) Parameters() map[string]any           { return map[string]any{"type": "object"} }

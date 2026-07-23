@@ -18,11 +18,13 @@ import (
 // 没有配置其他 provider 时，executor 返回友好的 "not configured" 状态。
 //
 // Provider 标识符（配合 WEBSEARCH_PROVIDER 使用）：
-//   "exa", "parallel", "bing", "google", "tavily", "brave",
-//   "kimi_search", "glm_search", "duckduckgo"
+//
+//	"exa", "parallel", "bing", "google", "tavily", "brave",
+//	"kimi_search", "glm_search", "duckduckgo"
 //
 // WEBSEARCH_PROVIDER 为空时的 provider 优先级：
-//   brave -> bing -> google -> tavily -> parallel -> exa -> duckduckgo
+//
+//	brave -> bing -> google -> tavily -> parallel -> exa -> duckduckgo
 //
 // 除 DuckDuckGo 外的所有 provider 默认关闭；通过 WEBSEARCH_ENABLE_* 启用
 // 并提供对应的 API key / 凭证。
@@ -153,7 +155,7 @@ func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 			},
 			"required": []string{"query"},
 		},
-		func(input map[string]any) (any, error) { return webSearchExecutor(cfg, input) },
+		func(_ ExecuteContext, input map[string]any) (any, error) { return webSearchExecutor(cfg, input) },
 	).WithTags("network", "websearch")
 }
 

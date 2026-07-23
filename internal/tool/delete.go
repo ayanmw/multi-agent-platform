@@ -31,7 +31,7 @@ func NewDeleteFileTool() *BuiltinTool {
 			},
 			"required": []string{"path"},
 		},
-		deleteFileExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return deleteFileExecutor(input) },
 	).WithTags("filesystem", "filesystem:destructive")
 }
 

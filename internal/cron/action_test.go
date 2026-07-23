@@ -47,8 +47,8 @@ func TestRunStartTask(t *testing.T) {
 	r := newRunner(t, ActionRunnerConfig{StartTask: starter})
 	c := Cron{ID: "cron_1", Name: "Report", ActionType: ActionStartTask}
 	res, err := r.Run(context.Background(), c, map[string]any{
-		"agent_id": "agent_default",
-		"input":    "do work",
+		"agent_id":   "agent_default",
+		"input":      "do work",
 		"session_id": "sess_existing",
 	})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestRunStartTaskStarterError(t *testing.T) {
 func TestRunScriptWhitelist(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(tool.NewBuiltinTool("run_shell", "", "run shell", map[string]any{"type": "object"},
-		func(input map[string]any) (any, error) { return "ok-output", nil }))
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) { return "ok-output", nil }))
 	r := newRunner(t, ActionRunnerConfig{Tools: reg, AllowedTools: []string{"run_shell"}})
 	res, err := r.Run(context.Background(), Cron{ActionType: ActionScript}, map[string]any{
 		"tool_calls": []any{
@@ -116,7 +116,7 @@ func TestRunScriptWhitelist(t *testing.T) {
 func TestRunScriptDisallowedTool(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(tool.NewBuiltinTool("run_shell", "", "run shell", map[string]any{"type": "object"},
-		func(input map[string]any) (any, error) { return "ok", nil }))
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) { return "ok", nil }))
 	r := newRunner(t, ActionRunnerConfig{Tools: reg, AllowedTools: []string{"read_file"}})
 	_, err := r.Run(context.Background(), Cron{ActionType: ActionScript}, map[string]any{
 		"tool_calls": []any{map[string]any{"tool": "run_shell", "input": map[string]any{}}},
@@ -147,10 +147,10 @@ func TestRunWebhookSuccess(t *testing.T) {
 	defer srv.Close()
 	r := newRunner(t, ActionRunnerConfig{WebhookTimeout: 5e9})
 	res, err := r.Run(context.Background(), Cron{ID: "cron_1", ActionType: ActionWebhook}, map[string]any{
-		"method": "POST",
-		"url":    srv.URL,
+		"method":  "POST",
+		"url":     srv.URL,
 		"headers": map[string]any{"X-Cron-Id": "cron_1"},
-		"body":   `{"a":1}`,
+		"body":    `{"a":1}`,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -241,11 +241,11 @@ func TestRunUnknownAction(t *testing.T) {
 // TestDecodeStartTaskPayloadNumbers 验证数字字段兼容 float64。
 func TestDecodeStartTaskPayloadNumbers(t *testing.T) {
 	p, err := decodeStartTaskPayload(map[string]any{
-		"agent_id": "a",
-		"max_steps": float64(15),
+		"agent_id":        "a",
+		"max_steps":       float64(15),
 		"timeout_seconds": float64(60),
 		"cost_budget_usd": float64(0.5),
-		"allowed_tools": []any{"run_shell", "read_file"},
+		"allowed_tools":   []any{"run_shell", "read_file"},
 	})
 	if err != nil {
 		t.Fatalf("decode: %v", err)

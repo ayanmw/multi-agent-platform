@@ -35,7 +35,7 @@ func NewParseJSONTool() *BuiltinTool {
 			},
 			"required": []string{"input", "query"},
 		},
-		parseJSONExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return parseJSONExecutor(input) },
 	).WithTags("data", "readonly")
 }
 

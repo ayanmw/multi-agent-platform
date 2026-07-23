@@ -51,7 +51,7 @@ func NewFetchURLTool() *BuiltinTool {
 			},
 			"required": []string{"url"},
 		},
-		fetchURLExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return fetchURLExecutor(input) },
 	).WithTags("network", "readonly").WithAliases("web_fetch")
 }
 

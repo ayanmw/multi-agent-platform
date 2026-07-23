@@ -30,8 +30,54 @@ type Tool interface {
 	Parameters() map[string]any
 	// Tags 返回用于分类与过滤的标签列表。
 	Tags() []string
+	// Version 返回工具的版本标识符，用于多版本并存。builtin 工具可返回空字符串。
+	Version() string
+	// Source 返回工具来源，取值 "builtin" / "local_db" / "mcp" / "plugin"。
+	Source() string
+	// CanonicalName 返回 Registry 使用的唯一键：namespace/name@version（namespace 为空时为 name@version）。
+	CanonicalName() string
 	// Execute 使用给定输入 map 运行工具并返回结果。
 	Execute(input map[string]any) (any, error)
+}
+
+// canonicalizeKey 是 Registry 内部对 CanonicalName 的兜底补全：
+// 当 CanonicalName() 返回空时回退到 FullName()，避免空键插入 map。
+func canonicalizeKey(tool Tool) string {
+	if key := tool.CanonicalName(); key != "" {
+		return key
+	}
+	return tool.FullName()
+}
+
+// Get 按 registry key 查找工具并返回是否存在。为了兼容 FullName 调用，
+// 当精确 key 未命中且只有一个匹配该 FullName 的工具时，返回该工具及 true。
+func (r *Registry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if t, ok := r.tools[name]; ok {
+		return t, true
+	}
+	return r.getByFullNameLocked(name)
+}
+
+// getByFullNameLocked 在持有读锁时按 FullName（不含版本）查找唯一匹配。
+// 若同名不同版本存在多个，为避免歧义返回 (nil, false)。
+func (r *Registry) getByFullNameLocked(fullName string) (Tool, bool) {
+	var matched Tool
+	var count int
+	for key, t := range r.tools {
+		if key == "" {
+			continue
+		}
+		if t.FullName() == fullName {
+			matched = t
+			count++
+		}
+	}
+	if count == 1 {
+		return matched, true
+	}
+	return nil, false
 }
 
 // Registry 管理可用工具。可被多个 goroutine 并发安全使用。
@@ -81,13 +127,16 @@ func (r *Registry) Register(tool Tool) {
 
 // registerLocked 在持有 registry 锁的情况下注册工具及其别名。
 func (r *Registry) registerLocked(tool Tool) {
-	name := tool.FullName()
-	if _, exists := r.tools[name]; !exists {
-		r.order = append(r.order, name)
+	key := canonicalizeKey(tool)
+	if key == "" {
+		return
 	}
-	r.tools[name] = tool
+	if _, exists := r.tools[key]; !exists {
+		r.order = append(r.order, key)
+	}
+	r.tools[key] = tool
 	for _, alias := range tool.Aliases() {
-		if alias == "" || alias == name {
+		if alias == "" || alias == key {
 			continue
 		}
 		fullAlias := alias
@@ -101,12 +150,21 @@ func (r *Registry) registerLocked(tool Tool) {
 	}
 }
 
-// Execute 以工具的 FullName 标识并使用所提供的输入运行该工具。
+// Execute 以 registry key 或 FullName 标识并使用所提供的输入运行该工具。
+// 当传入 FullName 且有多个版本时返回错误，调用方应使用 CanonicalName 精确指定版本。
 func (r *Registry) Execute(name string, input map[string]any) (any, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
-	r.mu.RUnlock()
 	if !ok {
+		var ambiguous bool
+		tool, ambiguous = r.getByFullNameLocked(name)
+		if ambiguous {
+			r.mu.RUnlock()
+			return nil, fmt.Errorf("tool name %q is ambiguous; use canonical name namespace/name@version", name)
+		}
+	}
+	r.mu.RUnlock()
+	if tool == nil {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
 	return tool.Execute(input)
@@ -149,14 +207,14 @@ func (r *Registry) ListAll() []Tool {
 	return list
 }
 
-// Unregister 按 FullName 从 registry 中移除工具。
+// Unregister 按 registry key 从 registry 中移除工具。
 // 若工具未找到则返回错误；若为内置工具也返回错误（内置工具不能通过
 // Registry 移除，可使用 IsBuiltin 先行检查）。
 // 注意：反注册主名称也会一并移除指向它的所有别名。
 func (r *Registry) Unregister(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.IsBuiltin(name) {
+	if r.isBuiltinLocked(name) {
 		return fmt.Errorf("cannot unregister built-in tool: %s", name)
 	}
 	tool, ok := r.tools[name]
@@ -164,7 +222,12 @@ func (r *Registry) Unregister(name string) error {
 		return fmt.Errorf("tool not found: %s", name)
 	}
 	// 移除主名称及所有指向该工具的已注册别名。
-	delete(r.tools, name)
+	key := canonicalizeKey(tool)
+	delete(r.tools, key)
+	// 若调用方按 alias 反注册，name 本身也要删除。
+	if name != key {
+		delete(r.tools, name)
+	}
 	for _, alias := range tool.Aliases() {
 		fullAlias := alias
 		if tool.Namespace() != "" && !strings.Contains(alias, "/") {
@@ -176,14 +239,28 @@ func (r *Registry) Unregister(name string) error {
 	return nil
 }
 
-// IsBuiltin 当给定工具名是内置工具之一（run_shell、write_file、read_file）
-// 时返回 true。内置工具不能通过动态工具注册 API 删除。
-func (r *Registry) IsBuiltin(name string) bool {
+// isBuiltinLocked 是 IsBuiltin 的无锁版本，调用方必须已持有 r.mu 的写锁。
+// 当 registry 中存在该工具时以 Source() 为准；不存在时回退到旧硬编码名单。
+func (r *Registry) isBuiltinLocked(name string) bool {
+	if t, ok := r.tools[name]; ok {
+		return t.Source() == "builtin"
+	}
+	if t, ok := r.getByFullNameLocked(name); ok {
+		return t.Source() == "builtin"
+	}
 	switch name {
 	case "run_shell", "write_file", "read_file":
 		return true
 	}
 	return false
+}
+
+// IsBuiltin 当给定工具名对应的工具 Source() 为 "builtin" 时返回 true。
+// 内置工具不能通过动态工具注册 API 删除。
+func (r *Registry) IsBuiltin(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.isBuiltinLocked(name)
 }
 
 // ToJSON 将每个已注册工具序列化为 JSON 数组。每个条目包含工具的
@@ -215,6 +292,9 @@ func (r *Registry) ToolTags(name string) []string {
 	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	if !ok {
+		tool, _ = r.getByFullNameLocked(name)
+	}
+	if tool == nil {
 		return nil
 	}
 	return tool.Tags()
@@ -227,9 +307,19 @@ func (r *Registry) ToolMetadata(name string) (namespace, description string, tag
 	defer r.mu.RUnlock()
 	tool, exists := r.tools[name]
 	if !exists {
+		tool, _ = r.getByFullNameLocked(name)
+	}
+	if tool == nil {
 		return "", "", nil, false
 	}
 	return tool.Namespace(), tool.Description(), tool.Tags(), true
+}
+
+// lookupByCanonicalName 返回指定 CanonicalName 的工具；未找到返回 nil。
+func (r *Registry) lookupByCanonicalName(name string) Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.tools[name]
 }
 
 // Names 返回所提供工具的短 Name() 值，保留原顺序。

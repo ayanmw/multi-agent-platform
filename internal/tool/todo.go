@@ -116,7 +116,7 @@ func NewTodoCreateTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"session_id", "title"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			sessionID, ok := input["session_id"].(string)
 			if !ok || sessionID == "" {
 				return nil, fmt.Errorf("session_id is required")
@@ -174,7 +174,7 @@ func NewTodoUpdateTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			id, ok := input["id"].(string)
 			if !ok || id == "" {
 				return nil, fmt.Errorf("id is required")
@@ -218,7 +218,7 @@ func NewTodoUpdateStatusTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"id", "status"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			id, ok := input["id"].(string)
 			if !ok || id == "" {
 				return nil, fmt.Errorf("id is required")
@@ -252,7 +252,7 @@ func NewTodoDeleteTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			id := getString(input, "id", "")
 			id = strings.TrimSpace(id)
 			if id == "" {
@@ -293,7 +293,7 @@ func NewTodoListTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"session_id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			sessionID, ok := input["session_id"].(string)
 			if !ok || sessionID == "" {
 				return nil, fmt.Errorf("session_id is required")
@@ -342,7 +342,7 @@ func NewTodoClearAllTool(svc *todo.Service) *BuiltinTool {
 			},
 			"required": []string{"session_id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			sessionID, ok := input["session_id"].(string)
 			if !ok || sessionID == "" {
 				return nil, fmt.Errorf("session_id is required")

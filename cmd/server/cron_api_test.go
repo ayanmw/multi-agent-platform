@@ -5,7 +5,7 @@
 //   创建 → 列表 → 详情 → 启用/禁用 → 手动 trigger（notify_session，避免依赖 LLM）→
 //   执行历史查询 → 清理 → 删除 → 404。
 //
-// 不接真实 LLM：start_task action 需要 TaskStarter + runAgentLoop，这里用
+// 不接真实 LLM：start_task action 需要 TaskStarter + AgentRunner，这里用
 // notify_session（只写 session_messages + 广播事件）验证整条触发链路。
 package main
 

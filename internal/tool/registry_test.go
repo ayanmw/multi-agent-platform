@@ -24,6 +24,7 @@ type mockTool struct {
 	params      map[string]any
 	tags        []string
 	aliases     []string
+	source      string
 	execFn      func(input map[string]any) (any, error)
 	execCalls   int
 	lastInput   map[string]any
@@ -45,6 +46,21 @@ func (m *mockTool) Description() string        { return m.description }
 func (m *mockTool) Parameters() map[string]any { return m.params }
 func (m *mockTool) Tags() []string             { return m.tags }
 func (m *mockTool) Aliases() []string          { return m.aliases }
+
+// Version 返回 mock 工具的版本。测试中默认无版本。
+func (m *mockTool) Version() string { return "" }
+
+// mockToolSource 返回用于测试的 mock tool source。默认不是 builtin，
+// 以便反注册测试可以正常移除工具。
+func (m *mockTool) Source() string { return m.source }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (m *mockTool) CanonicalName() string {
+	if v := m.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", m.FullName(), v)
+	}
+	return m.FullName()
+}
 
 // Execute 记录本次调用，并在设置了 execFn 时委托给它；否则返回确定性的
 // "mock-output:<name>" 字符串。
@@ -352,10 +368,10 @@ func TestIsBuiltin(t *testing.T) {
 		{"write_file", true},
 		{"read_file", true},
 		{"", false},
-		{"Run_Shell", false},    // 大小写敏感
-		{"run_shell ", false},   // 仅精确匹配（不做 trim）
-		{" run_shell", false},   // 前导空格
-		{"run_shell", true},     // 重复一次以保证确定性
+		{"Run_Shell", false},  // 大小写敏感
+		{"run_shell ", false}, // 仅精确匹配（不做 trim）
+		{" run_shell", false}, // 前导空格
+		{"run_shell", true},   // 重复一次以保证确定性
 		{"custom_tool", false},
 		{"my_tool", false},
 		{"run_shell_v2", false}, // 后缀破坏精确匹配

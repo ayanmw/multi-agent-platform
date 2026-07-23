@@ -158,11 +158,11 @@ func (s *SandboxExecutor) Run(ctx context.Context, command string) (stdout strin
 	// 构建带全部安全 flag 的 docker run 命令。
 	args := []string{
 		"run",
-		"--rm",                     // 自动清理
+		"--rm", // 自动清理
 		"--network=" + s.cfg.NetworkMode,
 		"--memory=" + s.cfg.MemoryLimit,
 		"--cpus=" + s.cfg.CPULimit,
-		"--user", "1000:1000",      // 非 root 用户
+		"--user", "1000:1000", // 非 root 用户
 	}
 
 	// 将工作目录作为 volume 挂载，使容器可以访问宿主文件。
@@ -273,6 +273,21 @@ func (t *SandboxedShellTool) Parameters() map[string]any {
 // Tags 返回工具的 tags，委托给 fallback 工具。
 func (t *SandboxedShellTool) Tags() []string {
 	return t.fallback.Tags()
+}
+
+// Version 返回工具的版本标识符，委托给 fallback 工具。
+func (t *SandboxedShellTool) Version() string {
+	return t.fallback.Version()
+}
+
+// Source 返回工具的来源。Sandboxed 包装不改变来源，委托给 fallback。
+func (t *SandboxedShellTool) Source() string {
+	return t.fallback.Source()
+}
+
+// CanonicalName 返回 Registry 使用的唯一键，委托给 fallback 工具。
+func (t *SandboxedShellTool) CanonicalName() string {
+	return t.fallback.CanonicalName()
 }
 
 // Aliases 返回该工具的别名，委托给 fallback 工具。

@@ -2,8 +2,8 @@
 //
 // 本文件做两件事：
 //   1. startChatTask：把 /api/tasks 的 chat action 核心启动逻辑抽成可复用函数，
-//      让原 handler 与 cron 的 start_task action 共用同一条 task 启动链路，
-//      避免复制 20+ 参数的 runAgentLoop 调用。
+//      让原 handler 与 cron 的 start_task action 共用同一条 task 启动链路。
+//      Phase 8-A 起内部改走 AgentRunner.Run(spec)。
 //   2. RegisterCronAPI：注册 /api/crons* 全部 REST 端点，委托给 cron.Service。
 package main
 
@@ -34,15 +34,15 @@ type startChatTaskOpts struct {
 	CaseID         string
 }
 
-// startChatTask 执行 chat action 的核心：校验 + 构建 contract + 启动 runAgentLoop。
+// startChatTask 执行 chat action 的核心：校验 + 构建 contract + 启动 AgentRunner。
 // sessionID 为空时自动新建 session；返回实际的 sessionID 与 taskID。
 // 被 /api/tasks handler 与 cron ActionRunner 共同复用。
 //
 // 实现以闭包形式在 main() 中赋值，捕获 main() 的局部依赖（cfg、toolRegistry、
 // persist、hub、approvalHandler、memRecall、agentBusAdapter、checkpointMgr、
 // costRepo、modelRegistry、modelRouter、routerProviders、caseService、todoSvc...）。
-// 这与 handleTasksRoot 的模式一致——避免把 20+ 参数的 runAgentLoop 调用复制两份，
-// 也避免把这些依赖全部提升为包级变量。
+// 这与 handleTasksRoot 的模式一致——避免把这些依赖全部提升为包级变量，
+// 也避免在每个入口重复拼装 AgentDeps。
 var startChatTask func(opts startChatTaskOpts) (sessionID, taskID string, err error)
 
 // globalCronService 是 Cron 子系统的全局 Service 引用，供 API handler 使用。

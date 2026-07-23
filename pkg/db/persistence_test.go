@@ -64,3 +64,71 @@ func TestAgentBusMessageSubTaskIDRoundTrip(t *testing.T) {
 		t.Errorf("metadata from_sub_task_id = %q, want task_abc_sub2", got.Metadata["from_sub_task_id"])
 	}
 }
+
+// TestInsertAgentOptionsEquivalence 验证 InsertAgent(options) 与 InsertAgentLegacy
+// 对相同字段集合写入后读出的记录一致（Phase 8-A）。
+func TestInsertAgentOptionsEquivalence(t *testing.T) {
+	freshDB(t)
+
+	tools := []string{"run_shell", "read_file"}
+	if err := InsertAgent(InsertAgentOptions{
+		ID: "a_opts", Name: "Opts", Description: "d", SystemPrompt: "sp",
+		Model: "m", Endpoint: "e", APIKey: "k",
+		Temperature: 0.5, MaxTokens: 1024, Tools: tools, IsDefault: false,
+	}); err != nil {
+		t.Fatalf("InsertAgent: %v", err)
+	}
+	if err := InsertAgentLegacy("a_legacy", "Legacy", "d", "sp", "m", "e", "k",
+		0.5, 1024, tools, false); err != nil {
+		t.Fatalf("InsertAgentLegacy: %v", err)
+	}
+
+	opts, err := QueryAgentByID("a_opts")
+	if err != nil {
+		t.Fatalf("QueryAgentByID opts: %v", err)
+	}
+	legacy, err := QueryAgentByID("a_legacy")
+	if err != nil {
+		t.Fatalf("QueryAgentByID legacy: %v", err)
+	}
+
+	// 除 ID/Name 外，两者字段应一致。
+	if opts.Temperature != legacy.Temperature || opts.MaxTokens != legacy.MaxTokens {
+		t.Fatalf("temp/maxTokens mismatch: %+v vs %+v", opts, legacy)
+	}
+	if opts.Model != legacy.Model || opts.APIEndpoint != legacy.APIEndpoint || opts.APIKey != legacy.APIKey {
+		t.Fatalf("model/endpoint/key mismatch: %+v vs %+v", opts, legacy)
+	}
+	if len(opts.Tools) != len(legacy.Tools) {
+		t.Fatalf("tools length mismatch: %v vs %v", opts.Tools, legacy.Tools)
+	}
+}
+
+// TestUpdateAgentOptions 验证 UpdateAgent(options) 能正确覆盖写入。
+func TestUpdateAgentOptions(t *testing.T) {
+	freshDB(t)
+
+	if err := InsertAgent(InsertAgentOptions{
+		ID: "u1", Name: "orig", Model: "m1", Temperature: 0.7, MaxTokens: 4096,
+	}); err != nil {
+		t.Fatalf("InsertAgent: %v", err)
+	}
+	if err := UpdateAgent(UpdateAgentOptions{
+		ID: "u1", Name: "updated", Description: "new desc", SystemPrompt: "new sp",
+		Model: "m2", Endpoint: "e2", APIKey: "k2",
+		Temperature: 0.3, MaxTokens: 2048, Tools: []string{"run_shell"},
+	}); err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+
+	got, err := QueryAgentByID("u1")
+	if err != nil {
+		t.Fatalf("QueryAgentByID: %v", err)
+	}
+	if got.Name != "updated" || got.Model != "m2" || got.Temperature != 0.3 || got.MaxTokens != 2048 {
+		t.Fatalf("update not applied: %+v", got)
+	}
+	if len(got.Tools) != 1 || got.Tools[0] != "run_shell" {
+		t.Fatalf("tools not updated: %v", got.Tools)
+	}
+}

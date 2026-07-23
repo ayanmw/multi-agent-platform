@@ -49,6 +49,10 @@ type DynamicTool struct {
 	description string
 	parameters  map[string]any
 	toolType    DynamicToolType
+	// namespace/version 由 descriptor 透传，支持多版本并存与分组。
+	// 旧 NewDynamicTool 路径不设置，保持空（namespace="" 仍属全局 namespace）。
+	namespace string
+	version   string
 	// 对于 shell 类型：含 {param} 占位符的 shell 命令模板
 	command string
 	// 对于 http 类型：URL 模板与 HTTP method
@@ -67,6 +71,26 @@ func NewDynamicTool(name, description string, parameters map[string]any, toolTyp
 		parameters:  parameters,
 		toolType:    toolType,
 	}
+}
+
+// NewDynamicToolFromDescriptor 从 ToolDescriptor 构造 DynamicTool。
+// 这是 DBToolLoader 还原持久化工具的入口：descriptor 中的 ExecutionConfig
+// 携带 type/command/url/method/code 等字段，这里拆解到 DynamicTool 对应字段。
+// namespace/version 透传到元数据方法（Namespace/Version），供 Registry 多版本键使用。
+func NewDynamicToolFromDescriptor(desc ToolDescriptor) *DynamicTool {
+	t := &DynamicTool{
+		name:        desc.Name,
+		description: desc.Description,
+		parameters:  desc.Parameters,
+		toolType:    DynamicToolType(getString(desc.ExecutionConfig, "type", "")),
+		namespace:   desc.Namespace,
+		version:     desc.Version,
+	}
+	t.command = getString(desc.ExecutionConfig, "command", "")
+	t.url = getString(desc.ExecutionConfig, "url", "")
+	t.method = getString(desc.ExecutionConfig, "method", "")
+	t.code = getString(desc.ExecutionConfig, "code", "")
+	return t
 }
 
 // SetCommand 设置 shell 类型工具的 shell 命令模板。
@@ -97,12 +121,27 @@ func (t *DynamicTool) Code() string { return t.code }
 func (t *DynamicTool) ToolType() DynamicToolType { return t.toolType }
 
 // Name 返回工具的唯一标识符。
-func (t *DynamicTool) Namespace() string { return "" }
+func (t *DynamicTool) Namespace() string { return t.namespace }
 func (t *DynamicTool) Name() string      { return t.name }
 
 // FullName 返回工具的完全限定标识符。Dynamic tool 位于全局 namespace，
 // 因此 FullName 等于 Name。
 func (t *DynamicTool) FullName() string { return t.name }
+
+// Version 返回工具的版本标识符。DynamicTool 默认无版本；
+// 由 descriptor 构造时透传 desc.Version。
+func (t *DynamicTool) Version() string { return t.version }
+
+// Source 返回工具来源。DynamicTool 始终返回 "local_db"。
+func (t *DynamicTool) Source() string { return "local_db" }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (t *DynamicTool) CanonicalName() string {
+	if v := t.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", t.FullName(), v)
+	}
+	return t.FullName()
+}
 
 // Aliases 返回该 dynamic tool 的别名。默认情况下 dynamic tool 没有别名。
 func (t *DynamicTool) Aliases() []string { return nil }
