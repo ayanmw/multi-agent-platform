@@ -176,14 +176,10 @@ func (r *Registry) ExecuteWithCtx(name string, ctx ExecuteContext, input map[str
 	if tool == nil {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
-	switch t := tool.(type) {
-	case *BuiltinTool:
-		return t.executeWithCtx(ctx, input)
-	case *DynamicTool:
-		return t.executeWithCtx(ctx, input)
-	default:
-		return t.Execute(input)
+	if ctxTool, ok := tool.(CtxTool); ok {
+		return ctxTool.ExecuteWithCtx(ctx, input)
 	}
+	return tool.Execute(input)
 }
 
 // CtxTool 是支持 ExecuteContext 的 Tool 扩展。Registry.ExecuteWithCtx 在拿到
@@ -191,31 +187,6 @@ func (r *Registry) ExecuteWithCtx(name string, ctx ExecuteContext, input map[str
 // 注入）；否则回退到普通 Execute（input["workdir"]）。
 type CtxTool interface {
 	ExecuteWithCtx(ctx ExecuteContext, input map[string]any) (any, error)
-}
-
-// ExecuteWithCtx 与 Execute 同语义，但携带 ExecuteContext。Engine 在 worktree
-// 隔离启用时用本入口：把 per-run holder 的当前值经 ctx.Workdir 传入，使其
-// 优先于 input["workdir"]，从而 LLM 无法伪造 workdir 逃逸到 worktree 之外。
-// 不实现 CtxTool 的 tool（如 skill/todo）透明回退到 Execute，行为不变。
-func (r *Registry) ExecuteWithCtx(name string, ctx ExecuteContext, input map[string]any) (any, error) {
-	r.mu.RLock()
-	tool, ok := r.tools[name]
-	if !ok {
-		var ambiguous bool
-		tool, ambiguous = r.getByFullNameLocked(name)
-		if ambiguous {
-			r.mu.RUnlock()
-			return nil, fmt.Errorf("tool name %q is ambiguous; use canonical name namespace/name@version", name)
-		}
-	}
-	r.mu.RUnlock()
-	if tool == nil {
-		return nil, fmt.Errorf("tool not found: %s", name)
-	}
-	if ctxTool, ok := tool.(CtxTool); ok {
-		return ctxTool.ExecuteWithCtx(ctx, input)
-	}
-	return tool.Execute(input)
 }
 
 // List 返回所有已注册工具的快照（不含别名）。返回的 slice 是副本，
