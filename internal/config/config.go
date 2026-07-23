@@ -155,7 +155,13 @@ func Load() (*Config, error) {
 	}
 
 	// 加载 .env 文件(优先级最低)
-	if err := loadEnvFile(".env"); err != nil {
+	// ENV_FILE 环境变量可指定绝对路径，便于 server 在非项目根 CWD（如测试隔离
+	// 目录）启动时仍能加载项目根的 .env；未指定则回退到 CWD 下的 .env。
+	envFile := os.Getenv("ENV_FILE")
+	if envFile == "" {
+		envFile = ".env"
+	}
+	if err := loadEnvFile(envFile); err != nil {
 		// .env 是可选的 — 缺失不应导致失败
 		fmt.Fprintf(os.Stderr, "Warning: .env file not found or unreadable: %v\n", err)
 	}
