@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -142,4 +143,15 @@ func (e *DynamicExecutor) executeInline(ctx ExecuteContext, input map[string]any
 		"code":    code,
 		"input":   input,
 	}, nil
+}
+
+// sanitizeInput 将模板字符串中的 {param_name} 占位符替换为输入 map 中的
+// 对应值。未在输入 map 中找到的键保持原样（占位符仍保留在输出中）。
+func sanitizeInput(template string, input map[string]any) string {
+	result := template
+	for key, value := range input {
+		placeholder := fmt.Sprintf("{%s}", key)
+		result = strings.ReplaceAll(result, placeholder, fmt.Sprintf("%v", value))
+	}
+	return result
 }

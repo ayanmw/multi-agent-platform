@@ -11,21 +11,6 @@ type ToolLoader interface {
 	Load(ctx context.Context) ([]Tool, error)
 }
 
-// BuiltInToolLoader 加载本仓库编译期固定的内置工具。
-// 本次仍是空实现：历史路径由 cmd/server 直接调用 tool.RegisterBuiltins。
-// 未来可把 RegisterBuiltins 的实现迁移到这里，使 main.go 完全走 Loader 模式。
-type BuiltInToolLoader struct{}
-
-// NewBuiltInToolLoader 创建 BuiltInToolLoader。
-func NewBuiltInToolLoader() *BuiltInToolLoader {
-	return &BuiltInToolLoader{}
-}
-
-// Load 返回 nil, nil。内置工具仍由 RegisterBuiltins 显式注册。
-func (l *BuiltInToolLoader) Load(_ context.Context) ([]Tool, error) {
-	return nil, nil
-}
-
 // RecordLoader 是 DBToolLoader 使用的最小记录加载函数签名。
 // 定义在 tool 包内以避免直接依赖 pkg/db。
 type RecordLoader func() ([]map[string]any, error)
