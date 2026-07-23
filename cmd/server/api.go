@@ -883,7 +883,11 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := uuid.New().String()
-		if err := db.InsertAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools, false); err != nil {
+		if err := db.InsertAgent(db.InsertAgentOptions{
+			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
+			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
+			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
+		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -926,7 +930,11 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := db.UpdateAgent(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Endpoint, req.APIKey, req.Temperature, req.MaxTokens, req.Tools); err != nil {
+		if err := db.UpdateAgent(db.UpdateAgentOptions{
+			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
+			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
+			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
+		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -492,18 +492,64 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 	return steps, rows.Err()
 }
 
-// InsertAgent 创建一条新的 agent 记录
-func InsertAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string, isDefault bool) error {
+// InsertAgentOptions 是创建 agent 记录的全部可配置字段。
+// Phase 8-A 把 InsertAgent 的长参数列表收敛为 options struct，便于扩展
+// （未来新增字段只改 struct，不动调用点签名）并提高调用处可读性。
+type InsertAgentOptions struct {
+	ID           string
+	Name         string
+	Description  string
+	SystemPrompt string
+	Model        string
+	Endpoint     string
+	APIKey       string
+	Temperature  float64
+	MaxTokens    int
+	Tools        []string
+	IsDefault    bool
+}
+
+// UpdateAgentOptions 是更新 agent 记录的可变字段集合。
+// ID 为定位主键，其余字段覆盖写入。
+type UpdateAgentOptions struct {
+	ID           string
+	Name         string
+	Description  string
+	SystemPrompt string
+	Model        string
+	Endpoint     string
+	APIKey       string
+	Temperature  float64
+	MaxTokens    int
+	Tools        []string
+}
+
+// InsertAgent 按 options 创建一条新的 agent 记录。
+// 这是 Phase 8-A 引入的主入口；旧长签名调用方请改用 InsertAgentLegacy。
+func InsertAgent(opts InsertAgentOptions) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	toolsJSON, _ := json.Marshal(tools)
+	toolsJSON, _ := json.Marshal(opts.Tools)
 	_, err := DB.Exec(
 		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON), isDefault,
+		opts.ID, opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
+		opts.Temperature, opts.MaxTokens, opts.Endpoint, opts.APIKey,
+		string(toolsJSON), opts.IsDefault,
 	)
 	return err
+}
+
+// InsertAgentLegacy 是旧长签名 InsertAgent 的兼容 wrapper。
+// 仅为平滑迁移保留；新代码应直接调用 InsertAgent(InsertAgentOptions{...})。
+func InsertAgentLegacy(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string, isDefault bool) error {
+	return InsertAgent(InsertAgentOptions{
+		ID: id, Name: name, Description: description, SystemPrompt: systemPrompt,
+		Model: model, Endpoint: endpoint, APIKey: apiKey,
+		Temperature: temperature, MaxTokens: maxTokens,
+		Tools: tools, IsDefault: isDefault,
+	})
 }
 
 // QueryAgents 返回所有 agent，按创建时间排序
@@ -561,19 +607,31 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	return &a, nil
 }
 
-// UpdateAgent 更新一条已有 agent 记录
-func UpdateAgent(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
+// UpdateAgent 按 options 更新一条已有 agent 记录。
+// Phase 8-A 引入的主入口；旧长签名调用方请改用 UpdateAgentLegacy。
+func UpdateAgent(opts UpdateAgentOptions) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	toolsJSON, _ := json.Marshal(tools)
+	toolsJSON, _ := json.Marshal(opts.Tools)
 	_, err := DB.Exec(
 		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, temperature=?,
 		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
-		name, description, systemPrompt, model, temperature, maxTokens, endpoint, apiKey, string(toolsJSON), id,
+		opts.Name, opts.Description, opts.SystemPrompt, opts.Model, opts.Temperature,
+		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), opts.ID,
 	)
 	return err
+}
+
+// UpdateAgentLegacy 是旧长签名 UpdateAgent 的兼容 wrapper。
+// 仅为平滑迁移保留；新代码应直接调用 UpdateAgent(UpdateAgentOptions{...})。
+func UpdateAgentLegacy(id, name, description, systemPrompt, model, endpoint, apiKey string, temperature float64, maxTokens int, tools []string) error {
+	return UpdateAgent(UpdateAgentOptions{
+		ID: id, Name: name, Description: description, SystemPrompt: systemPrompt,
+		Model: model, Endpoint: endpoint, APIKey: apiKey,
+		Temperature: temperature, MaxTokens: maxTokens, Tools: tools,
+	})
 }
 
 // DeleteAgent 按 ID 删除一个 agent
