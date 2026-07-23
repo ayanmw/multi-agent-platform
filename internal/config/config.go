@@ -63,6 +63,13 @@ type Config struct {
 	CronWebhookTimeoutSeconds int
 	CronMaxResultChars        int
 
+	// Workspace worktree 隔离配置。
+	// WorktreeEnabled 总开关，默认 true：worktree 是主动触发的叠加能力，
+	// 不触发则系统零感知，故默认开启不影响存量。false 时 worktree/create
+	// Agent Tool 与 REST create 返回错误，run 沿用普通 session WorkspaceDir。
+	// 不设 session 结束钩子、不引入 WORKTREE_DEFAULT_EXIT（见 design D8）。
+	WorktreeEnabled bool
+
 	// WebSearch 配置映射到用于选择 provider 与 API key 的环境变量。
 	// 在 Load() 中加载,以便 server 能接入 core/web_search 工具。
 	// DuckDuckGo 是零 key 的兜底方案;其他所有 provider 默认关闭。
@@ -211,6 +218,12 @@ func Load() (*Config, error) {
 	}
 	cfg.CronWebhookTimeoutSeconds = parseEnvIntDefault("CRON_WEBHOOK_TIMEOUT_SECONDS", 10)
 	cfg.CronMaxResultChars = parseEnvIntDefault("CRON_MAX_EXECUTION_RESULT_CHARS", 2000)
+
+	// Workspace worktree 隔离：默认启用（主动触发的叠加能力，不触发则零感知）。
+	cfg.WorktreeEnabled = true
+	if v := os.Getenv("WORKTREE_ENABLED"); v != "" {
+		cfg.WorktreeEnabled = strings.EqualFold(v, "true") || v == "1"
+	}
 
 	// WebSearch provider 配置。
 	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {

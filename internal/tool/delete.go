@@ -31,12 +31,13 @@ func NewDeleteFileTool() *BuiltinTool {
 			},
 			"required": []string{"path"},
 		},
-		func(_ ExecuteContext, input map[string]any) (any, error) { return deleteFileExecutor(input) },
+		func(ctx ExecuteContext, input map[string]any) (any, error) { return deleteFileExecutor(ctx, input) },
 	).WithTags("filesystem", "filesystem:destructive")
 }
 
 // deleteFileExecutor 在路径 traversal 检查之后删除文件或目录。
-func deleteFileExecutor(input map[string]any) (any, error) {
+// 相对路径按 ctx.Workdir → input["workdir"] 优先级解析。
+func deleteFileExecutor(ctx ExecuteContext, input map[string]any) (any, error) {
 	path := getString(input, "path", "")
 	if path == "" {
 		return nil, fmt.Errorf("path required")
@@ -46,7 +47,7 @@ func deleteFileExecutor(input map[string]any) (any, error) {
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal not allowed: %s", path)
 	}
-	path = resolvePath(path, input)
+	path = resolvePathWithCtx(path, ctx, input)
 
 	info, err := os.Stat(path)
 	if err != nil {

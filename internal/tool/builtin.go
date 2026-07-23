@@ -103,8 +103,19 @@ func (t *BuiltinTool) WithAliases(aliases ...string) *BuiltinTool {
 
 // Execute 使用给定的输入 map 运行工具并返回结果。
 // 输入 map 必须符合 Parameters() 返回的 schema。
+//
+// 注意：此入口不携带 ExecuteContext，因此 workdir 仍由 input["workdir"]
+// 决定（由 Engine 注入）。worktree 隔离路径不经此入口——见 ExecuteWithCtx。
 func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
 	return t.executor(ExecuteContext{}, input)
+}
+
+// ExecuteWithCtx 以携带 ExecuteContext 的形式运行工具。worktree 隔离场景下，
+// Engine 把 per-run 可变 holder 的当前值（可能是 worktree.Path）经
+// ExecuteContext.Workdir 传入；这里转交给 executor 函数，使其优先于
+// input["workdir"]。对不关心 Workdir 的旧 executor 是透明无副作用的。
+func (t *BuiltinTool) ExecuteWithCtx(ctx ExecuteContext, input map[string]any) (any, error) {
+	return t.executor(ctx, input)
 }
 
 // Version 返回工具的版本标识符。BuiltinTool 默认无版本，返回空字符串。
@@ -213,13 +224,21 @@ func truncateObservation(s string, maxBytes int) string {
 }
 
 // resolvePath 对工具输入路径做规范化。绝对路径会被 Clean 后原样返回。
-// 相对路径会先尝试基于 input["workdir"] 解析，若不存在则回退到进程工作目录。
+// 相对路径按以下优先级解析基准目录：
+//  1. ExecuteContext.Workdir —— worktree 隔离 holder 注入的 per-run CWD
+//     （唯一可信源，LLM 无法伪造；由 Engine 在每次 tool 调用前注入）
+//  2. input["workdir"] —— Engine 为普通 session workspace 注入的 workdir
+//     （向后兼容路径，worktree 关闭时仍走这里）
+//  3. os.Getwd() —— 兜底
 //
 // 调用方应在调用 resolvePath 之前先通过 isPathTraversal 检查，以防止
 // 通过 ".." 段进行 directory traversal。
-func resolvePath(path string, input map[string]any) string {
+func resolvePathWithCtx(path string, ctx ExecuteContext, input map[string]any) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
+	}
+	if ctx.Workdir != "" {
+		return filepath.Clean(filepath.Join(ctx.Workdir, path))
 	}
 	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
 		return filepath.Clean(filepath.Join(workdir, path))
@@ -229,6 +248,16 @@ func resolvePath(path string, input map[string]any) string {
 	}
 	return filepath.Clean(path)
 }
+
+// resolvePath 是 resolvePathWithCtx 的旧入口（无 ExecuteContext），
+// 保留供尚未接 ctx 的调用点与测试使用。优先级：input["workdir"] → os.Getwd()。
+//
+//nolint:unused // 保留作为无 ctx 调用点的兼容入口，未来若全部接 ctx 可删
+func resolvePath(path string, input map[string]any) string {
+	return resolvePathWithCtx(path, ExecuteContext{}, input)
+}
+
+var _ = resolvePath // 防止 go vet 报 unused（兼容入口，刻意保留）
 
 // ---------------------------------------------------------------------------
 // run_shell — 带超时的 shell 命令执行
@@ -268,14 +297,15 @@ func NewRunShellTool() *BuiltinTool {
 			},
 			"required": []string{"command"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(ctx, input) },
 	}
 }
 
 // executeShell 是 run_shell 工具的 executor 函数。
 // 它解析 shell 二进制文件、创建带超时的 context，并通过 exec.CommandContext
 // 运行命令。结果包含 stdout、stderr 与 exit_code。
-func executeShell(input map[string]any) (any, error) {
+// CWD 优先取 ExecuteContext.Workdir（worktree 隔离注入），回退 input["workdir"]。
+func executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	cmdStr, ok := input["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command must be a string")
@@ -303,13 +333,15 @@ func executeShell(input map[string]any) (any, error) {
 		timeoutMs = int(t)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	execCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, shell, shellFlag, cmdStr)
+	cmd := exec.CommandContext(execCtx, shell, shellFlag, cmdStr)
 
-	// 如提供 workdir 则设置工作目录。
-	if workdir, ok := input["workdir"].(string); ok && workdir != "" {
+	// CWD：worktree holder 注入优先，回退 input["workdir"]。
+	if ctx.Workdir != "" {
+		cmd.Dir = ctx.Workdir
+	} else if workdir, ok := input["workdir"].(string); ok && workdir != "" {
 		cmd.Dir = workdir
 	}
 
@@ -322,7 +354,7 @@ func executeShell(input map[string]any) (any, error) {
 
 	if err != nil {
 		// 显式检查 context 超时/取消。
-		if ctx.Err() != nil {
+		if execCtx.Err() != nil {
 			result["exit_code"] = -1
 			result["stderr"] = fmt.Sprintf("command timed out after %d ms", timeoutMs)
 			return result, nil
@@ -369,7 +401,7 @@ func NewWriteFileTool() *BuiltinTool {
 			},
 			"required": []string{"path", "content"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeWriteFile(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeWriteFile(ctx, input) },
 	}
 }
 
@@ -388,8 +420,9 @@ func isPathTraversal(path string) bool {
 }
 
 // executeWriteFile 是 write_file 工具的 executor 函数。
-// 它校验路径、创建父目录并写入内容。
-func executeWriteFile(input map[string]any) (any, error) {
+// 它校验路径、创建父目录并写入内容。相对路径按 ExecuteContext.Workdir
+// → input["workdir"] → os.Getwd() 优先级解析基准目录。
+func executeWriteFile(ctx ExecuteContext, input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
@@ -408,9 +441,12 @@ func executeWriteFile(input map[string]any) (any, error) {
 
 	// 如提供 workdir，则将相对路径解析到 workdir 之下。当 workdir 为空
 	// （session 未绑定 workspace_dir）时，回退到当前工作目录，确保
-	// 相对路径仍能以可预期方式解析。
+	// 相对路径仍能以可预期方式解析。worktree 隔离开启时，ctx.Workdir
+	// （holder 注入）优先于 input["workdir"]。
 	if !filepath.IsAbs(path) {
-		if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
+		if ctx.Workdir != "" {
+			path = filepath.Join(ctx.Workdir, path)
+		} else if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
 			path = filepath.Join(workdir, path)
 		} else {
 			wd, _ := os.Getwd()
@@ -486,14 +522,15 @@ func NewReadFileTool() *BuiltinTool {
 			},
 			"required": []string{"path"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeReadFile(input) },
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeReadFile(ctx, input) },
 	}
 }
 
 // executeReadFile 是 read_file 工具的 executor 函数。
 // 它打开文件，读取最多 max_bytes 字节（默认 1 MB），然后对结果内容
-// 应用可选的行 offset 与 limit 过滤。
-func executeReadFile(input map[string]any) (any, error) {
+// 应用可选的行 offset 与 limit 过滤。相对路径按 ctx.Workdir → input["workdir"]
+// 优先级解析。
+func executeReadFile(ctx ExecuteContext, input map[string]any) (any, error) {
 	path, ok := input["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
@@ -504,9 +541,14 @@ func executeReadFile(input map[string]any) (any, error) {
 		return nil, fmt.Errorf("path traversal detected: %s", path)
 	}
 
-	// 如提供 workdir，则将相对路径解析到 workdir 之下。
-	if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && !filepath.IsAbs(path) {
-		path = filepath.Join(workdir, path)
+	// 如提供 workdir，则将相对路径解析到 workdir 之下。worktree 隔离开启时
+	// ctx.Workdir 优先于 input["workdir"]。
+	if !filepath.IsAbs(path) {
+		if ctx.Workdir != "" {
+			path = filepath.Join(ctx.Workdir, path)
+		} else if workdir, hasWorkdir := input["workdir"].(string); hasWorkdir && workdir != "" {
+			path = filepath.Join(workdir, path)
+		}
 	}
 
 	// 在根据 workdir 解析之后再次拒绝尝试 directory traversal 的路径。
@@ -869,12 +911,13 @@ func NewListDirTool() *BuiltinTool {
 			},
 			"required": []string{},
 		},
-		func(_ ExecuteContext, input map[string]any) (any, error) { return listDirExecutor(input) },
+		func(ctx ExecuteContext, input map[string]any) (any, error) { return listDirExecutor(ctx, input) },
 	).WithTags("filesystem", "filesystem:readonly")
 }
 
-// listDirExecutor 实现 list_dir 工具的逻辑。
-func listDirExecutor(input map[string]any) (any, error) {
+// listDirExecutor 实现 list_dir 工具的逻辑。相对路径按 ctx.Workdir
+// → input["workdir"] 优先级解析。
+func listDirExecutor(ctx ExecuteContext, input map[string]any) (any, error) {
 	path := getString(input, "path", ".")
 	recursive := getBool(input, "recursive", false)
 	maxDepth := getInt(input, "max_depth", 3)
@@ -884,7 +927,7 @@ func listDirExecutor(input map[string]any) (any, error) {
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal not allowed: %s", path)
 	}
-	path = resolvePath(path, input)
+	path = resolvePathWithCtx(path, ctx, input)
 
 	entries, err := walkDir(path, recursive, maxDepth, pattern, includeHidden)
 	if err != nil {

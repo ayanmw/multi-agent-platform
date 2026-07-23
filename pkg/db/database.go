@@ -147,7 +147,8 @@ func createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			workspace_dir TEXT DEFAULT '',
-			workspace_auto BOOLEAN DEFAULT 1
+			workspace_auto BOOLEAN DEFAULT 1,
+			active_worktree_id TEXT DEFAULT NULL
 		)`,
 		// Phase 5-A：项目管理和多轮对话相关表
 		//   projects — 顶层组织单元，用于分组 session
