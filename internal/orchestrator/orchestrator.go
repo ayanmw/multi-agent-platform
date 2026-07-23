@@ -48,6 +48,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/workspace"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -178,6 +179,16 @@ type Orchestrator struct {
 		FinishWithAttributes(ctx *observability.TraceContext, err error, attrs map[string]any)
 	}
 	rootTraceCtx *observability.TraceContext
+
+	// Phase worktree: 可选的 worktree Manager。非 nil 时，子 agent 共享父 session
+	// 的 active worktree —— 每个子 agent run 持有自己的 WorkdirHolder（初值指向
+	// 父 session 当前 active worktree.Path，无 active 则用 session WorkspaceDir），
+	// 使子 agent 的 file/shell tool 也作用在隔离分支内。Manager 也用于给子 agent
+	// 注册 worktree/* Agent Tool（per-subagent holder 注入）。
+	workspaceMgr *workspace.Manager
+	// workspaceSessionID 是当前 orchestration 绑定的 session，用于子 agent
+	// 读取/共享父 session 的 active worktree 绑定。
+	workspaceSessionID string
 }
 
 // New 创建一个新的 Orchestrator。
@@ -226,6 +237,16 @@ func (o *Orchestrator) SetTracer(tracer interface {
 }, rootTraceCtx *observability.TraceContext) {
 	o.tracer = tracer
 	o.rootTraceCtx = rootTraceCtx
+}
+
+// SetWorkspace 设置 worktree Manager 与绑定 session。设置后，每个子 agent 的
+// Engine 会持有自己的 WorkdirHolder，初值指向父 session 当前 active worktree
+// 的 Path（无 active 则用 session WorkspaceDir），使子 agent 的 file/shell tool
+// 作用在隔离分支内；同时子 agent 也会注册 worktree/* Agent Tool，透传 per-subagent
+// holder。mgr 为 nil 时 worktree 能力关闭，子 agent 沿用普通 WorkspaceDir。
+func (o *Orchestrator) SetWorkspace(mgr *workspace.Manager, sessionID string) {
+	o.workspaceMgr = mgr
+	o.workspaceSessionID = sessionID
 }
 
 // RunBlocking 启动所有 agent 并阻塞直到全部完成。
@@ -908,6 +929,40 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		}
 	}
 
+	// Phase worktree: 若 orchestrator 注入了 worktree Manager 且父 session 有
+	// active worktree，则子 agent 的 CWD holder 初值指向 active worktree.Path，
+	// 使子 agent 的 file/shell tool 作用在隔离分支内（共享父 session worktree）。
+	// 每个子 agent 持有自己的 holder，互不影响。无 active worktree 时 holder
+	// 初值用 session WorkspaceDir，行为与旧路径一致。Manager 为 nil（worktree
+	// 未启用）时跳过整个块，子 agent 沿用普通 WorkspaceDir。
+	var workdirHolder *workspace.WorkdirHolder
+	var engineTools *tool.Registry = o.tools
+	holderInit := workspaceDir
+	if o.workspaceMgr != nil {
+		wsid := o.workspaceSessionID
+		if wsid == "" {
+			wsid = sessionID
+		}
+		if wtID, _ := db.GetSessionActiveWorktree(wsid); wtID != "" {
+			if wt, _ := o.workspaceMgr.Get(wtID); wt != nil {
+				holderInit = wt.Path
+			}
+		}
+		workdirHolder = workspace.NewWorkdirHolder(holderInit)
+		// 子 agent 在克隆的 registry 上注册 worktree/* Agent Tool，注入自己的
+		// per-subagent holder 与父 session ID。子 agent 经 worktree/exit 退出时
+		// 只清自己的 holder 与父 session 的 active 绑定——多 worker 共享同一
+		// active 绑定，退出语义以最后一个 exit 为准（与单 agent 一致）。
+		engineTools = o.tools.Clone()
+		tool.RegisterWorktreeTools(engineTools, tool.WorktoolDeps{
+			Mgr:       o.workspaceMgr,
+			Store:     orchestratorWorktreeStore{},
+			Bus:       &hubAdapter{hub: o.hub},
+			Holder:    workdirHolder,
+			SessionID: wsid,
+		})
+	}
+
 	// OnLLMUsage 把累计 cost 喂给 costBudgetRule，这样当 USD 预算超限时
 	// PolicyChain 可以阻止后续 tool 调用。与 main.go:888-895
 	// （handleMultiAgent）和 main.go:1173-1181（handleRecoverCheckpoint）对齐。
@@ -951,13 +1006,16 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		// 能挂到 orchestration root 下。
 		Tracer:       o.tracer,
 		RootTraceCtx: o.rootTraceCtx,
+		// Phase worktree: 子 agent 的 per-subagent CWD holder（worktree 隔离注入）。
+		// nil（worktree 未启用）时 Engine 回退到 WorkspaceDir 行为。
+		WorkdirHolder: workdirHolder,
 		// Phase 7-H: 子 agent 是 worker，禁止再派发和自定义工作流。
 		Role:                 runtime.AgentRoleWorker,
 		CanDispatchSubAgents: false,
 		CanDefineWorkflow:    false,
 		SupervisorSubTaskID:  rootTaskID,
 		ApproverMode:         "leader",
-	}, o.tools, &hubAdapter{hub: o.hub}, subTaskID)
+	}, engineTools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Phase 7-A: 注意 —— 每个 agent 的 Engine/cancel 注册被刻意保留在
 	// cmd/server 层（由调用方创建 context 并持有 registry 表）。Orchestrator
@@ -1049,6 +1107,23 @@ type hubAdapter struct {
 
 func (a *hubAdapter) SendEvent(evt event.Event) {
 	a.hub.SendEvent(evt)
+}
+
+// orchestratorWorktreeStore 把 pkg/db 的 session↔worktree 绑定 helper 适配为
+// tool.WorktreeSessionStore，供子 agent 的 worktree/* Agent Tool 使用。
+// 无状态——所有子 agent 共用同一份 DB 绑定（多 worker 共享父 session active worktree）。
+type orchestratorWorktreeStore struct{}
+
+func (orchestratorWorktreeStore) GetActiveWorktree(sessionID string) (string, error) {
+	return db.GetSessionActiveWorktree(sessionID)
+}
+
+func (orchestratorWorktreeStore) SetActiveWorktree(sessionID, worktreeID string) error {
+	return db.SetSessionActiveWorktree(sessionID, worktreeID)
+}
+
+func (orchestratorWorktreeStore) ClearActiveWorktree(sessionID string) error {
+	return db.ClearSessionActiveWorktree(sessionID)
 }
 
 // ============================================================================

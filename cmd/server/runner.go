@@ -37,6 +37,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/internal/todo"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/workspace"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -89,6 +90,10 @@ type AgentDeps struct {
 	SkillRegistry   *skill.Registry
 	Orchestrator    *orchestrator.Orchestrator
 	Tracer          *observability.Tracer
+	// WorkspaceMgr 是 session 级 git worktree 隔离原语。非空时 worktree/*
+	// Agent Tool 可用，run 中途可切 CWD 到隔离分支。为 nil（DB 未初始化或
+	// WORKTREE_ENABLED=false）时 worktree 能力关闭，run 沿用普通 WorkspaceDir。
+	WorkspaceMgr *workspace.Manager
 	// MemDB 用于 session chat 的上下文压缩（harness.NewContextCompressor）。
 	// 单独列出是因为它属于 CompressorDB 接口，不与运行期 EngineConfig 直接耦合。
 	MemDB harness.CompressorDB
@@ -152,12 +157,13 @@ func makeRunnerDeps(cfg *config.Config, tools *tool.Registry, persist runtime.Pe
 		RouterProviders: routerProviders,
 		CaseService:     caseService,
 		TodoSvc:         todoSvc,
-		// 以下三项是进程级单例：server 只有一个 orchestrator / skill registry /
-		// tracer，Engine 构建期也直接引用这些包级全局。这里同步引用，保持单一
-		// 事实源，避免 appServer 字段与全局出现两份不一致的引用。
+		// 以下四项是进程级单例：server 只有一个 orchestrator / skill registry /
+		// tracer / workspace manager，Engine 构建期也直接引用这些包级全局。这里
+		// 同步引用，保持单一事实源，避免 appServer 字段与全局出现两份不一致的引用。
 		SkillRegistry: globalSkillRegistry,
 		Orchestrator:  globalOrchestrator,
 		Tracer:        tracer,
+		WorkspaceMgr:  globalWorkspaceMgr,
 		MemDB:         memDB,
 		MemRecall:     memRecall,
 	}
@@ -520,6 +526,31 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		}
 	}
 
+	// Phase worktree: per-run 可变 CWD holder。初值为 session WorkspaceDir
+	//（普通目录）。worktree/create 改写它为 worktree.Path，worktree/exit 恢复
+	// 它为 ""（Engine 回退到 WorkspaceDir）。holder 是 CWD 的唯一可信源——LLM
+	// 经 tool input 传入的 workdir 会被 Engine 无条件覆盖，防逃逸。
+	//
+	// 若 runner 注入了 worktree Manager（r.Deps.WorkspaceMgr 非 nil）且有
+	// sessionID，则给本次 run 注册 worktree/* Agent Tool，注入 holder 与 sessionID。
+	// Manager 为 nil（worktree 未启用）时跳过，holder 仍构造但只用于普通 CWD
+	// 一致性（无 worktree 工具，holder 值恒为 WorkspaceDir，行为等价旧路径）。
+	holder := workspace.NewWorkdirHolder(workspaceDir)
+	if r.Deps.WorkspaceMgr != nil && sessionID != "" {
+		if engineTools == tools {
+			// 非 leader 路径没有克隆 registry，这里克隆一份再注册 worktree 工具，
+			// 避免污染共享的 base registry（worktree 工具持有 per-run holder，不能共享）。
+			engineTools = tools.Clone()
+		}
+		tool.RegisterWorktreeTools(engineTools, tool.WorktoolDeps{
+			Mgr:       r.Deps.WorkspaceMgr,
+			Store:     globalWorkspaceStore,
+			Bus:       &hubAdapter{hub: hub},
+			Holder:    holder,
+			SessionID: sessionID,
+		})
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:              agentID,
 		SystemPrompt:         systemPrompt,
@@ -604,6 +635,11 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		// session 上下文填充。
 		SkillRegistry: globalSkillRegistry,
 		ActiveSkills:  GetEnabledSkillIDs(globalSkillRegistry),
+		// Phase worktree: per-run 可变 CWD holder（worktree 隔离注入）。holder
+		// 非 nil 时 Engine 在每次 tool 调用前读 holder.Get() 经
+		// ExecuteContext.Workdir 注入，优先于 input["workdir"]。holder 值为 ""
+		// 时 Engine 透明回退到 WorkspaceDir，行为与旧路径一致。
+		WorkdirHolder: holder,
 		// Phase 7 TODO: 把当前 session 的 active todos 注入 system prompt。
 		// todoSvc 为 nil（DB 未初始化）或 sessionID 为空时跳过。
 		ActiveTodos: func() string {

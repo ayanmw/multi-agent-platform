@@ -34,6 +34,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
 	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
 	"github.com/anmingwei/multi-agent-platform/internal/version"
+	"github.com/anmingwei/multi-agent-platform/internal/workspace"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -115,6 +116,14 @@ var globalSkillRegistry *skill.Registry
 // orchestratorDispatcher。通过包级引用获取是 Main 包内的合理折中
 //（server 进程只有一个 orchestrator 实例）。
 var globalOrchestrator *orchestrator.Orchestrator
+
+// globalWorkspaceMgr 是 worktree 隔离子系统的全局 Manager 引用。
+//
+// 与 globalSkillRegistry / globalOrchestrator 同模式：main() 启动期构造一次，
+// AgentRunner 经 AgentDeps.WorkspaceMgr 透传给 worktree/* Agent Tool 与
+// Engine 的 per-run workdir holder。DB 未初始化或 WORKTREE_ENABLED=false 时
+// 为 nil，worktree 能力关闭，run 沿用普通 session WorkspaceDir。
+var globalWorkspaceMgr *workspace.Manager
 
 // storeCancel 注册 task/agent 对应的取消函数。
 //
@@ -849,6 +858,38 @@ func main() {
 		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
 	} else {
 		log.Println("Cron subsystem: disabled (no database)")
+	}
+
+	// Phase worktree: 初始化 workspace worktree 隔离 Manager。
+	//
+	// worktree 是普通 session workspace 之上"主动触发的叠加能力"——LLM 在 run
+	// 中经 worktree/* Agent Tool 自主进入/退出隔离分支。这里只构造 Manager 原语
+	// 并 EnsureGitignored（把 .claude/worktrees/ 写入 .gitignore），不注册任何
+	// REST 路由（前端只能 create+查看，exit 仅 LLM）。Agent Tools 与 per-run
+	// workdir holder 在 AgentRunner.Run 中按需注入。
+	//
+	// 仅在 DB 可用且 cfg.WorktreeEnabled 时构造；否则 globalWorkspaceMgr 为 nil，
+	// worktree 能力关闭，run 沿用普通 WorkspaceDir，存量行为零感知。
+	if db.DB != nil && cfg.WorktreeEnabled {
+		root := repoRoot()
+		wtRoot := filepath.Join(root, ".claude", "worktrees")
+		if err := os.MkdirAll(wtRoot, 0755); err != nil {
+			observability.DefaultLogger.Warn("workspace", "worktree root mkdir failed", map[string]any{"error": err.Error()})
+		}
+		// Manager.repoDir 指向主仓库根，使所有 git CLI 以仓库根为 CWD——
+		// server 进程 CWD 未必是仓库根（session workspace 可能是独立目录），
+		// 显式注入避免 worktree add/list 作用到错误仓库。
+		mgr := workspace.NewManager(wtRoot).SetRepoDir(root)
+		if err := mgr.EnsureGitignored(); err != nil {
+			observability.DefaultLogger.Warn("workspace", "ensure gitignored failed", map[string]any{"error": err.Error()})
+		}
+		globalWorkspaceMgr = mgr
+		// 启动孤儿扫描：对比 git worktree list 与 DB 全表 active_worktree_id，
+		// 清理 DB 不认得的 crash 残留 worktree，广播 worktree_orphan_removed。
+		reclaimOrphanWorktrees(mgr, hub)
+		log.Printf("Workspace subsystem: worktree manager initialized at %s (repo=%s)", wtRoot, root)
+	} else {
+		log.Println("Workspace subsystem: worktree disabled (no database or WORKTREE_ENABLED=false)")
 	}
 
 	// AgentBus 在所有 agent 之间共享，允许 agent 在执行期间互相发送消息。

@@ -186,6 +186,24 @@ func (h *Hub) SetControlHandler(handler ControlHandler) {
 	h.controlHandler = handler
 }
 
+// RegisterTestClient 注册一个 client 用于接收广播事件，返回该 client。
+// 仅用于测试：生产路径的 client 由 ServeWS 经 websocket 升级创建。测试用它
+// 直接从 client.Send chan 读取广播事件，无需真实 websocket 连接。
+func (h *Hub) RegisterTestClient(id string) *Client {
+	c := &Client{
+		ID:   id,
+		Hub:  h,
+		Send: make(chan event.Event, 256),
+	}
+	h.register <- c
+	return c
+}
+
+// UnregisterTestClient 注销一个测试 client。仅用于测试。
+func (h *Hub) UnregisterTestClient(c *Client) {
+	h.unregister <- c
+}
+
 func ServeWS(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)

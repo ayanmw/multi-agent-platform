@@ -45,6 +45,14 @@ const (
 	EventCronExecutionSkipped   = "cron_execution_skipped"
 	EventCronMissed             = "cron_missed"
 	EventCronNotification       = "cron_notification"
+
+	// Workspace worktree 隔离子系统事件常量。worktree 状态变更通过这些事件
+	// 经 hub.SendEvent WS 广播（不写 task steps），前端据此实时渲染 active
+	// worktree 状态与未提交护栏确认。事件 TaskID 字段填 session_id。
+	EventWorktreeCreated       = "worktree_created"       // worktree 创建成功
+	EventWorktreeRemoved       = "worktree_removed"       // worktree 被 remove 删除
+	EventWorktreeExitBlocked   = "worktree_exit_blocked"  // exit{remove} 因未提交变更被护栏阻塞
+	EventWorktreeOrphanRemoved = "worktree_orphan_removed" // 启动孤儿扫描清理 crash 残留
 )
 
 // Event 表示通过 WebSocket 发送的结构化事件

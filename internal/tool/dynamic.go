@@ -156,11 +156,19 @@ func (t *DynamicTool) Parameters() map[string]any { return t.parameters }
 func (t *DynamicTool) Tags() []string { return nil }
 
 // Execute 使用给定输入 map 运行 dynamic tool。
-// 它根据工具类型分派到相应的执行策略。
+// 它根据工具类型分派到相应的执行策略。此入口不携带 ExecuteContext，
+// shell 类 tool 的 CWD 由 input["workdir"] 决定。
 func (t *DynamicTool) Execute(input map[string]any) (any, error) {
+	return t.ExecuteWithCtx(ExecuteContext{}, input)
+}
+
+// ExecuteWithCtx 以携带 ExecuteContext 的形式运行 dynamic tool。
+// worktree 隔离场景下，shell 类 tool 用 ctx.Workdir 作为 CWD（优先于
+// input["workdir"]）；http/inline 类型忽略 Workdir。
+func (t *DynamicTool) ExecuteWithCtx(ctx ExecuteContext, input map[string]any) (any, error) {
 	switch t.toolType {
 	case DynamicToolShell:
-		return t.executeShell(input)
+		return t.executeShell(ctx, input)
 	case DynamicToolHTTP:
 		return t.executeHTTP(input)
 	case DynamicToolInline:
@@ -172,15 +180,22 @@ func (t *DynamicTool) Execute(input map[string]any) (any, error) {
 
 // executeShell 运行带输入替换的 shell 命令。
 // 命令模板中的 {param_name} 占位符会被输入 map 中的对应值替换。
-// 执行由 30 秒的 context 超时守护。
-func (t *DynamicTool) executeShell(input map[string]any) (any, error) {
+// 执行由 30 秒的 context 超时守护。CWD 优先取 ExecuteContext.Workdir
+// （worktree 隔离注入），回退 input["workdir"]。
+func (t *DynamicTool) executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	cmdStr := sanitizeInput(t.command, input)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// dynamic tool 在所有平台上都使用 sh -c（行为一致）。
-	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	cmd := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
+	// CWD：worktree holder 注入优先，回退 input["workdir"]。
+	if ctx.Workdir != "" {
+		cmd.Dir = ctx.Workdir
+	} else if wd, ok := input["workdir"].(string); ok && wd != "" {
+		cmd.Dir = wd
+	}
 
 	output, err := cmd.CombinedOutput()
 	result := map[string]any{
@@ -190,7 +205,7 @@ func (t *DynamicTool) executeShell(input map[string]any) (any, error) {
 	}
 
 	if err != nil {
-		if ctx.Err() != nil {
+		if execCtx.Err() != nil {
 			result["exit_code"] = -1
 			result["stderr"] = "command timed out after 30 seconds"
 			return result, nil
