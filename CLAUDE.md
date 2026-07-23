@@ -281,6 +281,8 @@ User Input → System Prompt + Messages → LLM (streaming)
 - `internal/llm/mock_builtin.go`：`BuiltinMockScripts()` 返回 22 个 mock 脚本（21 case 各一个 + `tool-error` keyword 回退）。每个脚本通过精确 `CaseID` 匹配被 `MockProvider.selectScript` 选中（精确命中 +1000，远高于 router-classifier 的 Priority 1000），其 `Responses` 序列还原该 case 的真实 ReAct 行为（tool_call → 最终 text）。
 - `selectScript` 区分两档 CaseID 命中：精确 `EqualFold`（+1000）与输入子串包含（+500）。后者低于前者，防止 `research` 这类常见英文词 case ID 靠子串劫持其它 case 的 run-case 路径（`multi-agent-sequential` 的 input 含 "research" 曾被 research 脚本抢走）。
 - 回归脚本 Windows 注意事项：必须 `export PYTHONUTF8=1`，否则 python stdin 默认 GBK 解码含中文的 `/api/tasks` 响应（如 `skill/list` 返回的 Skill DisplayName）会 JSON 解析失败、轮询 status 恒空 → 误判超时。
+- `scripts/real-llm-smoke.sh`（真实 LLM，非 mock）：Part A 6 白盒场景 + Part B 全量 21 case。断言分两档——硬失败（达终态/usage/cost/panic）计 FAIL，软标记（status/tool/final/编排事件，real-LLM 不可控）计 SKIP 不计 FAIL。`b_run_case` 180s 轮询预算外加 200s 宽限复检，命中终态降级 slow-LLM 软标记（reasoning 模型每步 15-30s，慢 case 200-350s 正常，非平台 bug）；known-limitation（L5 leader-dispatch/fault-tolerance）不走宽限。全量结果 PASS=143/SKIP=20/FAIL=0。
+- real-llm-smoke 产物隔离：脚本启动 server 前切到独立 `SMOKE_CWD`（默认 `workspace/smoke-server/run-<ts>-<pid>/`，gitignore 内），`DB_PATH`/`ENV_FILE` 用绝对路径；产物不自动清理（便于对比），`SMOKE_FRESH=1` 启动前清空默认目录。`ENV_FILE` 环境变量由 `config.Load` 读取（未设回退 CWD/.env），让 server 在隔离 CWD 启动仍能加载项目根 .env。
 
 ### 编排事件的可观测性约定
 
@@ -324,6 +326,7 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 →
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 | 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
+| 8-B real-llm-smoke 收尾 | ✅ | `real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 timeout 假阳性 + 全量 21 case 真实 LLM 评测 PASS=143/SKIP=20/FAIL=0；产物 CWD 隔离（`workspace/smoke-server/run-*`，`SMOKE_FRESH=1` 清空）+ `ENV_FILE` 绝对路径；后端 workspace 三层兜底（`handleRunCase` 匿名 session / `resolveSession` 绑 workspace / `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`），根目录零污染 |
 
 ## 编码约定
 
