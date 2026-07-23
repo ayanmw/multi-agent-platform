@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-21
-> **当前版本**: v0.10.0 Alpha（Session 级 TODO 子系统落地）
+> **最近更新**: 2026-07-23
+> **当前版本**: v0.11.3 Alpha（内置 Case 矩阵扩展到 21 个 L1-L5 阶梯，mock 回归 21/21）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 (Skeleton)
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)
 ```
 
 ---
@@ -208,6 +208,19 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] 全局快捷键系统（Ctrl+Shift+C 取消、Ctrl+Shift+P 暂停/恢复、? 提示面板）
 - [x] TypeWriter 代码块复制按钮 + Tool output JSON 格式化/还原切换
 - [x] MetricsPanel 运行时长 + Agent 选择器占坑
+
+### extend-task-cases 增量（2026-07-23，OpenSpec change `extend-task-cases`，版本 v0.11.3 Alpha，commit `134426e`）
+> OpenSpec change 已归档至 `openspec/changes/archive/2026-07-23-extend-task-cases/`，并产出 `openspec/specs/task-cases/` 与 `openspec/specs/multi-agent-orchestration/` 两份能力规格。本增量属 Phase 3（Cases）的能力深化，挂在本节便于追溯。
+- [x] 内置 Case 矩阵从 5 个扩展到 21 个，覆盖 L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排五级阶梯
+- [x] 新增 L2：todo-driven、web-research、skill-code-helper、cron-notify、llm-judge-qa
+- [x] 新增 L3：policy-enforcement（PathTraversal 拦截）、approval-flow（AllowShellDangerous）、max-steps-exhaustion（步数耗尽 failed）、context-compression、checkpoint-resume
+- [x] 新增 L4：multi-agent-parallel / -sequential / -dag（保留 legacy multi-agent 对照）
+- [x] 新增 L5：multi-agent-leader-dispatch / -review / -fault-tolerance
+- [x] `internal/cases/cases_test.go` 增补完整性校验：ID 唯一、Name/Category/SystemPrompt/Goal 非空、MaxSteps>0、Tags 含阶梯标识、L1-L5 各级覆盖、验收类型属 harness 枚举
+- [x] `scripts/cases-regression.sh` 全量 mock 回归：21/21 PASS，含 status / has_tool / final_result / tokens / cost_records / L4-L5 编排事件（decompose_done / agent_dispatched / agent_completed）/ child_tasks[].steps 回填断言
+- [x] `internal/llm/mock_builtin.go` 为 21 个 case 各配一个精确 CaseID mock 脚本（+ tool-error keyword 回退，共 22 个），还原各 case 真实 ReAct 行为
+- [x] `internal/llm/mock_provider.go` selectScript 区分精确 CaseID 命中（+1000）与输入子串命中（+500），防止 "research" 等常见英文词 case ID 靠子串劫持其它 case 脚本
+- [x] 回归脚本 WS 订阅改为服务就绪后启动 + 带退避重连，捕获 orchestrator 仅经 hub.SendEvent 广播、不写 task steps 的编排事件；Windows 下强制 `PYTHONUTF8=1` 修复含中文响应的 JSON 解析（skill/list 返回 Skill DisplayName 导致 skill-code-helper 轮询超时）
 
 ### 验证标准
 - [x] 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新
@@ -619,10 +632,10 @@ const activeTaskId = ref<string | null>(null)
 
 ## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
-**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
+**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 URL 路径（`/` 默认 v2、`/ui/v1/` 旧版）运行时切换。
 
 ### 交付物
-- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` 按 `UI_VERSION=v2` 选择静态资源。
+- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` `serveVersionedUI` 按 `UIVersionsRegistry` + URL 路径分发，根路径 `/` 走 `DefaultUIVersion=v2`，`/ui/v1/` 与 `/ui/v2/` 各自可访问。
 - [x] 设计系统：`global.css` deep-space dark + industrial 主题，CSS tokens；`responsive.css` 桌面/平板/移动适配。
 - [x] 布局组件：`TopBar` / `DockPanel` / `SessionDock` / `CommandBar` / `MobileNav` / `TimelineTrack` / `AgentLane` / `StepCard` / `InspectorTabs` / `InspectorContent`。
 - [x] Store composables 全量迁移适配（Task / Session / Agent / Project / Case / Memory / ContextWindow / Trace / Toast / RecentMods / ModelPrices / MCP / Keyboard / Layout / Skills）。
@@ -632,13 +645,14 @@ const activeTaskId = ref<string | null>(null)
 - [x] 构建验证：`web/` 与 `web/v2/` 均构建通过，`go build ./cmd/server` 通过。
 
 ### 待验证 / 待办
-- [ ] 端到端冒烟：`UI_VERSION=v2` 启动后跑通 chat / case / skill / multi-agent，桌面与移动端均正常。
+- [ ] 端到端冒烟：默认（根路径 `/` 即 v2）启动后跑通 chat / case / skill / multi-agent，桌面与移动端均正常。
 - [ ] Traces tab 升级为可折叠树。
 - [ ] 用户验收满意后合并 `ui-v2-control-room` → `main`。
 
 ### 已知注意
 - 工作分支 `ui-v2-control-room` 位于隔离 worktree，未合并 main 前不影响生产部署。
 - 子 agent 并行失控教训已记录至 `memory/lead-subagent-parallel-control.md`，后续收尾改用单 agent 串行。
+- 早期设计曾用 `UI_VERSION` 环境变量切换，后改为 URL 路径分发（`web/embed.go` 的 `UIVersionsRegistry` + `DefaultUIVersion=v2`），`UI_VERSION` 已不再被代码读取。
 
 ---
 
@@ -790,7 +804,7 @@ const activeTaskId = ref<string | null>(null)
 
 - [x] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
 - [x] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，`status=completed` 与 `agent_count=2` 一致（18s 完成）
-- [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + orchestrator lane + Traces 面板均有数据
+- [ ] 前端（默认 v2，根路径 `/`）跑通 multi-agent：leader lane + worker lanes + orchestrator lane + Traces 面板均有数据
 
 ---
 
@@ -817,7 +831,7 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.5 Alpha | 2026-07-18 | DuckDuckGo fallback: core/web_search 无 API key 时自动降级到 DuckDuckGo HTML/lite 搜索 |
 | v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |
 | v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
-| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
+| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（根路径默认 v2，`/ui/v1/` 保留旧版）；待端到端冒烟验证后合并 main |
 | v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
 | v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
@@ -829,3 +843,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
 | v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
 | v0.11.2 Alpha | 2026-07-22 | Phase 7-cron 收尾: smoke 端到端双覆盖 — `smoke-test.sh` 9.6 节(mock) + `real-llm-smoke.sh` 场景 6(真实 LLM)；新增 node 内置 WebSocket 订阅器采集 WS 事件流断言 cron_triggered→started→completed；real-llm-smoke 22 项全 PASS / 0 FAIL |
+| v0.11.3 Alpha | 2026-07-23 | extend-task-cases: 内置 Case 矩阵 5→21（L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排）+ `cases_test.go` 完整性校验 + `internal/llm/mock_builtin.go` 22 个 mock 脚本（21 case + tool-error 回退）+ `mock_provider.go` selectScript 两档 CaseID 评分（精确 +1000 / 子串 +500，防 research 劫持）+ `scripts/cases-regression.sh` mock 回归 21/21（WS 重连订阅编排事件 + Windows PYTHONUTF8=1）；OpenSpec change 已归档 `openspec/changes/archive/2026-07-23-extend-task-cases/` 并产出 `task-cases` / `multi-agent-orchestration` 两份能力规格 |

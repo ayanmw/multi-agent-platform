@@ -1,8 +1,8 @@
 # 多 Agent 平台
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.7.4 Alpha**
-> **Phase 状态：0–6 已完成，MCP stdio / SSE / remote marketplace 已落地，Phase 7 进行中**
+> **当前版本：v0.11.3 Alpha**
+> **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 已落地，UI-v2 与 7-H2 编排闭环进行中**
 
 ## 快速开始
 
@@ -164,12 +164,13 @@ cp .env.example .env
 ### 2. 编译运行
 
 ```bash
-cd web
-npm run build
-cd ..
-# 单文件部署：前端 web/dist/* 已嵌入 Go 二进制
+cd web && npm run build && cd ..
+# v2 前端（默认即 v2，按需构建）：控制室风格 UI
+cd web/v2 && npm run build && cd ..
+# 单文件部署：前端 web/dist/* (v1) 与 web/v2/dist/* (v2) 均嵌入 Go 二进制
 go build -o server.exe ./cmd/server/
 ./server.exe --port 8080
+# 根路径 / 默认服务 v2；/ui/v1/ 访问旧版 v1（无需环境变量，由 web/embed.go 的 UIVersionsRegistry 与 URL 路径分发）
 ```
 
 ### 3. 端到端测试（推荐）
@@ -180,6 +181,15 @@ bash scripts/smoke-test.sh
 
 # PowerShell 环境
 .\scripts\smoke-test.ps1
+
+# 21 个内置 Case 的 mock 回归（确定性，无需真实 LLM）
+bash scripts/cases-regression.sh
+
+# multi-agent 编排端到端（mock）
+bash scripts/multi-agent-smoke.sh
+
+# 真实 LLM 冒烟（需配置 .env）
+bash scripts/real-llm-smoke.sh
 
 
 # go的sample客户端测试(非最新)
@@ -233,29 +243,33 @@ cmd/
 internal/
   agent/                   # Agent 类型定义
   auth/                    # API key / 用户 / 角色 / 认证中间件
-  cases/                   # 预设 Task Cases
+  cases/                   # 预设 Task Cases（21 个 L1-L5 内置 + 自定义 CRUD）
   config/                  # .env 加载 + 配置管理（含 MCP_SERVERS）
   cost/                    # CostTracker + CostBudgetRule
+  cron/                    # Cron / 定时器子系统（4 种 action + robfig/cron 调度）
   harness/                 # PolicyChain / TaskContract / ApprovalRule
-  llm/                     # LLM Provider 抽象 + OpenAI/Anthropic/DeepSeek 实现
+  llm/                     # LLM Provider 抽象 + OpenAI/Anthropic/DeepSeek + MockProvider（含 22 个内置 mock 脚本）
   memory/                  # 记忆召回、作用域、上下文压缩
-  observability/           # 结构化日志 + Prometheus metrics + /healthz
-  orchestrator/            # 多 Agent 编排
+  observability/           # 结构化日志 + Prometheus metrics + /healthz + Tracer
+  orchestrator/            # 多 Agent 编排（parallel/sequential/DAG/leader-driven）
   pool/                    # Worker Pool 并发调度
   runtime/                 # ReAct Loop 引擎 + Step 状态机 + 持久化
+  skill/                   # 可复用 Skill prompt 包（Registry / Store / Renderer）
+  todo/                    # Session 级 TODO 子系统
   tool/                    # Tool 注册表 + 内置工具 + 运行时注册
   tool/mcp/                # MCP Client / Manager / Repository / 示例（新增）
   version/                 # 版本信息 + go:embed
   ws/                      # WebSocket Hub
 pkg/
-  db/                      # SQLite Schema（17+ 表）、迁移、CRUD
+  db/                      # SQLite Schema（26+ 表）、迁移、CRUD
   event/                   # 统一事件结构 + 序列化
-web/                       # Vue 3 + Vite + TypeScript 前端
+web/                       # Vue 3 + Vite + TypeScript 前端（v1）
+web/v2/                    # Observable Control Room 前端（v2，默认根路径服务）
 docs/                      # 历史/未来 Markdown 文档
 roadmaps/                  # ROADMAP.md 路线图 + 版本史
 doc/                       # HTML 格式项目文档（部分章节可能已过时）
-openspec/                  # OpenSpec 变更产物
-scripts/                   # 测试/发布脚本（smoke-test.sh、smoke-test.ps1）
+openspec/                  # OpenSpec 变更产物（changes/ + specs/）
+scripts/                   # 测试/发布脚本（smoke-test.sh、cases-regression.sh、multi-agent-smoke.sh、real-llm-smoke.sh 等）
 data/                      # SQLite 数据库文件
 storage/                   # 文件存储
 examples/mcp/              # MCP Server 示例（time / calc）
@@ -278,29 +292,29 @@ examples/mcp/              # MCP Server 示例（time / calc）
 
 ## 当前状态
 
-**v0.7.0 Alpha** — Phases 0–6 已完成，MCP 支持已落地，Phase 7 规划中。
+**v0.11.3 Alpha** — Phases 0–6 已完成，Skill / TODO / Cron 子系统与 21 个 L1-L5 Case 矩阵已落地，UI-v2 控制室与 multi-agent 编排闭环进行中。
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | WebSocket 实时通信 | ✅ | gorilla/websocket，事件驱动，多客户端广播 |
 | ReAct Loop 引擎 | ✅ | think → tool_call → observe，支持 max_steps / timeout |
 | 内置工具 | ✅ | run_shell、write_file、read_file + 运行时注册 |
-| MCP 工具扩展 | ✅ | stdio transport + Manager 生命周期 + 动态 API（新增） |
+| MCP 工具扩展 | ✅ | stdio / SSE transport + Manager 生命周期 + 动态 API + 远程 marketplace |
 | 工具沙箱 | ✅ | Docker 安全隔离 run_shell |
-| DB 持久化 | ✅ | modernc.org/sqlite，17+ 表，迁移 v14+ |
-| Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket |
+| DB 持久化 | ✅ | modernc.org/sqlite，26+ 表，迁移 v26+ |
+| Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket；`web/v2/` 控制室风格 UI 为默认（根路径 `/`），`/ui/v1/` 保留旧版 |
 | Session / Project | ✅ | multi-turn chat，Project 分组，Session 历史 |
-| 多 Agent 并发 | ✅ | 并行派发，前端多树渲染 |
+| 多 Agent 并发 | ✅ | 并行派发，前端多树渲染；leader-driven dispatch_sub_agent 主链路（Phase 7-H2） |
 | Memory | ✅ | scope=session/project/global，向量召回，上下文压缩 |
-| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH |
+| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH，RBAC enforcement |
 | RAG | ✅ | LocalEmbeddingProvider + InMemoryVectorStore + `/api/memories/recall` |
-| 成本 / 可观测性 | ✅ | CostTracker、/metrics、/healthz、结构化日志 |
+| 成本 / 可观测性 | ✅ | CostTracker、/metrics、/healthz、结构化日志、OpenTelemetry trace |
 | Checkpoint / Recovery | ✅ | 任务检查点 + 崩溃恢复 |
+| Skill 系统 | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + 前端 SkillPicker |
+| TODO 子系统 | ✅ | session 级 TODO + 6 个 Agent Tools + `/api/todos` + 前端拖拽/嵌套 |
+| Cron / 定时器 | ✅ | 4 种 action_type + robfig/cron 秒级调度 + 事件化 + 前端管理 UI |
+| Case 矩阵 | ✅ | 21 个内置 Case（L1-L5 阶梯）+ mock 回归 21/21 + LLM Judge 验收 |
 | 可配置 timeout | ✅ | TaskContract.TimeoutSeconds，0 表示无限制 |
-| UI overlays | ✅ | Memory Browser overlay，独立关闭 |
-| 展开 / 折叠全部 | ✅ | Expand All / Collapse All，最新 step 自动展开 |
-| 智能滚动 | ✅ | 底部阈值 + 暂停提示 + Ctrl+End 恢复 |
-| Step 索引 | ✅ | `#{{ index }}` 显示在每个 step 头部 |
 | Provider Router | ✅ | 多厂商 Provider + fallback 降级 |
 
 ## 文档组织

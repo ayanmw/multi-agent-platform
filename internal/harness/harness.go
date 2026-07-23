@@ -53,6 +53,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -810,13 +811,13 @@ func (ae *AcceptanceEvaluator) checkContentContains(criterion AcceptanceCriterio
 // 注意：此处刻意限制 —— 使用较短超时且不允许任意命令。它面向测试 runner 与校验命令，
 // 不用于通用 shell 执行。
 func (ae *AcceptanceEvaluator) checkShell(criterion AcceptanceCriterion, start time.Time) EvalResult {
-	// 出于安全考虑，初始实现中 shell 退出检查是 stub。
-	// 完整实现需要 Docker sandbox（Phase 5）。
-	// 目前返回"未实现"结果，但不会阻塞。
+	// TODO: Phase 5 —— 当前 shell 验收检查未真正执行，等待 Docker sandbox 完成后实现。
+	// 在此之前使用 soft pass，但明确打日志，避免被忽略。
+	log.Printf("[AcceptanceEvaluator] shell check soft-pass (not implemented): type=%s target=%q", criterion.Type, criterion.Target)
 	return EvalResult{
 		Criterion: criterion,
 		Passed:    true, // soft pass —— 不因未实现的检查而阻塞
-		Message:   fmt.Sprintf("Shell check skipped (not yet implemented): %s. Full implementation in Phase 5 with Docker sandbox.", criterion.Target),
+		Message:   fmt.Sprintf("Shell check soft-pass (not yet implemented): %s. Full implementation in Phase 5 with Docker sandbox.", criterion.Target),
 		Duration:  time.Since(start).Milliseconds(),
 	}
 }

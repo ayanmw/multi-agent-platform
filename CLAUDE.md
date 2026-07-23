@@ -24,8 +24,9 @@
 | 语言 | Go 1.25 | 后端全部 |
 | 数据库 | modernc.org/sqlite | 纯 Go SQLite，单文件部署 |
 | 通信 | gorilla/websocket | Phase 0-4，Phase 6 迁 gRPC |
-| 前端 | Vue 3 + Vite + TypeScript | 当前 CDN 单文件，Phase 2 迁移 |
+| 前端 | Vue 3 + Vite + TypeScript | `web/`(v1) + `web/v2/`(控制室，默认根路径)，按 URL 路径 `/ui/v{N}/` 分发 |
 | LLM | OpenAI-compatible API | `aicoding.dobest.com/v1`，deepseek-v4-flash |
+| Mock | MockProvider | 22 个内置脚本，回归脚本确定性评测 |
 | 配置 | .env + 环境变量 | 优先级：系统环境变量 > .env > 默认值 |
 
 ---
@@ -36,26 +37,28 @@
 cmd/server/main.go          # 入口：HTTP Server + WS Hub + API 路由
 internal/
   agent/agent.go             # Agent 类型定义
+  cases/cases.go             # 21 个内置 Task Case（L1-L5 阶梯）+ 自定义 Case CRUD
   config/config.go           # .env 加载 + 配置管理
+  cron/                      # Cron / 定时器子系统（见下文「Cron / 定时器系统」）
   llm/client.go              # OpenAI-compatible SSE streaming 客户端
+  llm/mock_provider.go       # 确定性 MockProvider（22 个内置脚本，回归用）
   runtime/engine.go          # ReAct Loop 引擎 + Step 状态机
   skill/                     # Skill 可复用 prompt 包
-    models.go                # Skill 领域模型（来源、状态、模板、变量）
+    skill.go                 # Skill 领域模型（来源、状态、模板、变量）
     registry.go              # 进程内 Skill 注册表
     store.go                 # SQLite 持久化
     loader.go                # built_in / local_db 加载
     renderer.go              # {{ variable }} 模板渲染
     builtin.go               # 内置 Skill 种子
+  todo/                      # Session 级 TODO 子系统（model/store/service + Agent Tools）
   tool/registry.go           # Tool 注册表
   tool/builtin.go            # 3 个内置工具 (run_shell, write_file, read_file)
   ws/hub.go                  # WebSocket Hub (connect/broadcast/disconnect)
 pkg/
   event/event.go             # 统一事件结构 + 序列化
-  db/database.go             # SQLite 初始化 + Schema (6 表)
-web/                         # 前端 Vite + Vue 3 + TypeScript
-  src/components/SkillPicker.vue   # `/` 触发的 Skill 搜索面板
-  src/components/TaskInput.vue     # chat 输入 + 集成 SkillPicker
-  src/App.vue                      # 处理 `/skill-id ` 前缀并启用 skill
+  db/database.go             # SQLite 初始化 + Schema (26+ 表)
+web/                         # 前端 Vite + Vue 3 + TypeScript（v1）
+web/v2/                      # Observable Control Room 前端（v2，默认根路径服务）
 data/                        # SQLite 数据库文件
 storage/                     # 文件存储
 .env                         # API Key + 配置 (gitignore)
@@ -249,11 +252,36 @@ User Input → System Prompt + Messages → LLM (streaming)
 
 ---
 
+## 内置 Case 矩阵（L1-L5 阶梯）
+
+`internal/cases/cases.go` 通过 `cases.All()` 返回 21 个内置 case，按能力阶梯分为五级，是回归脚本 `scripts/cases-regression.sh` 的 mock 评测对象。每个 case 由 `ID / SystemPrompt / DefaultInput / TaskContract(Goal, Scope, MaxSteps, Permissions, AcceptanceCriteria) / Tags` 构成。
+
+| 级别 | Case ID | 验证能力 |
+|------|---------|---------|
+| L1 单 Agent 基线 | `code-gen` `dialogue` `research` `long-task` | 基础 ReAct Loop、write_file/run_shell、纯对话、多步 |
+| L2 单 Agent + 子系统 | `todo-driven` `web-research` `skill-code-helper` `cron-notify` `llm-judge-qa` | todo/cron/skill Agent Tools、web 搜索、llm_judge 验收 |
+| L3 Harness 治理 | `policy-enforcement` `approval-flow` `max-steps-exhaustion` `context-compression` `checkpoint-resume` | PolicyGate 拦截、审批、步数耗尽、上下文压缩、checkpoint 续跑 |
+| L4 多 Agent 静态编排 | `multi-agent`(legacy) `multi-agent-parallel` `multi-agent-sequential` `multi-agent-dag` | orchestrator parallel/sequential/pipeline(DAG) 静态拆分 |
+| L5 多 Agent 动态编排 | `multi-agent-leader-dispatch` `multi-agent-review` `multi-agent-fault-tolerance` | leader 运行时 dispatch_sub_agent、互评、容错降级 |
+
+### 回归脚本与 mock 脚本
+
+- `scripts/cases-regression.sh`：独立端口 + 独立 DB + `LLM_USE_MOCK=true` 串行跑全部 21 个 case，断言 status / has_tool / final_result / total_tokens / cost_records；L4-L5 额外断言编排事件（`decompose_done` / `agent_dispatched` / `agent_completed`，经 WS 订阅捕获）与 `child_tasks[].steps` 回填。目标 21/21 PASS。
+- `internal/llm/mock_builtin.go`：`BuiltinMockScripts()` 返回 22 个 mock 脚本（21 case 各一个 + `tool-error` keyword 回退）。每个脚本通过精确 `CaseID` 匹配被 `MockProvider.selectScript` 选中（精确命中 +1000，远高于 router-classifier 的 Priority 1000），其 `Responses` 序列还原该 case 的真实 ReAct 行为（tool_call → 最终 text）。
+- `selectScript` 区分两档 CaseID 命中：精确 `EqualFold`（+1000）与输入子串包含（+500）。后者低于前者，防止 `research` 这类常见英文词 case ID 靠子串劫持其它 case 的 run-case 路径（`multi-agent-sequential` 的 input 含 "research" 曾被 research 脚本抢走）。
+- 回归脚本 Windows 注意事项：必须 `export PYTHONUTF8=1`，否则 python stdin 默认 GBK 解码含中文的 `/api/tasks` 响应（如 `skill/list` 返回的 Skill DisplayName）会 JSON 解析失败、轮询 status 恒空 → 误判超时。
+
+### 编排事件的可观测性约定
+
+orchestrator 的 `decompose_done` / `agent_dispatched` / `agent_completed` 事件用 `event.NewEvent`（无 SubTaskID）经 `hub.SendEvent` 做 WS 广播，**不写 task steps**。因此 HTTP `/api/tasks` 详情里看不到这些事件，只能靠 WS 订阅（或 `/api/replay/events`）捕获。回归脚本据此把 WS 订阅改为"服务就绪后启动 + 带退避重连"。
+
+---
+
 ## Phase 计划
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ (Skeleton)
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → 扩展 Phase ✅🚧
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (skill/TODO/cron✅ + UI-v2/7-H2🚧)
 ```
 
 | Phase | 状态 | 核心交付 |
@@ -261,7 +289,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | 0 骨架 | ✅ | WS Hub + Event Schema + SQLite + Vue CDN |
 | 1 Agent | ✅ | LLM Client + 3 Tools + ReAct Engine + .env |
 | 2 UI | ✅ | Vite + TypeScript + AgentTree + TypeWriter + Markdown |
-| 3 Cases | ✅ | 5 预设 Cases + Card UI + 历史回放 |
+| 3 Cases | ✅ | 5→21 内置 Cases（L1-L5 阶梯）+ Card UI + 历史回放 + mock 回归 21/21 |
 | 4 并发 | ✅ | 多 Agent 并行 + 前端多树渲染 |
 | 5 注册 | ✅ | 运行时 Tool 注册 + Docker 沙箱 |
 | 6 高级 | ✅ | RAG + Auth + gRPC + 可观测性 |
@@ -271,13 +299,18 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 ## 扩展 Phase
 
 ```
-Phase skill ✅ → Phase 7 🔜
-  (Skill 系统)      (生产化与深度集成)
+Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 7 🔜
+  (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (生产化与深度集成)
 ```
 
 | Phase | 状态 | 核心交付 |
 |-------|------|---------|
 | skill | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + Agent Tools + 前端 `/` 触发 SkillPicker + E2E 测试 |
+| TODO | ✅ | session 级 TODO + 6 个 Agent Tools + `/api/todos` + 前端拖拽/嵌套子任务 |
+| 7-cron | ✅ | Cron 子系统（4 种 action + robfig/cron 秒级调度 + 事件化 + 前端管理 UI） |
+| UI-v2 | 🚧 | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，根路径默认 v2，`/ui/v1/` 保留旧版） |
+| 7-H2 | 🚧 | multi-agent 编排遗留闭环（leader-driven dispatch_sub_agent + Tracer 事件流 + child steps 回填 + DAG） |
+| 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 
 ## 编码约定

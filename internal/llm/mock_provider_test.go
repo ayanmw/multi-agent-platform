@@ -72,6 +72,50 @@ func TestSelectScriptKeywordFallback(t *testing.T) {
 	}
 }
 
+// TestSelectScriptCaseIDBeatsSubstring 验证精确 CaseID 命中（+1000）会胜过
+// 仅靠输入子串命中 CaseID（+500）的脚本。这防止常见英文词 case ID（如
+// "research"）靠子串劫持其它 case 的 run-case 路径。
+func TestSelectScriptCaseIDBeatsSubstring(t *testing.T) {
+	store := NewInMemoryMockScriptStore()
+	// research 脚本：输入 "research" 子串命中 +500，加 Priority 100 = 600。
+	research := MockScript{
+		ID:         "builtin:research",
+		CaseID:     "research",
+		Priority:   100,
+		MatchInput: []string{"research"},
+		Responses:  []MockResponse{{Type: MockResponseText, Content: "research-script"}},
+	}
+	// multi-agent-sequential 脚本：CaseID 与 request.CaseID 精确命中 +1000，
+	// 加 Priority 100 = 1100。其输入恰好也含 "research" 子串。
+	seq := MockScript{
+		ID:         "builtin:multi-agent-sequential",
+		CaseID:     "multi-agent-sequential",
+		Priority:   100,
+		MatchInput: []string{"sequential"},
+		Responses:  []MockResponse{{Type: MockResponseText, Content: "sequential-script"}},
+	}
+	if _, err := store.Save(research); err != nil {
+		t.Fatalf("Save research: %v", err)
+	}
+	if _, err := store.Save(seq); err != nil {
+		t.Fatalf("Save seq: %v", err)
+	}
+	p := NewMockProvider("mock", store, nil)
+
+	// request.CaseID=multi-agent-sequential 且输入含 "research"：
+	// 精确命中应让 sequential 脚本胜出，而非 research 脚本靠子串抢走。
+	resp, err := p.Chat(ChatRequest{
+		CaseID:   "multi-agent-sequential",
+		Messages: []Message{{Role: "user", Content: "Research the pros and cons of serverless vs containers, then write a report"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := resp.Choices[0].Message.Content; got != "sequential-script" {
+		t.Fatalf("expected sequential-script (exact CaseID match), got %q", got)
+	}
+}
+
 // TestDynamicScriptOverridesBuiltin 验证：与某 builtin 同 CaseID 但
 // Priority 更高的动态脚本会胜出（selectScript 中动态脚本先于 builtin 追加，
 // 且 priority 计入评分）。
@@ -385,14 +429,15 @@ func TestInMemoryMockScriptStoreCRUD(t *testing.T) {
 		}
 	})
 
-	t.Run("LoadBuiltin_seeds_six_scripts", func(t *testing.T) {
+	t.Run("LoadBuiltin_seeds_all_builtin_scripts", func(t *testing.T) {
 		s := NewInMemoryMockScriptStore()
 		if err := s.LoadBuiltin(BuiltinMockScripts()); err != nil {
 			t.Fatalf("LoadBuiltin: %v", err)
 		}
 		list, _ := s.List()
-		if len(list) != 6 {
-			t.Fatalf("expected 6 builtin scripts, got %d", len(list))
+		// 21 个 case 脚本 + 1 个 tool-error keyword 回退脚本 = 22。
+		if len(list) != 22 {
+			t.Fatalf("expected 22 builtin scripts (21 cases + tool-error fallback), got %d", len(list))
 		}
 	})
 
@@ -429,8 +474,9 @@ func TestMockProviderImplementsProvider(t *testing.T) {
 // TestBuiltinMockScriptsShape 对内置脚本集做 sanity check。
 func TestBuiltinMockScriptsShape(t *testing.T) {
 	scripts := BuiltinMockScripts()
-	if len(scripts) != 6 {
-		t.Fatalf("expected 6 builtin scripts, got %d", len(scripts))
+	// 21 个 case 脚本 + 1 个 tool-error keyword 回退脚本 = 22。
+	if len(scripts) != 22 {
+		t.Fatalf("expected 22 builtin scripts (21 cases + tool-error fallback), got %d", len(scripts))
 	}
 	seen := map[string]bool{}
 	for _, s := range scripts {
@@ -445,7 +491,22 @@ func TestBuiltinMockScriptsShape(t *testing.T) {
 		}
 		seen[s.CaseID] = true
 	}
-	for _, want := range []string{"code-gen", "dialogue", "research", "multi-agent", "long-task", "tool-error"} {
+	// 21 个 case 的 CaseID 必须各自存在，外加 tool-error keyword 回退脚本。
+	wantCaseIDs := []string{
+		// L1
+		"code-gen", "dialogue", "research", "long-task",
+		// L2
+		"todo-driven", "web-research", "skill-code-helper", "cron-notify", "llm-judge-qa",
+		// L3
+		"policy-enforcement", "approval-flow", "max-steps-exhaustion", "context-compression", "checkpoint-resume",
+		// L4
+		"multi-agent", "multi-agent-parallel", "multi-agent-sequential", "multi-agent-dag",
+		// L5
+		"multi-agent-leader-dispatch", "multi-agent-review", "multi-agent-fault-tolerance",
+		// keyword 回退
+		"tool-error",
+	}
+	for _, want := range wantCaseIDs {
 		if !seen[want] {
 			t.Fatalf("missing builtin CaseID %q", want)
 		}
