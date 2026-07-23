@@ -42,7 +42,7 @@ func NewExecuteProgramTool() *BuiltinTool {
 			},
 			"required": []string{"language", "code"},
 		},
-		executeProgramExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return executeProgramExecutor(input) },
 	).WithTags("exec", "exec:dangerous")
 }
 

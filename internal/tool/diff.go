@@ -68,7 +68,7 @@ func NewApplyDiffTool() *BuiltinTool {
 			},
 			"required": []string{"path", "diffs"},
 		},
-		applyDiffExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return applyDiffExecutor(input) },
 	).WithTags("filesystem", "filesystem:write")
 }
 

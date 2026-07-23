@@ -42,6 +42,20 @@ func (t *skillCreateLocalTool) Description() string {
 	return "Create a new local editable skill with a system_prompt template. The skill is persisted to the database and registered in memory."
 }
 func (t *skillCreateLocalTool) Tags() []string { return []string{"skill", "management"} }
+
+// Version 返回 skill 工具的版本标识符。skill 工具默认无版本。
+func (t *skillCreateLocalTool) Version() string { return "" }
+
+// Source 返回 skill 工具的来源。skill 工具由本地代码实现，返回 "builtin"。
+func (t *skillCreateLocalTool) Source() string { return "builtin" }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (t *skillCreateLocalTool) CanonicalName() string {
+	if v := t.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", t.FullName(), v)
+	}
+	return t.FullName()
+}
 func (t *skillCreateLocalTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -68,10 +82,10 @@ func (t *skillCreateLocalTool) Parameters() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name": map[string]any{"type": "string"},
-						"type": map[string]any{"type": "string"},
-						"required": map[string]any{"type": "boolean"},
-						"default": map[string]any{"type": "any"},
+						"name":        map[string]any{"type": "string"},
+						"type":        map[string]any{"type": "string"},
+						"required":    map[string]any{"type": "boolean"},
+						"default":     map[string]any{"type": "any"},
 						"description": map[string]any{"type": "string"},
 					},
 				},
@@ -160,6 +174,20 @@ func (t *skillDeleteLocalTool) Description() string {
 	return "Delete a local editable skill by id. Built-in or non-editable skills cannot be deleted."
 }
 func (t *skillDeleteLocalTool) Tags() []string { return []string{"skill", "management"} }
+
+// Version 返回 skill 工具的版本标识符。
+func (t *skillDeleteLocalTool) Version() string { return "" }
+
+// Source 返回 skill 工具的来源。
+func (t *skillDeleteLocalTool) Source() string { return "builtin" }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (t *skillDeleteLocalTool) CanonicalName() string {
+	if v := t.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", t.FullName(), v)
+	}
+	return t.FullName()
+}
 func (t *skillDeleteLocalTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -210,6 +238,20 @@ func (t *skillListTool) Description() string {
 	return "List registered skills with id, display_name, description, source, tags, and state. Optionally filter by source."
 }
 func (t *skillListTool) Tags() []string { return []string{"skill", "management"} }
+
+// Version 返回 skill 工具的版本标识符。
+func (t *skillListTool) Version() string { return "" }
+
+// Source 返回 skill 工具的来源。
+func (t *skillListTool) Source() string { return "builtin" }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (t *skillListTool) CanonicalName() string {
+	if v := t.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", t.FullName(), v)
+	}
+	return t.FullName()
+}
 func (t *skillListTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",

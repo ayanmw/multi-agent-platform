@@ -51,7 +51,7 @@ func NewCronCreateTool(svc *Service) tool.Tool {
 			},
 			"required": []string{"name", "schedule_type", "action_type", "action_payload"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) {
 			in, err := parseCreateInput(input)
 			if err != nil {
 				return nil, err
@@ -68,15 +68,15 @@ func NewCronCreateTool(svc *Service) tool.Tool {
 // parseCreateInput 从 tool input map 解析 CreateInput。
 func parseCreateInput(input map[string]any) (CreateInput, error) {
 	in := CreateInput{
-		Name:        getStringAny(input, "name"),
-		Description: getStringAny(input, "description"),
+		Name:         getStringAny(input, "name"),
+		Description:  getStringAny(input, "description"),
 		ScheduleType: ScheduleType(getStringAny(input, "schedule_type")),
-		CronExpr:    getStringAny(input, "cron_expr"),
-		OnceAt:      getStringAny(input, "once_at"),
-		Timezone:    getStringAny(input, "timezone"),
-		DisplayType: getStringAny(input, "display_type"),
-		ActionType:  ActionType(getStringAny(input, "action_type")),
-		Source:      "agent",
+		CronExpr:     getStringAny(input, "cron_expr"),
+		OnceAt:       getStringAny(input, "once_at"),
+		Timezone:     getStringAny(input, "timezone"),
+		DisplayType:  getStringAny(input, "display_type"),
+		ActionType:   ActionType(getStringAny(input, "action_type")),
+		Source:       "agent",
 	}
 	if b, ok := input["allow_concurrent"].(bool); ok {
 		in.AllowConcurrent = b
@@ -106,7 +106,7 @@ func NewCronListTool(svc *Service) tool.Tool {
 				"status": map[string]any{"type": "string", "enum": []string{"enabled", "disabled", "paused"}, "description": "Optional status filter."},
 			},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) {
 			f := ListFilter{}
 			if s, ok := input["status"].(string); ok {
 				f.Status = s
@@ -132,7 +132,7 @@ func NewCronDeleteTool(svc *Service) tool.Tool {
 			},
 			"required": []string{"id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) {
 			id := getStringAny(input, "id")
 			if id == "" {
 				return nil, fmt.Errorf("id is required")
@@ -158,7 +158,7 @@ func NewCronTriggerTool(svc *Service) tool.Tool {
 			},
 			"required": []string{"id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) {
 			id := getStringAny(input, "id")
 			if id == "" {
 				return nil, fmt.Errorf("id is required")

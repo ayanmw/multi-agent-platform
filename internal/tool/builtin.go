@@ -62,7 +62,7 @@ type BuiltinTool struct {
 	parameters  map[string]any
 	tags        []string
 	aliases     []string
-	executor    func(input map[string]any) (any, error)
+	executor    func(ctx ExecuteContext, input map[string]any) (any, error)
 }
 
 // Namespace 返回工具的 namespace。空字符串表示工具位于全局 namespace；
@@ -104,12 +104,30 @@ func (t *BuiltinTool) WithAliases(aliases ...string) *BuiltinTool {
 // Execute 使用给定的输入 map 运行工具并返回结果。
 // 输入 map 必须符合 Parameters() 返回的 schema。
 func (t *BuiltinTool) Execute(input map[string]any) (any, error) {
-	return t.executor(input)
+	return t.executor(ExecuteContext{}, input)
+}
+
+// Version 返回工具的版本标识符。BuiltinTool 默认无版本，返回空字符串。
+func (t *BuiltinTool) Version() string { return "" }
+
+// Source 返回工具来源。BuiltinTool 始终返回 "builtin"。
+func (t *BuiltinTool) Source() string { return "builtin" }
+
+// CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
+func (t *BuiltinTool) CanonicalName() string {
+	fn := t.FullName()
+	if v := t.Version(); v != "" {
+		return fmt.Sprintf("%s@%s", fn, v)
+	}
+	return fn
 }
 
 // NewBuiltinTool 使用给定的元数据创建一个新的 BuiltinTool。
 // 当 namespace 非空时，工具的 FullName 为 "namespace/name"。
-func NewBuiltinTool(name, namespace, description string, parameters map[string]any, executor func(input map[string]any) (any, error)) *BuiltinTool {
+func NewBuiltinTool(name, namespace, description string, parameters map[string]any, executor func(ctx ExecuteContext, input map[string]any) (any, error)) *BuiltinTool {
+	if executor == nil {
+		panic("NewBuiltinTool: executor is nil")
+	}
 	return &BuiltinTool{
 		name:        name,
 		namespace:   namespace,
@@ -119,6 +137,14 @@ func NewBuiltinTool(name, namespace, description string, parameters map[string]a
 		tags:        []string{},
 		aliases:     []string{},
 	}
+}
+
+// NewBuiltinToolFromFunc 兼容旧闭包风格构造器。旧 executor 只接收 input map，
+// 内部被包装为 ToolExecutor 接口形式，使历史调用点无需一次性重构。
+func NewBuiltinToolFromFunc(name, namespace, description string, parameters map[string]any, fn func(input map[string]any) (any, error)) *BuiltinTool {
+	return NewBuiltinTool(name, namespace, description, parameters, func(_ ExecuteContext, input map[string]any) (any, error) {
+		return fn(input)
+	})
 }
 
 // WithTags 为 BuiltinTool 附加 tags，并返回自身以便链式调用。
@@ -242,7 +268,7 @@ func NewRunShellTool() *BuiltinTool {
 			},
 			"required": []string{"command"},
 		},
-		executor: executeShell,
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(input) },
 	}
 }
 
@@ -327,7 +353,7 @@ func executeShell(input map[string]any) (any, error) {
 // 拒绝，以防止 directory traversal 攻击。
 func NewWriteFileTool() *BuiltinTool {
 	return &BuiltinTool{
-		name: "write_file",
+		name:        "write_file",
 		description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use RELATIVE paths only — the working directory is set automatically by the system (see system prompt for the current working directory). Do NOT prepend directory segments like 'workspace/session-xxx/'. Example: {\"path\": \"snake_game.html\", \"content\": \"...\"}",
 		parameters: map[string]any{
 			"type": "object",
@@ -343,7 +369,7 @@ func NewWriteFileTool() *BuiltinTool {
 			},
 			"required": []string{"path", "content"},
 		},
-		executor: executeWriteFile,
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeWriteFile(input) },
 	}
 }
 
@@ -436,7 +462,7 @@ const DefaultMaxBytes = 1 << 20 // 1,048,576 bytes
 // 若文件超过 max_bytes，内容会被截断，并在结果中设置 "truncated" 标志。
 func NewReadFileTool() *BuiltinTool {
 	return &BuiltinTool{
-		name: "read_file",
+		name:        "read_file",
 		description: "Read the contents of a file. The working directory is set automatically by the system — use RELATIVE paths only (e.g. \"README.md\", \"src/main.go\"). Do NOT use absolute paths or prepend directory segments.",
 		parameters: map[string]any{
 			"type": "object",
@@ -460,7 +486,7 @@ func NewReadFileTool() *BuiltinTool {
 			},
 			"required": []string{"path"},
 		},
-		executor: executeReadFile,
+		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeReadFile(input) },
 	}
 }
 
@@ -594,7 +620,7 @@ type SubAgentDispatcher interface {
 }
 
 // SubAgentSpec 定义了一个子 agent 的规格，是 orchestrator.AgentSpec 的最小子集。
-//工具包不直接引用 orchestrator 类型，以打破 import cycle。
+// 工具包不直接引用 orchestrator 类型，以打破 import cycle。
 type SubAgentSpec struct {
 	AgentID      string   `json:"agent_id"`
 	Name         string   `json:"name"`
@@ -693,8 +719,8 @@ func NewDispatchSubAgentTool(dispatcher SubAgentDispatcher, leaderSubTaskID stri
 			},
 			"required": []string{"reason", "strategy", "agents"},
 		},
-		func(input map[string]any) (any, error) {
-				strategy := getString(input, "strategy", "parallel")
+		func(_ ExecuteContext, input map[string]any) (any, error) {
+			strategy := getString(input, "strategy", "parallel")
 			switch strategy {
 			case "parallel", "sequential", "pipeline":
 			default:
@@ -843,7 +869,7 @@ func NewListDirTool() *BuiltinTool {
 			},
 			"required": []string{},
 		},
-		listDirExecutor,
+		func(_ ExecuteContext, input map[string]any) (any, error) { return listDirExecutor(input) },
 	).WithTags("filesystem", "filesystem:readonly")
 }
 
@@ -973,7 +999,7 @@ func NewApproveSubAgentActionTool(resolve func(approvalID string, approved bool,
 			},
 			"required": []string{"approval_id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			approvalID, ok := input["approval_id"].(string)
 			if !ok || approvalID == "" {
 				return nil, fmt.Errorf("approval_id is required")
@@ -983,9 +1009,9 @@ func NewApproveSubAgentActionTool(resolve func(approvalID string, approved bool,
 				return nil, fmt.Errorf("failed to resolve approval: %w", err)
 			}
 			return map[string]any{
-				"approved":     true,
-				"approval_id":  approvalID,
-				"reason":       reason,
+				"approved":    true,
+				"approval_id": approvalID,
+				"reason":      reason,
 			}, nil
 		},
 	).WithTags("orchestration", "approval")
@@ -1016,7 +1042,7 @@ func NewRejectSubAgentActionTool(resolve func(approvalID string, approved bool, 
 			},
 			"required": []string{"approval_id"},
 		},
-		func(input map[string]any) (any, error) {
+		func(_ ExecuteContext, input map[string]any) (any, error) {
 			approvalID, ok := input["approval_id"].(string)
 			if !ok || approvalID == "" {
 				return nil, fmt.Errorf("approval_id is required")
@@ -1026,9 +1052,9 @@ func NewRejectSubAgentActionTool(resolve func(approvalID string, approved bool, 
 				return nil, fmt.Errorf("failed to resolve approval: %w", err)
 			}
 			return map[string]any{
-				"approved":     false,
-				"approval_id":  approvalID,
-				"reason":       reason,
+				"approved":    false,
+				"approval_id": approvalID,
+				"reason":      reason,
 			}, nil
 		},
 	).WithTags("orchestration", "approval")
