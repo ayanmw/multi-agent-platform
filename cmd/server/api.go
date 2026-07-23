@@ -2246,6 +2246,37 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 
 	taskID := newTaskID()
+
+	// 无 session 的 run-case 兜底：自动创建一个匿名 session 并绑定独立 workspace。
+	// 根因：run-case 不传 session_id 时，runner 无 workspace_dir 可解析，
+	// write_file/run_shell 的相对路径会回退到 server CWD，把 case 副产物
+	// （verse_*.txt / research/ 等）落在不可预期的位置（曾污染仓库根目录）。
+	// 给每次 run-case 一个独立 session + workspace，产物即落在
+	// workspace/session-<id>/ 下，可追踪、可清理、互不污染。
+	// 仅当调用方未提供 session_id 时触发，不影响已绑 session 的调用方（前端
+	// handleRunCase 已先行 createSession；此处覆盖脚本/裸 curl 等无 session 路径）。
+	if req.SessionID == "" {
+		anonID := "sess_" + uuid.New().String()
+		anonWS, _ := resolveWorkspaceDir("", "", anonID) // 默认 <cwd>/workspace/session-<id>/
+		anonSess := db.SessionRecord{
+			ID:            anonID,
+			Name:          "run-case/" + caseID,
+			Status:        "empty",
+			UserInput:     req.Input,
+			WorkspaceDir:  anonWS,
+			WorkspaceAuto: true,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+		}
+		if err := db.InsertSession(anonSess); err != nil {
+			log.Printf("[run-case] 创建匿名 session 失败 (case=%q): %v — 退回无 session 路径，产物将落在 server CWD", caseID, err)
+		} else {
+			log.Printf("[run-case] 无 session_id，已自动创建匿名 session=%s (workspace=%s) 绑定 case=%q task=%s",
+				anonID, anonWS, caseID, taskID)
+			req.SessionID = anonID
+		}
+	}
+
 	// Phase 8-A：run-case 改走 AgentRunner.Run(spec)。IsRoot=true（首轮），
 	// 与旧 runAgentLoop(...turnIndex=0...) 语义一致。
 	runner := NewAgentRunner(hub, makeRunnerDeps(cfg, tools, persist, approvalHandler, memRecall, agentBus, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
