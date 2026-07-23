@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -410,6 +412,21 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 					workspaceDir = proj.WorkingDirectory
 				}
 			}
+		}
+	}
+
+	// 最后一道兜底：若经 session/project 解析后 workspaceDir 仍为空（如 session
+	// 记录未带 workspace_dir 的旧数据、或子 agent 无 session 路径），落到默认
+	// <cwd>/workspace/ 目录。这是 write_file/run_shell 相对路径的最后锚点 ——
+	// 避免回退到 server CWD（可能是仓库根目录）污染源码树。
+	// 仅作 CWD 锚点用，不在此创建 per-task 子目录（产物归属应由上游 session 兜底，
+	// 见 resolveSession / handleRunCase 的匿名 session 逻辑）。
+	if workspaceDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workspaceDir = filepath.Join(cwd, "workspace")
+			_ = os.MkdirAll(workspaceDir, 0755)
+			log.Printf("[runAgentLoopWithTurn] session=%q 无 workspace_dir，兜底到 %s（产物将落此，建议上游绑定 session workspace）",
+				sessionID, workspaceDir)
 		}
 	}
 

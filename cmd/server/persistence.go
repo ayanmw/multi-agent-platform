@@ -162,19 +162,35 @@ func (p *DBPersistence) UpdateApprovalLeaderDecision(approvalID string, approved
 // resolveSession 使用既有 session ID 或创建一个新的空 session，
 // 然后在该 session 下创建一个新的 root task。
 // 返回 (sessionID, taskID, error)。
+//
+// 当新建 session 时，会同步绑定一个默认 workspace 目录（<cwd>/workspace/session-<id>/），
+// 让后续 write_file/run_shell 等工具的相对路径有明确落点，而非回退到 server CWD
+// 污染仓库根目录。这是所有"无 session 入口"（/api/tasks chat、leader、cron
+// start_task 等）的统一兜底，与 handleRunCase 的匿名 session 兜底形成双保险。
 func resolveSession(sessionID, userInput string, persist runtime.Persistence) (string, string, error) {
 	if sessionID == "" {
 		newID := "sess_" + uuid.New().String()
+		// 为新 session 绑定默认 workspace（auto 模式）。resolveWorkspaceDir 会
+		// 创建 <cwd>/workspace/session-<id>/ 目录。失败时 workspaceDir 为空，
+		// runner 仍能运行（工具回退到 CWD），只是产物落点不可预期 —— 记日志提示。
+		workspaceDir, _ := resolveWorkspaceDir("", "", newID)
 		sess := db.SessionRecord{
-			ID:        newID,
-			Name:      extractSessionName(userInput),
-			Status:    "empty",
-			UserInput: userInput,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+			ID:            newID,
+			Name:          extractSessionName(userInput),
+			Status:        "empty",
+			UserInput:     userInput,
+			WorkspaceDir:  workspaceDir,
+			WorkspaceAuto: true,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
 		}
 		if err := db.InsertSession(sess); err != nil {
 			return "", "", fmt.Errorf("create session: %w", err)
+		}
+		if workspaceDir != "" {
+			log.Printf("[resolveSession] 新建 session=%s 绑定默认 workspace=%s", newID, workspaceDir)
+		} else {
+			log.Printf("[resolveSession] 新建 session=%s workspace 创建失败，产物将落在 server CWD", newID)
 		}
 		sessionID = newID
 	}
