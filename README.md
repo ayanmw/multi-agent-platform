@@ -165,12 +165,12 @@ cp .env.example .env
 
 ```bash
 cd web && npm run build && cd ..
-# v2 前端（可选）：UI_VERSION=v2 启用控制室风格 UI
+# v2 前端（默认即 v2，按需构建）：控制室风格 UI
 cd web/v2 && npm run build && cd ..
-# 单文件部署：前端 web/dist/* (与 web/v2/dist/*) 已嵌入 Go 二进制
+# 单文件部署：前端 web/dist/* (v1) 与 web/v2/dist/* (v2) 均嵌入 Go 二进制
 go build -o server.exe ./cmd/server/
 ./server.exe --port 8080
-# 或启用 v2 UI：UI_VERSION=v2 ./server.exe --port 8080
+# 根路径 / 默认服务 v2；/ui/v1/ 访问旧版 v1（无需环境变量，由 web/embed.go 的 UIVersionsRegistry 与 URL 路径分发）
 ```
 
 ### 3. 端到端测试（推荐）
@@ -264,7 +264,7 @@ pkg/
   db/                      # SQLite Schema（26+ 表）、迁移、CRUD
   event/                   # 统一事件结构 + 序列化
 web/                       # Vue 3 + Vite + TypeScript 前端（v1）
-web/v2/                    # Observable Control Room 前端（v2，UI_VERSION=v2 切换）
+web/v2/                    # Observable Control Room 前端（v2，默认根路径服务）
 docs/                      # 历史/未来 Markdown 文档
 roadmaps/                  # ROADMAP.md 路线图 + 版本史
 doc/                       # HTML 格式项目文档（部分章节可能已过时）
@@ -302,7 +302,7 @@ examples/mcp/              # MCP Server 示例（time / calc）
 | MCP 工具扩展 | ✅ | stdio / SSE transport + Manager 生命周期 + 动态 API + 远程 marketplace |
 | 工具沙箱 | ✅ | Docker 安全隔离 run_shell |
 | DB 持久化 | ✅ | modernc.org/sqlite，26+ 表，迁移 v26+ |
-| Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket；`web/v2/` 控制室风格 UI（`UI_VERSION=v2` 切换） |
+| Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket；`web/v2/` 控制室风格 UI 为默认（根路径 `/`），`/ui/v1/` 保留旧版 |
 | Session / Project | ✅ | multi-turn chat，Project 分组，Session 历史 |
 | 多 Agent 并发 | ✅ | 并行派发，前端多树渲染；leader-driven dispatch_sub_agent 主链路（Phase 7-H2） |
 | Memory | ✅ | scope=session/project/global，向量召回，上下文压缩 |

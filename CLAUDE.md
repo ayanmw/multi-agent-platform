@@ -24,7 +24,7 @@
 | 语言 | Go 1.25 | 后端全部 |
 | 数据库 | modernc.org/sqlite | 纯 Go SQLite，单文件部署 |
 | 通信 | gorilla/websocket | Phase 0-4，Phase 6 迁 gRPC |
-| 前端 | Vue 3 + Vite + TypeScript | `web/`(v1) + `web/v2/`(控制室)，`UI_VERSION` 切换 |
+| 前端 | Vue 3 + Vite + TypeScript | `web/`(v1) + `web/v2/`(控制室，默认根路径)，按 URL 路径 `/ui/v{N}/` 分发 |
 | LLM | OpenAI-compatible API | `aicoding.dobest.com/v1`，deepseek-v4-flash |
 | Mock | MockProvider | 22 个内置脚本，回归脚本确定性评测 |
 | 配置 | .env + 环境变量 | 优先级：系统环境变量 > .env > 默认值 |
@@ -58,7 +58,7 @@ pkg/
   event/event.go             # 统一事件结构 + 序列化
   db/database.go             # SQLite 初始化 + Schema (26+ 表)
 web/                         # 前端 Vite + Vue 3 + TypeScript（v1）
-web/v2/                      # Observable Control Room 前端（v2，UI_VERSION=v2 切换）
+web/v2/                      # Observable Control Room 前端（v2，默认根路径服务）
 data/                        # SQLite 数据库文件
 storage/                     # 文件存储
 .env                         # API Key + 配置 (gitignore)
@@ -308,7 +308,7 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 →
 | skill | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + Agent Tools + 前端 `/` 触发 SkillPicker + E2E 测试 |
 | TODO | ✅ | session 级 TODO + 6 个 Agent Tools + `/api/todos` + 前端拖拽/嵌套子任务 |
 | 7-cron | ✅ | Cron 子系统（4 种 action + robfig/cron 秒级调度 + 事件化 + 前端管理 UI） |
-| UI-v2 | 🚧 | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，`UI_VERSION=v2` 切换） |
+| UI-v2 | 🚧 | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，根路径默认 v2，`/ui/v1/` 保留旧版） |
 | 7-H2 | 🚧 | multi-agent 编排遗留闭环（leader-driven dispatch_sub_agent + Tracer 事件流 + child steps 回填 + DAG） |
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|

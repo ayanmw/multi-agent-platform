@@ -632,10 +632,10 @@ const activeTaskId = ref<string | null>(null)
 
 ## Phase UI-v2: Observable Control Room 前端重设计 🚧 进行中 (2026-07-19)
 
-**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 `UI_VERSION` 环境变量运行时切换。
+**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动 3-tab，新老版本通过 URL 路径（`/` 默认 v2、`/ui/v1/` 旧版）运行时切换。
 
 ### 交付物
-- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` 按 `UI_VERSION=v2` 选择静态资源。
+- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` `serveVersionedUI` 按 `UIVersionsRegistry` + URL 路径分发，根路径 `/` 走 `DefaultUIVersion=v2`，`/ui/v1/` 与 `/ui/v2/` 各自可访问。
 - [x] 设计系统：`global.css` deep-space dark + industrial 主题，CSS tokens；`responsive.css` 桌面/平板/移动适配。
 - [x] 布局组件：`TopBar` / `DockPanel` / `SessionDock` / `CommandBar` / `MobileNav` / `TimelineTrack` / `AgentLane` / `StepCard` / `InspectorTabs` / `InspectorContent`。
 - [x] Store composables 全量迁移适配（Task / Session / Agent / Project / Case / Memory / ContextWindow / Trace / Toast / RecentMods / ModelPrices / MCP / Keyboard / Layout / Skills）。
@@ -645,13 +645,14 @@ const activeTaskId = ref<string | null>(null)
 - [x] 构建验证：`web/` 与 `web/v2/` 均构建通过，`go build ./cmd/server` 通过。
 
 ### 待验证 / 待办
-- [ ] 端到端冒烟：`UI_VERSION=v2` 启动后跑通 chat / case / skill / multi-agent，桌面与移动端均正常。
+- [ ] 端到端冒烟：默认（根路径 `/` 即 v2）启动后跑通 chat / case / skill / multi-agent，桌面与移动端均正常。
 - [ ] Traces tab 升级为可折叠树。
 - [ ] 用户验收满意后合并 `ui-v2-control-room` → `main`。
 
 ### 已知注意
 - 工作分支 `ui-v2-control-room` 位于隔离 worktree，未合并 main 前不影响生产部署。
 - 子 agent 并行失控教训已记录至 `memory/lead-subagent-parallel-control.md`，后续收尾改用单 agent 串行。
+- 早期设计曾用 `UI_VERSION` 环境变量切换，后改为 URL 路径分发（`web/embed.go` 的 `UIVersionsRegistry` + `DefaultUIVersion=v2`），`UI_VERSION` 已不再被代码读取。
 
 ---
 
@@ -803,7 +804,7 @@ const activeTaskId = ref<string | null>(null)
 
 - [x] `bash scripts/multi-agent-smoke.sh` 全 PASS，FINDINGS 清单第 5/8/9 项闭环
 - [x] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，`status=completed` 与 `agent_count=2` 一致（18s 完成）
-- [ ] 前端 `UI_VERSION=v2` 跑通 multi-agent：leader lane + worker lanes + orchestrator lane + Traces 面板均有数据
+- [ ] 前端（默认 v2，根路径 `/`）跑通 multi-agent：leader lane + worker lanes + orchestrator lane + Traces 面板均有数据
 
 ---
 
@@ -830,7 +831,7 @@ const activeTaskId = ref<string | null>(null)
 | v0.7.5 Alpha | 2026-07-18 | DuckDuckGo fallback: core/web_search 无 API key 时自动降级到 DuckDuckGo HTML/lite 搜索 |
 | v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |
 | v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
-| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（`UI_VERSION=v2`）；待端到端冒烟验证后合并 main |
+| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（根路径默认 v2，`/ui/v1/` 保留旧版）；待端到端冒烟验证后合并 main |
 | v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
 | v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
 | v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
