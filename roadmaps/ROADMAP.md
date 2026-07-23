@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton) → Phase 8-A 🔜
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase UI-v2 🚧 (Skeleton) → Phase 8-A ✅
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (UI 重设计)        (架构演进)
 ```
 
@@ -642,10 +642,10 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
-## Phase 8-A: Agent 进程化 & Tool 插件化 — 架构演进 🔜 规划中（范围 B）
+## Phase 8-A: Agent 进程化 & Tool 插件化 — 架构演进 ✅ 已完成（范围 B）
 
 > **日期**: 2026-07-22  
-> **版本**: v0.12.0 Alpha（规划）  
+> **版本**: v0.12.0 Alpha  
 > **设计文档**: `docs/superpowers/specs/2026-07-22-phase-8a-architecture-evolution-design.md`  
 > **探索文档**: `docs/agent-process-isolation-research.md`、`docs/tool-pluginization-research.md`
 
@@ -658,17 +658,17 @@ const activeTaskId = ref<string | null>(null)
 
 ### 交付物（范围 B）
 
-- [ ] `cmd/server/runner.go`: `AgentRunSpec`（纯数据）+ `AgentDeps`（进程内服务指针聚合）+ `AgentRunner.Run(ctx, spec)` 收口启动链路
-- [ ] `cmd/server/server.go`: `appServer` 聚合体，路由注册与控制 handler 迁移出 `main.go`
-- [ ] `cmd/server/main.go`: 仅保留子系统初始化与 `appServer` 启动
-- [ ] `internal/tool/registry.go`: `Tool` 接口扩展 `Version()/Source()/CanonicalName()`；Registry 键改为 `namespace/name@version`；`IsBuiltin` 改为按 `Source()` 判断
-- [ ] `internal/tool/descriptor.go` + `executor.go` + `loader.go`: `ToolDescriptor` / `ToolExecutor` / `ToolLoader` 抽象
-- [ ] `internal/tool/builtin.go` + `dynamic.go`: BuiltinTool 与 DynamicTool 适配新抽象
-- [ ] `pkg/db/tool.go`: v27 migration 重建 `tools` 表（含 namespace / version / source / execution_config）+ CRUD
-- [ ] `pkg/db/persistence.go`: `InsertAgentOptions` / `UpdateAgentOptions`；旧签名保留为薄 wrapper
-- [ ] `cmd/server/api.go` + `cron_api.go`: chat / cron / recovery 入口统一改走 `AgentRunner`
-- [ ] 测试: Registry 多版本、Descriptor JSON round-trip、DBToolLoader、AgentRunner 集成、DB options 兼容
-- [ ] 更新 `roadmaps/ROADMAP.md` 与 `CLAUDE.md` 项目结构说明
+- [x] `cmd/server/runner.go`: `AgentRunSpec`（纯数据）+ `AgentDeps`（进程内服务指针聚合）+ `AgentRunner.Run(ctx, spec)` 收口启动链路
+- [x] `cmd/server/server.go`: `appServer` 聚合体，路由注册与控制 handler 迁移出 `main.go`
+- [x] `cmd/server/main.go`: 仅保留子系统初始化与 `appServer` 启动
+- [x] `internal/tool/registry.go`: `Tool` 接口扩展 `Version()/Source()/CanonicalName()`；Registry 键改为 `namespace/name@version`；`IsBuiltin` 改为按 `Source()` 判断
+- [x] `internal/tool/descriptor.go` + `executor.go` + `loader.go`: `ToolDescriptor` / `ToolExecutor` / `ToolLoader` 抽象
+- [x] `internal/tool/builtin.go` + `dynamic.go`: BuiltinTool 与 DynamicTool 适配新抽象
+- [x] `pkg/db/tool.go`: v27 migration 重建 `tools` 表（含 namespace / version / source / execution_config）+ CRUD
+- [x] `pkg/db/persistence.go`: `InsertAgentOptions` / `UpdateAgentOptions`；旧签名保留为薄 wrapper
+- [x] `cmd/server/api.go` + `cron_api.go`: chat / cron / recovery 入口统一改走 `AgentRunner`
+- [x] 测试: Registry 多版本、Descriptor JSON round-trip、DBToolLoader、AgentRunner 集成、DB options 兼容
+- [x] 更新 `roadmaps/ROADMAP.md` 与 `CLAUDE.md` 项目结构说明
 
 ### 本次不做
 
@@ -873,4 +873,4 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.0 Alpha | 2026-07-21 | Phase 7-cron 后端: `internal/cron` 子系统（model/store/template/action/executor/scheduler/service/tools）+ `pkg/db/cron.go` migration v26 + `cmd/server` startChatTask 重构与 REST API 接入 + 4 种 action_type + 串行 skip/missed/模板渲染/事件化 + 单元/集成测试全绿 |
 | v0.11.1 Alpha | 2026-07-21 | Phase 7-cron 前端 v2: `types/cron.ts` + `useCrons`/`useCronEvents` + `events.ts` 14 个 `cron_*` EventType + `CronManager`/`CronForm`/`CronExecutions`（含单测）+ ManageFlyout/ManageTabs/ManageContent cron tab（`focusCronId` 直达）+ `CronDockPanel` 右侧侧栏 + `TopBar` ⏰ 按钮 + `App.vue` 桌面/平板接入；`go test ./...` 全绿、`npm run test`(123) 与 `npm run build` 全绿 |
 | v0.11.2 Alpha | 2026-07-22 | Phase 7-cron 收尾: smoke 端到端双覆盖 — `smoke-test.sh` 9.6 节(mock) + `real-llm-smoke.sh` 场景 6(真实 LLM)；新增 node 内置 WebSocket 订阅器采集 WS 事件流断言 cron_triggered→started→completed；real-llm-smoke 22 项全 PASS / 0 FAIL |
-| v0.12.0 Alpha | 2026-07-22 | Phase 8-A 架构演进（范围 B）: AgentRunner + AgentRunSpec 收口启动链路；Tool 接口扩展 Version/Source/CanonicalName，Registry 支持多版本；ToolDescriptor / ToolExecutor / ToolLoader 抽象；v27 tools 表迁移；DB InsertAgent/UpdateAgent options struct 化；cmd/server 拆分为 main.go / api.go / server.go / runner.go；更新 ROADMAP |
+| v0.12.0 Alpha | 2026-07-23 | Phase 8-A 架构演进（范围 B）: AgentRunner + AgentRunSpec 收口启动链路；Tool 接口扩展 Version/Source/CanonicalName，Registry 支持多版本；ToolDescriptor / ToolExecutor / ToolLoader 抽象；v27 tools 表迁移；DB InsertAgent/UpdateAgent options struct 化；cmd/server 拆分为 main.go / api.go / server.go / runner.go；chat / cron / multi-agent / run-case 入口统一改走 AgentRunner.Run(spec)（删除 20+ 参数 runAgentLoop* 包级函数）；更新 ROADMAP 与 CLAUDE.md |

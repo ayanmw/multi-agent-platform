@@ -33,7 +33,11 @@
 ## 项目结构
 
 ```
-cmd/server/main.go          # 入口：HTTP Server + WS Hub + API 路由
+cmd/server/                  # Phase 8-A 拆分为四文件
+  main.go                    # 子系统初始化 + handleTasksRoot/startChatTask 闭包 + appServer 启动
+  server.go                  # appServer 聚合体 + registerRoutes（30+ 路由）+ handleMultiAgent + serveSessionWorkspace
+  runner.go                  # AgentRunSpec / AgentDeps / AgentRunner.Run(ctx, spec) 收口启动链路 + cancel/engine registry + 权限/项目规则 helper + hubAdapter
+  api.go                     # HTTP handler（handleSessionChat / handleRunCase / handleRecoverCheckpoint 等）
 internal/
   agent/agent.go             # Agent 类型定义
   config/config.go           # .env 加载 + 配置管理
@@ -46,12 +50,19 @@ internal/
     loader.go                # built_in / local_db 加载
     renderer.go              # {{ variable }} 模板渲染
     builtin.go               # 内置 Skill 种子
-  tool/registry.go           # Tool 注册表
-  tool/builtin.go            # 3 个内置工具 (run_shell, write_file, read_file)
+  tool/                      # Phase 8-A: Tool 插件化抽象
+    registry.go              # Tool 注册表（键 namespace/name@version，IsBuiltin 按 Source 判断）
+    builtin.go               # 3 个内置工具 (run_shell, write_file, read_file)
+    descriptor.go            # ToolDescriptor 可序列化元数据
+    executor.go              # ToolExecutor 执行体接口
+    loader.go                # ToolLoader 加载抽象
+    dynamic.go               # DynamicTool 从 Descriptor 构造
   ws/hub.go                  # WebSocket Hub (connect/broadcast/disconnect)
 pkg/
   event/event.go             # 统一事件结构 + 序列化
   db/database.go             # SQLite 初始化 + Schema (6 表)
+  db/tool.go                 # v27 tools 表 migration + CRUD（namespace/version/source/execution_config）
+  db/persistence.go          # InsertAgent/UpdateAgent options struct（旧签名保留为薄 wrapper）
 web/                         # 前端 Vite + Vue 3 + TypeScript
   src/components/SkillPicker.vue   # `/` 触发的 Skill 搜索面板
   src/components/TaskInput.vue     # chat 输入 + 集成 SkillPicker
@@ -271,20 +282,22 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 ## 扩展 Phase
 
 ```
-Phase skill ✅ → Phase 7 🔜
-  (Skill 系统)      (生产化与深度集成)
+Phase skill ✅ → Phase 7 🔜 → Phase 8-A ✅
+  (Skill 系统)      (生产化)     (架构演进)
 ```
 
 | Phase | 状态 | 核心交付 |
 |-------|------|---------|
 | skill | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + Agent Tools + 前端 `/` 触发 SkillPicker + E2E 测试 |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
+| 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
 
 ## 编码约定
 
 - **Go**: 标准库优先，interface 抽象，goroutine 安全
 - **事件驱动**: 所有状态变更通过 EventBus 接口广播，不直接操作前端状态
-- **Tool 接口**: `Name() / Description() / Parameters() / Execute(input) -> output`
+- **Tool 接口**: `Name() / Description() / Parameters() / Execute(input) -> output`，Phase 8-A 起扩展 `Version() / Source() / CanonicalName()`
+- **Agent 启动入口**: Phase 8-A 起统一走 `AgentRunner.Run(ctx, AgentRunSpec{...})`，不再有 20+ 参数的包级 `runAgentLoop*`；依赖通过 `AgentDeps`（或 `appServer.deps()`）注入，运行期可变状态全部进 `AgentRunSpec`
 - **错误处理**: 每个 Step 失败都生成 `task_failed` 事件，含具体 reason
 - **Token 统计**: 严格使用 API 返回的 `usage` 字段，不做本地估算
 
