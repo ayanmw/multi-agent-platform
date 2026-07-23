@@ -10,6 +10,7 @@ import (
 
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
@@ -258,7 +259,13 @@ func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *Approval
 	}))
 
 	execStart := time.Now()
-	result, execErr := e.tools.Execute(tc.Function.Name, args)
+	// 仍走 ExecuteWithCtx 以透传 per-run workdir holder（worktree 隔离），
+	// 与主执行路径 / 用户审批路径保持一致。
+	workdirCtx := tool.ExecuteContext{}
+	if e.cfg.WorkdirHolder != nil {
+		workdirCtx.Workdir = e.cfg.WorkdirHolder.Get()
+	}
+	result, execErr := e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	execDuration := time.Since(execStart).Milliseconds()
 
 	if execErr != nil {

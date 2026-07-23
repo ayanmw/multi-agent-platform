@@ -68,12 +68,13 @@ func NewApplyDiffTool() *BuiltinTool {
 			},
 			"required": []string{"path", "diffs"},
 		},
-		func(_ ExecuteContext, input map[string]any) (any, error) { return applyDiffExecutor(input) },
+		func(ctx ExecuteContext, input map[string]any) (any, error) { return applyDiffExecutor(ctx, input) },
 	).WithTags("filesystem", "filesystem:write")
 }
 
-// applyDiffExecutor 对文件依次应用一组编辑。
-func applyDiffExecutor(input map[string]any) (any, error) {
+// applyDiffExecutor 对文件依次应用一组编辑。相对路径按 ctx.Workdir
+// → input["workdir"] 优先级解析。
+func applyDiffExecutor(ctx ExecuteContext, input map[string]any) (any, error) {
 	path := getString(input, "path", "")
 	if path == "" {
 		return nil, fmt.Errorf("path required")
@@ -87,7 +88,7 @@ func applyDiffExecutor(input map[string]any) (any, error) {
 	if isPathTraversal(path) {
 		return nil, fmt.Errorf("path traversal not allowed: %s", path)
 	}
-	path = resolvePath(path, input)
+	path = resolvePathWithCtx(path, ctx, input)
 
 	var content string
 	data, err := os.ReadFile(path)

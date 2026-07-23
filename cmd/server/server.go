@@ -121,6 +121,7 @@ func (s *appServer) deps() AgentDeps {
 		SkillRegistry:   globalSkillRegistry,
 		Orchestrator:    globalOrchestrator,
 		Tracer:          tracer,
+		WorkspaceMgr:    globalWorkspaceMgr,
 		MemDB:           s.memDB,
 		MemRecall:       s.memRecall,
 	}
@@ -313,6 +314,26 @@ func (s *appServer) registerRoutes() {
 			sessionID := strings.TrimSuffix(path, "/workspace-tree")
 			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
 			handleSessionWorkspaceTree(w, r, sessionID)
+			return
+		}
+		// Phase worktree: POST/GET /api/sessions/{id}/worktree —— worktree 隔离
+		// REST 入口（仅 create + 查看，exit 不暴露）。复用本 /api/sessions/
+		// handler 做最小分发，避免再注册一个同前缀 handler 造成 ServeMux 冲突。
+		if strings.HasSuffix(path, "/worktree") {
+			sessionID := strings.TrimSuffix(path, "/worktree")
+			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
+			if globalWorkspaceMgr == nil {
+				http.Error(w, "worktree feature disabled", http.StatusServiceUnavailable)
+				return
+			}
+			switch r.Method {
+			case http.MethodPost:
+				handleWorktreeCreate(w, r, sessionID, hub)
+			case http.MethodGet:
+				handleWorktreeGet(w, r, sessionID)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
 			return
 		}
 		handleSessionByID(w, r)
@@ -772,6 +793,11 @@ func (s *appServer) handleMultiAgent(w http.ResponseWriter, r *http.Request) {
 		storeCancel(taskID, "orchestrator", cancel)
 		defer removeCancel(taskID, "orchestrator")
 		defer cancel()
+		// Phase worktree: 把 worktree Manager 与 sessionID 透传给 orchestrator，
+		// 使子 agent 共享父 session 的 active worktree（per-subagent holder）。
+		// globalWorkspaceMgr 为 nil 时 orchestrator 跳过 worktree 注入，子 agent
+		// 沿用普通 WorkspaceDir。
+		orch.SetWorkspace(globalWorkspaceMgr, sessionID)
 		if strategy == "dag" && workflow != nil {
 			orch.RunBlockingDAG(ctx, taskID, workflow)
 		} else {

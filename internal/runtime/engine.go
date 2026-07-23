@@ -242,6 +242,18 @@ type EngineConfig struct {
 	// CWD 下执行。
 	WorkspaceDir string `json:"-"`
 
+	// WorkdirHolder 是 per-run 可变工作目录持有者（worktree 隔离注入）。
+	// 非空时，Engine 在每次 tool 调用前读 holder.Get() 并经
+	// ExecuteContext.Workdir 注入，优先于 input["workdir"]，使 LLM 无法
+	// 伪造 workdir 逃逸到 worktree 之外。worktree/create 改写它，
+	// worktree/exit 恢复它。为 nil（worktree 未启用）时 Engine 透明回退到
+	// 旧的 WorkspaceDir 注入路径，行为不变。
+	//
+	// 用接口而非 *workspace.WorkdirHolder 具体类型，避免 runtime → workspace
+	// 的编译期依赖（workspace 是叶子包，不应被 runtime 反向耦合）。
+	// *workspace.WorkdirHolder 天然满足本接口。
+	WorkdirHolder WorkdirProvider
+
 	// ParentTaskID 标识由 agent 派生的子任务的父任务。
 	// root task 为空。
 	ParentTaskID string
@@ -1800,7 +1812,29 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// 若用户（LLM）未显式提供 workdir，把 session 的 workspace_dir 注入到
 	// tool 输入中。这让 run_shell 之类的 tool 能在正确 CWD 下执行，而无需
 	// LLM 每次都传递。
-	if e.cfg.WorkspaceDir != "" {
+	//
+	// worktree 隔离说明：当本 run 持有 per-run 可变 workdir holder（见
+	// EngineConfig.WorkdirHolder）时，holder.Get() 是 CWD 的唯一可信源——
+	// worktree/create 改写它、worktree/exit 恢复它。下方 e.executeToolCall 用
+	// ExecuteWithCtx 把 holder 当前值经 ExecuteContext.Workdir 注入，优先于
+	// 此处的 args["workdir"]，从而 LLM 伪造的 workdir 无法逃逸到 worktree 之外。
+	//
+	// FileScopeRule 锚定：PolicyGate 在 FileScopeRule 中用 args["workdir"] 作
+	// scope 根（当 contract.Scope 为默认 "." 时）。worktree 启用后，若 holder
+	// 已切到 worktree.Path，必须让 FileScopeRule 也以 worktree.Path 为 scope，
+	// 否则 worktree 内的 write_file 会被误判为"超出 session WorkspaceDir scope"
+	// 而被拦。因此当 holder 非 nil 且值非空时，用 holder.Get() 覆盖
+	// args["workdir"]，使 scope 锚定与 CWD 注入保持同源。holder 为 nil 或空串
+	// 时回退到 session WorkspaceDir，行为与旧路径一致。
+	if e.cfg.WorkdirHolder != nil {
+		if hdir := e.cfg.WorkdirHolder.Get(); hdir != "" {
+			args["workdir"] = hdir
+		} else if e.cfg.WorkspaceDir != "" {
+			if _, hasWorkdir := args["workdir"]; !hasWorkdir {
+				args["workdir"] = e.cfg.WorkspaceDir
+			}
+		}
+	} else if e.cfg.WorkspaceDir != "" {
 		if _, hasWorkdir := args["workdir"]; !hasWorkdir {
 			args["workdir"] = e.cfg.WorkspaceDir
 		}
@@ -1844,23 +1878,24 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// 影响用户体验的瓶颈。
 	// DEBUG log.Printf("[Engine] executeTool %s with parsed args: %+v", tc.Function.Name, args)
 	start := time.Now()
-	// 构造供 tool 执行用的 ExecuteContext，把 session 工作目录透传下去。
-	// 同时保留 args["workdir"] 作为兼容性回退（已存在的测试/PolicyGate 回调依赖）。
-	toolCtx := tool.ExecuteContext{}
-	if e.cfg.WorkspaceDir != "" {
-		toolCtx.Workdir = e.cfg.WorkspaceDir
-	}
 	// 若配置了 PolicyGate 则经由它；否则直接执行。PolicyGate 在允许
 	// tool 执行前会按 policy chain（FileScopeRule、PathTraversalRule 等）
 	// 检查 tool call。
 	var result any
 	var execErr error
+	// workdirCtx 携带 per-run 可变 holder 的当前值（worktree 隔离注入）。
+	// holder 为 nil（worktree 未启用）时 Workdir 为空，tool 回退到
+	// input["workdir"]（即上方注入的 session WorkspaceDir），行为与旧路径一致。
+	workdirCtx := tool.ExecuteContext{}
+	if e.cfg.WorkdirHolder != nil {
+		workdirCtx.Workdir = e.cfg.WorkdirHolder.Get()
+	}
 	if e.gate != nil {
 		result, execErr = e.gate.Execute(tc.Function.Name, args, func(input map[string]any) (any, error) {
-			return e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, input)
+			return e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, input)
 		})
 	} else {
-		result, execErr = e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, args)
+		result, execErr = e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	}
 	duration := time.Since(start).Milliseconds()
 	if e.cfg.ToolLatencyRecorder != nil {
@@ -2121,13 +2156,14 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 		"message":     "审批通过，正在执行工具调用",
 	}))
 
-	// 直接执行工具（不经过 PolicyGate，因为用户已批准）
+	// 直接执行工具（不经过 PolicyGate，因为用户已批准）。仍走 ExecuteWithCtx
+	// 以透传 per-run workdir holder（worktree 隔离），与主执行路径保持一致。
 	execStart := time.Now()
-	toolCtx := tool.ExecuteContext{}
-	if e.cfg.WorkspaceDir != "" {
-		toolCtx.Workdir = e.cfg.WorkspaceDir
+	workdirCtx := tool.ExecuteContext{}
+	if e.cfg.WorkdirHolder != nil {
+		workdirCtx.Workdir = e.cfg.WorkdirHolder.Get()
 	}
-	result, execErr := e.tools.ExecuteWithCtx(tc.Function.Name, toolCtx, args)
+	result, execErr := e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	execDuration := time.Since(execStart).Milliseconds()
 
 	if execErr != nil {

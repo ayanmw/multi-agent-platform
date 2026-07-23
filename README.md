@@ -1,7 +1,7 @@
 # 多 Agent 平台
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.11.3 Alpha**
+> **当前版本：v0.12.1 Alpha**
 > **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 已落地，UI-v2 与 7-H2 编排闭环进行中**
 
 ## 快速开始
@@ -190,6 +190,9 @@ bash scripts/multi-agent-smoke.sh
 
 # 真实 LLM 冒烟（需配置 .env）
 bash scripts/real-llm-smoke.sh
+#   可选：SKIP_PARTB=1 只跑 Part A 6 场景（省时省钱）
+#         SMOKE_FRESH=1 启动前清空隔离产物目录
+#   产物自动落到 workspace/smoke-server/run-<ts>-<pid>/，不污染仓库根目录
 
 
 # go的sample客户端测试(非最新)

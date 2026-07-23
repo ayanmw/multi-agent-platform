@@ -35,18 +35,22 @@
 
 ```
 cmd/server/                  # Phase 8-A 拆分为四文件
-  main.go                    # 子系统初始化 + handleTasksRoot/startChatTask 闭包 + appServer 启动
-  server.go                  # appServer 聚合体 + registerRoutes（30+ 路由）+ handleMultiAgent + serveSessionWorkspace
-  runner.go                  # AgentRunSpec / AgentDeps / AgentRunner.Run(ctx, spec) 收口启动链路 + cancel/engine registry + 权限/项目规则 helper + hubAdapter
+  main.go                    # 子系统初始化 + handleTasksRoot/startChatTask 闭包 + appServer 启动 + worktree Manager 构造 + 启动孤儿扫描
+  server.go                  # appServer 聚合体 + registerRoutes（30+ 路由，含 /api/sessions/:id/worktree 内联分发）+ handleMultiAgent + serveSessionWorkspace
+  runner.go                  # AgentRunSpec / AgentDeps / AgentRunner.Run(ctx, spec) 收口启动链路 + per-run WorkdirHolder 构造 + worktree 工具注册 + cancel/engine registry + 权限/项目规则 helper + hubAdapter
   api.go                     # HTTP handler（handleSessionChat / handleRunCase / handleRecoverCheckpoint 等）
+  workspace_api.go           # worktree REST API（POST/GET /api/sessions/:id/worktree，仅 create+get）+ repoRoot 推断 + reclaimOrphanWorktrees 启动孤儿扫描 + worktreeSessionStoreAdapter
 internal/
   agent/agent.go             # Agent 类型定义
   cases/cases.go             # 21 个内置 Task Case（L1-L5 阶梯）+ 自定义 Case CRUD
-  config/config.go           # .env 加载 + 配置管理
+  config/config.go           # .env 加载 + 配置管理（含 WORKTREE_ENABLED）
   cron/                      # Cron / 定时器子系统（见下文「Cron / 定时器系统」）
   llm/client.go              # OpenAI-compatible SSE streaming 客户端
   llm/mock_provider.go       # 确定性 MockProvider（22 个内置脚本，回归用）
   runtime/engine.go          # ReAct Loop 引擎 + Step 状态机
+  workspace/                 # Session 级 git worktree 隔离工作区
+    manager.go               # Manager（git worktree 原语 Create/Keep/Remove/Get/List + repoDir）+ WorkdirHolder（per-run 可变 CWD）+ Worktree/RemoveReport
+    manager_test.go          # 原语单测（fresh/head/origin 回退、Get/List、Remove 护栏、Keep、gitignore 幂等）
   skill/                     # Skill 可复用 prompt 包
     skill.go                 # Skill 领域模型（来源、状态、模板、变量）
     registry.go              # 进程内 Skill 注册表
@@ -56,17 +60,19 @@ internal/
     builtin.go               # 内置 Skill 种子
   todo/                      # Session 级 TODO 子系统（model/store/service + Agent Tools）
   tool/                      # Phase 8-A: Tool 插件化抽象
-    registry.go              # Tool 注册表（键 namespace/name@version，IsBuiltin 按 Source 判断）
-    builtin.go               # 3 个内置工具 (run_shell, write_file, read_file)
+    registry.go              # Tool 注册表（键 namespace/name@version，IsBuiltin 按 Source 判断）+ ExecuteWithCtx（worktree 隔离 holder 注入）
+    builtin.go               # 3 个内置工具 (run_shell, write_file, read_file)，executor 优先用 ExecuteContext.Workdir
+    worktree.go              # worktree/create、worktree/exit、worktree/status 三个 Agent Tool（LLM 主入口）
     descriptor.go            # ToolDescriptor 可序列化元数据
     executor.go              # ToolExecutor 执行体接口
     loader.go                # ToolLoader 加载抽象
     dynamic.go               # DynamicTool 从 Descriptor 构造
-  ws/hub.go                  # WebSocket Hub (connect/broadcast/disconnect)
+  ws/hub.go                  # WebSocket Hub (connect/broadcast/disconnect + RegisterTestClient 测试钩子)
 pkg/
-  event/event.go             # 统一事件结构 + 序列化
-  db/database.go             # SQLite 初始化 + Schema (27+ 表)
+  event/event.go             # 统一事件结构 + 序列化（含 worktree_* 事件常量）
+  db/database.go             # SQLite 初始化 + Schema (28 表)
   db/tool.go                 # v27 tools 表 migration + CRUD（namespace/version/source/execution_config）
+  db/workspace.go            # v28 sessions.active_worktree_id migration + Get/Set/Clear/ListSessionActiveWorktrees
   db/persistence.go          # InsertAgent/UpdateAgent options struct（旧签名保留为薄 wrapper）
 web/                         # 前端 Vite + Vue 3 + TypeScript（v1）
 web/v2/                      # Observable Control Room 前端（v2，默认根路径服务）
@@ -154,6 +160,82 @@ POST   /api/skills/:id/disable                # 禁用
 - 选中后，父组件在输入框填入 `/skill-id ` 前缀。
 - `App.vue` 的 `handleSend` 解析该前缀，先调用 `POST /api/skills/{id}/enable`，然后将剩余文本作为真实 input 发送。
 - 输入框不再含 `/` 触发字符时，SkillPicker 自动关闭。
+
+---
+
+## Workspace Worktree 隔离
+
+Worktree 是 session 级 git worktree 隔离工作区，与 skill / tool / cron / memory 平级的独立子系统。它镜像 Claude Code 的 `EnterWorktree` / `ExitWorktree` 语义，但适配本项目"白盒 Agent + LLM 自主 + 孤儿扫描兜底"范式：worktree 是普通 session workspace 之上**主动触发的叠加能力**——LLM 在 run 中通过 `worktree/*` Agent Tool 自主决定何时进入隔离分支、何时退出，**不触发则系统零感知、沿用普通目录**。完全向后兼容（`WORKTREE_ENABLED=false` 或 DB 未初始化时能力关闭，行为等价旧路径）。
+
+### 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| `Manager` | git worktree 原语（Create/Keep/Remove/Get/List），含未提交变更护栏（对齐 ExitWorktree 的 `discard_changes`）。所有 git CLI 以 `repoDir`（主仓库根）为 CWD，不依赖进程 CWD。Create/Remove 串行化（mu.Lock）避免并发派发竞态 |
+| `WorkdirHolder` | per-run 可变 CWD 持有者，是 tool CWD 的**单一事实源**。初值 = session `WorkspaceDir`；`worktree/create` 改写它为 `worktree.Path`，`worktree/exit` 恢复为 `""`（Engine 回退 WorkspaceDir）。Engine 每次工具调用前读 `holder.Get()` 经 `ExecuteContext.Workdir` 注入，**优先于** LLM 传入的 `input["workdir"]`，从而 LLM 无法伪造 workdir 逃逸到 worktree 之外 |
+| `Worktree` | 领域模型（ID/Branch/Path/BaseRef/SessionID/CreatedAt）。路径在比较前经 `normPath` 归一化（Windows 8.3 短名 → 长名） |
+| `RemoveReport` | `Remove` 返回，`Blocked=true` 时含 `Uncommitted`/`Unmerged`，调用方据此决定是否 `discardChanges=true` 重试 |
+| `active_worktree_id` | `sessions` 表列（migration v28），一个 session 任一时刻最多一个 active worktree |
+| BaseRef | `fresh`（从 `origin/<默认分支>`，离线回退本地默认分支 + warning）/ `head`（从当前 HEAD） |
+
+### 关键文件
+
+```
+internal/workspace/
+  manager.go       # Manager + WorkdirHolder + Worktree/RemoveReport + git CLI 辅助（repoDir、normPath、parseWorktreePorcelain）
+  manager_test.go  # 原语单测（fresh/head/origin 回退、Get/List、Remove 护栏三档、Keep、gitignore 幂等、WorkdirHolder）
+internal/tool/
+  worktree.go      # worktree/create、worktree/exit、worktree/status 三个 Agent Tool + WorktoolDeps + RegisterWorktreeTools
+  worktree_test.go # 工具单测（create 成功/重入/disabled、status、exit keep/remove 干净/护栏/invalid action、nil Mgr 守卫）
+  workdir_ctx_test.go         # ExecuteContext.Workdir 优先级单测（LLM 伪造 workdir 被忽略、回退、path-traversal 第二道）
+  worktree_run_integration_test.go # task 4.5 runner 级 holder 切换集成（create→write_file 落 worktree、伪造 workdir 忽略、exit 恢复、Mgr nil 不注册）
+pkg/db/workspace.go           # v28 active_worktree_id migration + Get/Set/Clear/ListSessionActiveWorktrees
+cmd/server/workspace_api.go   # repoRoot 推断 + reclaimOrphanWorktrees 启动孤儿扫描 + worktree REST API（create+get）+ worktreeSessionStoreAdapter
+cmd/server/workspace_api_test.go     # REST 集成测试（create/get/重入 409/无 active/503/exit 路由 404）
+cmd/server/workspace_orphan_test.go  # task 7.3/7.4 孤儿扫描 + 无 session 结束钩子测试
+internal/harness/worktree_scope_test.go # task 8.x FileScopeRule 与 holder 协同（scope 跟随 worktree、逃逸被拦、恢复、伪造忽略）
+```
+
+### 注入与生命周期
+
+- **构造**：`cmd/server/main.go` 用 `repoRoot()`（`git rev-parse --show-toplevel` → 进程 CWD → 可执行文件目录）推断仓库根，构造 `workspace.NewManager(wtRoot).SetRepoDir(root)`，调 `EnsureGitignored()`（把 `.claude/worktrees/` 追加到 `.gitignore`），再调 `reclaimOrphanWorktrees(mgr, hub)` 做启动孤儿扫描。`WORKTREE_ENABLED=false` 时 `globalWorkspaceMgr` 为 nil，worktree 能力关闭。
+- **per-run 注入**：`AgentRunner.runAgentLoopWithTurn` 每次 run 构造 `holder := workspace.NewWorkdirHolder(workspaceDir)`（初值 = session WorkspaceDir）；若 `r.Deps.WorkspaceMgr != nil && sessionID != ""`，克隆 registry（避免污染共享 base registry）注册 `worktree/*` 工具，注入 `WorktoolDeps{Mgr, Store: globalWorkspaceStore, Bus: hubAdapter, Holder, SessionID}`，并在 `EngineConfig.WorkdirHolder` 透传 holder。
+- **子 agent 共享**：orchestrator 子 agent 的 holder 初值 = 父 session 的 active worktree.Path（若已开 worktree），各子 agent holder 独立但指向同一 worktree.Path；`handleMultiAgent` 在 `RunBlocking` 前调 `orch.SetWorkspace(globalWorkspaceMgr, sessionID)`。
+- **Engine 注入**：`engine.go executeToolCall` 在工具执行前，当 `WorkdirHolder != nil` 且 `holder.Get() != ""` 时用 holder 值覆盖 `args["workdir"]`（使 `FileScopeRule` 的 scope 锚定也跟随 worktree，否则 worktree 内写会被误判越界），并经 `ExecuteContext.Workdir` 注入 `ExecuteWithCtx`。holder 为 nil 或空串时回退 session WorkspaceDir，行为与旧路径一致。
+- **无 session 结束钩子**：run 结束路径只更新 `turn_count` / `total_tokens` / `status`，不触碰 `active_worktree_id`——worktree 生命周期收敛为 **LLM 主动 exit + 启动孤儿扫描兜底**。
+
+### Agent Tools
+
+| Tool | 说明 |
+|------|------|
+| `worktree/create` (base_ref: fresh\|head) | 创建 worktree + 改写 holder + 设 `active_worktree_id` + 广播 `worktree_created`；已有 active 或 disabled → 错误 observation |
+| `worktree/exit` (action: keep\|remove, discard_changes?) | keep：清绑定 + 恢复 holder（保留目录）；remove：调 `Manager.Remove`，护栏触发返回未提交文件列表 + 广播 `worktree_exit_blocked`，成功广播 `worktree_removed` |
+| `worktree/status` | 返回 active true/false + ID/Branch/Path（active 但 worktree 不在磁盘时标记 `missing`） |
+
+### REST API（仅 create + get，**不暴露 exit**——退出需判定干净/合并状态，风险高，仅 LLM 经 Agent Tool）
+
+```
+POST /api/sessions/:id/worktree     # body: {base_ref?}；已有 active → 409；WORKTREE_ENABLED=false → 503
+GET  /api/sessions/:id/worktree     # 无 active → {active:false}；active 但磁盘缺失 → {active:true, missing:true}
+```
+
+路由在 `server.go registerRoutes` 的 `/api/sessions/` handler 内联分发（避免同前缀 ServeMux 冲突）。事件经 `hub.SendEvent` WS 广播，**不写 task steps**。
+
+### 事件类型
+
+```
+worktree_created / worktree_removed / worktree_exit_blocked / worktree_orphan_removed
+```
+
+`TaskID` 填 sessionID，`AgentID` 填 `"worktree"`。
+
+### 配置
+
+```
+WORKTREE_ENABLED=true|false   # 默认 true；false 时 Manager 为 nil，Agent Tool 不注册、REST 返回 503
+```
+
+单元/集成测试见 `internal/workspace/manager_test.go`、`internal/tool/worktree_*.go`、`cmd/server/workspace_*_test.go`、`internal/harness/worktree_scope_test.go`。
 
 ---
 
@@ -281,6 +363,8 @@ User Input → System Prompt + Messages → LLM (streaming)
 - `internal/llm/mock_builtin.go`：`BuiltinMockScripts()` 返回 22 个 mock 脚本（21 case 各一个 + `tool-error` keyword 回退）。每个脚本通过精确 `CaseID` 匹配被 `MockProvider.selectScript` 选中（精确命中 +1000，远高于 router-classifier 的 Priority 1000），其 `Responses` 序列还原该 case 的真实 ReAct 行为（tool_call → 最终 text）。
 - `selectScript` 区分两档 CaseID 命中：精确 `EqualFold`（+1000）与输入子串包含（+500）。后者低于前者，防止 `research` 这类常见英文词 case ID 靠子串劫持其它 case 的 run-case 路径（`multi-agent-sequential` 的 input 含 "research" 曾被 research 脚本抢走）。
 - 回归脚本 Windows 注意事项：必须 `export PYTHONUTF8=1`，否则 python stdin 默认 GBK 解码含中文的 `/api/tasks` 响应（如 `skill/list` 返回的 Skill DisplayName）会 JSON 解析失败、轮询 status 恒空 → 误判超时。
+- `scripts/real-llm-smoke.sh`（真实 LLM，非 mock）：Part A 6 白盒场景 + Part B 全量 21 case。断言分两档——硬失败（达终态/usage/cost/panic）计 FAIL，软标记（status/tool/final/编排事件，real-LLM 不可控）计 SKIP 不计 FAIL。`b_run_case` 180s 轮询预算外加 200s 宽限复检，命中终态降级 slow-LLM 软标记（reasoning 模型每步 15-30s，慢 case 200-350s 正常，非平台 bug）；known-limitation（L5 leader-dispatch/fault-tolerance）不走宽限。全量结果 PASS=143/SKIP=20/FAIL=0。
+- real-llm-smoke 产物隔离：脚本启动 server 前切到独立 `SMOKE_CWD`（默认 `workspace/smoke-server/run-<ts>-<pid>/`，gitignore 内），`DB_PATH`/`ENV_FILE` 用绝对路径；产物不自动清理（便于对比），`SMOKE_FRESH=1` 启动前清空默认目录。`ENV_FILE` 环境变量由 `config.Load` 读取（未设回退 CWD/.env），让 server 在隔离 CWD 启动仍能加载项目根 .env。
 
 ### 编排事件的可观测性约定
 
@@ -310,8 +394,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 ## 扩展 Phase
 
 ```
-Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅
-  (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (架构演进)
+Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
+  (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (架构演进)  (smoke 收尾)  (worktree 隔离)
 ```
 
 | Phase | 状态 | 核心交付 |
@@ -324,6 +408,8 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 →
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 | 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
+| 8-B real-llm-smoke 收尾 | ✅ | `real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 timeout 假阳性 + 全量 21 case 真实 LLM 评测 PASS=143/SKIP=20/FAIL=0；产物 CWD 隔离（`workspace/smoke-server/run-*`，`SMOKE_FRESH=1` 清空）+ `ENV_FILE` 绝对路径；后端 workspace 三层兜底（`handleRunCase` 匿名 session / `resolveSession` 绑 workspace / `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`），根目录零污染 |
+| worktree 隔离 | ✅ | session 级 git worktree 隔离工作区（Manager 原语 + per-run WorkdirHolder + worktree/create·exit·status Agent Tools + REST create/get + v28 active_worktree_id + 启动孤儿扫描 + worktree_* 事件）；完全向后兼容，默认不触发零感知；mock 回归 21/21 不受影响 |
 
 ## 编码约定
 

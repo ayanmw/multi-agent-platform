@@ -20,7 +20,13 @@
 package tool
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os/exec"
+	"strings"
+	"time"
 )
 
 // DynamicToolType 表示 dynamic tool 的执行策略。
@@ -36,43 +42,42 @@ const (
 )
 
 // DynamicTool 是运行时注册的工具，实现了 Tool 接口。
-// 它把执行逻辑委托给 DynamicExecutor，自身保持为"Descriptor + Executor 薄壳"，
-// 使持久化、加载与执行通过同一可序列化描述符对齐。
+// 与使用预编译 executor 函数的 BuiltinTool 不同，DynamicTool 将其执行
+// 配置（command、url、code）作为数据存储，并在执行时通过输入替换进行求值。
 type DynamicTool struct {
-	name, namespace, version, description string
-	parameters                            map[string]any
-	toolType                              DynamicToolType
-	descriptor                            ToolDescriptor
-	executor                              *DynamicExecutor
+	name        string
+	description string
+	parameters  map[string]any
+	toolType    DynamicToolType
+	// namespace/version 由 descriptor 透传，支持多版本并存与分组。
+	// 旧 NewDynamicTool 路径不设置，保持空（namespace="" 仍属全局 namespace）。
+	namespace string
+	version   string
+	// 对于 shell 类型：含 {param} 占位符的 shell 命令模板
+	command string
+	// 对于 http 类型：URL 模板与 HTTP method
+	url    string
+	method string
+	// 对于 inline 类型：存储的代码（为未来预留）
+	code string
 }
 
 // NewDynamicTool 以给定配置创建一个新的 DynamicTool。
 // 调用方需根据工具类型通过 Set* 方法设置相应的执行字段（command、url、code）。
 func NewDynamicTool(name, description string, parameters map[string]any, toolType DynamicToolType) *DynamicTool {
-	desc := ToolDescriptor{
-		Name:            name,
-		Description:     description,
-		Parameters:      parameters,
-		Source:          ToolSourceLocalDB,
-		ExecutionConfig: map[string]any{"type": string(toolType)},
-	}
 	return &DynamicTool{
 		name:        name,
 		description: description,
 		parameters:  parameters,
 		toolType:    toolType,
-		descriptor:  desc,
-		executor:    NewDynamicExecutor(desc),
 	}
 }
 
 // NewDynamicToolFromDescriptor 从 ToolDescriptor 构造 DynamicTool。
 // 这是 DBToolLoader 还原持久化工具的入口：descriptor 中的 ExecutionConfig
-// 携带 type/command/url/method/code 等字段，统一由 DynamicExecutor 解析执行。
+// 携带 type/command/url/method/code 等字段，这里拆解到 DynamicTool 对应字段。
+// namespace/version 透传到元数据方法（Namespace/Version），供 Registry 多版本键使用。
 func NewDynamicToolFromDescriptor(desc ToolDescriptor) *DynamicTool {
-	if desc.Source == "" {
-		desc.Source = ToolSourceLocalDB
-	}
 	t := &DynamicTool{
 		name:        desc.Name,
 		description: desc.Description,
@@ -80,42 +85,37 @@ func NewDynamicToolFromDescriptor(desc ToolDescriptor) *DynamicTool {
 		toolType:    DynamicToolType(getString(desc.ExecutionConfig, "type", "")),
 		namespace:   desc.Namespace,
 		version:     desc.Version,
-		descriptor:  desc,
-		executor:    NewDynamicExecutor(desc),
 	}
+	t.command = getString(desc.ExecutionConfig, "command", "")
+	t.url = getString(desc.ExecutionConfig, "url", "")
+	t.method = getString(desc.ExecutionConfig, "method", "")
+	t.code = getString(desc.ExecutionConfig, "code", "")
 	return t
 }
 
 // SetCommand 设置 shell 类型工具的 shell 命令模板。
-func (t *DynamicTool) SetCommand(cmd string) {
-	t.descriptor.ExecutionConfig["command"] = cmd
-	t.executor = NewDynamicExecutor(t.descriptor)
-}
+func (t *DynamicTool) SetCommand(cmd string) { t.command = cmd }
 
 // SetHTTP 设置 http 类型工具的 URL 与 method。
 func (t *DynamicTool) SetHTTP(url, method string) {
-	t.descriptor.ExecutionConfig["url"] = url
-	t.descriptor.ExecutionConfig["method"] = method
-	t.executor = NewDynamicExecutor(t.descriptor)
+	t.url = url
+	t.method = method
 }
 
 // SetCode 设置 inline 类型工具的 inline 代码（预留）。
-func (t *DynamicTool) SetCode(code string) {
-	t.descriptor.ExecutionConfig["code"] = code
-	t.executor = NewDynamicExecutor(t.descriptor)
-}
+func (t *DynamicTool) SetCode(code string) { t.code = code }
 
 // Command 返回 shell 命令模板（仅 shell 类型）。
-func (t *DynamicTool) Command() string { return getString(t.descriptor.ExecutionConfig, "command", "") }
+func (t *DynamicTool) Command() string { return t.command }
 
 // URL 返回 HTTP URL 模板（仅 http 类型）。
-func (t *DynamicTool) URL() string { return getString(t.descriptor.ExecutionConfig, "url", "") }
+func (t *DynamicTool) URL() string { return t.url }
 
 // Method 返回 HTTP method（仅 http 类型）。
-func (t *DynamicTool) Method() string { return getString(t.descriptor.ExecutionConfig, "method", "") }
+func (t *DynamicTool) Method() string { return t.method }
 
 // Code 返回 inline 代码（仅 inline 类型）。
-func (t *DynamicTool) Code() string { return getString(t.descriptor.ExecutionConfig, "code", "") }
+func (t *DynamicTool) Code() string { return t.code }
 
 // ToolType 返回该 dynamic tool 的执行类型。
 func (t *DynamicTool) ToolType() DynamicToolType { return t.toolType }
@@ -156,12 +156,125 @@ func (t *DynamicTool) Parameters() map[string]any { return t.parameters }
 func (t *DynamicTool) Tags() []string { return nil }
 
 // Execute 使用给定输入 map 运行 dynamic tool。
-// 它把执行委托给 DynamicExecutor，使执行路径与工具描述符保持一致。
+// 它根据工具类型分派到相应的执行策略。此入口不携带 ExecuteContext，
+// shell 类 tool 的 CWD 由 input["workdir"] 决定。
 func (t *DynamicTool) Execute(input map[string]any) (any, error) {
-	return t.executor.Execute(ExecuteContext{}, input)
+	return t.ExecuteWithCtx(ExecuteContext{}, input)
 }
 
-// executeWithCtx 供 Registry 注入 ExecuteContext 时调用。
-func (t *DynamicTool) executeWithCtx(ctx ExecuteContext, input map[string]any) (any, error) {
-	return t.executor.Execute(ctx, input)
+// ExecuteWithCtx 以携带 ExecuteContext 的形式运行 dynamic tool。
+// worktree 隔离场景下，shell 类 tool 用 ctx.Workdir 作为 CWD（优先于
+// input["workdir"]）；http/inline 类型忽略 Workdir。
+func (t *DynamicTool) ExecuteWithCtx(ctx ExecuteContext, input map[string]any) (any, error) {
+	switch t.toolType {
+	case DynamicToolShell:
+		return t.executeShell(ctx, input)
+	case DynamicToolHTTP:
+		return t.executeHTTP(input)
+	case DynamicToolInline:
+		return t.executeInline(input)
+	default:
+		return nil, fmt.Errorf("unknown dynamic tool type: %s", t.toolType)
+	}
+}
+
+// executeShell 运行带输入替换的 shell 命令。
+// 命令模板中的 {param_name} 占位符会被输入 map 中的对应值替换。
+// 执行由 30 秒的 context 超时守护。CWD 优先取 ExecuteContext.Workdir
+// （worktree 隔离注入），回退 input["workdir"]。
+func (t *DynamicTool) executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
+	cmdStr := sanitizeInput(t.command, input)
+
+	execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// dynamic tool 在所有平台上都使用 sh -c（行为一致）。
+	cmd := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
+	// CWD：worktree holder 注入优先，回退 input["workdir"]。
+	if ctx.Workdir != "" {
+		cmd.Dir = ctx.Workdir
+	} else if wd, ok := input["workdir"].(string); ok && wd != "" {
+		cmd.Dir = wd
+	}
+
+	output, err := cmd.CombinedOutput()
+	result := map[string]any{
+		"stdout":    string(output),
+		"stderr":    "",
+		"exit_code": 0,
+	}
+
+	if err != nil {
+		if execCtx.Err() != nil {
+			result["exit_code"] = -1
+			result["stderr"] = "command timed out after 30 seconds"
+			return result, nil
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result["exit_code"] = exitErr.ExitCode()
+			result["stderr"] = err.Error()
+		} else {
+			result["exit_code"] = -1
+			result["stderr"] = err.Error()
+		}
+	}
+
+	return result, nil
+}
+
+// executeHTTP 发起带输入替换的 HTTP 请求。
+// URL 模板中的 {param_name} 占位符会被输入 map 中的对应值替换。
+// 请求由 30 秒的超时守护。
+func (t *DynamicTool) executeHTTP(input map[string]any) (any, error) {
+	url := sanitizeInput(t.url, input)
+	method := t.method
+	if method == "" {
+		method = "GET"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB 上限
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	return map[string]any{
+		"status_code": resp.StatusCode,
+		"body":        string(body),
+		"url":         url,
+		"method":      method,
+	}, nil
+}
+
+// executeInline 是 inline 代码执行的占位实现（预留）。
+func (t *DynamicTool) executeInline(input map[string]any) (any, error) {
+	return map[string]any{
+		"message": "inline execution not yet implemented (Phase 5+)",
+		"code":    t.code,
+		"input":   input,
+	}, nil
+}
+
+// sanitizeInput 将模板字符串中的 {param_name} 占位符替换为输入 map 中的
+// 对应值。未在输入 map 中找到的键保持原样（占位符仍保留在输出中）。
+func sanitizeInput(template string, input map[string]any) string {
+	result := template
+	for key, value := range input {
+		placeholder := fmt.Sprintf("{%s}", key)
+		result = strings.ReplaceAll(result, placeholder, fmt.Sprintf("%v", value))
+	}
+	return result
 }
