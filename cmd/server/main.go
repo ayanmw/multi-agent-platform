@@ -612,6 +612,50 @@ func main() {
 	toolRegistry := tool.NewRegistry()
 	tool.RegisterBuiltins(toolRegistry)
 
+	// Phase 8-B P0: 启动期从 v27 tools 表加载持久化的动态工具。
+	// 跳过 execution_config_json 为空或缺失 type 的旧记录，避免加载后报错。
+	if db.DB != nil {
+		loader := tool.NewDBToolLoader(func() ([]map[string]any, error) {
+			records, err := db.QueryToolsV2()
+			if err != nil {
+				return nil, err
+			}
+			maps := make([]map[string]any, 0, len(records))
+			for _, tr := range records {
+				if tr.ExecutionConfig == nil {
+					continue
+				}
+				if t, _ := tr.ExecutionConfig["type"].(string); t == "" {
+					log.Printf("[tool] skipping dynamic tool %q with missing execution type", tr.Name)
+					continue
+				}
+				maps = append(maps, map[string]any{
+					"namespace":        tr.Namespace,
+					"name":             tr.Name,
+					"version":          tr.Version,
+					"source":           tr.Source,
+					"description":      tr.Description,
+					"parameters":       tr.Schema,
+					"execution_config": tr.ExecutionConfig,
+				})
+			}
+			return maps, nil
+		})
+		loaded, err := loader.Load(context.Background())
+		if err != nil {
+			log.Printf("[tool] failed to load dynamic tools: %v", err)
+		} else {
+			registered := 0
+			for _, t := range loaded {
+				if t.Source() == "local_db" {
+					toolRegistry.Register(t)
+					registered++
+				}
+			}
+			log.Printf("[tool] loaded %d dynamic tool(s) from DB", registered)
+		}
+	}
+
 	// Phase web_search: 始终用配置好的实例替换占位的 core/web_search。
 	// DuckDuckGo 作为零 API key 的兜底方案，即使没配置任何 API provider，
 	// 该 tool 也能用。
