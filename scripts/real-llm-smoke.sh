@@ -26,12 +26,25 @@
 # 环境：Windows + Git Bash。需要 curl / go / node。jq 可选（无 jq 用 node）。
 # 端口 18200，独立临时 DB /tmp/real-llm-$$.db，跑完清理。
 #
+# 产物隔离：脚本启动 server 前会把 CWD 切到独立目录 SMOKE_CWD（默认
+# workspace/smoke-server/run-<timestamp>-<pid>），让真实 LLM 通过 write_file/
+# run_shell 落地的文件（verse_*.txt、research/、skill-demo/ 等 case 副产物）
+# 全部落在该目录而非污染仓库根目录。.env 用绝对路径或项目根的 .env 通过
+# ENV_FILE 环境变量显式注入 server，不依赖 server 的 CWD。
+#
+# 产物保留：跑完**不自动清理** SMOKE_CWD（便于事后对比产物）。脚本结尾会
+# 打印 SMOKE_CWD 路径提醒用户。需要干净目录时设 SMOKE_FRESH=1，脚本会在启动前
+# 清空 SMOKE_CWD（仅脚本自建的默认路径，用户自定义路径不自动清，避免误删）。
+#
 # 用法：  bash scripts/real-llm-smoke.sh
 #   可选环境变量：
 #     PORT          服务端口（默认 18200）
 #     KEEP_SERVER   =1 时不杀服务（调试用）
-#     KEEP_LOGS     =1 时不删日志/DB（调试用）
+#     KEEP_LOGS     =1 时不删日志/DB（调试用，SMOKE_CWD 始终保留）
 #     SKIP_PARTB=1  跳过 Part B 全量 case 评测（只跑 Part A 6 场景，省时省钱）
+#     SMOKE_CWD     server 工作目录（默认 workspace/smoke-server/run-<ts>-<pid>）
+#     SMOKE_FRESH=1 启动前清空 SMOKE_CWD（仅对默认路径生效；自定义路径需手动清）
+#     ENV_FILE      .env 绝对路径（默认 自动解析项目根 .env）
 # =============================================================================
 set -u
 
@@ -41,6 +54,15 @@ BASE="http://localhost:${PORT}"
 DB_PATH="${SMOKE_DB:-/tmp/real-llm-$$.db}"
 SERVER_BIN="/tmp/real-llm-server-$$.exe"
 SERVER_LOG="/tmp/real-llm-server-$$.log"
+# 记录脚本启动时的 CWD（项目根），用于解析 .env 与回显。脚本稍后会切到 SMOKE_CWD
+# 启动 server，避免 LLM 产物污染项目根目录。
+PROJECT_ROOT="$(pwd)"
+# 默认 SMOKE_CWD 用时间戳+pid 生成唯一子目录，跑完保留便于对比产物。
+# 不用固定 workspace/smoke-server/ 是因为多次运行的产物要分别保留做对比。
+SMOKE_CWD_DEFAULT="${PROJECT_ROOT}/workspace/smoke-server/run-$(date +%Y%m%d-%H%M%S)-$$"
+SMOKE_CWD="${SMOKE_CWD:-${SMOKE_CWD_DEFAULT}}"
+# .env 解析：优先 ENV_FILE 环境变量，否则用项目根 .env（绝对路径，不依赖 server CWD）。
+ENV_FILE="${ENV_FILE:-${PROJECT_ROOT}/.env}"
 SERVER_PID=""
 PASS=0
 FAIL=0
@@ -64,6 +86,8 @@ cleanup() {
     rm -f "${DB_PATH}" "${SERVER_BIN}" "${SERVER_LOG}" 2>/dev/null
     rm -f /tmp/real-llm-*-resp-$$ 2>/dev/null
     rm -f "${WS_EVENTS}" "${WS_EVENTS}.err" 2>/dev/null
+    # SMOKE_CWD（LLM 产物落地区，verse_*.txt / research/ 等）**不自动清理**，
+    # 保留便于事后对比。脚本结尾会打印路径提醒用户手动清理或查阅。
   fi
 }
 trap cleanup EXIT
@@ -183,12 +207,14 @@ print_section "环境信息"
 echo "  PORT       = ${PORT}"
 echo "  DB_PATH    = ${DB_PATH}"
 echo "  SERVER_LOG = ${SERVER_LOG}"
-if [[ -f ".env" ]]; then
+echo "  SMOKE_CWD  = ${SMOKE_CWD}  (server 工作目录，LLM 产物落此)"
+echo "  ENV_FILE   = ${ENV_FILE}"
+if [[ -f "${ENV_FILE}" ]]; then
   echo "  .env (脱敏):"
-  sed -E 's/(API_KEY=sk-)[A-Za-z0-9_-]+/\1***REDACTED***/' .env | sed 's/^/    /'
+  sed -E 's/(API_KEY=sk-)[A-Za-z0-9_-]+/\1***REDACTED***/' "${ENV_FILE}" | sed 's/^/    /'
 else
-  echo "  [WARN] 未找到 .env，真实 LLM 配置可能缺失"
-  FINDINGS+=("[环境] 未找到 .env 文件，真实 LLM endpoint/key/model 可能缺失，所有场景可能 timeout")
+  echo "  [WARN] 未找到 .env (${ENV_FILE})，真实 LLM 配置可能缺失"
+  FINDINGS+=("[环境] 未找到 .env 文件 (${ENV_FILE})，真实 LLM endpoint/key/model 可能缺失，所有场景可能 timeout")
 fi
 
 # ---- 编译服务 ---------------------------------------------------------------
@@ -203,14 +229,45 @@ echo "[setup] 编译成功"
 
 # ---- 启动服务 ---------------------------------------------------------------
 kill_orphans_on_port "${PORT}"
-echo "[setup] 启动服务 (port=${PORT}, DB=${DB_PATH}, LLM_USE_MOCK=false — 读 .env 真实 LLM)"
+# 产物隔离：在独立 SMOKE_CWD 启动 server，让真实 LLM 通过 write_file/run_shell
+# 落地的文件（verse_*.txt / research/ / skill-demo/ 等无 session 绑定的 case 副产物）
+# 全部落在 SMOKE_CWD 而非仓库根目录。DB_PATH/ENV_FILE 用绝对路径，server 切到
+# SMOKE_CWD 后仍能正确加载配置与数据库。
+mkdir -p "${SMOKE_CWD}"
+# 干净目录选项：SMOKE_FRESH=1 时，启动前清空默认 SMOKE_CWD 子目录。仅对脚本
+# 自建的默认路径（workspace/smoke-server/run-*）生效；用户自定义 SMOKE_CWD
+# 不自动清，避免误删用户文件。需要干净目录务必用默认路径 + SMOKE_FRESH=1。
+if [[ "${SMOKE_FRESH:-0}" == "1" ]]; then
+  if [[ "${SMOKE_CWD}" == */workspace/smoke-server/run-* ]]; then
+    echo "[setup] SMOKE_FRESH=1 — 清空 ${SMOKE_CWD}"
+    rm -rf "${SMOKE_CWD}"
+    mkdir -p "${SMOKE_CWD}"
+  else
+    echo "[setup] SMOKE_FRESH=1 但 SMOKE_CWD 为自定义路径 (${SMOKE_CWD})，不自动清空（避免误删）。如需干净目录请手动清理或改用默认路径。"
+    FINDINGS+=("[环境] SMOKE_FRESH=1 但 SMOKE_CWD=${SMOKE_CWD} 非默认路径，未自动清空。请确认目录是否干净。")
+  fi
+else
+  if [[ "${SMOKE_CWD}" == */workspace/smoke-server/run-* && -n "$(ls -A "${SMOKE_CWD}" 2>/dev/null)" ]]; then
+    echo "[setup] [提示] SMOKE_CWD=${SMOKE_CWD} 非空（残留上次产物）。如需干净目录请加 SMOKE_FRESH=1。"
+  fi
+fi
+echo "[setup] 启动服务 (port=${PORT}, DB=${DB_PATH}, CWD=${SMOKE_CWD}, LLM_USE_MOCK=false — 读 ${ENV_FILE})"
 # 显式传 LLM_USE_MOCK=false 覆盖（.env 也是 false，双保险）。
-# endpoint/key/model 从 .env 读，不在这里传。
-LLM_USE_MOCK=false \
-REQUIRE_AUTH=false \
-SERVER_PORT="${PORT}" \
-DB_PATH="${DB_PATH}" \
-  "${SERVER_BIN}" >"${SERVER_LOG}" 2>&1 &
+# ENV_FILE 用绝对路径传给 server，使其在 SMOKE_CWD 启动时仍能加载项目根 .env
+# （server 的 config.Load 读 ENV_FILE 环境变量，未设则回退 CWD/.env，而 SMOKE_CWD
+# 下没有 .env）。endpoint/key/model 从 .env 读，不在这里传。
+# 用子 shell ( cd SMOKE_CWD && exec ) 启动 server，使其进程 CWD 为 SMOKE_CWD，
+# 这样无 session/workspace_dir 绑定的 run-case（write_file 相对路径回退到 CWD）
+# 会把产物落在 SMOKE_CWD 而非仓库根目录。
+(
+  cd "${SMOKE_CWD}" || exit 1
+  LLM_USE_MOCK=false \
+  REQUIRE_AUTH=false \
+  SERVER_PORT="${PORT}" \
+  DB_PATH="${DB_PATH}" \
+  ENV_FILE="${ENV_FILE}" \
+    exec "${SERVER_BIN}"
+) >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 echo "[setup] server PID=${SERVER_PID}"
 
@@ -1065,7 +1122,15 @@ tail -30 "${SERVER_LOG}" | sed 's/^/  /'
 echo ""
 if [[ ${FAIL} -gt 0 ]]; then
   echo "[real-llm-smoke] 存在 FAIL 项，详见上方。服务日志：${SERVER_LOG}"
+  echo ""
+  echo "  [提醒] LLM 产物保留在：${SMOKE_CWD}"
+  echo "         服务日志：      ${SERVER_LOG}"
+  echo "         需要时手动清理：rm -rf \"${SMOKE_CWD}\""
   exit 1
 fi
 echo "[real-llm-smoke] 真实 LLM 冒烟完成 (PASS=${PASS}, SKIP=${SKIP}, FAIL=${FAIL})"
+echo ""
+echo "  [提醒] LLM 产物保留在：${SMOKE_CWD}"
+echo "         服务日志：      ${SERVER_LOG}"
+echo "         便于事后对比；需要时手动清理：rm -rf \"${SMOKE_CWD}\""
 exit 0
