@@ -3,12 +3,23 @@
 # Multi-Agent Platform — 真实 LLM 冒烟测试脚本
 # =============================================================================
 # 作用：不传 LLM_USE_MOCK=true，让服务读 .env 的真实 LLM 配置
-#       (endpoint/key/model)，对 5 个场景跑真实 LLM 调用，验证：
+#       (endpoint/key/model)，对两类场景跑真实 LLM 调用：
+#
+#   Part A — 6 个白盒手写场景（细致断言单个能力点）：
 #         - 任务能达终态 (completed/failed，不卡死)
 #         - 事件流完整 (task_started → llm_* → task_completed/failed)
 #         - 服务日志无 panic
 #         - usage 非零 (证明真实 LLM 返回了 token 统计)
 #         - tool_call 能被 LLM 生成并执行 (LLM 行为不可控，无 tool_call 记 SKIP)
+#
+#   Part B — Case 矩阵全量真实 LLM 评测（L1-L5，遍历 /api/cases 全部内置 case）：
+#         - 走 /api/run-case 统一入口，一次性暴露 mock 回归（22 个确定性脚本）
+#           掩盖的真实问题：usage 解析、cost 持久化、PolicyGate 真实拦截、
+#           orchestrator 真实 LLM 下是否调 dispatch_sub_agent、L5 动态编排边界。
+#         - 断言分硬失败（达终态/usage/cost/panic）与软标记（status/tool/
+#           final/编排事件，real-LLM 行为不可控不计 FAIL）。
+#         - L5 multi-agent-leader-dispatch / multi-agent-fault-tolerance 标
+#           known-limitation，硬失败降级为软标记。
 #
 # 断言哲学：真实 LLM 输出不可预测，只用"结构/状态断言"，不断言具体文字。
 #
@@ -20,6 +31,7 @@
 #     PORT          服务端口（默认 18200）
 #     KEEP_SERVER   =1 时不杀服务（调试用）
 #     KEEP_LOGS     =1 时不删日志/DB（调试用）
+#     SKIP_PARTB=1  跳过 Part B 全量 case 评测（只跑 Part A 6 场景，省时省钱）
 # =============================================================================
 set -u
 
@@ -640,6 +652,361 @@ else
     echo "  清理 cron ${S6_CRON_ID}"
   fi
 fi
+
+# =============================================================================
+# Part B：Case 矩阵全量真实 LLM 评测（L1-L5，21 个 case）
+# =============================================================================
+# 与 Part A 的 6 个"白盒手写场景"互补：这里遍历 /api/cases 返回的全部内置 case，
+# 统一走 /api/run-case 跑真实 LLM，一次性暴露 mock 回归（LLM_USE_MOCK=true，22 个
+# 确定性脚本）掩盖的真实问题：usage 解析、cost 持久化、PolicyGate 真实拦截行为、
+# orchestrator 真实 LLM 下是否调 dispatch_sub_agent、L5 动态编排能力边界等。
+#
+# 断言哲学（real-LLM 适配，区别于 cases-regression.sh 的 mock 硬断言）：
+#   硬失败（计入 FAIL，必为真实问题）：
+#     - 任务未达终态（timeout）          → LLM 不可达 / 卡死 / root task status 未更新
+#     - total_tokens <= 0                → usage 回调未触发 / OpenAIProvider 未解析 usage
+#     - cost_records < 1                 → CostTracker / SqliteCostRepository 持久化失败
+#     - 服务日志 panic / nil pointer     → 运行时崩溃
+#   软标记（不计 FAIL，仅观察 real-LLM 偏差）：
+#     - status != 期望                    → real LLM 行为不可控，记录但不判失败
+#     - has_tool != 期望                  → LLM 可能不调工具，记录但不判失败
+#     - final_result 空                   → 同上
+#     - L4/L5 编排事件缺失                → 记录为 FINDINGS 供分析
+#   known-limitation（L5 两个 case）：
+#     - multi-agent-leader-dispatch       → leader 是否主动调 dispatch_sub_agent 不可控
+#     - multi-agent-fault-tolerance       → 底层不支持真注入崩溃（cases.go 6.4 已标边界）
+#     这两个 case 的硬失败降级为软标记，FINDINGS 里注明"known-limitation"。
+# =============================================================================
+print_section "Part B: Case 矩阵全量真实 LLM 评测"
+
+if [[ "${SKIP_PARTB:-0}" == "1" ]]; then
+  echo "[PartB] SKIP_PARTB=1，跳过全量 case 评测（仅 Part A 6 场景已跑）"
+  echo "[PartB] 结束"
+else
+
+# 期望终态表（与 cases-regression.sh 一致；real LLM 下作软标记参考）
+declare -A B_EXP_STATUS=(
+  ["code-gen"]="completed"           ["dialogue"]="completed"        ["research"]="completed"
+  ["long-task"]="completed"          ["todo-driven"]="completed"     ["web-research"]="completed"
+  ["skill-code-helper"]="completed"  ["cron-notify"]="completed"     ["llm-judge-qa"]="completed"
+  ["policy-enforcement"]="failed"    ["approval-flow"]="completed"   ["max-steps-exhaustion"]="failed"
+  ["context-compression"]="completed" ["checkpoint-resume"]="completed"
+  ["multi-agent"]="completed"        ["multi-agent-parallel"]="completed"
+  ["multi-agent-sequential"]="completed" ["multi-agent-dag"]="completed"
+  ["multi-agent-leader-dispatch"]="completed"
+  ["multi-agent-review"]="completed" ["multi-agent-fault-tolerance"]="completed"
+)
+# 期望是否含 tool_call（real LLM 下作软标记参考）
+declare -A B_EXP_TOOL=(
+  ["code-gen"]="yes"    ["dialogue"]="no"     ["research"]="yes"    ["long-task"]="no"
+  ["todo-driven"]="yes" ["web-research"]="yes" ["skill-code-helper"]="yes"
+  ["cron-notify"]="yes" ["llm-judge-qa"]="no"  ["policy-enforcement"]="yes"
+  ["approval-flow"]="yes" ["max-steps-exhaustion"]="yes"
+  ["context-compression"]="no" ["checkpoint-resume"]="yes"
+  ["multi-agent"]="yes" ["multi-agent-parallel"]="yes" ["multi-agent-sequential"]="yes"
+  ["multi-agent-dag"]="yes" ["multi-agent-leader-dispatch"]="yes"
+  ["multi-agent-review"]="yes" ["multi-agent-fault-tolerance"]="yes"
+)
+# L4/L5 多 Agent case（需断言编排事件）
+B_MULTI_AGENT=(multi-agent multi-agent-parallel multi-agent-sequential multi-agent-dag
+  multi-agent-leader-dispatch multi-agent-review multi-agent-fault-tolerance)
+# L5 known-limitation case（硬失败降级为软标记）
+B_KNOWN_LIMITATION=(multi-agent-leader-dispatch multi-agent-fault-tolerance)
+
+b_is_multi_agent() {
+  local cid="$1"
+  for m in "${B_MULTI_AGENT[@]}"; do [[ "$m" == "$cid" ]] && return 0; done
+  return 1
+}
+b_is_known_limitation() {
+  local cid="$1"
+  for m in "${B_KNOWN_LIMITATION[@]}"; do [[ "$m" == "$cid" ]] && return 0; done
+  return 1
+}
+
+# 从 /api/cases 拉取全部 case ID（自动跟随 cases.All() 扩展）
+echo "[PartB] 拉取内置 case 列表..."
+B_CASES_JSON=$(curl -s "${BASE}/api/cases" 2>/dev/null | tr -d '\r')
+B_ALL_CASES=()
+if [[ -n "$B_CASES_JSON" ]]; then
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && B_ALL_CASES+=("$line")
+  done < <(printf '%s' "$B_CASES_JSON" | node -e "
+const d = JSON.parse(require('fs').readFileSync(0,'utf8'));
+for (const c of (Array.isArray(d)?d:[])) console.log(c.id||'');
+" 2>/dev/null)
+fi
+echo "[PartB] 发现 ${#B_ALL_CASES[@]} 个内置 case"
+
+if [[ ${#B_ALL_CASES[@]} -eq 0 ]]; then
+  record_result "B0 拉取 case 列表" "FAIL" "/api/cases 返回空"
+  FINDINGS+=("[PartB] /api/cases 返回空，无法跑全量 case 评测。")
+else
+  record_result "B0 拉取 case 列表" "PASS" "共 ${#B_ALL_CASES[@]} 个 case"
+fi
+
+# 轮询终态：real LLM 给 180s（部分多 agent case 慢）
+# 注意：local 多变量同行声明时，$()/$(( )) 在 local 赋值生效前就已展开，
+# 故引用 timeout_sec 的算术必须拆到下一行（set -u 下否则 unbound variable）。
+b_poll() {
+  local tid="$1"
+  local timeout_sec="${2:-180}"
+  local start=$SECONDS
+  local deadline=$((SECONDS + timeout_sec))
+  while [[ $SECONDS -lt $deadline ]]; do
+    local body status
+    body=$(curl -s "${BASE}/api/tasks?id=${tid}" 2>/dev/null | tr -d '\r')
+    [[ -z "$body" ]] && { sleep 1; continue; }
+    status=$(jrun "$body" "console.log((d.task && d.task.status) || '')")
+    if [[ "$status" == "completed" || "$status" == "failed" ]]; then
+      printf '%s %d' "$status" $((SECONDS - start)); return 0
+    fi
+    sleep 1
+  done
+  printf 'timeout %d' $((SECONDS - start)); return 1
+}
+
+# 单个 case 评测：b_run_case <case_id>
+# 注意：real LLM 有速率限制（aicoding 30 req/min、5 并发），全量 21 case 串行
+# 跑会触发 429。每个 case 之间 sleep CASE_COOLDOWN 秒（默认 8s）让速率窗口恢复。
+b_run_case() {
+  local cid="$1"
+  local exp_status exp_tool kl
+  exp_status="${B_EXP_STATUS[$cid]:-completed}"
+  exp_tool="${B_EXP_TOOL[$cid]:-yes}"
+  kl="no"; b_is_known_limitation "$cid" && kl="yes"
+
+  echo ""
+  echo "----- [PartB] ${cid} (exp=${exp_status}, exp_tool=${exp_tool}, known_limitation=${kl}) -----"
+
+  # 记录跑该 case 前的 WS 事件基线，事后用增量统计编排事件
+  local ws_before=0
+  [[ -f "${WS_EVENTS}" ]] && ws_before=$(wc -l < "${WS_EVENTS}" 2>/dev/null)
+  ws_before=${ws_before:-0}
+
+  local post_body post_code
+  post_code=$(curl -s -o /tmp/b-post-$$ -w '%{http_code}' \
+    -X POST "${BASE}/api/run-case" -H 'Content-Type: application/json' \
+    --data "{\"case\":\"${cid}\",\"agent_id\":\"agent_real_case\"}" 2>/dev/null)
+  post_body=$(cat /tmp/b-post-$$ 2>/dev/null); rm -f /tmp/b-post-$$
+
+  if [[ "$post_code" != "200" ]]; then
+    record_result "B:${cid} POST" "FAIL" "HTTP ${post_code}, body=${post_body:0:120}"
+    FINDINGS+=("[PartB:${cid}] /api/run-case POST 返回 HTTP ${post_code}：${post_body:0:160}")
+    return
+  fi
+  local tid
+  tid=$(jval "$post_body" "task_id")
+  if [[ -z "$tid" ]]; then
+    record_result "B:${cid} 创建任务" "FAIL" "无 task_id, body=${post_body:0:120}"
+    FINDINGS+=("[PartB:${cid}] /api/run-case 响应无 task_id：${post_body:0:160}")
+    return
+  fi
+  echo "  task_id=${tid}"
+
+  local result status elapsed grace_used=0
+  result=$(b_poll "$tid" 180)
+  status=$(echo "$result" | awk '{print $1}')
+  elapsed=$(echo "$result" | awk '{print $2}')
+
+  # 终态宽限复检（real-LLM 慢速预算保护）：
+  # .env 的 Qwen3.5-397B 是 reasoning 模型（流走 delta.reasoning，每步 15-30s），
+  # MaxSteps=10-14 的 case 真实耗时可达 200-350s，常超 180s 轮询预算。
+  # 超时后再宽限 200s 复检：若期间到达终态 → 降级软标记 SKIP（只是慢，非 bug），
+  # 仍不达终态 → 才计 FAIL（疑似真挂起）。known-limitation 不走宽限（已软标记）。
+  if [[ "$status" != "completed" && "$status" != "failed" && "$kl" != "yes" ]]; then
+    echo "  [宽限] 180s 未达终态 (status=${status})，real-LLM 可能慢，再宽限 200s 复检..."
+    local grace_result grace_status grace_elapsed
+    grace_result=$(b_poll "$tid" 200)
+    grace_status=$(echo "$grace_result" | awk '{print $1}')
+    grace_elapsed=$(echo "$grace_result" | awk '{print $2}')
+    if [[ "$grace_status" == "completed" || "$grace_status" == "failed" ]]; then
+      # 宽限期内到达终态：降级软标记，total elapsed = 180 + grace_elapsed
+      status="$grace_status"
+      elapsed=$((180 + grace_elapsed))
+      grace_used=1
+      echo "  [宽限] 复检命中终态: status=${status}, total elapsed=${elapsed}s (宽限 ${grace_elapsed}s)"
+    else
+      elapsed=$((180 + grace_elapsed))
+      echo "  [宽限] 复检仍未达终态: status=${grace_status}, total elapsed=${elapsed}s"
+      status="$grace_status"
+    fi
+  fi
+
+  TIMINGS+=("B:${cid}: ${elapsed}s (status=${status}${grace_used:+, grace})")
+  echo "  轮询: status=${status}, elapsed=${elapsed}s"
+
+  # 硬失败 1：未达终态（经宽限复检仍未达 → 疑似真挂起）
+  if [[ "$status" != "completed" && "$status" != "failed" ]]; then
+    if [[ "$kl" == "yes" ]]; then
+      record_result "B:${cid} 达终态" "SKIP" "timeout(known-limitation, 软标记) status=${status}"
+      FINDINGS+=("[PartB:${cid}][known-limitation] 180s 未达终态 (status=${status})。leader 动态 dispatch 不可控或底层能力边界。")
+    else
+      record_result "B:${cid} 达终态" "FAIL" "status=${status} (180s+200s 宽限后仍超时，疑似真挂起)"
+      FINDINGS+=("[PartB:${cid}] 380s (180+200 宽限) 未达终态 (status=${status})。已排除慢 LLM 误报，疑似 root task status 未更新 / agent 卡死 / 编排死锁。")
+    fi
+    return
+  fi
+
+  # 宽限命中终态：记为软标记 SKIP（非 FAIL），FINDINGS 注明 slow-LLM
+  if [[ "$grace_used" == "1" ]]; then
+    record_result "B:${cid} 达终态" "SKIP" "status=${status}, elapsed=${elapsed}s (180s 预算超时，宽限复检命中 — slow-LLM 软标记)"
+    FINDINGS+=("[PartB:${cid}][slow-LLM] 180s 预算内未达终态，宽限 200s 后到达终态 status=${status} (total ${elapsed}s)。Qwen3.5-397B reasoning 模型每步 15-30s，MaxSteps=${B_EXP_STATUS[$cid]:-} 累计耗时超预算。非平台 bug，考虑调大 b_poll 预算或给该 case 降 MaxSteps。")
+  else
+    record_result "B:${cid} 达终态" "PASS" "status=${status}, elapsed=${elapsed}s"
+  fi
+
+  # 拉详情
+  local detail
+  detail=$(curl -s "${BASE}/api/tasks?id=${tid}" 2>/dev/null | tr -d '\r')
+
+  # 硬失败 2：usage 为 0
+  local tokens
+  tokens=$(jval "$detail" "task.total_tokens")
+  if [[ "$tokens" =~ ^[0-9]+$ ]] && [[ "$tokens" -gt 0 ]]; then
+    record_result "B:${cid} usage 非零" "PASS" "total_tokens=${tokens}"
+  else
+    if [[ "$kl" == "yes" ]]; then
+      record_result "B:${cid} usage 非零" "SKIP" "tokens=${tokens}(known-limitation 软标记)"
+    else
+      record_result "B:${cid} usage 非零" "FAIL" "total_tokens=${tokens}"
+      FINDINGS+=("[PartB:${cid}] total_tokens=${tokens}，真实 LLM 调用后 usage 未记录。可能 onLLMUsage 未触发 / OpenAIProvider 未解析 usage / 该 case LLM 调用前就失败。")
+    fi
+  fi
+
+  # 硬失败 3：cost 记录缺失
+  local costs_resp cost_count
+  costs_resp=$(curl -s "${BASE}/api/costs?task_id=${tid}" 2>/dev/null | tr -d '\r')
+  cost_count=$(jval "$costs_resp" "record_count")
+  if [[ "$cost_count" =~ ^[0-9]+$ ]] && [[ "$cost_count" -ge 1 ]]; then
+    record_result "B:${cid} cost 记录" "PASS" "record_count=${cost_count}"
+  else
+    if [[ "$kl" == "yes" ]]; then
+      record_result "B:${cid} cost 记录" "SKIP" "count=${cost_count}(known-limitation 软标记)"
+    else
+      record_result "B:${cid} cost 记录" "FAIL" "record_count=${cost_count}"
+      FINDINGS+=("[PartB:${cid}] /api/costs?task_id=${tid} 无记录 (record_count=0)。CostTracker/SqliteCostRepository 未持久化。")
+    fi
+  fi
+
+  # 软标记：status vs 期望（real LLM 偏差）
+  if [[ "$status" != "$exp_status" ]]; then
+    record_result "B:${cid} status 符合期望" "SKIP" "status=${status} 期望 ${exp_status}（real-LLM 软标记，不计 FAIL）"
+    FINDINGS+=("[PartB:${cid}][软标记] status=${status} 期望 ${exp_status}。real LLM 行为偏差，非 necessarily bug —— 但 policy-enforcement/max-steps 若 completed 说明 PolicyGate/max_steps 路径在真实 LLM 下未触发，需核实。")
+  else
+    record_result "B:${cid} status 符合期望" "PASS" "status=${status}==${exp_status}"
+  fi
+
+  # 软标记：tool_call
+  local has_tool tool_names
+  has_tool=$(jrun "$detail" "console.log(d.steps && d.steps.some(s=>s.type==='tool_call') ? 'yes':'no')")
+  tool_names=$(jrun "$detail" "const tc=(d.steps||[]).filter(s=>s.type==='tool_call').map(s=>s.tool_name); console.log([...new Set(tc)].join(',')||'none')")
+  echo "  steps tool_calls=${has_tool}, tools=${tool_names}"
+  if [[ "$has_tool" != "$exp_tool" ]]; then
+    record_result "B:${cid} tool_call 符合期望" "SKIP" "has_tool=${has_tool} 期望 ${exp_tool} (tools=${tool_names})（real-LLM 软标记）"
+  else
+    record_result "B:${cid} tool_call 符合期望" "PASS" "has_tool=${has_tool}==${exp_tool}"
+  fi
+
+  # 软标记：final_result 非空（除期望 failed/empty 的 case）
+  local final
+  final=$(jval "$detail" "task.final_result")
+  if [[ -z "$(echo "$final" | tr -d '[:space:]')" ]]; then
+    record_result "B:${cid} final_result 非空" "SKIP" "final_result 为空（real-LLM 软标记）"
+  else
+    record_result "B:${cid} final_result 非空" "PASS" "len=${#final}"
+  fi
+
+  # L4/L5 编排事件（软标记，但记录为 FINDINGS）
+  if b_is_multi_agent "$cid"; then
+    local ws_after dec disp comp child_steps
+    [[ -f "${WS_EVENTS}" ]] && ws_after=$(wc -l < "${WS_EVENTS}" 2>/dev/null)
+    ws_after=${ws_after:-0}
+    # 只统计本次 case 期间新增的事件（增量），避免跨 case 累计误判。
+    # 注意：本脚本 WS 订阅写入的是纯事件名（每行一个 e.type，见上方 node 订阅），
+    # 不是 JSON，故这里直接 grep 裸事件名。
+    local seg
+    seg=$(tail -n +$((ws_before + 1)) "${WS_EVENTS}" 2>/dev/null)
+    dec=$(printf '%s' "$seg" | grep -cx "decompose_done"); dec=${dec:-0}
+    disp=$(printf '%s' "$seg" | grep -cx "agent_dispatched"); disp=${disp:-0}
+    comp=$(printf '%s' "$seg" | grep -cx "agent_completed"); comp=${comp:-0}
+    # child_steps 回填
+    child_steps=$(jrun "$detail" "
+const cts=d.child_tasks||[];
+if(!cts.length){console.log('no_child');}
+else{console.log(cts.every(c=>(c.steps||[]).length>0)?'yes':'no');}
+")
+    echo "  orchestrator(增量): decompose=${dec} dispatched=${disp} completed=${comp} child_steps=${child_steps}"
+    if [[ "$dec" -ge 1 && "$disp" -ge 1 && "$comp" -ge 1 ]]; then
+      record_result "B:${cid} 编排事件流" "PASS" "dec=${dec} disp=${disp} comp=${comp}"
+    else
+      record_result "B:${cid} 编排事件流" "SKIP" "dec=${dec} disp=${disp} comp=${comp}（real-LLM 软标记）"
+      if b_is_known_limitation "$cid"; then
+        FINDINGS+=("[PartB:${cid}][known-limitation] 编排事件不完整 dec=${dec}/disp=${disp}/comp=${comp}。leader 动态 dispatch 不可控 / fault-tolerance 底层无真崩溃注入。")
+      else
+        FINDINGS+=("[PartB:${cid}][软标记] 编排事件不完整 dec=${dec}/disp=${disp}/comp=${comp}。real LLM 下 leader 未按 mock 脚本调 dispatch_sub_agent —— 若 status=completed 且 final 非空，说明 leader 自行答题未走编排，属行为偏差；若 final 空，可能是真问题。child_steps=${child_steps}")
+      fi
+    fi
+    # child_steps 回填（非 legacy 多 agent case 期望 yes）
+    if [[ "$cid" != "multi-agent" && "$child_steps" != "yes" ]]; then
+      record_result "B:${cid} child_steps 回填" "SKIP" "child_steps=${child_steps}（real-LLM 软标记）"
+      FINDINGS+=("[PartB:${cid}][软标记] child_steps=${child_steps}。若 leader 真走了编排，child_tasks[].steps 应回填；为 no/no_child 说明 child tasks 未正确持久化或 leader 未真派发。")
+    else
+      record_result "B:${cid} child_steps 回填" "PASS" "child_steps=${child_steps}"
+    fi
+  fi
+
+  # case 间冷却：让 LLM 速率窗口恢复，避免连续 429
+  sleep "${CASE_COOLDOWN:-8}"
+}
+
+# 按 L1-L5 阶梯顺序跑（便于按级别读报告）
+B_L1=(code-gen dialogue research long-task)
+B_L2=(todo-driven web-research skill-code-helper cron-notify llm-judge-qa)
+B_L3=(policy-enforcement approval-flow max-steps-exhaustion context-compression checkpoint-resume)
+B_L4=(multi-agent multi-agent-parallel multi-agent-sequential multi-agent-dag)
+B_L5=(multi-agent-leader-dispatch multi-agent-review multi-agent-fault-tolerance)
+
+b_run_level() {
+  local label="$1"; shift
+  echo ""; echo "===== PartB ${label} ====="
+  local cid c found
+  for cid in "$@"; do
+    # 跳过 /api/cases 未返回的 case（向后兼容）
+    found=0
+    for c in "${B_ALL_CASES[@]}"; do [[ "$c" == "$cid" ]] && { found=1; break; }; done
+    if [[ "$found" == "0" ]]; then
+      echo "  [SKIP] ${cid} 不在 /api/cases 返回列表，跳过"
+      record_result "B:${cid} 存在性" "SKIP" "未在 /api/cases 返回"
+      continue
+    fi
+    b_run_case "$cid"
+  done
+}
+
+# 若 LLM 不可达则只跑 L1 第一个 case 探测，其余 SKIP 省钱
+if [[ "$LLM_OK" != "yes" ]]; then
+  echo "[PartB] LLM 不可达（PartA 场景1 未通过），仅探测 L1 code-gen，其余 SKIP"
+  b_run_level "L1 单 Agent 基线 (探测)" "${B_L1[@]}"
+  local cid2
+  for cid2 in "${B_L2[@]}" "${B_L3[@]}" "${B_L4[@]}" "${B_L5[@]}"; do
+    record_result "B:${cid2} 达终态" "SKIP" "LLM 不可达，跳过"
+  done
+else
+  b_run_level "L1 单 Agent 基线" "${B_L1[@]}"
+  b_run_level "L2 单 Agent + 子系统" "${B_L2[@]}"
+  b_run_level "L3 Harness 治理" "${B_L3[@]}"
+  b_run_level "L4 多 Agent 静态编排" "${B_L4[@]}"
+  b_run_level "L5 多 Agent 动态编排" "${B_L5[@]}"
+fi
+
+# PartB 汇总表
+print_section "Part B 汇总"
+echo "  (PartB 明细见上方各项 [PASS]/[FAIL]/[SKIP]；FINDINGS 见文末「发现的问题清单」)"
+echo "  硬失败=达终态/usage/cost/panic；软标记=status/tool/final/编排事件不计 FAIL；"
+echo "  L5 leader-dispatch 与 fault-tolerance 为 known-limitation，硬失败降级软标记。"
+
+fi  # end SKIP_PARTB
 
 # =============================================================================
 # 全局检查
