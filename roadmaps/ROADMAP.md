@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-21
-> **当前版本**: v0.10.0 Alpha（Session 级 TODO 子系统落地）
+> **最近更新**: 2026-07-23
+> **当前版本**: v0.10.1 Alpha（内置 Case 矩阵扩展到 21 个，mock 回归 21/21）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -208,6 +208,18 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] 全局快捷键系统（Ctrl+Shift+C 取消、Ctrl+Shift+P 暂停/恢复、? 提示面板）
 - [x] TypeWriter 代码块复制按钮 + Tool output JSON 格式化/还原切换
 - [x] MetricsPanel 运行时长 + Agent 选择器占坑
+
+### extend-task-cases 增量（2026-07-23，OpenSpec change `extend-task-cases`）
+- [x] 内置 Case 矩阵从 5 个扩展到 21 个，覆盖 L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排五级阶梯
+- [x] 新增 L2：todo-driven、web-research、skill-code-helper、cron-notify、llm-judge-qa
+- [x] 新增 L3：policy-enforcement（PathTraversal 拦截）、approval-flow（AllowShellDangerous）、max-steps-exhaustion（步数耗尽 failed）、context-compression、checkpoint-resume
+- [x] 新增 L4：multi-agent-parallel / -sequential / -dag（保留 legacy multi-agent 对照）
+- [x] 新增 L5：multi-agent-leader-dispatch / -review / -fault-tolerance
+- [x] `internal/cases/cases_test.go` 增补完整性校验：ID 唯一、Name/Category/SystemPrompt/Goal 非空、MaxSteps>0、Tags 含阶梯标识、L1-L5 各级覆盖、验收类型属 harness 枚举
+- [x] `scripts/cases-regression.sh` 全量 mock 回归：21/21 PASS，含 status / has_tool / final_result / tokens / cost_records / L4-L5 编排事件（decompose_done / agent_dispatched / agent_completed）/ child_tasks[].steps 回填断言
+- [x] `internal/llm/mock_builtin.go` 为 21 个 case 各配一个精确 CaseID mock 脚本（+ tool-error keyword 回退，共 22 个），还原各 case 真实 ReAct 行为
+- [x] `internal/llm/mock_provider.go` selectScript 区分精确 CaseID 命中（+1000）与输入子串命中（+500），防止 "research" 等常见英文词 case ID 靠子串劫持其它 case 脚本
+- [x] 回归脚本 WS 订阅改为服务就绪后启动 + 带退避重连，捕获 orchestrator 仅经 hub.SendEvent 广播、不写 task steps 的编排事件；Windows 下强制 `PYTHONUTF8=1` 修复含中文响应的 JSON 解析（skill/list 返回 Skill DisplayName 导致 skill-code-helper 轮询超时）
 
 ### 验证标准
 - [x] 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新

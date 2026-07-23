@@ -144,8 +144,18 @@ func (p *MockProvider) selectScript(userInput, model, caseID string, scripts []M
 	for _, script := range allScripts {
 		score := 0
 		key := "case:" + script.CaseID
-		if script.CaseID != "" && (strings.EqualFold(script.CaseID, caseID) || strings.Contains(lowerInput, strings.ToLower(script.CaseID))) {
-			score += 1000
+		// CaseID 命中分两档：精确 EqualFold（request.CaseID 即为该 case）给
+		// +1000，远高于任何 keyword/priority 叠加，确保 run-case 路径下正确
+		// 脚本稳定胜出；输入子串包含 CaseID（如 case "research" 的 ID 恰好
+		// 是常见英文词，会匹配到含 "research" 的其它 case 输入）只给 +500，
+		// 低于精确匹配，避免子串误命中抢走正确的 case 脚本（见
+		// multi-agent-sequential 被 research 脚本劫持的回归案例）。
+		if script.CaseID != "" {
+			if strings.EqualFold(script.CaseID, caseID) {
+				score += 1000
+			} else if strings.Contains(lowerInput, strings.ToLower(script.CaseID)) {
+				score += 500
+			}
 		}
 		for _, kw := range script.MatchInput {
 			if strings.Contains(lowerInput, strings.ToLower(kw)) {

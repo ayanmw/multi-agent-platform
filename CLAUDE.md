@@ -249,6 +249,31 @@ User Input → System Prompt + Messages → LLM (streaming)
 
 ---
 
+## 内置 Case 矩阵（L1-L5 阶梯）
+
+`internal/cases/cases.go` 通过 `cases.All()` 返回 21 个内置 case，按能力阶梯分为五级，是回归脚本 `scripts/cases-regression.sh` 的 mock 评测对象。每个 case 由 `ID / SystemPrompt / DefaultInput / TaskContract(Goal, Scope, MaxSteps, Permissions, AcceptanceCriteria) / Tags` 构成。
+
+| 级别 | Case ID | 验证能力 |
+|------|---------|---------|
+| L1 单 Agent 基线 | `code-gen` `dialogue` `research` `long-task` | 基础 ReAct Loop、write_file/run_shell、纯对话、多步 |
+| L2 单 Agent + 子系统 | `todo-driven` `web-research` `skill-code-helper` `cron-notify` `llm-judge-qa` | todo/cron/skill Agent Tools、web 搜索、llm_judge 验收 |
+| L3 Harness 治理 | `policy-enforcement` `approval-flow` `max-steps-exhaustion` `context-compression` `checkpoint-resume` | PolicyGate 拦截、审批、步数耗尽、上下文压缩、checkpoint 续跑 |
+| L4 多 Agent 静态编排 | `multi-agent`(legacy) `multi-agent-parallel` `multi-agent-sequential` `multi-agent-dag` | orchestrator parallel/sequential/pipeline(DAG) 静态拆分 |
+| L5 多 Agent 动态编排 | `multi-agent-leader-dispatch` `multi-agent-review` `multi-agent-fault-tolerance` | leader 运行时 dispatch_sub_agent、互评、容错降级 |
+
+### 回归脚本与 mock 脚本
+
+- `scripts/cases-regression.sh`：独立端口 + 独立 DB + `LLM_USE_MOCK=true` 串行跑全部 21 个 case，断言 status / has_tool / final_result / total_tokens / cost_records；L4-L5 额外断言编排事件（`decompose_done` / `agent_dispatched` / `agent_completed`，经 WS 订阅捕获）与 `child_tasks[].steps` 回填。目标 21/21 PASS。
+- `internal/llm/mock_builtin.go`：`BuiltinMockScripts()` 返回 22 个 mock 脚本（21 case 各一个 + `tool-error` keyword 回退）。每个脚本通过精确 `CaseID` 匹配被 `MockProvider.selectScript` 选中（精确命中 +1000，远高于 router-classifier 的 Priority 1000），其 `Responses` 序列还原该 case 的真实 ReAct 行为（tool_call → 最终 text）。
+- `selectScript` 区分两档 CaseID 命中：精确 `EqualFold`（+1000）与输入子串包含（+500）。后者低于前者，防止 `research` 这类常见英文词 case ID 靠子串劫持其它 case 的 run-case 路径（`multi-agent-sequential` 的 input 含 "research" 曾被 research 脚本抢走）。
+- 回归脚本 Windows 注意事项：必须 `export PYTHONUTF8=1`，否则 python stdin 默认 GBK 解码含中文的 `/api/tasks` 响应（如 `skill/list` 返回的 Skill DisplayName）会 JSON 解析失败、轮询 status 恒空 → 误判超时。
+
+### 编排事件的可观测性约定
+
+orchestrator 的 `decompose_done` / `agent_dispatched` / `agent_completed` 事件用 `event.NewEvent`（无 SubTaskID）经 `hub.SendEvent` 做 WS 广播，**不写 task steps**。因此 HTTP `/api/tasks` 详情里看不到这些事件，只能靠 WS 订阅（或 `/api/replay/events`）捕获。回归脚本据此把 WS 订阅改为"服务就绪后启动 + 带退避重连"。
+
+---
+
 ## Phase 计划
 
 ```

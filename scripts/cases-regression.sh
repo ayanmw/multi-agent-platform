@@ -16,6 +16,11 @@
 # =============================================================================
 set -u
 
+# Windows 下 python 默认 stdin 编码为 GBK（cp936），而 /api/tasks 响应可能含
+# UTF-8 中文（如 skill/list 返回的 Skill DisplayName）。GBK 解码 UTF-8 字节会
+# 失败导致 json.load 抛异常、轮询 status 恒空 → 超时。强制 UTF-8 模式修复。
+export PYTHONUTF8=1
+
 # ---- 配置 --------------------------------------------------------------------
 PORT=18105
 BASE="http://localhost:${PORT}"
@@ -70,7 +75,7 @@ EXP_TOOL=(
   ["llm-judge-qa"]="no"
   ["policy-enforcement"]="yes"
   ["approval-flow"]="yes"
-  ["max-steps-exhaustion"]="no"
+  ["max-steps-exhaustion"]="yes"
   ["context-compression"]="no"
   ["checkpoint-resume"]="yes"
   ["multi-agent"]="yes"
@@ -185,21 +190,6 @@ DB_PATH="${DB_PATH}" \
   "${SERVER_BIN}" >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
-# ---- WS 事件订阅（用于 L4/L5 编排事件断言）------------------------------------
-: > "${WS_EVENTS}"
-node -e "
-  const out = process.argv[1], base = process.argv[2], fs = require('fs');
-  const ws = new WebSocket(base + '/ws?session_id=cases-regression');
-  let fd;
-  ws.addEventListener('open',  () => { fd = fs.openSync(out, 'a'); fs.writeSync(fd, JSON.stringify({type:'__ws_open__'}) + '\n'); });
-  ws.addEventListener('message', m => {
-    try { const e = JSON.parse(m.data); if (fd === undefined) fd = fs.openSync(out, 'a'); fs.writeSync(fd, JSON.stringify(e) + '\n'); } catch (x) {}
-  });
-  ws.addEventListener('error', e => { fs.writeFileSync(out + '.err', String(e.message || e) + '\n', { flag: 'a' }); });
-  setInterval(() => {}, 1000);
-" "${WS_EVENTS}" "${BASE}" >/dev/null 2>&1 &
-WS_PID=$!
-
 # ---- 等待健康检查 ------------------------------------------------------------
 echo "[setup] 等待 /healthz 就绪..."
 ready=0
@@ -213,12 +203,49 @@ if [[ "${ready}" != "1" ]]; then
   tail -30 "${SERVER_LOG}"
   exit 3
 fi
-# 再等 WS 连上
-sleep 1
-if grep -q "__ws_open__" "${WS_EVENTS}" 2>/dev/null; then
-  echo "[setup] 服务就绪 ✓，WS 订阅已连接"
+echo "[setup] 服务就绪 ✓"
+
+# ---- WS 事件订阅（用于 L4/L5 编排事件断言）------------------------------------
+# 必须在服务就绪后启动：orchestrator 的 decompose_done / agent_dispatched /
+# agent_completed 事件只经 hub.SendEvent 做 WS 广播，不写 task steps，因此
+# HTTP fallback 拿不到，只能靠 WS 订阅捕获。脚本带重连，避免单次握手失败。
+: > "${WS_EVENTS}"
+node -e "
+  const out = process.argv[1], base = process.argv[2], fs = require('fs');
+  let fd, ws, connectedOnce = false;
+  function connect() {
+    ws = new WebSocket(base + '/ws?session_id=cases-regression');
+    ws.addEventListener('open',  () => {
+      if (fd === undefined) fd = fs.openSync(out, 'a');
+      fs.writeSync(fd, JSON.stringify({type:'__ws_open__'}) + '\n');
+      connectedOnce = true;
+    });
+    ws.addEventListener('message', m => {
+      try { const e = JSON.parse(m.data); if (fd === undefined) fd = fs.openSync(out, 'a'); fs.writeSync(fd, JSON.stringify(e) + '\n'); } catch (x) {}
+    });
+    ws.addEventListener('error', e => {
+      fs.writeFileSync(out + '.err', String(e.message || e) + '\n', { flag: 'a' });
+    });
+    ws.addEventListener('close', () => {
+      // 服务可能还在重启或握手失败；带退避重连，直到 cleanup kill 本进程。
+      setTimeout(connect, 300);
+    });
+  }
+  connect();
+  setInterval(() => {}, 1000);
+" "${WS_EVENTS}" "${BASE}" >/dev/null 2>&1 &
+WS_PID=$!
+
+# 等 WS 连上（最多 5s）
+ws_ready=0
+for i in $(seq 1 10); do
+  if grep -q "__ws_open__" "${WS_EVENTS}" 2>/dev/null; then ws_ready=1; break; fi
+  sleep 0.5
+done
+if [[ "${ws_ready}" == "1" ]]; then
+  echo "[setup] WS 订阅已连接 ✓"
 else
-  echo "[setup] 服务就绪 ✓，WS 订阅未连上（后续编排事件断言可能依赖 HTTP fallback）"
+  echo "[setup] WS 订阅未连上（后续编排事件断言可能依赖 HTTP fallback）"
 fi
 
 # ---- 从 /api/cases 拉取全部 case ID ------------------------------------------
