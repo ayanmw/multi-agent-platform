@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -1983,7 +1984,22 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
 		}
 
-		runAgentLoopWithTurn(hub, taskID, agentID, fullSystemPrompt, req.Input, cfg, tools, persist, contract, id, approvalHandler, workingMemory, agentBus, checkpointMgr, turnIndex, sess.RootTaskID, "", costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
+		// Phase 8-A：session-chat 改走 AgentRunner.Run(spec)。
+		// turnIndex>0 → IsRoot=false（非首轮），parentTaskID=sess.RootTaskID，
+		// 与旧 runAgentLoopWithTurn(...,turnIndex,sess.RootTaskID,...) 语义一致。
+		runner := NewAgentRunner(hub, makeRunnerDeps(cfg, tools, persist, approvalHandler, memRecall, agentBus, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+		runner.Run(context.Background(), AgentRunSpec{
+			TaskID:        taskID,
+			AgentID:       agentID,
+			SystemPrompt:  fullSystemPrompt,
+			UserInput:     req.Input,
+			SessionID:     id,
+			ParentTaskID:  sess.RootTaskID,
+			TurnIndex:     turnIndex,
+			IsRoot:        false,
+			Contract:      contract,
+			WorkingMemory: workingMemory,
+		})
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2230,7 +2246,20 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 
 	taskID := newTaskID()
-	go runAgentLoop(hub, taskID, agentID, systemPrompt, req.Input, cfg, tools, persist, contract, req.SessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
+	// Phase 8-A：run-case 改走 AgentRunner.Run(spec)。IsRoot=true（首轮），
+	// 与旧 runAgentLoop(...turnIndex=0...) 语义一致。
+	runner := NewAgentRunner(hub, makeRunnerDeps(cfg, tools, persist, approvalHandler, memRecall, agentBus, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+	go runner.Run(context.Background(), AgentRunSpec{
+		TaskID:        taskID,
+		AgentID:       agentID,
+		SystemPrompt:  systemPrompt,
+		UserInput:     req.Input,
+		SessionID:     req.SessionID,
+		IsRoot:        true,
+		Contract:      contract,
+		CaseID:        caseID,
+		WorkingMemory: workingMemory,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

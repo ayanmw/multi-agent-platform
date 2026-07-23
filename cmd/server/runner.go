@@ -89,6 +89,12 @@ type AgentDeps struct {
 	SkillRegistry   *skill.Registry
 	Orchestrator    *orchestrator.Orchestrator
 	Tracer          *observability.Tracer
+	// MemDB 用于 session chat 的上下文压缩（harness.NewContextCompressor）。
+	// 单独列出是因为它属于 CompressorDB 接口，不与运行期 EngineConfig 直接耦合。
+	MemDB harness.CompressorDB
+	// MemRecall 用于在启动 chat / multi-agent 任务前构建工作记忆（Working Memory）
+	// 并注入 system prompt。可空：DB 未初始化时为 nil，BuildWorkingMemory 调用被跳过。
+	MemRecall *harness.MemoryRecall
 }
 
 // AgentRunner 是 agent 运行入口。持有 WS Hub（用于广播事件）与共享 Deps。
@@ -120,40 +126,20 @@ func (r *AgentRunner) RunSync(ctx context.Context, spec AgentRunSpec) {
 	r.runAgentLoopWithTurn(spec)
 }
 
-// runAgentLoop 是旧包级入口的兼容封装：root 轮次（turnIndex=0、无 parentTaskID）
-// 的便捷调用。Phase 8-A 之前散落在 main.go，现委托给 AgentRunner。
+// makeRunnerDeps 把 chat / cron / multi-agent / session-chat / run-case 等入口
+// 共用的那组"非全局"依赖，连同包级全局（globalSkillRegistry / globalOrchestrator /
+// tracer）一起组装成 AgentDeps。
 //
-// 保留旧签名是为了让尚未迁移到 AgentRunner.Run(spec) 的调用点（api.go、
-// cron_api.go、checkpoint recovery、multi-agent leader、测试）继续工作；
-// Task 7-9 会逐步把这些调用点改为直接构造 AgentRunSpec 并调用 runner.Run。
-func runAgentLoop(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service, rootTraceCtx ...*observability.TraceContext) {
-	runAgentLoopWithTurn(hub, taskID, agentID, systemPrompt, userInput, cfg, tools, persist, contract, sessionID, approvalHandler, workingMemory, agentBus, checkpointMgr, 0, "", caseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx...)
-}
-
-// runAgentLoopWithTurn 是旧包级入口的兼容封装：把 20+ 位置参数组装成
-// AgentRunSpec + AgentDeps，委托给 AgentRunner.runAgentLoopWithTurn。
+// 为什么仍需要这个 helper：Phase 8-A 之前所有入口都调一个 20+ 参数的
+// runAgentLoopWithTurn 包级函数；现在该函数已删除，入口改为
+// `NewAgentRunner(hub, makeRunnerDeps(...)).Run(ctx, AgentRunSpec{...})`。
+// 这 15 个依赖是各 handler 的参数（或 main() 闭包捕获的局部变量），无法再压缩——
+// 但 AgentDeps 把它们与"运行期可变状态"（spec）分离，让 runner 可独立测试，
+// 且 spec 不再混入依赖参数，是本阶段收敛的核心收益。
 //
-// 这里每次都用传入的 deps 现场构造一个 AgentRunner，语义与旧函数完全等价
-// （不引入额外的全局状态）；SkillRegistry / Orchestrator / Tracer 仍走
-// 包级全局变量（runAgentLoopWithTurn 函数体内部直接引用），与旧实现一致。
-func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput string, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, contract harness.TaskContract, sessionID string, approvalHandler harness.ApprovalHandler, workingMemory string, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, turnIndex int, parentTaskID string, caseID string, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service, rootTraceCtx ...*observability.TraceContext) {
-	spec := AgentRunSpec{
-		TaskID:        taskID,
-		AgentID:       agentID,
-		SystemPrompt:  systemPrompt,
-		UserInput:     userInput,
-		SessionID:     sessionID,
-		ParentTaskID:  parentTaskID,
-		TurnIndex:     turnIndex,
-		IsRoot:        turnIndex == 0,
-		Contract:      contract,
-		CaseID:        caseID,
-		WorkingMemory: workingMemory,
-	}
-	if len(rootTraceCtx) > 0 && rootTraceCtx[0] != nil {
-		spec.RootTraceCtx = rootTraceCtx[0]
-	}
-	r := NewAgentRunner(hub, AgentDeps{
+// hub 不在此处：它属于 AgentRunner 而非 AgentDeps，由 NewAgentRunner 单独接收。
+func makeRunnerDeps(cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service) AgentDeps {
+	return AgentDeps{
 		Cfg:             cfg,
 		Tools:           tools,
 		Persist:         persist,
@@ -166,8 +152,15 @@ func runAgentLoopWithTurn(hub *ws.Hub, taskID, agentID, systemPrompt, userInput 
 		RouterProviders: routerProviders,
 		CaseService:     caseService,
 		TodoSvc:         todoSvc,
-	})
-	r.runAgentLoopWithTurn(spec)
+		// 以下三项是进程级单例：server 只有一个 orchestrator / skill registry /
+		// tracer，Engine 构建期也直接引用这些包级全局。这里同步引用，保持单一
+		// 事实源，避免 appServer 字段与全局出现两份不一致的引用。
+		SkillRegistry: globalSkillRegistry,
+		Orchestrator:  globalOrchestrator,
+		Tracer:        tracer,
+		MemDB:         memDB,
+		MemRecall:     memRecall,
+	}
 }
 
 // orchestratorDispatcher 是 SubAgentDispatcher 在 cmd/server 层的实现。

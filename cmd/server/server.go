@@ -89,6 +89,37 @@ type appServer struct {
 	runner *AgentRunner
 }
 
+// deps 构造 appServer 当前的 AgentDeps 快照。所有运行入口（chat / cron /
+// checkpoint recovery / multi-agent leader）共用同一份依赖，避免重复拼装。
+// SkillRegistry / Orchestrator / Tracer 仍以包级 global* 变量为权威来源——
+// Engine 构建期也读这些全局——这里同步引用，保持单一事实源。
+func (s *appServer) deps() AgentDeps {
+	return AgentDeps{
+		Cfg:             s.cfg,
+		Tools:           s.toolRegistry,
+		Persist:         s.persist,
+		ApprovalHandler: s.approvalHandler,
+		AgentBus:        s.agentBusAdapter,
+		CheckpointMgr:   s.checkpointMgr,
+		CostRepo:        s.costRepo,
+		ModelRegistry:   s.modelRegistry,
+		ModelRouter:     s.modelRouter,
+		RouterProviders: s.routerProviders,
+		CaseService:     s.caseService,
+		TodoSvc:         s.todoSvc,
+		SkillRegistry:   globalSkillRegistry,
+		Orchestrator:    globalOrchestrator,
+		Tracer:          tracer,
+		MemDB:           s.memDB,
+		MemRecall:       s.memRecall,
+	}
+}
+
+// newRunner 构造一个绑定当前 appServer 依赖的 AgentRunner。
+func (s *appServer) newRunner() *AgentRunner {
+	return NewAgentRunner(s.hub, s.deps())
+}
+
 // registerRoutes 把全部 HTTP 路由挂到 http.DefaultServeMux。
 //
 // 调用顺序与旧 main() 一致（Go ServeMux 对无重叠前缀的路由不依赖注册顺序，

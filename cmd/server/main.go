@@ -43,8 +43,7 @@ import (
 
 // handleTasksRoot 是 /api/tasks 的 POST 入口（chat / multi-agent / stream-demo
 // action）。以闭包形式在 main() 中赋值，捕获 main 局部依赖；声明为包级变量
-// 让 server.go 的 registerRoutes 也能引用同一个闭包。Phase 8-A Task 9 会把它
-// 改为 appServer 方法 + AgentRunner，届时此变量可移除。
+// 让 server.go 的 registerRoutes 也能引用同一个闭包。内部已改走 AgentRunner。
 var handleTasksRoot func(http.ResponseWriter, *http.Request)
 
 // cancelRegistry 把 task_id 映射到当前运行中 agent loop 的 context.CancelFunc。
@@ -105,18 +104,16 @@ func spanRecordToMap(rec observability.SpanRecord) map[string]any {
 
 // globalSkillRegistry 是 Skill 子系统的全局注册表引用。
 //
-// 在 main() 中初始化后保留为包级变量，让 runAgentLoopWithTurn 等闭包能直接把
-// SkillRegistry / ActiveSkills 注入 EngineConfig，而不必把参数一路透传到所有
-// handler 签名上（runAgentLoop 已有 20+ 个参数，再加会失控）。
-//
-// 当 db.DB 未初始化时仍是一个空 registry，避免 nil 解引用。
+// 在 main() 中初始化后保留为包级变量，让 AgentRunner.runAgentLoopWithTurn 能
+// 直接把 SkillRegistry / ActiveSkills 注入 EngineConfig，而不必把参数一路透传
+// 到所有 handler 签名上。当 db.DB 未初始化时仍是一个空 registry，避免 nil 解引用。
 var globalSkillRegistry *skill.Registry
 
 // globalOrchestrator 是 multi-agent orchestrator 的全局引用。
 //
-// runAgentLoopWithTurn 需要为每个 leader 动态注入 dispatch_sub_agent 工具，
-// 但函数签名已非常长。通过包级引用获取 orchestrator 与 dispatcher 是 Main 包
-// 内的合理折中（server 进程只有一个 orchestrator 实例）。
+// AgentRunner 为每个 leader 动态注入 dispatch_sub_agent 工具时需要它构造
+// orchestratorDispatcher。通过包级引用获取是 Main 包内的合理折中
+//（server 进程只有一个 orchestrator 实例）。
 var globalOrchestrator *orchestrator.Orchestrator
 
 // storeCancel 注册 task/agent 对应的取消函数。
@@ -610,7 +607,7 @@ func main() {
 	orch.SetTracer(tracer, nil)
 
 	// 用内置 tool 初始化基础 registry（不含 leader 专用工具）。
-	// leader 工具在 runAgentLoopWithTurn 中按 task 动态注入克隆后的 registry，
+	// leader 工具在 AgentRunner.runAgentLoopWithTurn 中按 task 动态注入克隆后的 registry，
 	// 避免全局 registry 共享导致 worker/chat 看到 dispatch_sub_agent。
 	toolRegistry := tool.NewRegistry()
 	tool.RegisterBuiltins(toolRegistry)
@@ -790,7 +787,7 @@ func main() {
 		_ = skillLoader.LoadAll()
 		log.Printf("Skill subsystem: disabled (no database)")
 	}
-	// 把 registry 提升为包级变量，让 runAgentLoopWithTurn / runAgentLoop 等闭包
+	// 把 registry 提升为包级变量，让 AgentRunner.runAgentLoopWithTurn 等入口
 	// 可以直接读取当前已启用的 skill 列表并注入 EngineConfig。
 	globalSkillRegistry = skillRegistry
 
@@ -1048,7 +1045,18 @@ func main() {
 					// mock 模式下简化 prompt，避免 mock provider 被过长文本干扰。
 					leaderSystemPrompt = "You are the Leader agent. Use dispatch_sub_agent when delegation is needed."
 				}
-				runAgentLoopWithTurn(hub, taskID, "leader", leaderSystemPrompt, leaderInput, cfg, toolRegistry, persist, harness.DefaultContract(leaderInput), sessionID, approvalHandler, "", agentBusAdapter, checkpointMgr, 0, "", "", costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
+				// Phase 8-A：leader-driven multi-agent 改走 AgentRunner.Run(spec)。
+				// IsRoot=true 让 runner 注入 leader 角色与 dispatch_sub_agent 工具。
+				runner := NewAgentRunner(hub, makeRunnerDeps(cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, nil, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+				runner.Run(context.Background(), AgentRunSpec{
+					TaskID:       taskID,
+					AgentID:      "leader",
+					SystemPrompt: leaderSystemPrompt,
+					UserInput:    leaderInput,
+					SessionID:    sessionID,
+					IsRoot:       true,
+					Contract:     harness.DefaultContract(leaderInput),
+				})
 				removeCancel(taskID, "leader")
 				removeEngine(taskID, "leader")
 				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
@@ -1149,9 +1157,9 @@ func main() {
 	// 依赖（cfg / toolRegistry / persist / hub / approvalHandler / memRecall /
 	// agentBusAdapter / checkpointMgr / costRepo / modelRegistry / modelRouter /
 	// routerProviders / caseService / todoSvc / tracer），让 /api/tasks 的 chat
-	// action 与 cron 的 start_task action 共用同一条任务启动链路，避免复制
-	// 20+ 参数的 runAgentLoop 调用。定义放在 handleTasksRoot 之后，确保引用的
-	// 所有局部变量都已声明。
+	// action 与 cron 的 start_task action 共用同一条任务启动链路。Phase 8-A
+	// 起内部改走 AgentRunner.Run(spec)（不再调已删除的 20+ 参数 runAgentLoop）。
+	// 定义放在 handleTasksRoot 之后，确保引用的所有局部变量都已声明。
 	startChatTask = func(opts startChatTaskOpts) (sessionID, taskID string, err error) {
 		if opts.Input == "" {
 			return "", "", errors.New("input is required for chat action")
@@ -1249,7 +1257,22 @@ func main() {
 		rootTraceCtx := tracer.StartRoot(tid, "task")
 		traceRegistry.Store(tid, rootTraceCtx)
 
-		go runAgentLoop(hub, tid, agentID, systemPrompt, opts.Input, cfg, toolRegistry, persist, contract, sid, approvalHandler, workingMemory, agentBusAdapter, checkpointMgr, opts.CaseID, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc, rootTraceCtx)
+		// 启动 Agent Loop（Phase 8-A：改走 AgentRunner.Run(spec)，不再调
+		// 已删除的 20+ 参数 runAgentLoop 包级函数）。
+		runner := NewAgentRunner(hub, makeRunnerDeps(cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, nil, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+		spec := AgentRunSpec{
+			TaskID:        tid,
+			AgentID:       agentID,
+			SystemPrompt:  systemPrompt,
+			UserInput:     opts.Input,
+			SessionID:     sid,
+			IsRoot:        true,
+			Contract:      contract,
+			CaseID:        opts.CaseID,
+			WorkingMemory: workingMemory,
+			RootTraceCtx:  rootTraceCtx,
+		}
+		go runner.Run(context.Background(), spec)
 
 		return sid, tid, nil
 	}
