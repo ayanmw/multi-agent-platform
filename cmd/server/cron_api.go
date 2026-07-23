@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -33,21 +34,6 @@ type startChatTaskOpts struct {
 	CostBudgetUSD  float64
 	CaseID         string
 }
-
-// startChatTask 执行 chat action 的核心：校验 + 构建 contract + 启动 AgentRunner。
-// sessionID 为空时自动新建 session；返回实际的 sessionID 与 taskID。
-// 被 /api/tasks handler 与 cron ActionRunner 共同复用。
-//
-// 实现以闭包形式在 main() 中赋值，捕获 main() 的局部依赖（cfg、toolRegistry、
-// persist、hub、approvalHandler、memRecall、agentBusAdapter、checkpointMgr、
-// costRepo、modelRegistry、modelRouter、routerProviders、caseService、todoSvc...）。
-// 这与 handleTasksRoot 的模式一致——避免把这些依赖全部提升为包级变量，
-// 也避免在每个入口重复拼装 AgentDeps。
-var startChatTask func(opts startChatTaskOpts) (sessionID, taskID string, err error)
-
-// globalCronService 是 Cron 子系统的全局 Service 引用，供 API handler 使用。
-// 在 main() 中初始化。
-var globalCronService *cron.Service
 
 // RegisterCronAPI 注册 /api/crons* 全部 REST 端点，挂载到传入的 mux。
 // 用 mux 参数而非 http.DefaultServeMux，便于测试用 httptest.NewServer 隔离。
@@ -329,12 +315,20 @@ func parseIntQuery(s string) int {
 	return n
 }
 
-// cronTaskStarter 适配 cron.ActionRunner 需要的 TaskStarter 回调。
-// 它把 cron.StartTaskParams 转成 startChatTaskOpts 并调用 startChatTask。
-// input 已在 ActionRunner 中加好 [cron:...] 前缀，这里直接透传。
-func cronTaskStarter(ctx context.Context, p cron.StartTaskParams) (taskID, sessionID string, err error) {
+// appCronStarter 适配 cron.ActionRunner 需要的 TaskStarter 回调。
+// 它捕获 *appServer，从而可以调用 s.startChatTask，彻底消除 startChatTask
+// 这个包级闭包变量。
+type appCronStarter struct {
+	s *appServer
+}
+
+// Start 实现 cron.TaskStarter。
+func (cs *appCronStarter) Start(ctx context.Context, p cron.StartTaskParams) (taskID, sessionID string, err error) {
 	_ = ctx
-	sid, tid, err := startChatTask(startChatTaskOpts{
+	if cs.s == nil {
+		return "", "", fmt.Errorf("cron starter not initialized")
+	}
+	return cs.s.startChatTask(startChatTaskOpts{
 		AgentID:        p.AgentID,
 		Input:          p.Input,
 		SystemPrompt:   p.SystemPrompt,
@@ -347,8 +341,4 @@ func cronTaskStarter(ctx context.Context, p cron.StartTaskParams) (taskID, sessi
 		CostBudgetUSD:  p.CostBudgetUSD,
 		CaseID:         p.CaseID,
 	})
-	if err != nil {
-		return "", "", err
-	}
-	return tid, sid, nil
 }

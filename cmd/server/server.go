@@ -34,6 +34,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
+	"github.com/anmingwei/multi-agent-platform/internal/cron"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/memory"
@@ -57,35 +58,45 @@ import (
 // serveVersionedUI 以及既有的 registerXxxRoutes（都默认写 DefaultServeMux）兼容；
 // 后续若要支持多实例/测试隔离，可再引入 mux 字段。
 type appServer struct {
-	cfg             *config.Config
-	hub             *ws.Hub
-	toolRegistry    *tool.Registry
+	// Core / infrastructure
+	cfg  *config.Config
+	hub  *ws.Hub
+
+	// Persistence & memory
 	persist         runtime.Persistence
-	approvalHandler harness.ApprovalHandler
+	memDB           *harness.SqliteMemoryDB
 	memRecall       *harness.MemoryRecall
+	vectorStore     memory.VectorStore
+	embedProvider   llm.EmbeddingProvider
+
+	// Agent runtime
+	toolRegistry    *tool.Registry
+	approvalHandler harness.ApprovalHandler
 	agentBusAdapter runtime.AgentBus
 	checkpointMgr   *runtime.CheckpointManager
-	memDB           *harness.SqliteMemoryDB
+	routerClassifier llm.Provider
+	orch            *orchestrator.Orchestrator
+
+	// Cost & routing
 	costRepo        cost.CostRepository
 	modelRegistry   *llm.ModelRegistry
 	modelRouter     *llm.Router
 	routerProviders map[string]llm.Provider
-	caseService     *cases.Service
-	todoSvc         *todo.Service
-	skillRegistry   *skill.Registry
-	skillStore      *skill.Store
-	mcpManager      *mcp.Manager
-	orch            *orchestrator.Orchestrator
-	mockStore       llm.MockScriptStore
-	authAPI         *auth.AuthAPI
-	authStore       auth.APIKeyStore
-	vectorStore     memory.VectorStore
-	embedProvider   llm.EmbeddingProvider
-	routerClassifier llm.Provider
 
-	// runner 是 agent 运行入口。本任务（Task 7）暂未让所有 handler 改走 runner；
-	// Task 9 会把 handleSessionChat / handleRunCase / handleTasksRoot chat action /
-	// cron startChatTask 等逐步切到 runner.Run(spec)。这里先持有，供后续任务使用。
+	// Subsystems
+	caseService   *cases.Service
+	todoSvc       *todo.Service
+	skillRegistry *skill.Registry
+	skillStore    *skill.Store
+	cronService   *cron.Service
+	mcpManager    *mcp.Manager
+
+	// Dev / admin
+	mockStore llm.MockScriptStore
+	authAPI   *auth.AuthAPI
+	authStore auth.APIKeyStore
+
+	// Runner 入口（供 task / checkpoint / cron 等入口复用）
 	runner *AgentRunner
 }
 
@@ -116,8 +127,12 @@ func (s *appServer) deps() AgentDeps {
 }
 
 // newRunner 构造一个绑定当前 appServer 依赖的 AgentRunner。
+// 构造后缓存到 s.runner，避免每次重建。
 func (s *appServer) newRunner() *AgentRunner {
-	return NewAgentRunner(s.hub, s.deps())
+	if s.runner == nil {
+		s.runner = NewAgentRunner(s.hub, s.deps())
+	}
+	return s.runner
 }
 
 // registerRoutes 把全部 HTTP 路由挂到 http.DefaultServeMux。
@@ -156,9 +171,9 @@ func (s *appServer) registerRoutes() {
 	// 内部对 nil service 返回 503）。
 	registerTodoRoutes(http.DefaultServeMux, todoSvc)
 
-	// Phase 7-cron: Cron REST API。globalCronService 在 main() 中初始化；为 nil
+	// Phase 7-cron: Cron REST API。s.cronService 在 main() 中初始化；为 nil
 	// 时 RegisterCronAPI 直接 return（不注册任何端点）。
-	RegisterCronAPI(http.DefaultServeMux, globalCronService)
+	RegisterCronAPI(http.DefaultServeMux, s.cronService)
 
 	// /api/tasks/ —— 子资源路由（context_window / agent-messages / 单任务详情）。
 	// 注册在 /api/tasks 之前，便于更具体的子路径优先匹配。
@@ -212,7 +227,7 @@ func (s *appServer) registerRoutes() {
 			}
 			// POST /api/tasks —— chat / multi-agent / stream-demo action。
 			// 仍委托给 main() 中定义的 handleTasksRoot 闭包（捕获 main 局部依赖）。
-			handleTasksRoot(w, r)
+			s.handleTasksRoot(w, r)
 			return
 		}
 		http.Error(w, "task ID required", http.StatusNotFound)

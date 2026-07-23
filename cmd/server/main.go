@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -40,11 +39,6 @@ import (
 	"github.com/anmingwei/multi-agent-platform/web"
 	"github.com/google/uuid"
 )
-
-// handleTasksRoot 是 /api/tasks 的 POST 入口（chat / multi-agent / stream-demo
-// action）。以闭包形式在 main() 中赋值，捕获 main 局部依赖；声明为包级变量
-// 让 server.go 的 registerRoutes 也能引用同一个闭包。内部已改走 AgentRunner。
-var handleTasksRoot func(http.ResponseWriter, *http.Request)
 
 // cancelRegistry 把 task_id 映射到当前运行中 agent loop 的 context.CancelFunc。
 // WebSocket 控制消息可以查找并调用这些函数来取消任务。访问由 sync.Map 同步。
@@ -860,16 +854,20 @@ func main() {
 	// 仍构造 Service（可 CRUD/手动触发），但 Scheduler 为 nil——到点不会自动触发。
 	// 与 todo/skill 一样，EventBus 复用 hubAdapter，写入即广播到前端。
 	var cronSched *cron.Scheduler
+	var cronService *cron.Service
+	var cronStarter *appCronStarter
 	if db.DB != nil {
 		cronStore := cron.NewStore(&cronDBStoreAdapter{})
 		bus := &hubAdapter{hub: hub}
+		// appServer 在下方构造；这里先创建 starter，后续把 server 注入。
+		cronStarter = &appCronStarter{}
 		runner := cron.NewActionRunner(cron.ActionRunnerConfig{
 			Tools:          toolRegistry,
 			AllowedTools:   cfg.CronAllowedTools,
 			WebhookTimeout: time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
 			MaxResultChars: cfg.CronMaxResultChars,
 			Bus:            bus,
-			StartTask:      cronTaskStarter,
+			StartTask:      cronStarter.Start,
 			MessageWriter:  &cronSessionMsgWriter{},
 		})
 		executor := cron.NewExecutor(cronStore, runner, bus, cfg.CronMaxResultChars)
@@ -886,10 +884,10 @@ func main() {
 		} else {
 			log.Println("Cron subsystem: scheduler disabled (CRON_ENABLED=false)")
 		}
-		globalCronService = cron.NewService(cronStore, cronSched, execAdapter, bus)
-		cron.RegisterCronTools(toolRegistry, globalCronService)
+		cronService = cron.NewService(cronStore, cronSched, execAdapter, bus)
+		cron.RegisterCronTools(toolRegistry, cronService)
 		// Cron REST API 注册移至 appServer.registerRoutes（Phase 8-A），
-		// 通过 globalCronService 包级变量引用。
+		// 通过 appServer.cronService 字段引用。
 		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
 	} else {
 		log.Println("Cron subsystem: disabled (no database)")
@@ -928,399 +926,6 @@ func main() {
 	orch.SetAgentBus(agentBusAdapter)
 	orch.SetPersistence(persist)
 
-	// handleTasksRoot 是 /api/tasks 的 POST 入口闭包（chat / multi-agent /
-	// stream-demo action）。它捕获下方声明的 main() 局部依赖（cfg / toolRegistry /
-	// persist / hub / approvalHandler / memRecall / agentBusAdapter / checkpointMgr /
-	// costRepo / modelRegistry / modelRouter / routerProviders / caseService / todoSvc /
-	// orch / routerClassifier），赋值后被 server.go 的 registerRoutes 通过包级变量
-	// 引用。Phase 8-A Task 9 会把它改为 appServer 方法 + AgentRunner。
-	handleTasksRoot = func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// lookupCase 按 ID 解析用例：优先走 caseService（同时覆盖内置用例与
-		// SQLite 持久化的自定义用例），当 caseService 不可用时退回只含内置用例的
-		// cases.Get。自定义用例仅存于数据库，cases.Get 无法命中，会令请求丢失
-		// case 的 default_input / system_prompt / max_steps 兜底，最终以
-		// "input is required for chat action" 400 返回。
-		lookupCase := func(caseID string) *cases.Case {
-			if caseID == "" {
-				return nil
-			}
-			if caseService != nil {
-				c, err := caseService.Get(caseID)
-				if err != nil || c == nil {
-					return nil
-				}
-				return c
-			}
-			return cases.Get(caseID)
-		}
-
-		var req struct {
-			Action         string                   `json:"action"`
-			AgentID        string                   `json:"agent_id"`
-			Input          string                   `json:"input"`
-			SystemPrompt   string                   `json:"system_prompt"`
-			CaseType       string                   `json:"case_type"`
-			MaxSteps       int                      `json:"max_steps"`
-			TimeoutSeconds int                      `json:"timeout_seconds"`
-			SessionID      string                   `json:"session_id"`
-			Agents         []orchestrator.AgentSpec `json:"agents"`
-			// TaskContract 可选覆盖项 —— 大于 0 / 非空时覆盖默认
-			// （或 case 提供）的 contract，让前端能驱动 PolicyChain。
-			Scope         string   `json:"scope"`
-			AllowedTools  []string `json:"allowed_tools"`
-			TokenBudget   int      `json:"token_budget"`
-			CostBudgetUSD float64  `json:"cost_budget_usd"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// 解析预设 case：把 case 的默认 input / system prompt / max_steps /
-		// timeout 继承到请求字段上（contract 由 startChatTask 内部按 CaseID
-		// 重新构建，这里不再持有局部 contract 变量）。
-		caseID := r.URL.Query().Get("case")
-		if caseID != "" {
-			if c := lookupCase(caseID); c != nil {
-				// 请求未提供 input 时使用 case 的默认 input
-				if req.Input == "" {
-					req.Input = c.DefaultInput
-				}
-				// 请求未提供 system prompt 时使用 case 的 system prompt
-				if req.SystemPrompt == "" {
-					req.SystemPrompt = c.SystemPrompt
-				}
-				// Case 的 contract 自带 MaxSteps/TimeoutSeconds 默认值。
-				// 客户端未覆盖时从 case 继承，避免下方校验拒绝合法的
-				// case 请求。
-				if req.MaxSteps <= 0 {
-					req.MaxSteps = c.Contract.MaxSteps
-				}
-				if req.TimeoutSeconds <= 0 {
-					req.TimeoutSeconds = c.Contract.TimeoutSeconds
-				}
-			}
-		}
-
-		// 按服务端强制 contract 限制校验请求 input 长度。
-		if len(req.Input) > cfg.ContractLimits.MaxInputLength {
-			http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
-			return
-		}
-
-		if req.MaxSteps < 1 {
-			// 未显式指定 max_steps，也没有 case 上下文 —— 回退到服务端默认值。
-			req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
-		}
-		if req.MaxSteps > cfg.ContractLimits.MaxSteps {
-			req.MaxSteps = cfg.ContractLimits.MaxSteps
-		}
-		if req.TimeoutSeconds < 0 {
-			http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
-			return
-		}
-		if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
-			http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
-			return
-		}
-
-		switch req.Action {
-
-		case "multi-agent":
-			// req.MaxSteps 已在上方校验并钳制。
-			// 按服务端限制校验显式指定的子 agent 数量。
-			if len(req.Agents) > cfg.ContractLimits.MaxSubAgents {
-				http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
-				return
-			}
-
-			// Phase 7-H：multi-agent 改为 leader-agent 驱动。
-			// 1) 解析/生成 session 与 root task；2）启动一个 Leader Agent；
-			// 3) Leader 通过 dispatch_sub_agent 工具决定派哪些子 agent。
-			// 若请求体显式提供 agents，则把强制工作流写进 leader 的输入，
-			// 保证前端既有行为仍能运行这些 agent。
-
-			// 先生成 session/root task，便于后续子任务树定位。
-			sessionID, taskID, err := resolveSession(req.SessionID, req.Input, persist)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			if persist != nil {
-				persist.SaveTaskMeta(taskID, sessionID, "", true)
-				if sessionID != "" {
-					sess, err := db.QuerySessionByID(sessionID)
-					if err == nil && sess.RootTaskID == "" {
-						db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
-					}
-				}
-			}
-
-			hub.SendEvent(event.NewEvent("task_started", taskID, "leader", 0, map[string]any{
-				"task_id":    taskID,
-				"session_id": sessionID,
-				"input":      req.Input,
-				"mode":       "leader-driven",
-			}))
-
-			// 组装 leader 的输入：如果请求给出了显式 agents，强制要求使用 dispatch_sub_agent。
-			leaderInput := req.Input
-			if len(req.Agents) > 0 {
-				strategy := "parallel"
-				for i := range req.Agents {
-					if req.Agents[i].Name == "" {
-						req.Agents[i].Name = req.Agents[i].AgentID
-					}
-				}
-				workflowJSON, _ := json.Marshal(req.Agents)
-				leaderInput += fmt.Sprintf("\n\n[MANDATORY WORKFLOW] You must use the dispatch_sub_agent tool with strategy=%q and agents=%s to complete this task.", strategy, string(workflowJSON))
-			}
-
-			go func() {
-				// Leader 视情况调用 dispatch_sub_agent；若未调用，将作为普通 chat agent 返回答案。
-				leaderSystemPrompt := "You are the Leader agent. You coordinate sub-agents to solve complex tasks. Use the dispatch_sub_agent tool when you need to delegate work to multiple sub-agents. Each sub-agent runs independently; their results are returned as observations. If the task is simple enough, you may answer directly."
-				if cfg.LLMUseMock {
-					// mock 模式下简化 prompt，避免 mock provider 被过长文本干扰。
-					leaderSystemPrompt = "You are the Leader agent. Use dispatch_sub_agent when delegation is needed."
-				}
-				// Phase 8-A：leader-driven multi-agent 改走 AgentRunner.Run(spec)。
-				// IsRoot=true 让 runner 注入 leader 角色与 dispatch_sub_agent 工具。
-				runner := NewAgentRunner(hub, makeRunnerDeps(cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, nil, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
-				runner.Run(context.Background(), AgentRunSpec{
-					TaskID:       taskID,
-					AgentID:      "leader",
-					SystemPrompt: leaderSystemPrompt,
-					UserInput:    leaderInput,
-					SessionID:    sessionID,
-					IsRoot:       true,
-					Contract:     harness.DefaultContract(leaderInput),
-				})
-				removeCancel(taskID, "leader")
-				removeEngine(taskID, "leader")
-				db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
-				log.Printf("[Multi-Agent] Leader task %s completed", taskID)
-			}()
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"session_id":  sessionID,
-				"task_id":     taskID,
-				"agent_count": 1,
-				"agent_ids":   []string{"leader"},
-				"status":      "started",
-			})
-		case "stream-demo":
-			sessionID, taskID, err := resolveSession(req.SessionID, "", persist)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			go streamTask(hub, taskID)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"session_id": sessionID,
-				"task_id":    taskID,
-			})
-
-		case "chat":
-			// 检查是否指定了预设 case —— 在校验请求前加载其默认 input 与
-			// system prompt。contract 由 startChatTask 内部按 CaseID 重新构建，
-			// 这里只继承 input / system prompt / max_steps / timeout 到请求字段。
-			// req.MaxSteps 已在上方校验并钳制。
-			caseID := r.URL.Query().Get("case")
-			if caseID != "" {
-				if c := lookupCase(caseID); c != nil {
-					// 请求未提供 input 时使用 case 的默认 input
-					if req.Input == "" {
-						req.Input = c.DefaultInput
-					}
-					// 请求未提供 system prompt 时使用 case 的 system prompt
-					if req.SystemPrompt == "" {
-						req.SystemPrompt = c.SystemPrompt
-					}
-					// 客户端未覆盖时继承 case 级别的 step/timeout 默认值，
-					// 否则下方"步数必须为正"的校验会拒绝 case 运行。
-					if req.MaxSteps <= 0 {
-						req.MaxSteps = c.Contract.MaxSteps
-					}
-					if req.TimeoutSeconds <= 0 {
-						req.TimeoutSeconds = c.Contract.TimeoutSeconds
-					}
-				}
-			}
-
-			if req.Input == "" {
-
-				http.Error(w, "input is required for chat action", http.StatusBadRequest)
-				return
-			}
-
-			sessionID, taskID, err := startChatTask(startChatTaskOpts{
-				AgentID:        req.AgentID,
-				Input:          req.Input,
-				SystemPrompt:   req.SystemPrompt,
-				SessionID:      req.SessionID,
-				MaxSteps:       req.MaxSteps,
-				TimeoutSeconds: req.TimeoutSeconds,
-				Scope:          req.Scope,
-				AllowedTools:   req.AllowedTools,
-				TokenBudget:    req.TokenBudget,
-				CostBudgetUSD:  req.CostBudgetUSD,
-				CaseID:         caseID,
-			})
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"session_id": sessionID,
-				"task_id":    taskID,
-				"agent_id":   func() string {
-					if req.AgentID != "" {
-						return req.AgentID
-					}
-					return "agent_default"
-				}(),
-				"action": "chat",
-			})
-
-		default:
-			http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
-		}
-	}
-
-	// startChatTask 在 handleTasksRoot 之外以闭包形式定义，捕获 main() 局部
-	// 依赖（cfg / toolRegistry / persist / hub / approvalHandler / memRecall /
-	// agentBusAdapter / checkpointMgr / costRepo / modelRegistry / modelRouter /
-	// routerProviders / caseService / todoSvc / tracer），让 /api/tasks 的 chat
-	// action 与 cron 的 start_task action 共用同一条任务启动链路。Phase 8-A
-	// 起内部改走 AgentRunner.Run(spec)（不再调已删除的 20+ 参数 runAgentLoop）。
-	// 定义放在 handleTasksRoot 之后，确保引用的所有局部变量都已声明。
-	startChatTask = func(opts startChatTaskOpts) (sessionID, taskID string, err error) {
-		if opts.Input == "" {
-			return "", "", errors.New("input is required for chat action")
-		}
-
-		agentID := opts.AgentID
-		if agentID == "" {
-			agentID = "agent_default"
-		}
-
-		systemPrompt := opts.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = "You are a helpful AI assistant with access to tools. " +
-				"When you need to run commands, read files, or write files, use the available tools. " +
-				"Always explain your reasoning before using tools. " +
-				"After using tools, analyze the results and continue until the task is complete."
-		}
-
-		// lookupCase 按 ID 解析用例：优先走 caseService（同时覆盖内置用例与
-		// SQLite 持久化的自定义用例），当 caseService 不可用时退回只含内置用例的
-		// cases.Get。逻辑与 handleTasksRoot 中的 lookupCase 一致。
-		lookupCase := func(caseID string) *cases.Case {
-			if caseID == "" {
-				return nil
-			}
-			if caseService != nil {
-				c, err := caseService.Get(caseID)
-				if err != nil || c == nil {
-					return nil
-				}
-				return c
-			}
-			return cases.Get(caseID)
-		}
-
-		var contract harness.TaskContract
-		if opts.CaseID != "" {
-			if c := lookupCase(opts.CaseID); c != nil {
-				contract = c.Contract
-				if opts.SystemPrompt == "" {
-					systemPrompt = c.SystemPrompt
-				}
-				if opts.MaxSteps <= 0 {
-					opts.MaxSteps = c.Contract.MaxSteps
-				}
-				if opts.TimeoutSeconds <= 0 {
-					opts.TimeoutSeconds = c.Contract.TimeoutSeconds
-				}
-			}
-		}
-
-		if contract.Goal == "" {
-			contract = harness.DefaultContract(opts.Input)
-		}
-		if opts.MaxSteps > 0 {
-			contract.MaxSteps = opts.MaxSteps
-		}
-		if opts.TimeoutSeconds > 0 {
-			contract.TimeoutSeconds = opts.TimeoutSeconds
-		}
-		if opts.Scope != "" {
-			if !isAllowedScope(opts.Scope, cfg.ContractLimits.Scopes) {
-				return "", "", fmt.Errorf("scope %q is not allowed", opts.Scope)
-			}
-			contract.Scope = opts.Scope
-		}
-		if len(opts.AllowedTools) > 0 {
-			contract.AllowedTools = opts.AllowedTools
-		} else if tools := agentAllowedTools(agentID); len(tools) > 0 {
-			contract.AllowedTools = tools
-		}
-		if opts.TokenBudget > 0 {
-			contract.TokenBudget = opts.TokenBudget
-		}
-		if opts.CostBudgetUSD > 0 {
-			contract.CostBudgetUSD = opts.CostBudgetUSD
-		}
-
-		// 复用或新建 session。
-		sid, tid, err := resolveSession(opts.SessionID, opts.Input, persist)
-		if err != nil {
-			return "", "", fmt.Errorf("resolve session: %w", err)
-		}
-
-		// Working Memory + project rules。
-		workingMemory := ""
-		if memRecall != nil {
-			if wm, err := memRecall.BuildWorkingMemory("default", sid, opts.Input, 3); err == nil {
-				workingMemory = memRecall.FormatForSystemPrompt(wm)
-			}
-		}
-		workingMemory += projectRulesPrompt(sid)
-
-		// Phase 7-C: root trace context。
-		rootTraceCtx := tracer.StartRoot(tid, "task")
-		traceRegistry.Store(tid, rootTraceCtx)
-
-		// 启动 Agent Loop（Phase 8-A：改走 AgentRunner.Run(spec)，不再调
-		// 已删除的 20+ 参数 runAgentLoop 包级函数）。
-		runner := NewAgentRunner(hub, makeRunnerDeps(cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, nil, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
-		spec := AgentRunSpec{
-			TaskID:        tid,
-			AgentID:       agentID,
-			SystemPrompt:  systemPrompt,
-			UserInput:     opts.Input,
-			SessionID:     sid,
-			IsRoot:        true,
-			Contract:      contract,
-			CaseID:        opts.CaseID,
-			WorkingMemory: workingMemory,
-			RootTraceCtx:  rootTraceCtx,
-		}
-		go runner.Run(context.Background(), spec)
-
-		return sid, tid, nil
-	}
-
 	// 路由注册：Phase 8-A 把全部 http.HandleFunc 收敛到 appServer.registerRoutes。
 	server := &appServer{
 		cfg:              cfg,
@@ -1340,6 +945,7 @@ func main() {
 		todoSvc:          todoSvc,
 		skillRegistry:    skillRegistry,
 		skillStore:       skillStore,
+		cronService:      cronService,
 		mcpManager:       mcpManager,
 		orch:             orch,
 		mockStore:        mockStore,
@@ -1349,43 +955,14 @@ func main() {
 		embedProvider:    embedProvider,
 		routerClassifier: routerClassifier,
 	}
+	// 把 appServer 回注给 cron starter，让 cron start_task action 复用 chat 链路。
+	if server.cronService != nil && cronStarter != nil {
+		cronStarter.s = server
+	}
 	server.registerRoutes()
 
-	// 从嵌入式文件系统提供 Vue SPA（生产模式）。
-	// 开发模式下用户可运行 `cd web && npm run dev` 使用 Vite 的 dev server
-	// 与 HMR。构建 Go binary 时使用嵌入式 dist/。
-	//
-	// Phase UI-v2: 同时嵌入 v1 (web/dist) 与 v2 (web/v2/dist)，通过 URL 路径分发：
-	//   - 根路径 "/" 永远服务最新默认版本（当前为 v2）。
-	//   - "/ui/v1/" 与 "/ui/v2/" 分别服务对应历史版本。
-	//   未来新增版本时，在 web/embed.go 的 UIVersionsRegistry 注册即可。
-	serveVersionedUI()
-	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
-
-	log.Printf("========================================")
-	log.Printf("Multi-Agent Platform %s", version.Version)
-	log.Printf("========================================")
-	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
-	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
-	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
-	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
-	log.Printf("LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
-	log.Printf("Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
-	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
-	log.Printf("========================================")
-
-	// 用 auth middleware 包装默认 mux。REQUIRE_AUTH 为 true 时，它保护
-	// 改状态的路由和敏感读 endpoint，而公开路由 (/healthz、/metrics、
-	// /health) 仍然开放。REQUIRE_AUTH 为 false 时，所有路由都放行，
-	// 但会注入 seed user ID。
-	handler := auth.NewAuthMiddleware(authStore, authAPI.SeedUserID(), requireAuth, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
-
-	if err := http.ListenAndServe(":"+cfg.ServerPort, handler); err != nil {
-		log.Fatal(err)
-	}
 }
-
-
+	// 从嵌入式文件系统提供 Vue SPA（生产模式）。
 // streamTask 发射一组演示事件序列，模拟多步 agent 任务。
 func streamTask(hub *ws.Hub, taskID string) {
 	agentID := "agent_test_001"
