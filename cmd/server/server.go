@@ -467,14 +467,14 @@ func (s *appServer) registerRoutes() {
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
 			}
-			handleRegisterTool(w, r, toolRegistry)
+			s.handleRegisterTool(w, r)
 		case http.MethodGet:
 			handleListTools(w, r, toolRegistry)
 		case http.MethodDelete:
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
 			}
-			handleDeleteTool(w, r, toolRegistry)
+			s.handleDeleteTool(w, r)
 		default:
 			http.Error(w, "GET, POST, or DELETE only", http.StatusMethodNotAllowed)
 		}

@@ -18,7 +18,8 @@ var toolCounter uint64
 
 // handleRegisterTool 处理 POST /api/tools —— 注册一个新的动态 tool。
 // 注册后该 tool 立即对 agent 可用。
-func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
+func (s *appServer) handleRegisterTool(w http.ResponseWriter, r *http.Request) {
+	toolRegistry := s.toolRegistry
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -54,21 +55,15 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		req.Name = fmt.Sprintf("dynamic_tool_%03d", counter)
 	}
 
-	// 检查 name 冲突
-	for _, t := range toolRegistry.List() {
-		if t.Name() == req.Name {
-			http.Error(w, fmt.Sprintf("tool with name '%s' already exists", req.Name), http.StatusConflict)
-			return
-		}
-	}
-
-	// 校验类型相关字段
+	// 创建并配置 DynamicTool，用于取得 CanonicalName 及后续注册。
+	dt := tool.NewDynamicTool(req.Name, req.Description, req.Parameters, tool.DynamicToolType(req.Type))
 	switch req.Type {
 	case "shell":
 		if req.Command == "" {
 			http.Error(w, "command is required for shell-type tools", http.StatusBadRequest)
 			return
 		}
+		dt.SetCommand(req.Command)
 	case "http":
 		if req.URL == "" {
 			http.Error(w, "url is required for http-type tools", http.StatusBadRequest)
@@ -77,11 +72,19 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		if req.Method == "" {
 			req.Method = "GET"
 		}
+		dt.SetHTTP(req.URL, req.Method)
 	case "inline":
 		if req.Code == "" {
 			http.Error(w, "code is required for inline-type tools", http.StatusBadRequest)
 			return
 		}
+		dt.SetCode(req.Code)
+	}
+
+	// 检查 CanonicalName 冲突：同一 namespace/name@version 不能重复注册。
+	if _, exists := toolRegistry.Get(dt.CanonicalName()); exists {
+		http.Error(w, fmt.Sprintf("tool with canonical name '%s' already exists", dt.CanonicalName()), http.StatusConflict)
+		return
 	}
 
 	// 未提供 description 时使用默认值
@@ -97,22 +100,32 @@ func handleRegisterTool(w http.ResponseWriter, r *http.Request, toolRegistry *to
 		}
 	}
 
-	// 创建并配置 DynamicTool
-	dt := tool.NewDynamicTool(req.Name, req.Description, req.Parameters, tool.DynamicToolType(req.Type))
-	switch req.Type {
-	case "shell":
-		dt.SetCommand(req.Command)
-	case "http":
-		dt.SetHTTP(req.URL, req.Method)
-	case "inline":
-		dt.SetCode(req.Code)
-	}
-
 	// 注册到全局 tool registry（立即对 agent 可用）
 	toolRegistry.Register(dt)
 
-	// 持久化到 SQLite 的 tools 表
-	if err := db.InsertTool(req.Name, req.Description, req.Parameters, true); err != nil {
+	// 构造 execution_config_json：含 type 与对应执行字段
+	execConfig := map[string]any{"type": req.Type}
+	switch req.Type {
+	case "shell":
+		execConfig["command"] = req.Command
+	case "http":
+		execConfig["url"] = req.URL
+		execConfig["method"] = req.Method
+	case "inline":
+		execConfig["code"] = req.Code
+	}
+
+	// 持久化到 SQLite 的 v27 tools 表。
+	if err := db.InsertToolV2(db.ToolRecord{
+		Namespace:       "",
+		Name:            req.Name,
+		Version:         "1.0.0",
+		Source:          "local_db",
+		Description:     req.Description,
+		Schema:          req.Parameters,
+		Enabled:         true,
+		ExecutionConfig: execConfig,
+	}); err != nil {
 		// 持久化失败时回滚注册
 		toolRegistry.Unregister(req.Name)
 		http.Error(w, fmt.Sprintf("failed to persist tool: %v", err), http.StatusInternalServerError)
@@ -213,7 +226,8 @@ func handleListTools(w http.ResponseWriter, r *http.Request, toolRegistry *tool.
 
 // handleDeleteTool 处理 DELETE /api/tools?name=xxx —— 注销一个动态 tool。
 // 内置 tool（run_shell、write_file、read_file）受保护，不能删除。
-func handleDeleteTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool.Registry) {
+func (s *appServer) handleDeleteTool(w http.ResponseWriter, r *http.Request) {
+	toolRegistry := s.toolRegistry
 	if r.Method != http.MethodDelete {
 		http.Error(w, "DELETE only", http.StatusMethodNotAllowed)
 		return
@@ -237,8 +251,13 @@ func handleDeleteTool(w http.ResponseWriter, r *http.Request, toolRegistry *tool
 		return
 	}
 
-	// 从 SQLite tools 表中删除
-	if err := db.DeleteTool(name); err != nil {
+	// 从 SQLite v27 tools 表中删除（按 namespace/name/version 删除，未提供则使用空 namespace 与默认版本）
+	namespace := r.URL.Query().Get("namespace")
+	version := r.URL.Query().Get("version")
+	if version == "" {
+		version = "1.0.0"
+	}
+	if err := db.DeleteToolV2(namespace, name, version); err != nil {
 		http.Error(w, fmt.Sprintf("failed to delete tool from database: %v", err), http.StatusInternalServerError)
 		return
 	}
