@@ -233,3 +233,47 @@
 
 **涉及文件**
 `pkg/db/database.go`, `pkg/db/migrate.go`, `pkg/db/persistence.go`, `internal/runtime/persistence.go`, `internal/runtime/engine.go`, `cmd/server/api.go`, `cmd/server/main.go`, `web/src/types/events.ts`, `web/src/composables/useTaskStore.ts`, `web/src/components/MetricsPanel.vue`, `web/src/components/TurnItem.vue`, `web/src/components/AgentTree.vue`
+
+---
+
+## 2026-07-23 real-llm-smoke 收尾 + 产物隔离 + workspace 三层兜底（v0.12.1 Alpha）
+
+### 背景
+`extend-task-cases`（v0.11.3）把内置 Case 矩阵扩到 21 个并完成 mock 回归 21/21，但真实 LLM 全量冒烟（`scripts/real-llm-smoke.sh`）尚未跑通。本轮收尾第 9 部分：跑全量 real-LLM 冒烟、分析失败项、并发现/修复一个产物污染根目录的缺陷。
+
+### 问题 1：4 个 timeout 假阳性 FAIL
+首跑 Part B 21 case 出现 4 个硬 FAIL（todo-driven / multi-agent / multi-agent-sequential / multi-agent-review），全部是 `180s 轮询超时`。查 server log 证实 4 个任务实际都到达终态，只是耗时 200-350s 超过 180s 预算——根因是 Qwen3.5-397B 是 reasoning 模型，每步 15-30s，MaxSteps=10-14 累计耗时超预算。非平台 bug。
+
+### 改动 1：终态宽限复检
+- `scripts/real-llm-smoke.sh` `b_run_case` 加 180s+200s 宽限复检逻辑：180s 超时后再宽限 200s 复检，命中终态降级 slow-LLM 软标记 SKIP，仍超时才 FAIL（疑似真挂起）。
+- known-limitation（L5 leader-dispatch/fault-tolerance）不走宽限，直接按 KL 判定。
+
+### 问题 2：真实 LLM 产物污染仓库根目录
+跑完发现仓库根目录冒出 `verse_1.txt`~`verse_10.txt`、`research/`、`skill-demo/`、`task-scheduler/` 等未跟踪文件，且 `README.md` 被 LLM 覆盖成 "Tiny URL Shortener"。
+根因链路：`/api/run-case` 不传 `session_id` → runner 无 `workspace_dir` 可解析 → `write_file` 相对路径回退到 server 进程 CWD（项目根）→ case 副产物直接落仓库根。`cases.go` 里 21 个 case 的 `DefaultInput` 都用相对路径（`verse_1.txt`、`research/ai-agents-2026.md` 等），mock 回归因 `LLM_USE_MOCK` 不真落盘未暴露，real-LLM 才显形。
+
+### 改动 2：产物隔离 + workspace 三层兜底（方案 A + B）
+- **方案 A（脚本 CWD 隔离）**：`real-llm-smoke.sh` 启动 server 前切到独立 `SMOKE_CWD`（默认 `workspace/smoke-server/run-<ts>-<pid>/`，在 gitignore 内），`DB_PATH`/`ENV_FILE` 用绝对路径；产物不自动清理（便于对比），脚本结尾打印路径提醒；`SMOKE_FRESH=1` 启动前清空默认目录。
+- **`internal/config/config.go`**：`config.Load` 支持 `ENV_FILE` 环境变量（绝对路径加载 .env），未设回退 `CWD/.env`，让 server 在隔离 CWD 启动时仍能加载项目根 .env。
+- **方案 B（后端三层 workspace 兜底）**：
+  - L1 `cmd/server/api.go` `handleRunCase`：无 `session_id` 自动建匿名 session + workspace。
+  - L2 `cmd/server/persistence.go` `resolveSession`：新建 session 同步绑定默认 `<cwd>/workspace/session-<id>/`，覆盖 `/api/tasks` chat / leader / cron start_task 等所有无 session 入口。
+  - L3 `cmd/server/runner.go` `runAgentLoopWithTurn`：session/project 解析后 `workspaceDir` 仍空时兜底到 `<cwd>/workspace/`，记日志提示上游应绑定 session workspace。
+
+### real-LLM 全量冒烟结果（run3）
+- **PASS=143 / SKIP=20 / FAIL=0**，零平台 bug。
+- 20 个 SKIP 全是 real-LLM 行为偏差软标记：15 个是 LLM 不可控现象（慢/max_steps/工具选择/final 空），5 个映射 2 个 7-H2 已知遗留（`policy-enforcement` PolicyGate 未触发拦截；`multi-agent/sequential/review` leader 未调 `dispatch_sub_agent` 编排事件缺失）。
+- 静态编排（parallel/sequential/DAG）硬断言全 PASS；动态 leader-dispatch 在 real-LLM 下不可靠——属 7-H2 已知遗留（memory `multi-agent-dual-entry-placeholder-bug`）。
+- 服务日志：deepseek-v4-pro 403 自动 fallback Qwen3.5-397B（正常）；1 次 context length 400 是 context-compression case 故意压测触发的预期边界。
+
+### 验证
+- `SKIP_PARTB=1 SMOKE_FRESH=1 bash scripts/real-llm-smoke.sh` → PASS=22/FAIL=0，根目录零污染，hello.txt 落 `workspace/smoke-server/run-*/workspace/session-*/`。
+- `go build ./cmd/server` ✅；`go test ./cmd/server/` ✅；`go test ./internal/config/` ✅。
+- 合入 main：`45fca1c Merge branch 'feat/real-llm-smoke-grace'`（--no-ff，4 commit）。
+
+### 涉及文件
+`scripts/real-llm-smoke.sh`（+458：宽限复检 + CWD 隔离 + 全量 21 case 评测）
+`internal/config/config.go`（ENV_FILE 绝对路径）
+`cmd/server/api.go`（handleRunCase 匿名 session 兜底）
+`cmd/server/persistence.go`（resolveSession 绑 workspace）
+`cmd/server/runner.go`（runner L3 兜底 `<cwd>/workspace/`）
