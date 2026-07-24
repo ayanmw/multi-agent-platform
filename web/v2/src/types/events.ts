@@ -68,6 +68,9 @@ export type EventType =
   | 'cron_execution_skipped'
   | 'cron_missed'
   | 'cron_notification'
+  // web_research tool events
+  | 'web_research_summarize_started'
+  | 'web_research_summarize_completed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

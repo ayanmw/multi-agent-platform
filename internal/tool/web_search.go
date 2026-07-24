@@ -20,14 +20,15 @@ import (
 // Provider 标识符（配合 WEBSEARCH_PROVIDER 使用）：
 //
 //	"exa", "parallel", "bing", "google", "tavily", "brave",
+//	"baidu", "sogou", "bing_cn_html",
 //	"kimi_search", "glm_search", "duckduckgo"
 //
 // WEBSEARCH_PROVIDER 为空时的 provider 优先级：
 //
-//	brave -> bing -> google -> tavily -> parallel -> exa -> duckduckgo
+//	brave -> bing -> google -> tavily -> parallel -> exa
+//	-> baidu_mobile -> sogou -> bing_cn_html -> duckduckgo
 //
-// 除 DuckDuckGo 外的所有 provider 默认关闭；通过 WEBSEARCH_ENABLE_* 启用
-// 并提供对应的 API key / 凭证。
+// 国内 provider（baidu、sogou、bing_cn_html）默认关闭；DuckDuckGo 默认关闭。
 type WebSearchConfig struct {
 	Provider string // 显式覆盖；空表示自动选择
 
@@ -60,12 +61,17 @@ type WebSearchConfig struct {
 	BraveAPIKey   string
 	BraveEndpoint string
 
+	// 已配置国内 HTML 搜索 provider。
+	EnableBaidu       bool
+	EnableSogou       bool
+	EnableBingCnHTML  bool
+
 	// 占位 provider（公开端点尚未知）
 	EnableKimiSearch bool
 	EnableGlmSearch  bool
 
-	// DisableDDG 关闭 DuckDuckGo 回退。适用于必须禁用外部搜索、
-	// 或仅允许通过已配置 provider 进行搜索的环境。
+	// DisableDDG 关闭 DuckDuckGo 回退。默认 true。
+	// 适用于必须禁用外部搜索、或仅允许通过已配置 provider 进行搜索的环境。
 	DisableDDG bool
 
 	// HTTPClient 用于 provider 请求。nil 表示使用 http.DefaultClient。
@@ -124,7 +130,7 @@ func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 	return NewBuiltinTool(
 		"web_search",
 		"core",
-		"Search the web using Bing, Google, Tavily, Brave, Exa, Parallel, or DuckDuckGo (no API key). Returns a text summary of search results. Use for recent/current information beyond the model's knowledge cutoff.",
+		"Search the web using Brave, Bing, Google, Tavily, Exa, Parallel, Baidu, Sogou, Bing China, or DuckDuckGo (no API key). Returns a text summary of search results. Use for recent/current information beyond the model's knowledge cutoff.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -201,12 +207,20 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 		}, nil
 	}
 
+	// 调用 provider 获取结果。
 	var text string
 	var err error
 	if provider == "" {
-		// 未配置任何 API provider —— 直接走 DuckDuckGo。
-		text, err = callDuckDuckGo(ctx, cfg, query, numResults)
-		provider = "duckduckgo"
+		// 未配置任何 provider——默认尝试国内链,但若 DuckDuckGo 被显式启用
+		// (DisableDDG=false)则优先走 DuckDuckGo,保持旧路径向后兼容。
+		if !cfg.DisableDDG {
+			text, err = callDuckDuckGo(ctx, cfg, query, numResults)
+			provider = "duckduckgo"
+		}
+		if cfg.DisableDDG || err != nil {
+			text, err = fallbackChinaProvider(ctx, cfg, query, numResults, "")
+			provider = "baidu"
+		}
 	} else {
 		switch provider {
 		case "parallel":
@@ -227,6 +241,12 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 			text, err = callTavily(ctx, cfg, query, numResults)
 		case "brave":
 			text, err = callBrave(ctx, cfg, query, numResults)
+		case "baidu":
+			text, err = callBaiduMobile(ctx, cfg, query, numResults)
+		case "sogou":
+			text, err = callSogou(ctx, cfg, query, numResults)
+		case "bing_cn_html":
+			text, err = callBingCnHTML(ctx, cfg, query, numResults)
 		case "kimi_search", "glm_search":
 			text, err = "", fmt.Errorf("provider %s is not yet implemented", provider)
 		default:
@@ -234,15 +254,10 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 		}
 	}
 
-	// 若所选 provider 失败，且回退未被禁用、该 provider 是真实 API 时，
-	// 尝试用 DuckDuckGo 作为稳健的回退。
-	if err != nil && provider != "duckduckgo" && !cfg.DisableDDG && !isPlaceholderProvider(provider) {
-		dgText, dgErr := callDuckDuckGo(ctx, cfg, query, numResults)
-		if dgErr == nil {
-			provider = "duckduckgo"
-			text = dgText
-			err = nil
-		}
+	// 若所选 provider 失败，按国内链回退（baidu -> sogou -> bing_cn_html），
+	// 最后才是 DuckDuckGo（未被禁用时）。
+	if err != nil && provider != "duckduckgo" && !isPlaceholderProvider(provider) {
+		text, err = fallbackChinaProvider(ctx, cfg, query, numResults, provider)
 	}
 
 	if err != nil {
@@ -260,8 +275,9 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 }
 
 // selectWebSearchProvider 以确定性方式挑选已配置的 provider。
-// 优先级顺序：brave -> bing -> google -> tavily -> parallel -> exa。
-// 当没有任何 provider 被配置时返回 ""，使调用方转而使用 DuckDuckGo。
+// API provider 优先级：brave -> bing -> google -> tavily -> parallel -> exa。
+// 国内无 key provider 优先级：baidu -> sogou -> bing_cn_html。
+// 当没有任何 provider 被配置时返回 "", 使调用方转而使用 DuckDuckGo(未被禁用时)。
 func selectWebSearchProvider(cfg WebSearchConfig) string {
 	if cfg.Provider != "" {
 		return cfg.Provider
@@ -284,6 +300,15 @@ func selectWebSearchProvider(cfg WebSearchConfig) string {
 	if cfg.EnableExa || cfg.ExaAPIKey != "" {
 		return "exa"
 	}
+	if cfg.EnableBaidu {
+		return "baidu"
+	}
+	if cfg.EnableSogou {
+		return "sogou"
+	}
+	if cfg.EnableBingCnHTML {
+		return "bing_cn_html"
+	}
 	return ""
 }
 
@@ -294,6 +319,30 @@ func isPlaceholderProvider(provider string) bool {
 		return true
 	}
 	return false
+}
+
+// fallbackChinaProvider 在 API provider 失败时按国内链回退,最后尝试 DuckDuckGo。
+func fallbackChinaProvider(ctx context.Context, cfg WebSearchConfig, query string, numResults int, current string) (string, error) {
+	order := []struct {
+		name string
+		call func(context.Context, WebSearchConfig, string, int) (string, error)
+	}{
+		{"baidu", callBaiduMobile},
+		{"sogou", callSogou},
+		{"bing_cn_html", callBingCnHTML},
+	}
+	for _, p := range order {
+		if p.name == current {
+			continue
+		}
+		if text, err := p.call(ctx, cfg, query, numResults); err == nil && text != "" {
+			return text, nil
+		}
+	}
+	if !cfg.DisableDDG {
+		return callDuckDuckGo(ctx, cfg, query, numResults)
+	}
+	return "", fmt.Errorf("all search providers failed (including fallbacks)")
 }
 
 // clampInt 将 v 限制在 [min, max] 区间内。

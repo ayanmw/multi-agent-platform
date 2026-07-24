@@ -53,6 +53,11 @@ const (
 	EventWorktreeRemoved       = "worktree_removed"       // worktree 被 remove 删除
 	EventWorktreeExitBlocked   = "worktree_exit_blocked"  // exit{remove} 因未提交变更被护栏阻塞
 	EventWorktreeOrphanRemoved = "worktree_orphan_removed" // 启动孤儿扫描清理 crash 残留
+
+	// web_research 工具事件常量。当 web_research 内部调用 LLM 做摘要时,
+	// 通过事件总线广播开始与完成状态,保持白盒可观测。
+	EventWebResearchSummarizeStarted  = "web_research_summarize_started"
+	EventWebResearchSummarizeCompleted = "web_research_summarize_completed"
 )
 
 // Event 表示通过 WebSocket 发送的结构化事件

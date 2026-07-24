@@ -14,9 +14,8 @@ func TestWebSearchFallbackWhenNoProvider(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r)
 
-	// 在没有任何 provider/API key 配置时，web_search 应回退到 DuckDuckGo。
-	// 我们通过工具的 HTTPClient 字段注入自定义 client 拦截 HTTP，以模拟
-	// DuckDuckGo HTML 响应。
+	// 在没有任何 provider/API key 配置且 DDG 未禁用时,web_search 应回退到 DuckDuckGo。
+	// 注入的 HTTPClient 通过 rewriteHostTransport 把所有 HTTP(S) 调用重定向到 srv。
 	var requestedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.Path
@@ -32,12 +31,9 @@ func TestWebSearchFallbackWhenNoProvider(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 用指向测试服务器的配置版本替换全局注册的占位工具。
-	// DuckDuckGo 的 URL 是硬编码的，但注入的 HTTPClient 通过下面的
-	// transport 改写，把所有 HTTP(S) 调用重定向到 srv。
 	client := srv.Client()
 	client.Transport = &rewriteHostTransport{base: client.Transport, host: srv.URL}
-	cfg := WebSearchConfig{HTTPClient: client, Timeout: 5 * time.Second}
+	cfg := WebSearchConfig{HTTPClient: client, Timeout: 5 * time.Second, DisableDDG: false}
 	r.Unregister("core/web_search")
 	r.Register(NewWebSearchTool(cfg))
 
