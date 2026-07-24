@@ -587,7 +587,8 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		}
 	}
 
-	// Phase 7 TODO: 把当前 session 的 active TODO 列表注入 system prompt。
+	// Phase worktree / Phase 7: 把当前 session 的 active TODO 列表（若已配置）注入 system prompt。
+	// ActiveTodos 由 cmd/server/runner.go 在构造 EngineConfig 时从 todoSvc 加载并格式化；
 	// 空字符串表示无 active todo，不追加任何内容，避免污染 prompt。
 	if cfg.ActiveTodos != "" {
 		systemPrompt += "\n\n" + cfg.ActiveTodos + "\n"

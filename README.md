@@ -1,8 +1,8 @@
 # 多 Agent 平台
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
-> **当前版本：v0.12.1 Alpha**
-> **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 已落地，UI-v2 与 7-H2 编排闭环进行中**
+> **当前版本：v0.13.0 Alpha**
+> **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 与 UI-v2、7-H2 编排闭环已落地**
 
 ## 快速开始
 
@@ -295,7 +295,7 @@ examples/mcp/              # MCP Server 示例（time / calc）
 
 ## 当前状态
 
-**v0.11.3 Alpha** — Phases 0–6 已完成，Skill / TODO / Cron 子系统与 21 个 L1-L5 Case 矩阵已落地，UI-v2 控制室与 multi-agent 编排闭环进行中。
+**v0.13.0 Alpha** — Phases 0–6 已完成，Skill / TODO / Cron 子系统、21 个 L1–L5 Case 矩阵、UI-v2 控制室与 multi-agent 编排闭环均已落地。
 
 | 功能 | 状态 | 说明 |
 |------|------|------|

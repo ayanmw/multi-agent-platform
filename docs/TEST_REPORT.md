@@ -44,7 +44,7 @@ task_completed   (21 条)
 ### 结论
 - ✅ 核心事件相对顺序符合设计，字段完整（task_id/agent_id/session_id/input/output）。
 - ✅ tool_call 三联事件（started→output→complete）顺序正确。
-- ❌ **cancel/pause/resume 控制消息未实现**：`cmd/server/main.go:84` 明确 `TODO: Phase 4+ — implement actual engine control via context cancellation`，controlHandler 只处理 approve/deny，三种控制 action 被静默忽略。前端无法中止运行中的任务。
+- ✅ **cancel/pause/resume 控制消息已实现**：`cmd/server/main.go` 已维护 `cancelRegistry`（task_id → CancelFunc）与 `engineRegistry`（task_id → *Engine），controlHandler 对 `cancel` 调用 context cancel、`pause`/`resume` 调用 `Engine.Pause`/`Engine.Resume`。WS 控制消息可精确到子 agent（key 为 `taskID/agentID`）。
 - ⚠️ 设计序列未列出的扩展事件：`agent_ready`（engine.go:499）、`agent_status`（engine.go:623，携带 usage）、`session_status`（main.go:937）——属 Phase 6-D 增强，非 bug，建议补文档。
 - ⚠️ "最终答案 observation" 在 step_complete 之后发送（engine.go:680），与设计序列"observation → step_complete"相反，属合法变体。
 
@@ -151,7 +151,7 @@ Bearer 校验链路、key 生命周期（创建/列出/吊销）、双保险吊�
 | S3 | 子任务记录因 SQLITE_BUSY 丢失（未设 busy_timeout/WAL） | C | database.go |
 | S4 | step ID 碰撞，多 agent 并行时部分 steps 丢失 | C | persistence.go:36 |
 | S5 | root task agent_ids 永远空（SaveTask 主键冲突） | C | persistence.go:80 |
-| S6 | cancel/pause/resume 控制消息未实现 | A | main.go:84 |
+| S6 | cancel/pause/resume 控制消息已实现 | A | main.go
 | S7 | Engine 把硬性安全拦截转为 30s 审批超时，应立即失败 | B | engine.go:1213 |
 
 ### 🟡 中危（设计缺口 / 可观测性）

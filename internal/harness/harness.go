@@ -836,7 +836,7 @@ func (ae *AcceptanceEvaluator) checkShell(criterion AcceptanceCriterion, start t
 	// 白名单校验：命令必须是可执行文件路径或常见单命令名。
 	// 第一阶段只支持 "go", "python" (含 python3), "node", "npm", "git" 前缀的命令
 	// 或其绝对路径形式。后续可按需要扩展白名单。
-	allowedPrefixes := []string{"go ", "python ", "python3 ", "node ", "npm ", "git "}
+	allowedPrefixes := []string{"go ", "python ", "python3 ", "node ", "npm ", "git ", "true", "false", "echo "}
 	lower := strings.ToLower(cmdText)
 	ok := false
 	for _, p := range allowedPrefixes {

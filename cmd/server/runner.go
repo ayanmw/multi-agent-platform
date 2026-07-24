@@ -892,7 +892,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		// ExecuteContext.Workdir 注入，优先于 input["workdir"]。holder 值为 ""
 		// 时 Engine 透明回退到 WorkspaceDir，行为与旧路径一致。
 		WorkdirHolder: holder,
-		// Phase 7 TODO: 把当前 session 的 active todos 注入 system prompt。
+		// Phase TODO: 把当前 session 的 active todos 注入 system prompt。
 		// todoSvc 为 nil（DB 未初始化）或 sessionID 为空时跳过。
 		ActiveTodos: func() string {
 			if todoSvc == nil || sessionID == "" {

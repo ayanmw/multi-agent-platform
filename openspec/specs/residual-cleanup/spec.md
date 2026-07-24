@@ -1,7 +1,7 @@
 # residual-cleanup Specification
 
 ## Purpose
-TBD - created by archiving change cleanup-residual-bugs-and-docs. Update Purpose after archive.
+本规格定义"项目级残留状态清理"能力。当某个 Phase 或能力已实际交付，但文档、memory、spec 与代码注释中仍残留"进行中"标记或未实现 TODO 时，通过一次结构化 cleanup 变更统一同步状态：区分"主体已完成"与"真实遗留项"，补全 OpenSpec 规格中缺失的 `Purpose`，实现（或决策）可安全落地的代码 TODO，并产出单一事实源文档供后续会话查询。该能力本身不引入新功能，而是维护项目知识库与代码实际状态的一致性。
 ## Requirements
 ### Requirement: 文档状态同步
 变更 MUST 将项目说明文档与路线图中的 Phase 状态标记更新为与代码实际交付一致，区分"主体已完成"与"真实遗留项"，避免新会话 LLM 误判能力边界。
