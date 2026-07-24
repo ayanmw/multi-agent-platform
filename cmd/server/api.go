@@ -18,15 +18,11 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
-	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
-	"github.com/anmingwei/multi-agent-platform/internal/todo"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -42,7 +38,7 @@ import (
 // 对于 live task，snapshot 读取自 Engine.think() 写入的内存 runtime store。
 // 对于已持久化/idle 的 task，snapshot 由该 task 自身的 session_messages
 // 加上 agent 的 system prompt 重建。task 不存在时返回 404。
-func handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
+func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
@@ -202,7 +198,7 @@ func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWind
 // （GET /api/tasks/:id/agent-messages）。它始终返回非 nil 的
 // `messages` 数组 —— 任务没有跨 agent 流量时为空 —— 让前端
 // 渲染时间线时无需做 null 检查。
-func handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID string) {
+func (s *appServer) handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID string) {
 	msgs, err := db.QueryAgentMessages(taskID)
 	if err != nil {
 		log.Printf("[AgentMessages] query failed for task=%s: %v", taskID, err)
@@ -224,7 +220,7 @@ func handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID strin
 // === Task History API ===
 
 // handleListTasks 返回最近的任务（GET /api/tasks）
-func handleListTasks(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := db.QueryTasks(50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -248,7 +244,7 @@ type ChildTaskDetail struct {
 // 若存在关联的 case evaluation，则以向后兼容的方式放在 "evaluation" key 下。
 // Phase 7-H2 MA5: 返回的 child_tasks 每个元素都附带自己的 steps 数组，
 // 让前端在刷新/历史回放时能把子 agent 的步骤回填到对应 worker lane。
-func handleGetTask(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
 	log.Printf("[API] GET /api/tasks?id=%s", taskID)
 	if taskID == "" {
@@ -365,7 +361,7 @@ func queryLatestCaseEvaluation(taskID string) (map[string]any, error) {
 
 // handleListCases 处理 GET /api/cases，支持可选的 tag 与 category 过滤。
 // 多个 tag 采用 OR 语义：case 只要包含任一所列 tag 即匹配。
-func handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
+func (s *appServer) handleListCases(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
 	tags := parseTagFilter(r.URL.Query().Get("tag"))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 
@@ -396,7 +392,7 @@ func parseTagFilter(s string) []string {
 }
 
 // handleGetCase 处理 GET /api/cases/{id}。
-func handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+func (s *appServer) handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	c, err := svc.Get(id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -415,7 +411,7 @@ func handleGetCase(w http.ResponseWriter, r *http.Request, id string, svc *cases
 }
 
 // handleCreateCase 处理 POST /api/cases。
-func handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
+func (s *appServer) handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
 		return
@@ -436,7 +432,7 @@ func handleCreateCase(w http.ResponseWriter, r *http.Request, svc *cases.Service
 }
 
 // handleUpdateCase 处理 PUT /api/cases/{id}。内置 case 会被拒绝。
-func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+func (s *appServer) handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
 		return
@@ -475,7 +471,7 @@ func handleUpdateCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 }
 
 // handleDeleteCase 处理 DELETE /api/cases/{id}。内置 case 会被拒绝。
-func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+func (s *appServer) handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
 		return
@@ -509,7 +505,7 @@ func handleDeleteCase(w http.ResponseWriter, r *http.Request, id string, svc *ca
 // （GET /api/cases/{id}/evaluations/{task_id}）。
 // 若没有 evaluation，则返回 {"evaluation": null} 与 HTTP 200，
 // 让非 case 任务也能被优雅处理。
-func handleGetCaseEvaluation(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
+func (s *appServer) handleGetCaseEvaluation(w http.ResponseWriter, r *http.Request, id string, svc *cases.Service) {
 	if svc == nil {
 		http.Error(w, "case service unavailable", http.StatusServiceUnavailable)
 		return
@@ -565,7 +561,7 @@ type updateSessionRequest struct {
 }
 
 // handleSessions 处理 GET/POST /api/sessions
-func handleSessions(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		projectID := r.URL.Query().Get("project_id")
@@ -656,7 +652,7 @@ func handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSessionByID 处理 GET/PUT/DELETE /api/sessions/{id}
-func handleSessionByID(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	if id == "" || id == "/" {
 		http.Error(w, "session ID required", http.StatusBadRequest)
@@ -859,7 +855,7 @@ type agentRequest struct {
 }
 
 // handleAgents 处理 GET/POST /api/agents
-func handleAgents(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		agents, err := db.QueryAgents()
@@ -907,7 +903,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentByID 处理 GET/PUT/DELETE /api/agents/{id}
-func handleAgentByID(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 	// 从 URL path 提取 agent ID：/api/agents/{id}
 	id := strings.TrimPrefix(r.URL.Path, "/api/agents/")
 	if id == "" || id == "/" {
@@ -968,7 +964,7 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 // handleListMemories 返回按 scope、tier、type、status、project 过滤并分页的
 // memory 记录。
 // GET /api/memories?scope=session&tier=consolidated&type=rule&status=active&project=default&limit=20&offset=0
-func handleListMemories(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
 		projectID = "default"
@@ -1031,7 +1027,7 @@ type memoryUpdateRequest struct {
 
 // handleMemoryByID 处理 GET / PUT / DELETE /api/memories/{id} 以及
 // POST /api/memories/{id}/embed。
-func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+func (s *appServer) handleMemoryByID(w http.ResponseWriter, r *http.Request, id string) {
 	switch r.Method {
 	case http.MethodGet:
 		record, err := db.QueryMemoryByID(id)
@@ -1101,8 +1097,8 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			Before: map[string]any{"content": existing.Content, "confidence": existing.Confidence, "status": existing.Status},
 			After:  map[string]any{"content": record.Content, "confidence": record.Confidence, "status": record.Status, "fields_changed": fieldsChanged},
 		})
-		if hub != nil {
-			hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
+		if s.hub != nil {
+			s.hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
 				"memory_id":      id,
 				"fields_changed": fieldsChanged,
 			}))
@@ -1122,7 +1118,7 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			http.Error(w, lookupErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		handleDeleteMemory(w, r, id)
+		s.handleDeleteMemory(w, r, id)
 		// Phase 7-C：memory 删除的 audit log。
 		observability.DefaultAuditor.Record(observability.AuditRecord{
 			Actor:  currentActor(r),
@@ -1131,8 +1127,8 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 			Before: map[string]any{"id": id, "content": record.Content, "scope": record.Scope, "tier": record.Tier},
 			After:  map[string]any{"deleted": true},
 		})
-		if hub != nil {
-			hub.SendEvent(event.NewEvent(event.EventMemoryDeleted, "", "server", 0, map[string]any{
+		if s.hub != nil {
+			s.hub.SendEvent(event.NewEvent(event.EventMemoryDeleted, "", "server", 0, map[string]any{
 				"memory_id": id,
 				"tier":      record.Tier,
 				"scope":     record.Scope,
@@ -1146,7 +1142,7 @@ func handleMemoryByID(w http.ResponseWriter, r *http.Request, id string, hub *ws
 
 // handleMemoryEmbed 处理 POST /api/memories/{id}/embed。它对 memory 内容
 // 做 embedding，并把向量存入配置的 VectorStore。
-func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+func (s *appServer) handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1160,7 +1156,7 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	vec, err := embedProvider.Embed(record.Content)
+	vec, err := s.embedProvider.Embed(record.Content)
 	if err != nil {
 		// 优雅降级：memory 存在但其 embedding 无法计算。返回 422 让前端
 		// 注意到而不触发重试风暴。
@@ -1168,7 +1164,7 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 		http.Error(w, "embedding failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	model := resolveProviderNameForAPI(embedProvider)
+	model := s.resolveProviderNameForAPI()
 	dims := len(vec)
 	metadata := map[string]any{
 		"memory_id": record.ID,
@@ -1176,7 +1172,7 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 		"tier":      record.Tier,
 		"scope":     record.Scope,
 	}
-	if err := vectorStore.Upsert(id, vec, metadata); err != nil {
+	if err := s.vectorStore.Upsert(id, vec, metadata); err != nil {
 		log.Printf("[API] vector store upsert for memory %s failed: %v", id, err)
 		http.Error(w, "vector store upsert failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1192,8 +1188,8 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 		}
 	}
 
-	if hub != nil {
-		hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
+	if s.hub != nil {
+		s.hub.SendEvent(event.NewEvent(event.EventMemoryUpdated, "", "server", 0, map[string]any{
 			"memory_id":       id,
 			"fields_changed":  []string{"embedding_dims", "embedding_model"},
 			"embedding_dims":  dims,
@@ -1208,13 +1204,13 @@ func handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id string, hub *w
 	})
 }
 
-// resolveProviderNameForAPI 返回某 embedding provider 的人类可读模型名。
+// resolveProviderNameForAPI 返回当前 appServer embedding provider 的人类可读模型名。
 // provider 为 nil 时回退到 "unknown"。
-func resolveProviderNameForAPI(provider llm.EmbeddingProvider) string {
-	if provider == nil {
+func (s *appServer) resolveProviderNameForAPI() string {
+	if s.embedProvider == nil {
 		return "unknown"
 	}
-	return fmt.Sprintf("%T", provider)
+	return fmt.Sprintf("%T", s.embedProvider)
 }
 
 // encodeFloat32ToBytes 把 []float32 向量序列化为小端字节切片，
@@ -1231,7 +1227,7 @@ func encodeFloat32ToBytes(vec []float32) ([]byte, error) {
 // handleUpdateMemoryScope 更新 memory 的 scope（以及可选的 session_id）。
 // PUT /api/memories/{id}/scope
 // Body: {"scope": "project", "session_id": ""}
-func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) {
+func (s *appServer) handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) {
 	// 更新前先确认 memory 存在。
 	if _, err := db.QueryMemoryByID(id); err != nil {
 		if err == sql.ErrNoRows {
@@ -1273,7 +1269,7 @@ func handleUpdateMemoryScope(w http.ResponseWriter, r *http.Request, id string) 
 
 // handleDeleteMemory 按 ID 删除 memory 记录。
 // DELETE /api/memories/{id}
-func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
+func (s *appServer) handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 	// 删除前先确认 memory 存在。
 	record, err := db.QueryMemoryByID(id)
 	if err != nil {
@@ -1308,7 +1304,7 @@ func handleDeleteMemory(w http.ResponseWriter, r *http.Request, id string) {
 
 // handleCreateMemory 根据用户请求创建新 memory。
 // POST /api/memories
-func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vectorStore memory.VectorStore, embedProvider llm.EmbeddingProvider) {
+func (s *appServer) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1373,19 +1369,19 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 	}
 	// 尽力而为的 embedding：若 embedding / 向量持久化不可用，
 	// 也不要让 create API 失败。
-	if vectorStore != nil && embedProvider != nil {
-		if vec, err := embedProvider.Embed(record.Content); err == nil {
+	if s.vectorStore != nil && s.embedProvider != nil {
+		if vec, err := s.embedProvider.Embed(record.Content); err == nil {
 			metadata := map[string]any{
 				"memory_id": record.ID,
 				"type":      record.Type,
 				"tier":      record.Tier,
 				"scope":     record.Scope,
 			}
-			if upsertErr := vectorStore.Upsert(id, vec, metadata); upsertErr != nil {
+			if upsertErr := s.vectorStore.Upsert(id, vec, metadata); upsertErr != nil {
 				log.Printf("[API] vector upsert for new memory %s failed: %v", id, upsertErr)
 			}
 			if encoded, encErr := encodeFloat32ToBytes(vec); encErr == nil {
-				model := resolveProviderNameForAPI(embedProvider)
+				model := s.resolveProviderNameForAPI()
 				if dbErr := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, len(vec)); dbErr != nil {
 					log.Printf("[API] persist embedding for new memory %s failed: %v", id, dbErr)
 				}
@@ -1394,8 +1390,8 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 			log.Printf("[API] embed new memory %s failed: %v", id, err)
 		}
 	}
-	if hub != nil {
-		hub.SendEvent(event.NewEvent(event.EventMemoryCreated, "", "server", 0, map[string]any{
+	if s.hub != nil {
+		s.hub.SendEvent(event.NewEvent(event.EventMemoryCreated, "", "server", 0, map[string]any{
 			"memory_id":  record.ID,
 			"project_id": record.ProjectID,
 			"scope":      record.Scope,
@@ -1417,7 +1413,7 @@ func handleCreateMemory(w http.ResponseWriter, r *http.Request, hub *ws.Hub, vec
 // handlePromoteMemories 手动触发 promotion pipeline。
 // POST /api/memories/promote
 // Body: {"project_id": "default"}
-func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness.PromotionGate) {
+func (s *appServer) handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness.PromotionGate) {
 	var req struct {
 		ProjectID string `json:"project_id"`
 	}
@@ -1441,7 +1437,7 @@ func handlePromoteMemories(w http.ResponseWriter, r *http.Request, gate *harness
 
 // handleMemoryStats 返回某项目的聚合 memory 统计。
 // GET /api/memories/stats?project=default
-func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
@@ -1488,7 +1484,7 @@ func handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 // GET /api/memories/recall?query=xxx&project=default&max=3 —— 纯向量检索
 // 这是一个调试 endpoint —— 它展示某任务会被注入的 WorkingMemory，
 // 但不会真正运行 agent。
-func handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness.MemoryRecall) {
+func (s *appServer) handleRecallPreview(w http.ResponseWriter, r *http.Request, recall *harness.MemoryRecall) {
 	projectID := r.URL.Query().Get("project")
 	if projectID == "" {
 		projectID = "default"
@@ -1607,7 +1603,7 @@ func buildProjectConfig(base map[string]any, rules string) map[string]any {
 // handleProjects handles GET/POST /api/projects
 // GET: 列出所有项目（含 sessions 计数和记忆统计）
 // POST: 创建新项目
-func handleProjects(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		projects, err := db.QueryProjects()
@@ -1698,7 +1694,7 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 // GET: 返回项目详情（含 sessions 列表、记忆统计）
 // PUT: 更新项目（名称、工作目录、描述）
 // DELETE: 删除项目（级联删除所有关联数据）
-func handleProjectByID(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/projects/")
 	if id == "" || id == "/" {
 		http.Error(w, "project ID required", http.StatusBadRequest)
@@ -1821,7 +1817,7 @@ func handleProjectByID(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionChat 处理 POST /api/sessions/{id}/chat
 // 在已有 Session 中发起新一轮对话，自动注入历史消息上下文
-func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service) {
+func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -1855,8 +1851,8 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	}
 
 	// 按服务端强制 contract 限制校验请求。
-	if len(req.Input) > cfg.ContractLimits.MaxInputLength {
-		http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
+	if len(req.Input) > s.cfg.ContractLimits.MaxInputLength {
+		http.Error(w, fmt.Sprintf("input length exceeds maximum of %d", s.cfg.ContractLimits.MaxInputLength), http.StatusBadRequest)
 		return
 	}
 	if req.MaxSteps < 1 {
@@ -1864,15 +1860,15 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		// 让普通 chat 请求无需客户端总是提供正值也能用。
 		req.MaxSteps = harness.DefaultContract(req.Input).MaxSteps
 	}
-	if req.MaxSteps > cfg.ContractLimits.MaxSteps {
-		req.MaxSteps = cfg.ContractLimits.MaxSteps
+	if req.MaxSteps > s.cfg.ContractLimits.MaxSteps {
+		req.MaxSteps = s.cfg.ContractLimits.MaxSteps
 	}
 	if req.TimeoutSeconds < 0 {
 		http.Error(w, "timeout_seconds must be >= 0", http.StatusBadRequest)
 		return
 	}
-	if req.TimeoutSeconds > cfg.ContractLimits.MaxTimeoutSeconds {
-		http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
+	if req.TimeoutSeconds > s.cfg.ContractLimits.MaxTimeoutSeconds {
+		http.Error(w, fmt.Sprintf("timeout_seconds exceeds maximum of %d", s.cfg.ContractLimits.MaxTimeoutSeconds), http.StatusBadRequest)
 		return
 	}
 
@@ -1904,7 +1900,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	// 上下文压缩：在创建新 Task 前检查是否需要压缩
 	// Phase 6-F：传入与 Heartbeat 相同的 LLM summarizer，保证 summary 质量。
 	// nil summarizer 会让 Compressor 回退到关键词路径。
-	compressor := harness.NewContextCompressor(memDB, nil)
+	compressor := harness.NewContextCompressor(s.memDB, nil)
 	if result, err := compressor.CompressIfNeeded(id); err != nil {
 		log.Printf("[SessionChat] Compression failed: %v", err)
 	} else if result.Compressed {
@@ -1931,8 +1927,8 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	if projectID == "" {
 		projectID = "default"
 	}
-	if wm, err := memRecall.BuildWorkingMemory(projectID, id, req.Input, 3); err == nil {
-		workingMemory = memRecall.FormatForSystemPrompt(wm)
+	if wm, err := s.memRecall.BuildWorkingMemory(projectID, id, req.Input, 3); err == nil {
+		workingMemory = s.memRecall.FormatForSystemPrompt(wm)
 	}
 
 	// 创建新 Task
@@ -1940,7 +1936,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 	turnIndex := sess.TurnCount // 当前轮次（0-based）
 
 	// 持久化 Task
-	if persist != nil {
+	if persist := s.persist; persist != nil {
 		persist.SaveTask(taskID, req.Input, []string{agentID})
 		persist.SaveTaskMeta(taskID, id, sess.RootTaskID, false) // 非 root task，parent = root
 	}
@@ -1956,7 +1952,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		contract.TimeoutSeconds = req.TimeoutSeconds
 	}
 	if req.Scope != "" {
-		if !isAllowedScope(req.Scope, cfg.ContractLimits.Scopes) {
+		if !isAllowedScope(req.Scope, s.cfg.ContractLimits.Scopes) {
 			http.Error(w, fmt.Sprintf("scope %q is not allowed", req.Scope), http.StatusBadRequest)
 			return
 		}
@@ -1987,7 +1983,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 		// Phase 8-A：session-chat 改走 AgentRunner.Run(spec)。
 		// turnIndex>0 → IsRoot=false（非首轮），parentTaskID=sess.RootTaskID，
 		// 与旧 runAgentLoopWithTurn(...,turnIndex,sess.RootTaskID,...) 语义一致。
-		runner := NewAgentRunner(hub, makeRunnerDeps(cfg, tools, persist, approvalHandler, memRecall, agentBus, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+		runner := s.newRunner()
 		runner.Run(context.Background(), AgentRunSpec{
 			TaskID:        taskID,
 			AgentID:       agentID,
@@ -2014,7 +2010,7 @@ func handleSessionChat(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg 
 
 // handleSessionMessages 处理 GET /api/sessions/{id}/messages
 // 返回指定 Session 的所有历史消息（按 turn_index ASC, created_at ASC）
-func handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (s *appServer) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
@@ -2049,7 +2045,7 @@ func buildHistoryContext(msgs []db.SessionMessageRecord) string {
 
 // handleCostQuery 处理 GET /api/costs，支持按维度过滤。
 // 支持的查询参数：task_id、session_id、project_id、days。
-func handleCostQuery(w http.ResponseWriter, r *http.Request, repo cost.CostRepository) {
+func (s *appServer) handleCostQuery(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
@@ -2057,18 +2053,18 @@ func handleCostQuery(w http.ResponseWriter, r *http.Request, repo cost.CostRepos
 
 	report := costReportFromRecords(func() []cost.CostRecord {
 		if taskID := r.URL.Query().Get("task_id"); taskID != "" {
-			records, _ := repo.QueryByTask(taskID)
+			records, _ := s.costRepo.QueryByTask(taskID)
 			return records
 		}
 		if sessionID := r.URL.Query().Get("session_id"); sessionID != "" {
-			records, _ := repo.QueryBySession(sessionID)
+			records, _ := s.costRepo.QueryBySession(sessionID)
 			return records
 		}
 		if projectID := r.URL.Query().Get("project_id"); projectID != "" {
-			records, _ := repo.QueryByProject(projectID)
+			records, _ := s.costRepo.QueryByProject(projectID)
 			return records
 		}
-		records, _ := repo.QueryRecent(100)
+		records, _ := s.costRepo.QueryRecent(100)
 		return records
 	}())
 
@@ -2123,7 +2119,7 @@ func truncateContent(content string, maxLen int) string {
 // 它提取 case 标识（从 "case" 或 "case_id" 字段），然后执行与
 // POST /api/tasks?case=<caseID> 相同的 chat action 逻辑，body 未覆盖时
 // 使用 case 的默认 input 与 system prompt。
-func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service) {
+func (s *appServer) handleRunCase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -2181,7 +2177,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 		if caseID == "" {
 			return nil
 		}
-		if caseService != nil {
+		if caseService := s.caseService; caseService != nil {
 			c, err := caseService.Get(caseID)
 			if err != nil || c == nil {
 				return nil
@@ -2241,8 +2237,8 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 	}
 
 	workingMemory := ""
-	if wm, err := memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
-		workingMemory = memRecall.FormatForSystemPrompt(wm)
+	if wm, err := s.memRecall.BuildWorkingMemory("default", req.SessionID, req.Input, 3); err == nil {
+		workingMemory = s.memRecall.FormatForSystemPrompt(wm)
 	}
 
 	taskID := newTaskID()
@@ -2279,7 +2275,7 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 
 	// Phase 8-A：run-case 改走 AgentRunner.Run(spec)。IsRoot=true（首轮），
 	// 与旧 runAgentLoop(...turnIndex=0...) 语义一致。
-	runner := NewAgentRunner(hub, makeRunnerDeps(cfg, tools, persist, approvalHandler, memRecall, agentBus, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc))
+	runner := s.newRunner()
 	go runner.Run(context.Background(), AgentRunSpec{
 		TaskID:        taskID,
 		AgentID:       agentID,
@@ -2304,20 +2300,18 @@ func handleRunCase(w http.ResponseWriter, r *http.Request, hub *ws.Hub, cfg *con
 
 // handleContractLimits 返回服务端强制 task contract 限制。
 // GET /api/contract-limits
-func handleContractLimits(cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cfg.ContractLimits)
+func (s *appServer) handleContractLimits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.cfg.ContractLimits)
 }
 
 // handleAudit 返回默认 auditor 最近的 audit 记录。
 // GET /api/audit?limit=N
-func handleAudit(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if q := r.URL.Query().Get("limit"); q != "" {
 		if n, err := strconv.Atoi(q); err == nil && n > 0 {
@@ -2331,7 +2325,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 
 // handleTraces 返回进程级 tracer 中所有缓存的 trace span。
 // GET /api/traces
-func handleTraces(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleTraces(w http.ResponseWriter, r *http.Request) {
 	data, _ := tracer.JSON()
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -2341,12 +2335,12 @@ func handleTraces(w http.ResponseWriter, r *http.Request) {
 // GET /api/replay/events?since_event_id=<id>&limit=<n>
 // 前端重连后用它补齐断连期间错过的事件。当 since_event_id 已不在内存
 // 缓冲区中时返回 410 Gone，让客户端回退到完整任务回放。
-func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
+func (s *appServer) handleReplayEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
-	if hub == nil {
+	if s.hub == nil {
 		http.Error(w, "event replay unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -2367,7 +2361,7 @@ func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
 		limit = 1000
 	}
 
-	evts, err := hub.ReplayEvents(sinceEventID, limit)
+	evts, err := s.hub.ReplayEvents(sinceEventID, limit)
 	if err != nil {
 		if errors.Is(err, ws.ErrEventIDNotFound) {
 			w.WriteHeader(http.StatusGone)
@@ -2392,7 +2386,7 @@ func handleReplayEvents(w http.ResponseWriter, r *http.Request, hub *ws.Hub) {
 
 // handleReplay 从持久化存储回放任务执行事件。
 // GET /api/replay/tasks/{task_id}
-func handleReplay(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/replay/tasks/"), "/")
 	taskID := parts[0]
 	if taskID == "" {

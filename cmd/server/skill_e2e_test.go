@@ -151,6 +151,27 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 	// ============================================================
 	// 4. 挂载路由并启动 httptest.Server
 	// ============================================================
+	// 构造最小 appServer，挂载测试中需要的 sessions / tasks handler。
+	// handleSessionChat、handleGetTask 等已改为 *appServer 方法，
+	// 测试必须复用同一实例以保证依赖一致。
+	server := &appServer{
+		cfg:              cfg,
+		hub:              hub,
+		toolRegistry:     toolRegistry,
+		persist:          persist,
+		approvalHandler:  approvalHandler,
+		memRecall:        memRecall,
+		checkpointMgr:    checkpointMgr,
+		memDB:            memDB,
+		costRepo:         costRepo,
+		modelRegistry:    modelRegistry,
+		modelRouter:      modelRouter,
+		routerProviders:  routerProviders,
+		caseService:      caseService,
+		skillRegistry:    skillRegistry,
+		skillStore:       skillStore,
+	}
+
 	mux := http.NewServeMux()
 
 	// Skill 管理路由：enable / disable 等。
@@ -158,18 +179,18 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 
 	// Sessions 路由：POST /api/sessions 创建 session。
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		handleSessions(w, r)
+		server.handleSessions(w, r)
 	})
 	// /api/sessions/{id}/chat —— 与 main.go 中路径分发保持一致。
 	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, nil, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, nil)
+			server.handleSessionChat(w, r)
 			return
 		}
 		// 其它 sessions 子路径（messages / workspace 等）本次测试不涉及，
 		// 直接交给 handleSessionByID 处理；未覆盖的 method 会被它返回 405。
-		handleSessionByID(w, r)
+		server.handleSessionByID(w, r)
 	})
 
 	// Tasks 路由：GET /api/tasks/{id}/context_window。
@@ -187,12 +208,12 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 				return
 			}
 			id := strings.TrimSuffix(path, "/context_window")
-			handleGetTaskContextWindow(w, r, id)
+			server.handleGetTaskContextWindow(w, r, id)
 			return
 		}
 		if r.Method == http.MethodGet {
 			r.URL.RawQuery = "id=" + path
-			handleGetTask(w, r)
+			server.handleGetTask(w, r)
 			return
 		}
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)

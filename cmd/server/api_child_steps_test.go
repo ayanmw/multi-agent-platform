@@ -82,7 +82,8 @@ func TestHandleGetTaskChildSteps(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks?id="+rootID, nil)
 	rr := httptest.NewRecorder()
-	handleGetTask(rr, req)
+	s := &appServer{}
+	s.handleGetTask(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())

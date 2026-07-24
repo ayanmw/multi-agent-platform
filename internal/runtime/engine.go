@@ -653,6 +653,10 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 //   - totalTokens：所有 LLM 调用累计的 token 数（失败时为 0）
 //   - error：成功时为 nil，失败时为描述性错误
 func (e *Engine) Run(ctx context.Context, userInput string) (content string, totalTokens int, err error) {
+	// engineRunDone 通知 AgentBus listener Run 函数生命周期结束，使其能
+	// 在 Run 返回后安全退出，避免继续处理可能已关闭的状态或通道。
+	engineRunDone := make(chan struct{})
+
 	// Panic recovery：捕获来自 LLM client、tool 执行、event bus 或持久化层
 	// 的任何 panic。发出 task_failed 事件让前端知道 agent 崩溃，然后重新
 	// panic 以保留堆栈。
@@ -675,6 +679,11 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			panic(r)
 		}
 	}()
+
+	// 无论成功、失败还是 context 取消，Run 返回前都关闭 engineRunDone，
+	// 让 AgentBus listener 能立即感知并退出，避免 listener 在 Run 结束后继续
+	// 处理消息或访问已关闭的通道/状态。
+	defer close(engineRunDone)
 
 	// 把用户输入追加到对话历史。这是 ReAct loop 的起点——LLM 会看到
 	// system prompt 后跟这条 user message。
@@ -711,7 +720,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 	// 若配置了 AgentBus，启动 AgentBus listener goroutine。
 	// 该 goroutine 监听来自其他 agent 的到达消息，并把它作为 user message
-	// 追加到对话中。它与 ReAct loop 并发运行，在 context 取消时停止。
+	// 追加到对话中。它与 ReAct loop 并发运行，在 context 取消或 Run 返回时停止。
 	agentMsgCh := make(chan AgentMessage, 10)
 	agentBusDone := make(chan struct{})
 	if e.agentBus != nil {
@@ -789,6 +798,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						TaskID: e.taskID, AgentID: e.cfg.AgentID, StepIndex: e.stepIdx,
 						Type: "agent_message_input", Status: "completed", Content: formatted,
 					})
+				case <-engineRunDone:
 				}
 			}
 		}()

@@ -141,36 +141,12 @@ func (s *appServer) newRunner() *AgentRunner {
 // 调用顺序与旧 main() 一致（Go ServeMux 对无重叠前缀的路由不依赖注册顺序，
 // 但保持原序便于 diff 审阅与 /api/tasks vs /api/tasks/ 的可读性）。
 func (s *appServer) registerRoutes() {
-	cfg := s.cfg
-	hub := s.hub
-	toolRegistry := s.toolRegistry
-	persist := s.persist
-	approvalHandler := s.approvalHandler
-	memRecall := s.memRecall
-	agentBusAdapter := s.agentBusAdapter
-	checkpointMgr := s.checkpointMgr
-	memDB := s.memDB
-	costRepo := s.costRepo
-	modelRegistry := s.modelRegistry
-	modelRouter := s.modelRouter
-	routerProviders := s.routerProviders
-	caseService := s.caseService
-	todoSvc := s.todoSvc
-	mcpManager := s.mcpManager
-	skillStore := s.skillStore
-	skillRegistry := s.skillRegistry
-	mockStore := s.mockStore
-	authAPI := s.authAPI
-	authStore := s.authStore
-	vectorStore := s.vectorStore
-	embedProvider := s.embedProvider
-
 	// WebSocket 入口
-	http.HandleFunc("/ws", ws.ServeWS(hub))
+	http.HandleFunc("/ws", ws.ServeWS(s.hub))
 
 	// Phase 7: Todo REST API（从 main() 迁入；todoSvc 可能为 nil，registerTodoRoutes
 	// 内部对 nil service 返回 503）。
-	registerTodoRoutes(http.DefaultServeMux, todoSvc)
+	registerTodoRoutes(http.DefaultServeMux, s.todoSvc)
 
 	// Phase 7-cron: Cron REST API。s.cronService 在 main() 中初始化；为 nil
 	// 时 RegisterCronAPI 直接 return（不注册任何端点）。
@@ -191,7 +167,7 @@ func (s *appServer) registerRoutes() {
 				return
 			}
 			id := strings.TrimSuffix(path, "/context_window")
-			handleGetTaskContextWindow(w, r, id)
+			s.handleGetTaskContextWindow(w, r, id)
 			return
 		}
 
@@ -202,14 +178,14 @@ func (s *appServer) registerRoutes() {
 				return
 			}
 			id := strings.TrimSuffix(path, "/agent-messages")
-			handleGetAgentMessages(w, r, id)
+			s.handleGetAgentMessages(w, r, id)
 			return
 		}
 
 		// GET /api/tasks/:id —— 单个任务详情
 		if r.Method == http.MethodGet {
 			r.URL.RawQuery = "id=" + path
-			handleGetTask(w, r)
+			s.handleGetTask(w, r)
 			return
 		}
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -220,10 +196,10 @@ func (s *appServer) registerRoutes() {
 		if r.URL.Path == "/api/tasks" || r.URL.Path == "/api/tasks/" {
 			if r.Method == http.MethodGet {
 				if r.URL.Query().Get("id") != "" {
-					handleGetTask(w, r)
+					s.handleGetTask(w, r)
 					return
 				}
-				handleListTasks(w, r)
+				s.handleListTasks(w, r)
 				return
 			}
 			// POST /api/tasks —— chat / multi-agent / stream-demo action。
@@ -235,46 +211,44 @@ func (s *appServer) registerRoutes() {
 	})
 
 	// Phase 7-C: 可观测性 REST endpoint。
-	http.HandleFunc("/api/audit", handleAudit)
-	http.HandleFunc("/api/traces", handleTraces)
-	http.HandleFunc("/api/replay/tasks/", handleReplay)
-	http.HandleFunc("/api/replay/events", func(w http.ResponseWriter, r *http.Request) {
-		handleReplayEvents(w, r, hub)
-	})
+	http.HandleFunc("/api/audit", s.handleAudit)
+	http.HandleFunc("/api/traces", s.handleTraces)
+	http.HandleFunc("/api/replay/tasks/", s.handleReplay)
+	http.HandleFunc("/api/replay/events", s.handleReplayEvents)
 
 	// Contract 限制 endpoint：暴露服务端强制的 task contract 边界。
-	http.HandleFunc("/api/contract-limits", handleContractLimits(cfg))
+	http.HandleFunc("/api/contract-limits", s.handleContractLimits)
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 			return
 		}
-		handleAgents(w, r)
+		s.handleAgents(w, r)
 	})
 	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 			return
 		}
-		handleAgentByID(w, r)
+		s.handleAgentByID(w, r)
 	})
 
 	// Session API
 	http.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		handleSessions(w, r)
+		s.handleSessions(w, r)
 	})
 	http.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		// POST /api/sessions/{id}/chat —— 一个 session 内的多轮对话
 		if strings.HasSuffix(path, "/chat") {
-			handleSessionChat(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
+			s.handleSessionChat(w, r)
 			return
 		}
 		// GET /api/sessions/{id}/messages —— session 消息历史
 		if strings.HasSuffix(path, "/messages") {
 			sessionID := strings.TrimSuffix(path, "/messages")
 			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionMessages(w, r, sessionID)
+			s.handleSessionMessages(w, r, sessionID)
 			return
 		}
 		// GET /api/sessions/{id}/workspace/dir —— 返回 workspace 路径与 auto 标志
@@ -302,7 +276,7 @@ func (s *appServer) registerRoutes() {
 		if strings.HasSuffix(path, "/workspace-browse") {
 			sessionID := strings.TrimSuffix(path, "/workspace-browse")
 			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionWorkspaceBrowse(w, r, sessionID)
+			s.handleSessionWorkspaceBrowse(w, r, sessionID)
 			return
 		}
 		// GET /api/sessions/{id}/workspace-tree?path=<rel>
@@ -313,7 +287,7 @@ func (s *appServer) registerRoutes() {
 			}
 			sessionID := strings.TrimSuffix(path, "/workspace-tree")
 			sessionID = strings.TrimPrefix(sessionID, "/api/sessions/")
-			handleSessionWorkspaceTree(w, r, sessionID)
+			s.handleSessionWorkspaceTree(w, r, sessionID)
 			return
 		}
 		// Phase worktree: POST/GET /api/sessions/{id}/worktree —— worktree 隔离
@@ -328,28 +302,28 @@ func (s *appServer) registerRoutes() {
 			}
 			switch r.Method {
 			case http.MethodPost:
-				handleWorktreeCreate(w, r, sessionID, hub)
+				s.handleWorktreeCreate(w, r, sessionID)
 			case http.MethodGet:
-				handleWorktreeGet(w, r, sessionID)
+				s.handleWorktreeGet(w, r, sessionID)
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
 			return
 		}
-		handleSessionByID(w, r)
+		s.handleSessionByID(w, r)
 	})
 
 	// Project API
 	http.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) {
-		handleProjects(w, r)
+		s.handleProjects(w, r)
 	})
 	http.HandleFunc("/api/projects/", func(w http.ResponseWriter, r *http.Request) {
-		handleProjectByID(w, r)
+		s.handleProjectByID(w, r)
 	})
 
 	// Phase 6-D: Cost 查询 API（task/session/project/daily 聚合）。
 	http.HandleFunc("/api/costs", func(w http.ResponseWriter, r *http.Request) {
-		handleCostQuery(w, r, costRepo)
+		s.handleCostQuery(w, r)
 	})
 
 	// Phase 6-D: Health check endpoint（JSON，检查 DB + WS hub）。
@@ -394,15 +368,15 @@ func (s *appServer) registerRoutes() {
 	})
 
 	// Auth API endpoint（API key 管理）
-	if authAPI != nil && authStore != nil {
-		authAPI.RegisterRoutes(http.DefaultServeMux)
+	if s.authAPI != nil && s.authStore != nil {
+		s.authAPI.RegisterRoutes(http.DefaultServeMux)
 	}
 
 	// Mock 脚本管理 API（Phase 6 mock provider）。
-	RegisterMockRoutes(http.DefaultServeMux, mockStore, llm.BuiltinMockScripts())
+	RegisterMockRoutes(http.DefaultServeMux, s.mockStore, llm.BuiltinMockScripts())
 
 	// 模型价格管理 API —— 查看/更新 ModelRegistry 价格。
-	RegisterModelPriceRoutes(http.DefaultServeMux, modelRegistry)
+	RegisterModelPriceRoutes(http.DefaultServeMux, s.modelRegistry)
 
 	// Version API：从 version.txt 返回当前版本号
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
@@ -422,17 +396,17 @@ func (s *appServer) registerRoutes() {
 	http.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			if caseService == nil {
+			if s.caseService == nil {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(cases.All())
 				return
 			}
-			handleListCases(w, r, caseService)
+			s.handleListCases(w, r, s.caseService)
 		case http.MethodPost:
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
 			}
-			handleCreateCase(w, r, caseService)
+			s.handleCreateCase(w, r, s.caseService)
 		default:
 			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		}
@@ -449,7 +423,7 @@ func (s *appServer) registerRoutes() {
 
 		// GET /api/cases/{id}/evaluations/{task_id}
 		if len(parts) >= 2 && parts[1] == "evaluations" {
-			handleGetCaseEvaluation(w, r, id, caseService)
+			s.handleGetCaseEvaluation(w, r, id, s.caseService)
 			return
 		}
 
@@ -459,7 +433,7 @@ func (s *appServer) registerRoutes() {
 		}
 		switch r.Method {
 		case http.MethodGet:
-			if caseService == nil {
+			if s.caseService == nil {
 				c := cases.Get(id)
 				if c == nil {
 					http.Error(w, "case not found", http.StatusNotFound)
@@ -469,17 +443,17 @@ func (s *appServer) registerRoutes() {
 				json.NewEncoder(w).Encode(c)
 				return
 			}
-			handleGetCase(w, r, id, caseService)
+			s.handleGetCase(w, r, id, s.caseService)
 		case http.MethodPut:
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
 			}
-			handleUpdateCase(w, r, id, caseService)
+			s.handleUpdateCase(w, r, id, s.caseService)
 		case http.MethodDelete:
 			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
 				return
 			}
-			handleDeleteCase(w, r, id, caseService)
+			s.handleDeleteCase(w, r, id, s.caseService)
 		default:
 			http.Error(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
 		}
@@ -487,14 +461,14 @@ func (s *appServer) registerRoutes() {
 
 	// Run Case 代理：POST /api/run-case
 	http.HandleFunc("/api/run-case", func(w http.ResponseWriter, r *http.Request) {
-		handleRunCase(w, r, hub, cfg, toolRegistry, persist, approvalHandler, memRecall, agentBusAdapter, checkpointMgr, memDB, costRepo, modelRegistry, modelRouter, routerProviders, caseService, todoSvc)
+		s.handleRunCase(w, r)
 	})
 
 	// MCP 管理 API：动态 add / enable / disable / remove。
-	registerMCPRoutes(http.DefaultServeMux, mcpManager)
+	registerMCPRoutes(http.DefaultServeMux, s.mcpManager)
 
 	// Phase skill: 注册 Skill REST API。
-	registerSkillRoutes(http.DefaultServeMux, hub, skillStore, skillRegistry)
+	registerSkillRoutes(http.DefaultServeMux, s.hub, s.skillStore, s.skillRegistry)
 
 	// 动态 Tool 注册 API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
@@ -527,13 +501,13 @@ func (s *appServer) registerRoutes() {
 	http.HandleFunc("/api/checkpoints/recover", s.handleRecoverCheckpoint)
 
 	// Memory API (Phase 6 / Phase 5-B)
-	memGateway := harness.NewPromotionGate(memDB)
+	memGateway := harness.NewPromotionGate(s.memDB)
 	http.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			handleListMemories(w, r)
+			s.handleListMemories(w, r)
 		case http.MethodPost:
-			handleCreateMemory(w, r, hub, vectorStore, embedProvider)
+			s.handleCreateMemory(w, r)
 		default:
 			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		}
@@ -545,7 +519,7 @@ func (s *appServer) registerRoutes() {
 				http.Error(w, "POST only", http.StatusMethodNotAllowed)
 				return
 			}
-			handlePromoteMemories(w, r, memGateway)
+			s.handlePromoteMemories(w, r, memGateway)
 			return
 		}
 		if path == "recall" {
@@ -553,7 +527,7 @@ func (s *appServer) registerRoutes() {
 				http.Error(w, "GET only", http.StatusMethodNotAllowed)
 				return
 			}
-			handleRecallPreview(w, r, memRecall)
+			s.handleRecallPreview(w, r, s.memRecall)
 			return
 		}
 		if path == "stats" {
@@ -561,7 +535,7 @@ func (s *appServer) registerRoutes() {
 				http.Error(w, "GET only", http.StatusMethodNotAllowed)
 				return
 			}
-			handleMemoryStats(w, r)
+			s.handleMemoryStats(w, r)
 			return
 		}
 		parts := strings.Split(path, "/")
@@ -572,11 +546,11 @@ func (s *appServer) registerRoutes() {
 		}
 		switch {
 		case len(parts) == 2 && parts[1] == "scope" && r.Method == http.MethodPut:
-			handleUpdateMemoryScope(w, r, id)
+			s.handleUpdateMemoryScope(w, r, id)
 		case len(parts) == 2 && parts[1] == "embed" && r.Method == http.MethodPost:
-			handleMemoryEmbed(w, r, id, hub, vectorStore, embedProvider)
+			s.handleMemoryEmbed(w, r, id)
 		case len(parts) == 1:
-			handleMemoryByID(w, r, id, hub, vectorStore, embedProvider)
+			s.handleMemoryByID(w, r, id)
 		default:
 			http.Error(w, "unsupported memory operation", http.StatusMethodNotAllowed)
 		}

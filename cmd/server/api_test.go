@@ -61,8 +61,9 @@ func newTestCreateRequest() cases.CreateCaseRequest {
 // TestHandleListCases 默认返回所有 case。
 func TestHandleListCases(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleListCases(w, r, svc)
+		s.handleListCases(w, r, svc)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cases", nil)
@@ -85,8 +86,9 @@ func TestHandleListCases(t *testing.T) {
 // TestHandleListCasesByCategory 按 category 过滤。
 func TestHandleListCasesByCategory(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleListCases(w, r, svc)
+		s.handleListCases(w, r, svc)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cases?category=generation", nil)
@@ -118,8 +120,9 @@ func TestHandleListCasesByCategory(t *testing.T) {
 // TestHandleListCasesByTagOr 以 OR 语义进行过滤。
 func TestHandleListCasesByTagOr(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleListCases(w, r, svc)
+		s.handleListCases(w, r, svc)
 	})
 
 	// dialogue 和 code-gen 都应命中。
@@ -150,8 +153,9 @@ func TestHandleListCasesByTagOr(t *testing.T) {
 // TestHandleGetCaseBuiltin 返回一个内置 case。
 func TestHandleGetCaseBuiltin(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleGetCase(w, r, "code-gen", svc)
+		s.handleGetCase(w, r, "code-gen", svc)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cases/code-gen", nil)
@@ -174,8 +178,9 @@ func TestHandleGetCaseBuiltin(t *testing.T) {
 // TestHandleGetCaseNotFound 返回 404。
 func TestHandleGetCaseNotFound(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleGetCase(w, r, "not-exist", svc)
+		s.handleGetCase(w, r, "not-exist", svc)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cases/not-exist", nil)
@@ -190,8 +195,9 @@ func TestHandleGetCaseNotFound(t *testing.T) {
 // TestHandleCreateCase 创建一个自定义 case。
 func TestHandleCreateCase(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleCreateCase(w, r, svc)
+		s.handleCreateCase(w, r, svc)
 	})
 
 	payload, _ := json.Marshal(newTestCreateRequest())
@@ -222,8 +228,9 @@ func TestHandleCreateCase(t *testing.T) {
 // TestHandleCreateCaseValidation 拒绝非法请求。
 func TestHandleCreateCaseValidation(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleCreateCase(w, r, svc)
+		s.handleCreateCase(w, r, svc)
 	})
 
 	invalid := newTestCreateRequest()
@@ -242,13 +249,14 @@ func TestHandleCreateCaseValidation(t *testing.T) {
 // TestHandleUpdateCase 更新一个自定义 case。
 func TestHandleUpdateCase(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	created, err := svc.Create(newTestCreateRequest())
 	if err != nil {
 		t.Fatalf("create case: %v", err)
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleUpdateCase(w, r, created.ID, svc)
+		s.handleUpdateCase(w, r, created.ID, svc)
 	})
 
 	newName := "Updated Case"
@@ -274,8 +282,9 @@ func TestHandleUpdateCase(t *testing.T) {
 // TestHandleUpdateBuiltinCaseRejected 返回 403。
 func TestHandleUpdateBuiltinCaseRejected(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleUpdateCase(w, r, "code-gen", svc)
+		s.handleUpdateCase(w, r, "code-gen", svc)
 	})
 
 	newName := "Hacked"
@@ -293,8 +302,9 @@ func TestHandleUpdateBuiltinCaseRejected(t *testing.T) {
 // TestHandleUpdateCaseNotFound 返回 404。
 func TestHandleUpdateCaseNotFound(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleUpdateCase(w, r, "case-notfound", svc)
+		s.handleUpdateCase(w, r, "case-notfound", svc)
 	})
 
 	newName := "Ghost"
@@ -312,13 +322,14 @@ func TestHandleUpdateCaseNotFound(t *testing.T) {
 // TestHandleDeleteCase 删除一个自定义 case。
 func TestHandleDeleteCase(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	created, err := svc.Create(newTestCreateRequest())
 	if err != nil {
 		t.Fatalf("create case: %v", err)
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteCase(w, r, created.ID, svc)
+		s.handleDeleteCase(w, r, created.ID, svc)
 	})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/cases/"+created.ID, nil)
@@ -340,8 +351,9 @@ func TestHandleDeleteCase(t *testing.T) {
 // TestHandleDeleteBuiltinCaseRejected 返回 403。
 func TestHandleDeleteBuiltinCaseRejected(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleDeleteCase(w, r, "dialogue", svc)
+		s.handleDeleteCase(w, r, "dialogue", svc)
 	})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/cases/dialogue", nil)
@@ -369,9 +381,9 @@ func TestHandleContractLimits(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/contract-limits", nil)
 	rr := httptest.NewRecorder()
 
-	// handleContractLimits 返回一个绑定到 cfg 的 http.HandlerFunc。
-	handler := handleContractLimits(cfg)
-	handler.ServeHTTP(rr, req)
+	// handleContractLimits 是 appServer 方法，测试中构造最小 appServer 实例。
+	s := &appServer{cfg: cfg}
+	s.handleContractLimits(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -408,14 +420,15 @@ func TestHandleContractLimits(t *testing.T) {
 // TestCaseRoutesIntegration 通过 httptest server 跑完整 API。
 func TestCaseRoutesIntegration(t *testing.T) {
 	svc := newCaseService(t)
+	s := &appServer{caseService: svc}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/cases", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			handleListCases(w, r, svc)
+			s.handleListCases(w, r, svc)
 		case http.MethodPost:
-			handleCreateCase(w, r, svc)
+			s.handleCreateCase(w, r, svc)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -428,11 +441,11 @@ func TestCaseRoutesIntegration(t *testing.T) {
 		}
 		switch r.Method {
 		case http.MethodGet:
-			handleGetCase(w, r, id, svc)
+			s.handleGetCase(w, r, id, svc)
 		case http.MethodPut:
-			handleUpdateCase(w, r, id, svc)
+			s.handleUpdateCase(w, r, id, svc)
 		case http.MethodDelete:
-			handleDeleteCase(w, r, id, svc)
+			s.handleDeleteCase(w, r, id, svc)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
