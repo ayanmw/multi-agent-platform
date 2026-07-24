@@ -787,6 +787,11 @@ const activeTaskId = ref<string | null>(null)
 
 - `go build ./...` 通过
 - `go test ./...` 全绿
+- `bash scripts/smoke-test.sh` 59/3（修复后核心流程恢复；剩余 3 项为既有已知缺口：DELETE /api/tools 动态工具删除、/api/checkpoints/recover 无效 task_id 返回 500、POST /api/memories 路由语义与文档差异）
+- `bash scripts/cases-regression.sh` 21/21 PASS
+- `bash scripts/multi-agent-smoke.sh` 12/0/0 PASS
+- `bash scripts/context-window-smoke.sh` 9/0 PASS
+- `bash scripts/policy-smoke.sh` 7/1（ApprovalRule 路径依赖未配置的 WS 审批决策，属于脚本覆盖缺口，非回归）
 
 ---
 
