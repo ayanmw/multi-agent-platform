@@ -8,20 +8,48 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
 // ExecuteContext 携带一次工具执行的上下文信息。
-// 当前仅包含工作目录，未来可扩展 env、timeout、approver 等。
+// 当前包含工作目录以及运行时的 task/agent/step 身份、事件总线和 LLM provider。
+// 这些字段使 tool 能够在保持白盒可观测的前提下发起内部 LLM 调用或广播状态事件。
 type ExecuteContext struct {
 	Workdir string
+
+	// 当前 tool 调用所属的任务/Agent/Step 身份,用于事件与日志。
+	TaskID    string
+	AgentID   string
+	StepIdx   int
+	SessionID string
+
+	// EventBus 允许 tool 向 WebSocket 前端发送事件。
+	// 可能为 nil,调用方应使用 nil-safe 包装。
+	EventBus EventBus
+
+	// LLMProvider 允许 tool 在内部调用 LLM(如 web_research 的摘要)。
+	// 可能为 nil,调用方应检查非空后再使用。
+	LLMProvider LLMProvider
 }
 
-// ToolExecutor 是工具执行体的抽象。它接收执行上下文与输入，返回结构化结果。
-// 通过把执行逻辑抽象为接口，BuiltinTool 与 DynamicTool 可共享同一执行模型，
+// EventBus 是 tool 包需要的事件总线最小接口。
+type EventBus interface {
+	SendEvent(event.Event)
+}
+
+// LLMProvider 是 tool 包对 llm.Provider 的最小使用子集。
+// 通过自定义接口避免 tool 包直接依赖 llm 包,减少循环依赖风险。
+type LLMProvider interface {
+	Chat(req any) (any, error)
+}
+
+// ToolExecutor 是工具执行体的抽象。它接收执行上下文与输入,返回结构化结果。
+// 通过把执行逻辑抽象为接口,BuiltinTool 与 DynamicTool 可共享同一执行模型,
 // 未来 plugin/WASM 实现也能接入。
 type ToolExecutor interface {
-	// Execute 执行工具。ctx 携带这次调用的上下文信息；input 为 LLM/tool_call
-	// 提供的参数 map，必须符合该工具的 JSON Schema。
+	// Execute 执行工具。ctx 携带这次调用的上下文信息;input 为 LLM/tool_call
+	// 提供的参数 map,必须符合该工具的 JSON Schema。
 	Execute(ctx ExecuteContext, input map[string]any) (any, error)
 }
 
@@ -36,7 +64,7 @@ func (e *BuiltinExecutor) Execute(ctx ExecuteContext, input map[string]any) (any
 	return e.Fn(ctx, input)
 }
 
-// DynamicExecutor 根据 ToolDescriptor.ExecutionConfig 中的 type 字段，
+// DynamicExecutor 根据 ToolDescriptor.ExecutionConfig 中的 type 字段,
 // 在 shell / http / inline 三种策略间分派执行。
 type DynamicExecutor struct {
 	desc ToolDescriptor
@@ -62,7 +90,7 @@ func (e *DynamicExecutor) Execute(ctx ExecuteContext, input map[string]any) (any
 	}
 }
 
-// executeShell 运行 ExecutionConfig["command"] 模板，替换 {param} 占位符。
+// executeShell 运行 ExecutionConfig["command"] 模板,替换 {param} 占位符。
 func (e *DynamicExecutor) executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	template, _ := e.desc.ExecutionConfig["command"].(string)
 	cmdStr := sanitizeInput(template, input)
@@ -98,8 +126,8 @@ func (e *DynamicExecutor) executeShell(ctx ExecuteContext, input map[string]any)
 	return result, nil
 }
 
-// executeHTTP 发起 ExecutionConfig["url"] 模板请求，method 由
-// ExecutionConfig["method"] 提供，默认 GET。
+// executeHTTP 发起 ExecutionConfig["url"] 模板请求,method 由
+// ExecutionConfig["method"] 提供,默认 GET。
 func (e *DynamicExecutor) executeHTTP(ctx ExecuteContext, input map[string]any) (any, error) {
 	urlTemplate, _ := e.desc.ExecutionConfig["url"].(string)
 	url := sanitizeInput(urlTemplate, input)
@@ -135,7 +163,7 @@ func (e *DynamicExecutor) executeHTTP(ctx ExecuteContext, input map[string]any) 
 	}, nil
 }
 
-// executeInline 是 inline 代码执行的占位实现，未来可接入受限执行环境。
+// executeInline 是 inline 代码执行的占位实现,未来可接入受限执行环境。
 func (e *DynamicExecutor) executeInline(ctx ExecuteContext, input map[string]any) (any, error) {
 	code, _ := e.desc.ExecutionConfig["code"].(string)
 	return map[string]any{
@@ -146,7 +174,7 @@ func (e *DynamicExecutor) executeInline(ctx ExecuteContext, input map[string]any
 }
 
 // sanitizeInput 将模板字符串中的 {param_name} 占位符替换为输入 map 中的
-// 对应值。未在输入 map 中找到的键保持原样（占位符仍保留在输出中）。
+// 对应值。未在输入 map 中找到的键保持原样(占位符仍保留在输出中)。
 func sanitizeInput(template string, input map[string]any) string {
 	result := template
 	for key, value := range input {

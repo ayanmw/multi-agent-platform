@@ -652,6 +652,7 @@ func RegisterBuiltins(registry *Registry) {
 	registry.Register(NewParseJSONTool())
 	registry.Register(NewExecuteProgramTool())
 	registry.Register(NewWebSearchTool(WebSearchConfig{}))
+	registry.Register(NewWebResearchTool(WebSearchConfig{}))
 }
 
 // SubAgentDispatcher 是 leader agent 派发子 agent 的抽象。

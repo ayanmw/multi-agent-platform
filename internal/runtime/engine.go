@@ -1893,12 +1893,22 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	// 检查 tool call。
 	var result any
 	var execErr error
-	// workdirCtx 携带 per-run 可变 holder 的当前值（worktree 隔离注入）。
-	// holder 为 nil（worktree 未启用）时 Workdir 为空，tool 回退到
-	// input["workdir"]（即上方注入的 session WorkspaceDir），行为与旧路径一致。
-	workdirCtx := tool.ExecuteContext{}
+	// workdirCtx 携带 per-run 可变 holder 的当前值(worktree 隔离注入),
+	// 以及 tool 内部可能用到的 task/agent/step/eventbus/llm-provider。
+	// holder 为 nil(worktree 未启用)时 Workdir 为空,tool 回退到
+	// input["workdir"](即上方注入的 session WorkspaceDir),行为与旧路径一致。
+	workdir := ""
 	if e.cfg.WorkdirHolder != nil {
-		workdirCtx.Workdir = e.cfg.WorkdirHolder.Get()
+		workdir = e.cfg.WorkdirHolder.Get()
+	}
+	workdirCtx := tool.ExecuteContext{
+		Workdir:     workdir,
+		TaskID:      e.taskID,
+		AgentID:     e.cfg.AgentID,
+		StepIdx:     e.stepIdx,
+		SessionID:   e.cfg.SessionID,
+		EventBus:    e.bus,
+		LLMProvider: &llmProviderAdapter{provider: e.llm},
 	}
 	if e.gate != nil {
 		result, execErr = e.gate.Execute(tc.Function.Name, args, func(input map[string]any) (any, error) {
@@ -2003,6 +2013,45 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	//   - tool_call_complete：tool 成功完成及其 duration
 	//   - observation：回喂给 LLM 的数据（"observe" 阶段）
 	//   - step_complete：该 step 在 step 列表中变为 "completed"
+	// 若 tool 内部调用了 LLM(如 web_research 的摘要),result 中可能包含
+	// _llm_usage 字段。这里把它累计到本 task 的 tokenUsage,保证成本统计
+	// 不遗漏 tool 内 LLM 调用的 token。
+	if toolUsage := extractToolLLMUsage(result); toolUsage != nil {
+		e.totalTokens += toolUsage.TotalTokens
+		e.tokenUsage.PromptTokens += toolUsage.PromptTokens
+		e.tokenUsage.PromptCacheHitTokens += toolUsage.PromptCacheHitTokens
+		e.tokenUsage.PromptCacheMissTokens += toolUsage.PromptCacheMissTokens
+		e.tokenUsage.CompletionTokens += toolUsage.CompletionTokens
+		e.tokenUsage.TotalTokens += toolUsage.TotalTokens
+
+		reportModel := e.selectedModel
+		if reportModel == "" {
+			reportModel = e.cfg.Model
+		}
+		if e.cfg.OnLLMUsage != nil {
+			var profile *llm.ModelProfile
+			if e.cfg.Registry != nil {
+				profile = e.cfg.Registry.Get(reportModel)
+			}
+			if profile == nil {
+				profile = &llm.ModelProfile{
+					Name:        reportModel,
+					Provider:    "unknown",
+					InputPrice:  0,
+					OutputPrice: 0,
+				}
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+					}
+				}()
+				e.cfg.OnLLMUsage(reportModel, profile, *toolUsage)
+			}()
+		}
+	}
+
 	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":   tc.Function.Name,
 		"result": result,
@@ -2169,9 +2218,22 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	// 直接执行工具（不经过 PolicyGate，因为用户已批准）。仍走 ExecuteWithCtx
 	// 以透传 per-run workdir holder（worktree 隔离），与主执行路径保持一致。
 	execStart := time.Now()
-	workdirCtx := tool.ExecuteContext{}
+	// workdirCtx 携带 per-run 可变 holder 的当前值(worktree 隔离注入),
+	// 以及 tool 内部可能用到的 task/agent/step/eventbus/llm-provider。
+	// holder 为 nil(worktree 未启用)时 Workdir 为空,tool 回退到
+	// input["workdir"](即上方注入的 session WorkspaceDir),行为与旧路径一致。
+	workdir := ""
 	if e.cfg.WorkdirHolder != nil {
-		workdirCtx.Workdir = e.cfg.WorkdirHolder.Get()
+		workdir = e.cfg.WorkdirHolder.Get()
+	}
+	workdirCtx := tool.ExecuteContext{
+		Workdir:     workdir,
+		TaskID:      e.taskID,
+		AgentID:     e.cfg.AgentID,
+		StepIdx:     e.stepIdx,
+		SessionID:   e.cfg.SessionID,
+		EventBus:    e.bus,
+		LLMProvider: &llmProviderAdapter{provider: e.llm},
 	}
 	result, execErr := e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	execDuration := time.Since(execStart).Milliseconds()
@@ -2189,10 +2251,50 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 		return "", execErr
 	}
 
-	// 工具执行成功 — 发射正常的事件流
+	// 把 tool result 序列化为 JSON 以供 LLM 对话。LLM 期望 tool result 是
+	// JSON 字符串以便解析结构化数据。若序列化失败（行为良好的 tool 极少
+	// 出现），我们仍有原始 result 对象——但 LLM 会收到空字符串。
 	resultJSON, _ := json.Marshal(result)
 	resultStr := string(resultJSON)
 
+	// 若审批后执行的 tool 内部也调用了 LLM,同样累计 usage。
+	if approvedUsage := extractToolLLMUsage(result); approvedUsage != nil {
+		e.totalTokens += approvedUsage.TotalTokens
+		e.tokenUsage.PromptTokens += approvedUsage.PromptTokens
+		e.tokenUsage.PromptCacheHitTokens += approvedUsage.PromptCacheHitTokens
+		e.tokenUsage.PromptCacheMissTokens += approvedUsage.PromptCacheMissTokens
+		e.tokenUsage.CompletionTokens += approvedUsage.CompletionTokens
+		e.tokenUsage.TotalTokens += approvedUsage.TotalTokens
+
+		reportModel := e.selectedModel
+		if reportModel == "" {
+			reportModel = e.cfg.Model
+		}
+		if e.cfg.OnLLMUsage != nil {
+			var profile *llm.ModelProfile
+			if e.cfg.Registry != nil {
+				profile = e.cfg.Registry.Get(reportModel)
+			}
+			if profile == nil {
+				profile = &llm.ModelProfile{
+					Name:        reportModel,
+					Provider:    "unknown",
+					InputPrice:  0,
+					OutputPrice: 0,
+				}
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+					}
+				}()
+				e.cfg.OnLLMUsage(reportModel, profile, *approvedUsage)
+			}()
+		}
+	}
+
+	// 工具执行成功 — 发射正常的事件流
 	e.bus.SendEvent(event.NewEventWithSubTask("tool_call_output", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"tool":   tc.Function.Name,
 		"result": result,
@@ -2224,6 +2326,32 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	})
 
 	return resultStr, nil
+}
+
+// extractToolLLMUsage 从 tool 返回结果中提取内部的 LLM usage,供 engine 累计到
+// task 级 tokenUsage 与 cost records。
+// tool 可通过在返回 map 中放置 "_llm_usage" 字段报告其内部 LLM 调用产生的 token,
+// 结构体字段与 llm.Usage 保持一致。
+func extractToolLLMUsage(result any) *llm.Usage {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := m["_llm_usage"]
+	if !ok || raw == nil {
+		return nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		log.Printf("[Engine] failed to marshal _llm_usage: %v", err)
+		return nil
+	}
+	var usage llm.Usage
+	if err := json.Unmarshal(data, &usage); err != nil {
+		log.Printf("[Engine] failed to unmarshal _llm_usage: %v", err)
+		return nil
+	}
+	return &usage
 }
 
 // sendAgentMessage 通过 AgentBus 向另一个 agent 发送消息。

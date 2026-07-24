@@ -365,7 +365,7 @@ func WebResearchCase() Case {
 	return Case{
 		ID:          "web-research",
 		Name:        "Web 调研",
-		Description: "Agent 使用 web_search 搜索、fetch_url 抓取、parse_json 提取结构，产出带 URL 引用的调研报告。",
+		Description: "Agent 使用 web_search 搜索、fetch_url 抓取、parse_json 提取结构，产出带 URL 引用的调研报告。你也可以直接调用 core/web_research，它会在一次 tool call 内完成搜索、抓取与 LLM 摘要。",
 		Icon:        "🌐",
 		Category:    "research",
 		IsBuiltin:   true,
@@ -374,7 +374,8 @@ func WebResearchCase() Case {
 2. Use core/fetch_url on the most promising result to read details
 3. Use core/parse_json if the page returns JSON (e.g. API endpoints)
 4. Write a concise report to web-research/report.md with URLs cited
-5. If the web search is not available, state the limitation clearly`,
+5. When you just need a compact answer with sources, use core/web_research instead
+6. If the web search is not available, state the limitation clearly`,
 		DefaultInput: "Research the current top 3 cloud providers' market share in 2026. Cite sources and save a short report to web-research/report.md.",
 		Contract: harness.TaskContract{
 			Goal:     "Use web_search, fetch_url and parse_json to research a topic",
@@ -398,7 +399,7 @@ func WebResearchCase() Case {
 				},
 			},
 		},
-		Tags: []string{"L2", "web-search", "research", "tools:web_search", "tools:fetch_url", "tools:parse_json", "network"},
+		Tags: []string{"L2", "web-search", "research", "tools:web_search", "tools:web_research", "tools:fetch_url", "tools:parse_json", "network"},
 	}
 }
 

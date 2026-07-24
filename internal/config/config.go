@@ -72,9 +72,12 @@ type Config struct {
 
 	// WebSearch 配置映射到用于选择 provider 与 API key 的环境变量。
 	// 在 Load() 中加载,以便 server 能接入 core/web_search 工具。
-	// DuckDuckGo 是零 key 的兜底方案;其他所有 provider 默认关闭。
+	// DuckDuckGo 是零 key 的兜底方案;由于网络环境限制,默认关闭。
 	WebSearchProvider       string // WEBSEARCH_PROVIDER
 	WebSearchDisableDDG     bool   // WEBSEARCH_DISABLE_DDG
+	WebSearchEnableBaidu    bool   // WEBSEARCH_ENABLE_BAIDU
+	WebSearchEnableSogou    bool   // WEBSEARCH_ENABLE_SOGOU
+	WebSearchEnableBingCnHTML bool // WEBSEARCH_ENABLE_BING_CN_HTML
 	WebSearchEnableExa      bool   // WEBSEARCH_ENABLE_EXA
 	WebSearchEnableParallel bool   // WEBSEARCH_ENABLE_PARALLEL
 	WebSearchExaAPIKey      string // WEBSEARCH_EXA_API_KEY
@@ -226,11 +229,21 @@ func Load() (*Config, error) {
 	}
 
 	// WebSearch provider 配置。
+	cfg.WebSearchDisableDDG = true
 	if v := os.Getenv("WEBSEARCH_PROVIDER"); v != "" {
 		cfg.WebSearchProvider = v
 	}
 	if v := os.Getenv("WEBSEARCH_DISABLE_DDG"); v != "" {
 		cfg.WebSearchDisableDDG = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_BAIDU"); v != "" {
+		cfg.WebSearchEnableBaidu = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_SOGOU"); v != "" {
+		cfg.WebSearchEnableSogou = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("WEBSEARCH_ENABLE_BING_CN_HTML"); v != "" {
+		cfg.WebSearchEnableBingCnHTML = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := os.Getenv("WEBSEARCH_ENABLE_EXA"); v != "" {
 		cfg.WebSearchEnableExa = strings.EqualFold(v, "true") || v == "1"

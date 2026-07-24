@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-24
-> **当前版本**: v0.13.0 Alpha（Phase 8-B 架构收尾：动态工具 DB 持久化+启动加载；DynamicTool 委托 DynamicExecutor；AgentRunner.Recover 收口；handler 全方法化；闭包退场）
+> **当前版本**: v0.13.1 Alpha（web_search 国内引擎 + web_research 工具；DuckDuckGo 默认关闭，新增 Baidu/Sogou/Bing China HTML 零 key provider，支持显式 WEBSEARCH_PROVIDER）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)
 ```
 
 ---
@@ -969,5 +969,5 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.3 Alpha | 2026-07-23 | extend-task-cases: 内置 Case 矩阵 5→21（L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排）+ `cases_test.go` 完整性校验 + `internal/llm/mock_builtin.go` 22 个 mock 脚本（21 case + tool-error 回退）+ `mock_provider.go` selectScript 两档 CaseID 评分（精确 +1000 / 子串 +500，防 research 劫持）+ `scripts/cases-regression.sh` mock 回归 21/21（WS 重连订阅编排事件 + Windows PYTHONUTF8=1）；OpenSpec change 已归档 `openspec/changes/archive/2026-07-23-extend-task-cases/` 并产出 `task-cases` / `multi-agent-orchestration` 两份能力规格 |
 | v0.12.0 Alpha | 2026-07-23 | Phase 8-A 架构演进（范围 B）: AgentRunner + AgentRunSpec 收口启动链路；Tool 接口扩展 Version/Source/CanonicalName，Registry 支持多版本；ToolDescriptor / ToolExecutor / ToolLoader 抽象；v27 tools 表迁移；DB InsertAgent/UpdateAgent options struct 化；cmd/server 拆分为 main.go / api.go / server.go / runner.go；chat / cron / multi-agent / run-case 入口统一改走 AgentRunner.Run(spec)（删除 20+ 参数 runAgentLoop* 包级函数）；更新 ROADMAP 与 CLAUDE.md |
 | v0.12.1 Alpha | 2026-07-23 | real-llm-smoke 收尾 + 产物隔离: `scripts/real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 4 个 timeout 假阳性 + 全量 21 case 真实 LLM 评测（PASS=143/SKIP=20/FAIL=0，零平台 bug）+ 产物 CWD 隔离到 `workspace/smoke-server/run-*`（不自动清理，SMOKE_FRESH=1 清空）；`internal/config/config.go` ENV_FILE 绝对路径加载 .env；后端 workspace 三层兜底——`handleRunCase` 无 session 自动建匿名 session + workspace（L1）/ `resolveSession` 新建 session 绑默认 workspace 覆盖所有无 session 入口（L2）/ `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`（L3）；20 个 SKIP 中 5 个映射 7-H2 已知遗留（policy-enforcement PolicyGate 未触发 + multi-agent/sequential/review 编排事件缺失），15 个为 real-LLM 不可控行为偏差 |
-| v0.13.0 Alpha | 2026-07-24 | Phase 8-B 架构收尾: 动态工具 DB 持久化+启动加载（v27 tools 表）+ DynamicTool 委托 DynamicExecutor + AgentRunner.Recover 收口 + Registry.ExecuteWithCtx Workdir 注入 + 内置工具读 ExecuteContext.Workdir + handler 全方法化 + taskActionRegistry 注册表分发 + 闭包退场；cmd/server 新增 tasks_api.go / checkpoint_api.go；`go test ./...` 全绿 |
+| v0.13.1 Alpha | 2026-07-24 | web_search 国内引擎与 web_research 工具: `internal/tool/web_search.go` 接入 Baidu mobile / Sogou / Bing China HTML 三个零 key 国内 provider，`WEBSEARCH_DISABLE_DDG` 默认 true，支持 `WEBSEARCH_PROVIDER=baidu` 显式选择；新增 `core/web_research` 深度研究工具（搜索→抓取 top-N→LLM JSON 摘要），通过 `tool.LLMProvider` 调用内部 LLM，返回 `_llm_usage` 供 engine 累计；新增 `web_research_summarize_started/completed` 事件与前端 EventType；`internal/tool/prompt.go` 集中管理 `web-research-summarize-system` prompt；`internal/cases/cases.go` 的 web-research case 提及 web_research 可一次调用替代；单元测试覆盖解析器、显式 provider、摘要/降级/usage 回传；`go test ./...` 全绿 |
 | v0.12.2 Alpha | 2026-07-23 | Phase worktree: session 级 git worktree 隔离工作区 — `internal/workspace` Manager 原语（Create/Keep/Remove/Get/List + 未提交护栏 + repoDir）+ WorkdirHolder（per-run 可变 CWD 单一事实源）+ `worktree/create·exit·status` 三个 Agent Tool + REST API（create/get，不暴露 exit）+ v28 `sessions.active_worktree_id` migration + 启动孤儿扫描兜底 + `worktree_*` 事件 + `WORKTREE_ENABLED` 配置；Engine 用 holder 覆盖 args["workdir"] 使 FileScopeRule scope 跟随 worktree；无 session 结束钩子（LLM 主动 exit + 孤儿扫描）；完全向后兼容，mock 回归 21/21 不受影响 |
