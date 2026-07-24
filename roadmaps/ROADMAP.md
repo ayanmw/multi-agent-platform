@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-24
-> **当前版本**: v0.13.2 Alpha（web_search 国内引擎 + web_research 工具；DuckDuckGo 默认关闭，新增 Baidu/Sogou/Bing China HTML 零 key provider，支持显式 WEBSEARCH_PROVIDER）
+> **当前版本**: v0.13.3 Alpha（Phase 8-B cleanup-2: 动态工具持久化确认、recovery 404 处理、makeRunnerDeps 删除；为 v0.14.0 Beta 做准备）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -409,7 +409,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 **目标**: 动态工具持久化、handler 方法化、闭包退场
 
 **完成日期**: 2026-07-24
-**Git commit**: `678e9e0`
+**Git commit**: `55f1280`; cleanup-2 迭代提交 `029c3f9`
 
 ### 交付物
 - [x] 动态工具 DB 持久化 + 启动加载（v27 tools 表）
@@ -425,6 +425,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] 动态工具重启后仍在
 - [x] `go test ./...` 全绿
 - [x] 无 20+ 参数包级函数
+- [x] recovery checkpoint 缺失返回 404
+- [x] 删除 `makeRunnerDeps`
 
 ---
 
@@ -502,6 +504,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.0 Alpha | 2026-07-24 | Phase 8-B 架构收尾 + UI-v2 / 7-H2 主体完成: 动态工具 DB 持久化+启动加载（v27 tools 表）+ DynamicTool 委托 DynamicExecutor + AgentRunner.Recover 收口 + Registry.ExecuteWithCtx Workdir 注入 + 内置工具读 ExecuteContext.Workdir + handler 全方法化 + taskActionRegistry 注册表分发 + 闭包退场（cmd/server 新增 tasks_api.go / checkpoint_api.go，`go test ./...` 全绿）；文档/memory 状态同步，将 UI-v2 控制室与 7-H2 编排闭环从"进行中"改为"已完成主体"，并记录端到端冒烟与 real-LLM leader-dispatch 可靠性为真实遗留项；OpenSpec cleanup-residual-bugs-and-docs 归档 |
 | v0.13.1 Alpha | 2026-07-24 | UI-v2 移动端可用性修复: MobileNav 5-tab、TopBar More 抽屉、Manage/Context bottom sheet、CommandBar flex 布局、Inspector 全屏、44×44 触控目标、`aria-label` 补齐、`MobileBottomSheet.vue` + 单测 5 例；`npx vue-tsc`/`npx vitest run` 全绿；OpenSpec `v2-mobile-usability-fix` 已归档 |
 | v0.12.2 Alpha | 2026-07-23 | Phase worktree: session 级 git worktree 隔离工作区 — `internal/workspace` Manager 原语（Create/Keep/Remove/Get/List + 未提交护栏 + repoDir）+ WorkdirHolder（per-run 可变 CWD 单一事实源）+ `worktree/create·exit·status` 三个 Agent Tool + REST API（create/get，不暴露 exit）+ v28 `sessions.active_worktree_id` migration + 启动孤儿扫描兜底 + `worktree_*` 事件 + `WORKTREE_ENABLED` 配置；Engine 用 holder 覆盖 args["workdir"] 使 FileScopeRule scope 跟随 worktree；无 session 结束钩子（LLM 主动 exit + 孤儿扫描）；完全向后兼容，mock 回归 21/21 不受影响 |
+| v0.13.3 Alpha | 2026-07-24 | Phase 8-B cleanup-2: 动态工具持久化与启动加载集成测试（注册→重启加载→删除）+ DynamicTool 委托 DynamicExecutor 测试扩展 + Engine ExecuteContext.Workdir 注入验证 + AgentRunner.Recover 缺失 checkpoint 返回 404 + 删除 makeRunnerDeps + 更新 ROADMAP / tasks.md |
 | v0.13.2 Alpha | 2026-07-24 | web_search 国内引擎与 web_research 工具: `internal/tool/web_search.go` 接入 Baidu mobile / Sogou / Bing China HTML 三个零 key 国内 provider，`WEBSEARCH_DISABLE_DDG` 默认 true，支持 `WEBSEARCH_PROVIDER=baidu` 显式选择；新增 `core/web_research` 深度研究工具（搜索→抓取 top-N→LLM JSON 摘要），通过 `tool.LLMProvider` 调用内部 LLM，返回 `_llm_usage` 供 engine 累计；新增 `web_research_summarize_started/completed` 事件与前端 EventType；`internal/tool/prompt.go` 集中管理 `web-research-summarize-system` prompt；`internal/cases/cases.go` 的 web-research case 提及 web_research 可一次调用替代；单元测试覆盖解析器、显式 provider、摘要/降级/usage 回传；真实网络探测中 Sogou/Bing China 可返回结果，Baidu 未登录请求被验证码拦截；OpenSpec `web-search-china-providers` 已归档 `openspec/changes/archive/2026-07-24-web-search-china-providers/` |
 
 ---
