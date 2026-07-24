@@ -53,8 +53,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -811,14 +811,89 @@ func (ae *AcceptanceEvaluator) checkContentContains(criterion AcceptanceCriterio
 // 注意：此处刻意限制 —— 使用较短超时且不允许任意命令。它面向测试 runner 与校验命令，
 // 不用于通用 shell 执行。
 func (ae *AcceptanceEvaluator) checkShell(criterion AcceptanceCriterion, start time.Time) EvalResult {
-	// TODO: Phase 5 —— 当前 shell 验收检查未真正执行，等待 Docker sandbox 完成后实现。
-	// 在此之前使用 soft pass，但明确打日志，避免被忽略。
-	log.Printf("[AcceptanceEvaluator] shell check soft-pass (not implemented): type=%s target=%q", criterion.Type, criterion.Target)
+	cmdText := strings.TrimSpace(criterion.Target)
+	if cmdText == "" {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   "Shell criterion target is empty",
+			Duration:  time.Since(start).Milliseconds(),
+		}
+	}
+
+	// 安全限制：拒绝危险字符与命令，避免 acceptance criterion 被用于任意命令执行。
+	// 允许的字符：字母数字、下划线、点、斜杠、连字符、冒号、等号、空格、引号、@、#、
+	// 逗号、括号、管道、重定向与 &&/|| 仍处于禁止状态。
+	if strings.ContainsAny(cmdText, ";&$`\"\\") {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   fmt.Sprintf("Shell command contains forbidden characters: %s", criterion.Target),
+			Duration:  time.Since(start).Milliseconds(),
+		}
+	}
+
+	// 白名单校验：命令必须是可执行文件路径或常见单命令名。
+	// 第一阶段只支持 "go", "python" (含 python3), "node", "npm", "git" 前缀的命令
+	// 或其绝对路径形式。后续可按需要扩展白名单。
+	allowedPrefixes := []string{"go ", "python ", "python3 ", "node ", "npm ", "git "}
+	lower := strings.ToLower(cmdText)
+	ok := false
+	for _, p := range allowedPrefixes {
+		if strings.HasPrefix(lower, p) {
+			ok = true
+			break
+		}
+	}
+	// 也允许绝对路径形式的可执行文件（如 /usr/bin/git status）
+	if !ok && (filepath.IsAbs(cmdText) || strings.HasPrefix(cmdText, "./")) {
+		ok = true
+	}
+	if !ok {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   fmt.Sprintf("Shell command not in allowed prefix list: %s", criterion.Target),
+			Duration:  time.Since(start).Milliseconds(),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdText)
+	cmd.Dir = ae.scope
+	output, err := cmd.CombinedOutput()
+	duration := time.Since(start).Milliseconds()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   fmt.Sprintf("Shell command timed out after 60s: %s", criterion.Target),
+			Duration:  duration,
+		}
+	}
+
+	if err != nil {
+		exitErr, isExit := err.(*exec.ExitError)
+		exitCode := -1
+		if isExit && exitErr.ProcessState != nil {
+			exitCode = exitErr.ProcessState.ExitCode()
+		}
+		return EvalResult{
+			Criterion: criterion,
+			Passed:    false,
+			Message:   fmt.Sprintf("Shell command failed (exit %d): %s\n%s", exitCode, criterion.Target, truncateForDisplay(string(output), 500)),
+			Duration:  duration,
+		}
+	}
+
 	return EvalResult{
 		Criterion: criterion,
-		Passed:    true, // soft pass —— 不因未实现的检查而阻塞
-		Message:   fmt.Sprintf("Shell check soft-pass (not yet implemented): %s. Full implementation in Phase 5 with Docker sandbox.", criterion.Target),
-		Duration:  time.Since(start).Milliseconds(),
+		Passed:    true,
+		Message:   fmt.Sprintf("Shell command succeeded: %s", truncateForDisplay(string(output), 200)),
+		Duration:  duration,
 	}
 }
 

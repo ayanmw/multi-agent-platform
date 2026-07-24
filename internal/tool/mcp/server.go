@@ -74,7 +74,7 @@ const (
 	SourceDB Source = "db"
 
 	// SourceMarket 是从外部 MCP marketplace 安装的来源。
-	// TODO: Phase 6 — 将 marketplace 适配器接入 Manager.Install。
+	// Manager.InstallFromMarket 与 InstallFromMarketIfMissing 已实现 SourceMarket 安装路径。
 	SourceMarket Source = "market"
 )
 

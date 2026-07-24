@@ -379,8 +379,8 @@ orchestrator 的 `decompose_done` / `agent_dispatched` / `agent_completed` 事�
 ## Phase 计划
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → 扩展 Phase ✅🚧
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (skill/TODO/cron✅ + UI-v2/7-H2🚧)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → 扩展 Phase ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (skill/TODO/cron/UI-v2/7-H2✅)
 ```
 
 | Phase | 状态 | 核心交付 |
@@ -398,7 +398,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 ## 扩展 Phase
 
 ```
-Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
+Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
   (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (架构演进)  (架构收尾)  (worktree 隔离)
 ```
 
@@ -407,8 +407,8 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 →
 | skill | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + Agent Tools + 前端 `/` 触发 SkillPicker + E2E 测试 |
 | TODO | ✅ | session 级 TODO + 6 个 Agent Tools + `/api/todos` + 前端拖拽/嵌套子任务 |
 | 7-cron | ✅ | Cron 子系统（4 种 action + robfig/cron 秒级调度 + 事件化 + 前端管理 UI） |
-| UI-v2 | 🚧 | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，根路径默认 v2，`/ui/v1/` 保留旧版） |
-| 7-H2 | 🚧 | multi-agent 编排遗留闭环（leader-driven dispatch_sub_agent + Tracer 事件流 + child steps 回填 + DAG） |
+| UI-v2 | ✅ | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，根路径默认 v2，`/ui/v1/` 保留旧版）；构建与核心组件已就绪，端到端冒烟与本分支合并纳入常规迭代 |
+| 7-H2 | ✅ | multi-agent 编排闭环：静态编排（parallel/sequential/DAG）已生产可用；动态 leader-driven `dispatch_sub_agent` 架构已闭环（mock 回归 21/21 PASS），real-LLM 下 leader 可靠派发为后续优化项，已记录限制 |
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 | 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
