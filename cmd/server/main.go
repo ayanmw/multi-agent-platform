@@ -1112,7 +1112,7 @@ func initDualLogging(logPath string) error {
 // handleSessionWorkspaceBrowse 返回 session workspace 目录的 JSON 元信息，
 // 包含供前端一键跳转的 browse URL。
 // GET /api/sessions/{id}/workspace-browse
-func handleSessionWorkspaceBrowse(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (s *appServer) handleSessionWorkspaceBrowse(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess, err := db.QuerySessionByID(sessionID)
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
@@ -1144,7 +1144,7 @@ type workspaceFileNode struct {
 //     在文件很多的工作目录下把响应撑爆。
 //   - 路径校验复用 /s/ 静态服务的同款 prefix 校验，确保相对路径不会逃出 workspace。
 //   - 排序：目录在前、文件在后，各自按名称升序，前端直接渲染即可。
-func handleSessionWorkspaceTree(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (s *appServer) handleSessionWorkspaceTree(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess, err := db.QuerySessionByID(sessionID)
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)

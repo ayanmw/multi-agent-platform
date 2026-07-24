@@ -399,6 +399,9 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 		if h == nil {
 			return
 		}
+		// 给 listener goroutine 启动并进入 select 的时间，避免消息在 listener
+		// 注册 handler 之后、但 select 循环开始之前到达而被丢弃。
+		time.Sleep(10 * time.Millisecond)
 		h(sent)
 	}()
 
@@ -406,6 +409,10 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Fatalf("engine.Run returned unexpected error: %v", err)
 	}
+
+	// AgentBus listener 与 engine Run 并发。消息注入后可能需要等 listener
+	// 处理完并发出 step 事件，再读取 recordingBus。给点缓冲时间避免竞态。
+	time.Sleep(100 * time.Millisecond)
 
 	var startCount, completeCount, receivedCount int
 	for _, evt := range bus.events {

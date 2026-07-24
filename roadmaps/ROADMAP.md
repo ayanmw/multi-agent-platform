@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-23
-> **当前版本**: v0.12.2 Alpha（session 级 git worktree 隔离工作区：per-run 可变 CWD + worktree/* Agent Tools + 启动孤儿扫描兜底；叠加 8-B real-llm-smoke 全量收尾 PASS=143/SKIP=20/FAIL=0 + 产物隔离 + workspace 三层兜底）
+> **最近更新**: 2026-07-24
+> **当前版本**: v0.13.0 Alpha（Phase 8-B 架构收尾：动态工具 DB 持久化+启动加载；DynamicTool 委托 DynamicExecutor；AgentRunner.Recover 收口；handler 全方法化；闭包退场）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase worktree ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)    (worktree 隔离)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)
 ```
 
 ---
@@ -742,6 +742,43 @@ const activeTaskId = ref<string | null>(null)
 
 ---
 
+## Phase 8-B: 架构收尾 — 动态工具持久化 + ExecuteWithCtx + handler 方法化 + 闭包退场 ✅ 已完成（2026-07-24）
+
+> **日期**: 2026-07-24
+> **版本**: v0.13.0 Alpha
+> **设计文档**: `docs/superpowers/specs/2026-07-22-phase-8a-architecture-evolution-design.md`（8-B 沿用 8-A 设计思路）
+> **执行计划**: `docs/superpowers/plans/2026-07-23-phase-8b-architecture-cleanup-plan.md`
+
+### 目标
+
+让 Phase 8-A 造好但未接线的抽象（AgentRunner / ToolDescriptor / Executor / Loader / v27 tools 表）真正接上，同时消除 HTTP handler 层的上帝函数与 main.go 闭包，使动态工具持久化、执行上下文 Workdir、recovery 路径全部收口。
+
+### 交付物
+
+- [x] `cmd/server/tool_api.go`: `handleRegisterTool`/`handleDeleteTool` 改为 `appServer` 方法；持久化走 `db.InsertToolV2` / `db.DeleteToolV2`；冲突检查改 `CanonicalName`
+- [x] `cmd/server/main.go`: 启动期加载 DB 动态工具（跳过无 `execution_config` 的旧记录）；`startChatTask` 改为 `appServer.startChatTask` 方法；cron 初始化顺序调整
+- [x] `internal/tool/dynamic.go`: `DynamicTool` 委托 `DynamicExecutor`，移除私有 `executeShell/executeHTTP/executeInline`；`SetCommand/SetHTTP/SetCode` 同步更新 descriptor + 重建 executor
+- [x] `internal/tool/loader.go`: 删除 `BuiltInToolLoader`，保留 `ToolLoader/RecordLoader/DBToolLoader`
+- [x] `internal/tool/registry.go`: 新增 `ExecuteWithCtx`，用类型断言分派 `BuiltinTool`/`DynamicTool` 的上下文执行入口
+- [x] `internal/tool/builtin.go`: `run_shell/write_file/read_file` executor 优先读 `ExecuteContext.Workdir`
+- [x] `internal/runtime/engine.go`: `executeToolCall` 改调 `tools.ExecuteWithCtx`；AgentBus listener 新增 `engineRunDone` 分支，Run 返回时有序退出
+- [x] `cmd/server/runner.go`: 新增 `RecoverSpec` 与 `AgentRunner.Recover`，补齐 EngineConfig（Router/Registry/Providers/SkillRegistry/ActiveSkills/OnLLMUsage 等）
+- [x] `cmd/server/checkpoint_api.go`（新增）: `handleRecoverCheckpoint`/`handleListCheckpoints` 迁出并方法化
+- [x] `cmd/server/tasks_api.go`（新增）: `handleTasksRoot` + `taskActionRegistry` + `actionChat/actionMultiAgent/actionStreamDemo`
+- [x] `cmd/server/server.go`: `appServer` 字段按子系统分组；`registerRoutes` 改直接调用 `s.handleXxx` 方法值；删除透传样板
+- [x] `cmd/server/cron_api.go`: cron REST handler 方法化；`appCronStarter` 捕获 `*appServer`
+- [x] `cmd/server/api.go`: 约 30 个包级 handler 全部改为 `appServer` 方法
+- [x] `cmd/server/api_skill.go` / `api_todo.go` / `mcp_api.go` / `mock_api.go` / `model_price_api.go`: 子路由注册函数与 handler 方法化
+- [x] 测试修复: `cmd/server/*_test.go` 统一改为构造 `appServer` 实例调用方法；修复 `internal/runtime/TestAgentBusMessageCreatesInputStep` 并发竞态
+- [x] 更新 `roadmaps/ROADMAP.md` 与 `CLAUDE.md` Phase 表与项目结构
+
+### 验证基准
+
+- `go build ./...` 通过
+- `go test ./...` 全绿
+
+---
+
 ## Phase 7: 生产化与深度集成 🔜 规划中（暂不实施）
 
 ### 候选特性
@@ -932,4 +969,5 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.3 Alpha | 2026-07-23 | extend-task-cases: 内置 Case 矩阵 5→21（L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排）+ `cases_test.go` 完整性校验 + `internal/llm/mock_builtin.go` 22 个 mock 脚本（21 case + tool-error 回退）+ `mock_provider.go` selectScript 两档 CaseID 评分（精确 +1000 / 子串 +500，防 research 劫持）+ `scripts/cases-regression.sh` mock 回归 21/21（WS 重连订阅编排事件 + Windows PYTHONUTF8=1）；OpenSpec change 已归档 `openspec/changes/archive/2026-07-23-extend-task-cases/` 并产出 `task-cases` / `multi-agent-orchestration` 两份能力规格 |
 | v0.12.0 Alpha | 2026-07-23 | Phase 8-A 架构演进（范围 B）: AgentRunner + AgentRunSpec 收口启动链路；Tool 接口扩展 Version/Source/CanonicalName，Registry 支持多版本；ToolDescriptor / ToolExecutor / ToolLoader 抽象；v27 tools 表迁移；DB InsertAgent/UpdateAgent options struct 化；cmd/server 拆分为 main.go / api.go / server.go / runner.go；chat / cron / multi-agent / run-case 入口统一改走 AgentRunner.Run(spec)（删除 20+ 参数 runAgentLoop* 包级函数）；更新 ROADMAP 与 CLAUDE.md |
 | v0.12.1 Alpha | 2026-07-23 | real-llm-smoke 收尾 + 产物隔离: `scripts/real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 4 个 timeout 假阳性 + 全量 21 case 真实 LLM 评测（PASS=143/SKIP=20/FAIL=0，零平台 bug）+ 产物 CWD 隔离到 `workspace/smoke-server/run-*`（不自动清理，SMOKE_FRESH=1 清空）；`internal/config/config.go` ENV_FILE 绝对路径加载 .env；后端 workspace 三层兜底——`handleRunCase` 无 session 自动建匿名 session + workspace（L1）/ `resolveSession` 新建 session 绑默认 workspace 覆盖所有无 session 入口（L2）/ `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`（L3）；20 个 SKIP 中 5 个映射 7-H2 已知遗留（policy-enforcement PolicyGate 未触发 + multi-agent/sequential/review 编排事件缺失），15 个为 real-LLM 不可控行为偏差 |
+| v0.13.0 Alpha | 2026-07-24 | Phase 8-B 架构收尾: 动态工具 DB 持久化+启动加载（v27 tools 表）+ DynamicTool 委托 DynamicExecutor + AgentRunner.Recover 收口 + Registry.ExecuteWithCtx Workdir 注入 + 内置工具读 ExecuteContext.Workdir + handler 全方法化 + taskActionRegistry 注册表分发 + 闭包退场；cmd/server 新增 tasks_api.go / checkpoint_api.go；`go test ./...` 全绿 |
 | v0.12.2 Alpha | 2026-07-23 | Phase worktree: session 级 git worktree 隔离工作区 — `internal/workspace` Manager 原语（Create/Keep/Remove/Get/List + 未提交护栏 + repoDir）+ WorkdirHolder（per-run 可变 CWD 单一事实源）+ `worktree/create·exit·status` 三个 Agent Tool + REST API（create/get，不暴露 exit）+ v28 `sessions.active_worktree_id` migration + 启动孤儿扫描兜底 + `worktree_*` 事件 + `WORKTREE_ENABLED` 配置；Engine 用 holder 覆盖 args["workdir"] 使 FileScopeRule scope 跟随 worktree；无 session 结束钩子（LLM 主动 exit + 孤儿扫描）；完全向后兼容，mock 回归 21/21 不受影响 |

@@ -85,7 +85,7 @@ func wtAPIHarness(t *testing.T) (*httptest.Server, *ws.Hub) {
 	hub := ws.NewHub()
 	go hub.Run()
 	mux := http.NewServeMux()
-	RegisterWorkspaceAPI(mux, hub)
+	RegisterWorkspaceAPI(mux, &appServer{hub: hub})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, hub

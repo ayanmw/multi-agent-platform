@@ -56,28 +56,30 @@ func TestHandleSessionWorkspaceTree(t *testing.T) {
 
 	// 插入一条 session 记录，WorkspaceDir 指向上面构造的临时目录。
 	sess := db.SessionRecord{
-		ID:          "sess_tree_1",
-		Name:        "tree-test",
-		RootTaskID:  "",
-		Status:      "running",
-		UserInput:   "",
-		ProjectID:   "default",
-		TurnCount:   0,
-		TotalTokens: 0,
-		ContextSize: 0,
-		WorkspaceDir: root,
+		ID:            "sess_tree_1",
+		Name:          "tree-test",
+		RootTaskID:    "",
+		Status:        "running",
+		UserInput:     "",
+		ProjectID:     "default",
+		TurnCount:     0,
+		TotalTokens:   0,
+		ContextSize:   0,
+		WorkspaceDir:  root,
 		WorkspaceAuto: false,
-		CreatedAt:   time.Now().UTC().Truncate(time.Second),
-		UpdatedAt:   time.Now().UTC().Truncate(time.Second),
+		CreatedAt:     time.Now().UTC().Truncate(time.Second),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Second),
 	}
 	if err := db.InsertSession(sess); err != nil {
 		t.Fatalf("InsertSession: %v", err)
 	}
 
+	s := &appServer{}
+
 	// 顶层请求：应得到 sub（目录） + a.txt（文件），且 .hidden 不出现。
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/sess_tree_1/workspace-tree", nil)
 	rr := httptest.NewRecorder()
-	handleSessionWorkspaceTree(rr, req, "sess_tree_1")
+	s.handleSessionWorkspaceTree(rr, req, "sess_tree_1")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
@@ -108,7 +110,7 @@ func TestHandleSessionWorkspaceTree(t *testing.T) {
 	// 子目录请求：path=sub，应只得到 b.go。
 	req2 := httptest.NewRequest(http.MethodGet, "/api/sessions/sess_tree_1/workspace-tree?path=sub", nil)
 	rr2 := httptest.NewRecorder()
-	handleSessionWorkspaceTree(rr2, req2, "sess_tree_1")
+	s.handleSessionWorkspaceTree(rr2, req2, "sess_tree_1")
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("sub status = %d, want 200; body=%s", rr2.Code, rr2.Body.String())
 	}
@@ -140,21 +142,23 @@ func TestHandleSessionWorkspaceTreeTraversal(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(secret) })
 
 	sess := db.SessionRecord{
-		ID:          "sess_tree_2",
-		Name:        "traversal-test",
-		WorkspaceDir: root,
-		CreatedAt:   time.Now().UTC().Truncate(time.Second),
-		UpdatedAt:   time.Now().UTC().Truncate(time.Second),
+		ID:            "sess_tree_2",
+		Name:          "traversal-test",
+		WorkspaceDir:  root,
+		CreatedAt:     time.Now().UTC().Truncate(time.Second),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Second),
 	}
 	if err := db.InsertSession(sess); err != nil {
 		t.Fatalf("InsertSession: %v", err)
 	}
 
+	s := &appServer{}
+
 	cases := []string{"..", "../outside_secret.txt", "/etc", "sub/../../.."}
 	for _, p := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/api/sessions/sess_tree_2/workspace-tree?path="+p, nil)
 		rr := httptest.NewRecorder()
-		handleSessionWorkspaceTree(rr, req, "sess_tree_2")
+		s.handleSessionWorkspaceTree(rr, req, "sess_tree_2")
 		if rr.Code != http.StatusBadRequest && rr.Code != http.StatusForbidden {
 			t.Errorf("path=%q: status = %d, want 400/403; body=%s", p, rr.Code, rr.Body.String())
 		}
@@ -165,18 +169,19 @@ func TestHandleSessionWorkspaceTreeTraversal(t *testing.T) {
 func TestHandleSessionWorkspaceTreeEmptyWorkspace(t *testing.T) {
 	setupSessionTreeDB(t)
 	sess := db.SessionRecord{
-		ID:          "sess_tree_3",
-		Name:        "empty-ws",
-		WorkspaceDir: "",
-		CreatedAt:   time.Now().UTC().Truncate(time.Second),
-		UpdatedAt:   time.Now().UTC().Truncate(time.Second),
+		ID:            "sess_tree_3",
+		Name:          "empty-ws",
+		WorkspaceDir:  "",
+		CreatedAt:     time.Now().UTC().Truncate(time.Second),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Second),
 	}
 	if err := db.InsertSession(sess); err != nil {
 		t.Fatalf("InsertSession: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/sess_tree_3/workspace-tree", nil)
 	rr := httptest.NewRecorder()
-	handleSessionWorkspaceTree(rr, req, "sess_tree_3")
+	s := &appServer{}
+	s.handleSessionWorkspaceTree(rr, req, "sess_tree_3")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}

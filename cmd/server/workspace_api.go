@@ -154,7 +154,7 @@ var globalWorkspaceStore = worktreeSessionStoreAdapter{}
 //
 // 端点仅 create + get，**不注册 exit**（见 spec: Worktree REST API）。
 // globalWorkspaceMgr 为 nil 时端点返回 503。
-func RegisterWorkspaceAPI(mux *http.ServeMux, hub *ws.Hub) {
+func RegisterWorkspaceAPI(mux *http.ServeMux, srv *appServer) {
 	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 		if !strings.HasSuffix(path, "/worktree") {
@@ -172,9 +172,9 @@ func RegisterWorkspaceAPI(mux *http.ServeMux, hub *ws.Hub) {
 		}
 		switch r.Method {
 		case http.MethodPost:
-			handleWorktreeCreate(w, r, sessionID, hub)
+			srv.handleWorktreeCreate(w, r, sessionID)
 		case http.MethodGet:
-			handleWorktreeGet(w, r, sessionID)
+			srv.handleWorktreeGet(w, r, sessionID)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -183,7 +183,7 @@ func RegisterWorkspaceAPI(mux *http.ServeMux, hub *ws.Hub) {
 
 // handleWorktreeCreate 处理 POST /api/sessions/:id/worktree。
 // body: {base_ref?: "fresh"|"head"}。已有 active worktree 返回 409。
-func handleWorktreeCreate(w http.ResponseWriter, r *http.Request, sessionID string, hub *ws.Hub) {
+func (s *appServer) handleWorktreeCreate(w http.ResponseWriter, r *http.Request, sessionID string) {
 	var body struct {
 		BaseRef string `json:"base_ref"`
 	}
@@ -217,8 +217,8 @@ func handleWorktreeCreate(w http.ResponseWriter, r *http.Request, sessionID stri
 		return
 	}
 	// 广播 worktree_created（不写 task steps）。
-	if hub != nil {
-		hub.SendEvent(event.NewEvent(event.EventWorktreeCreated, sessionID, "worktree", 0, map[string]any{
+	if s.hub != nil {
+		s.hub.SendEvent(event.NewEvent(event.EventWorktreeCreated, sessionID, "worktree", 0, map[string]any{
 			"worktree_id": wt.ID,
 			"branch":      wt.Branch,
 			"path":        wt.Path,
@@ -239,7 +239,7 @@ func handleWorktreeCreate(w http.ResponseWriter, r *http.Request, sessionID stri
 }
 
 // handleWorktreeGet 处理 GET /api/sessions/:id/worktree。无 active 返回 active:false。
-func handleWorktreeGet(w http.ResponseWriter, r *http.Request, sessionID string) {
+func (s *appServer) handleWorktreeGet(w http.ResponseWriter, r *http.Request, sessionID string) {
 	wtID, err := globalWorkspaceStore.GetActiveWorktree(sessionID)
 	if err != nil || wtID == "" {
 		writeJSONStatus(w, http.StatusOK, map[string]any{"active": false})

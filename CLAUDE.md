@@ -34,11 +34,15 @@
 ## 项目结构
 
 ```
-cmd/server/                  # Phase 8-A 拆分为四文件
-  main.go                    # 子系统初始化 + handleTasksRoot/startChatTask 闭包 + appServer 启动 + worktree Manager 构造 + 启动孤儿扫描
-  server.go                  # appServer 聚合体 + registerRoutes（30+ 路由，含 /api/sessions/:id/worktree 内联分发）+ handleMultiAgent + serveSessionWorkspace
-  runner.go                  # AgentRunSpec / AgentDeps / AgentRunner.Run(ctx, spec) 收口启动链路 + per-run WorkdirHolder 构造 + worktree 工具注册 + cancel/engine registry + 权限/项目规则 helper + hubAdapter
-  api.go                     # HTTP handler（handleSessionChat / handleRunCase / handleRecoverCheckpoint 等）
+cmd/server/                  # Phase 8-A 拆分为四文件；Phase 8-B 新增 tasks_api.go / checkpoint_api.go
+  main.go                    # 子系统初始化 + appServer 启动 + worktree Manager 构造 + 启动孤儿扫描
+  server.go                  # appServer 聚合体（字段按子系统分组）+ registerRoutes（30+ 路由，方法值注册）+ handleMultiAgent + serveSessionWorkspace
+  runner.go                  # AgentRunSpec / AgentDeps / AgentRunner.Run(ctx, spec) 收口启动链路 + AgentRunner.Recover + per-run WorkdirHolder 构造 + worktree 工具注册 + cancel/engine registry + 权限/项目规则 helper + hubAdapter
+  api.go                     # HTTP handler（全部改为 *appServer 方法：handleSessionChat / handleRunCase / handleListCheckpoints 等）
+  tasks_api.go               # Phase 8-B 新增：handleTasksRoot + taskActionRegistry + actionChat/actionMultiAgent/actionStreamDemo
+  checkpoint_api.go          # Phase 8-B 新增：handleRecoverCheckpoint / handleListCheckpoints（从 main.go 迁出并方法化）
+  tool_api.go                # handleRegisterTool / handleDeleteTool 方法化，持久化走 db.InsertToolV2 / db.DeleteToolV2
+  cron_api.go                # cron REST handler 方法化 + appCronStarter 捕获 *appServer
   workspace_api.go           # worktree REST API（POST/GET /api/sessions/:id/worktree，仅 create+get）+ repoRoot 推断 + reclaimOrphanWorktrees 启动孤儿扫描 + worktreeSessionStoreAdapter
 internal/
   agent/agent.go             # Agent 类型定义
@@ -59,14 +63,14 @@ internal/
     renderer.go              # {{ variable }} 模板渲染
     builtin.go               # 内置 Skill 种子
   todo/                      # Session 级 TODO 子系统（model/store/service + Agent Tools）
-  tool/                      # Phase 8-A: Tool 插件化抽象
+  tool/                      # Phase 8-A: Tool 插件化抽象；Phase 8-B: DynamicTool 委托 DynamicExecutor，ExecuteWithCtx 注入 Workdir
     registry.go              # Tool 注册表（键 namespace/name@version，IsBuiltin 按 Source 判断）+ ExecuteWithCtx（worktree 隔离 holder 注入）
     builtin.go               # 3 个内置工具 (run_shell, write_file, read_file)，executor 优先用 ExecuteContext.Workdir
     worktree.go              # worktree/create、worktree/exit、worktree/status 三个 Agent Tool（LLM 主入口）
+    dynamic.go               # DynamicTool 从 Descriptor 构造，委托 DynamicExecutor 执行
     descriptor.go            # ToolDescriptor 可序列化元数据
-    executor.go              # ToolExecutor 执行体接口
-    loader.go                # ToolLoader 加载抽象
-    dynamic.go               # DynamicTool 从 Descriptor 构造
+    executor.go              # DynamicExecutor / BuiltinExecutor 执行体
+    loader.go                # ToolLoader / DBToolLoader / RecordLoader 加载抽象
   ws/hub.go                  # WebSocket Hub (connect/broadcast/disconnect + RegisterTestClient 测试钩子)
 pkg/
   event/event.go             # 统一事件结构 + 序列化（含 worktree_* 事件常量）
@@ -395,7 +399,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ```
 Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 → Phase 7-H2 🚧 → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
-  (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (架构演进)  (smoke 收尾)  (worktree 隔离)
+  (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)      (架构演进)  (架构收尾)  (worktree 隔离)
 ```
 
 | Phase | 状态 | 核心交付 |
@@ -408,7 +412,7 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 🚧 →
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
 | 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
 | 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
-| 8-B real-llm-smoke 收尾 | ✅ | `real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 timeout 假阳性 + 全量 21 case 真实 LLM 评测 PASS=143/SKIP=20/FAIL=0；产物 CWD 隔离（`workspace/smoke-server/run-*`，`SMOKE_FRESH=1` 清空）+ `ENV_FILE` 绝对路径；后端 workspace 三层兜底（`handleRunCase` 匿名 session / `resolveSession` 绑 workspace / `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`），根目录零污染 |
+| 8-B 架构收尾 | ✅ | 动态工具 DB 持久化+启动加载；`DynamicTool` 委托 `DynamicExecutor`；`Registry.ExecuteWithCtx` 注入 Workdir；`AgentRunner.Recover` 收口；handler 全方法化 + `taskActionRegistry` 注册表分发；闭包退场；新增 `tasks_api.go` / `checkpoint_api.go`；`go build ./...` + `go test ./...` 全绿 |
 | worktree 隔离 | ✅ | session 级 git worktree 隔离工作区（Manager 原语 + per-run WorkdirHolder + worktree/create·exit·status Agent Tools + REST create/get + v28 active_worktree_id + 启动孤儿扫描 + worktree_* 事件）；完全向后兼容，默认不触发零感知；mock 回归 21/21 不受影响 |
 
 ## 编码约定
