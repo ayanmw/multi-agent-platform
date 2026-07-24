@@ -50,15 +50,15 @@
 
 ## 7. 测试与文档
 
-- [ ] 7.1 同步修改 `cmd/server/*_test.go` 中的测试调用方式
-- [ ] 7.2 运行 `go build ./...` 与 `go test ./...` 全绿
-- [ ] 7.3 运行 `scripts/cases-regression.sh` 或等价的 smoke 回归，确认不低于基线
-- [ ] 7.4 更新 `roadmaps/ROADMAP.md`（新增 v0.13.0 版本记录）
-- [ ] 7.5 更新 `CLAUDE.md`（扩展 Phase 表加 Phase 8-B、更新项目结构）
+- [x] 7.1 同步修改 `cmd/server/*_test.go` 中的测试调用方式
+- [x] 7.2 运行 `go build ./...` 与 `go test ./...` 全绿
+- [x] 7.3 运行 `scripts/cases-regression.sh` 或等价的 smoke 回归，确认不低于基线
+- [x] 7.4 更新 `roadmaps/ROADMAP.md`（新增 v0.13.0 版本记录）
+- [x] 7.5 更新 `CLAUDE.md`（扩展 Phase 表加 Phase 8-B、更新项目结构）
 
 ## 8. OpenSpec 收尾
 
-- [ ] 8.1 同步更新 `tasks.md` 勾选状态
-- [ ] 8.2 运行 `openspec verify-change` 通过
-- [ ] 8.3 提交 Git（commit message：`Phase 8-B cleanup-2: 动态工具持久化、Engine Workdir 注入、handler 方法化与闭包退场`）
-- [ ] 8.4 运行 `openspec archive-change`
+- [x] 8.1 同步更新 `tasks.md` 勾选状态
+- [x] 8.2 运行 `openspec validate phase-8b-cleanup-2 --type change` 通过
+- [x] 8.3 提交 Git（commit message：`Phase 8-B cleanup-2: 动态工具持久化、Engine Workdir 注入、handler 方法化与闭包退场`）
+- [x] 8.4 运行 `openspec archive phase-8b-cleanup-2`
