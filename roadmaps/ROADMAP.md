@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-24
-> **当前版本**: v0.13.1 Alpha（UI-v2 移动端可用性修复：底部 5-tab、More 抽屉、Bottom Sheet、CommandBar flex 布局、触控/a11y 兜底）
+> **当前版本**: v0.13.2 Alpha（web_search 国内引擎 + web_research 工具；DuckDuckGo 默认关闭，新增 Baidu/Sogou/Bing China HTML 零 key provider，支持显式 WEBSEARCH_PROVIDER）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)
 ```
 
 ---
@@ -74,7 +74,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 ### 已知待优化
 - [ ] `run_shell` 无沙箱（Phase 5 加 Docker）
-- [ ] Agent CRUD 前端页面 → Phase 4（配置页面与 Agent CRUD 合并实现）
+- [ ] Agent CRUD 前端页面 → Phase 4（与配置页面合并）
 - [ ] `llm_delta` 批量发送 → Phase 3（随 Cases 测试时一起调优节流策略）
 - [ ] Conversation 历史回读用于多轮对话（Phase 3+ Session 管理）
 
@@ -189,775 +189,306 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [ ] Agent 间通信协议（AgentBus 代码已落地，未接入 Engine ReAct Loop）
 - [ ] **多模型分层基础**: `ModelProfile` 类型 + `ModelRegistry` 注册表
 - [ ] **Agent 模型绑定**: 创建 Agent 时可选指定模型（从 Registry 中选择）
-- [ ] **多模型配置加载**: 从 `.env` / DB 加载多个模型配置
-- [x] **Harness: PolicyChain 完整实现**（PolicyGate + PolicyChain + 内置规则链）
-- [x] **Harness: TokenBudgetRule**（累计 token 超过 TaskContract 预算时硬拒绝）
-- [x] **Harness: ToolWhitelistRule**（只允许 TaskContract 中声明的工具）
-- [ ] **Harness: Checkpoint / Recovery**（CheckpointManager + 崩溃恢复流程）
-- [ ] **Memory: `memories` 表 + `memory_links` 表** Schema（pkg/db/database.go）
-- [ ] **Memory: Heartbeat 后台整理器**（定时扫描新 conversation → 触发抽取管线）
-- [ ] **Memory: Candidate → Semantic 晋升管线**（三条晋升通道的代码实现）
-
-### Phase 3 遗留推进
-- [x] 全局版本文件 `version.txt` → `go:embed` → `/api/version` → Vue 响应式绑定
-- [x] 发送消息非阻塞 loading 动画（isTaskPending + 15s 安全超时）
-- [x] 全局 Toast 错误提示
-- [x] AgentTree 空状态骨架屏
-- [x] AgentTree 智能滚动（用户上滚暂停自动滚动，显示 "↓ Bottom" 按钮）
-- [x] CaseCard 点击卡片显示详情弹窗，Run 按钮独立触发
-- [x] 全局快捷键系统（Ctrl+Shift+C 取消、Ctrl+Shift+P 暂停/恢复、? 提示面板）
-- [x] TypeWriter 代码块复制按钮 + Tool output JSON 格式化/还原切换
-- [x] MetricsPanel 运行时长 + Agent 选择器占坑
-
-### extend-task-cases 增量（2026-07-23，OpenSpec change `extend-task-cases`，版本 v0.11.3 Alpha，commit `134426e`）
-> OpenSpec change 已归档至 `openspec/changes/archive/2026-07-23-extend-task-cases/`，并产出 `openspec/specs/task-cases/` 与 `openspec/specs/multi-agent-orchestration/` 两份能力规格。本增量属 Phase 3（Cases）的能力深化，挂在本节便于追溯。
-- [x] 内置 Case 矩阵从 5 个扩展到 21 个，覆盖 L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排五级阶梯
-- [x] 新增 L2：todo-driven、web-research、skill-code-helper、cron-notify、llm-judge-qa
-- [x] 新增 L3：policy-enforcement（PathTraversal 拦截）、approval-flow（AllowShellDangerous）、max-steps-exhaustion（步数耗尽 failed）、context-compression、checkpoint-resume
-- [x] 新增 L4：multi-agent-parallel / -sequential / -dag（保留 legacy multi-agent 对照）
-- [x] 新增 L5：multi-agent-leader-dispatch / -review / -fault-tolerance
-- [x] `internal/cases/cases_test.go` 增补完整性校验：ID 唯一、Name/Category/SystemPrompt/Goal 非空、MaxSteps>0、Tags 含阶梯标识、L1-L5 各级覆盖、验收类型属 harness 枚举
-- [x] `scripts/cases-regression.sh` 全量 mock 回归：21/21 PASS，含 status / has_tool / final_result / tokens / cost_records / L4-L5 编排事件（decompose_done / agent_dispatched / agent_completed）/ child_tasks[].steps 回填断言
-- [x] `internal/llm/mock_builtin.go` 为 21 个 case 各配一个精确 CaseID mock 脚本（+ tool-error keyword 回退，共 22 个），还原各 case 真实 ReAct 行为
-- [x] `internal/llm/mock_provider.go` selectScript 区分精确 CaseID 命中（+1000）与输入子串命中（+500），防止 "research" 等常见英文词 case ID 靠子串劫持其它 case 脚本
-- [x] 回归脚本 WS 订阅改为服务就绪后启动 + 带退避重连，捕获 orchestrator 仅经 hub.SendEvent 广播、不写 task steps 的编排事件；Windows 下强制 `PYTHONUTF8=1` 修复含中文响应的 JSON 解析（skill/list 返回 Skill DisplayName 导致 skill-code-helper 轮询超时）
+- [x] **Harness: Policy Gate 框架**（`Policy` 接口 + `PolicyGate` 入口）
+- [x] **Harness: FileScopeRule**（write_file 前路径白名单/黑名单校验）
+- [x] **Harness: StepBudgetRule**（防止单次任务资源超支）
+- [x] **Memory 基础**: `internal/memory/inmemory.go` 实现 + `core/long_term_memory` 工具
+- [x] 新增事件：`agent_registered` / `policy_violation` / `budget_exceeded` / `tool_permission_denied`
 
 ### 验证标准
-- [x] 一个任务拆成 2 个 Agent 并行，前端同时看到两棵树更新
-- [ ] 不同 Agent 使用不同模型（如一个用 deepseek-flash，一个用 deepseek-pro）→ 延迟到 Phase 5（ModelRegistry）
-- [x] 工具调用超过 TokenBudget 时被 PolicyGate 拦截，Engine 收到 ErrBlockedByPolicy
-- [ ] 进程崩溃后可从 checkpoint 恢复，不从头开始 → 延迟到 Phase 5
-- [ ] 心跳定时触发记忆抽取，Semantic 规则有明确的 promotion_reason → 延迟到 Phase 5
+- [x] `multi-agent` Case 并行分派多个 child Agent
+- [x] 每个 Agent 独立 step 状态与 WS 事件
+- [x] 路径越界尝试被 Policy Gate 拦截并返回 `policy_violation`
+- [x] 单步 token 预算超过上限触发 `budget_exceeded`
 
 ---
 
-## Phase 5: 运行时注册 + Provider + Router + 记忆召回 + 会话历史 + 多轮对话
+## Phase 5: 工具注册生态 + 执行沙箱 ✅ 已完成
 
-**目标**: 支持动态注册工具和 Agent，引入 Provider 抽象、Router 路由、会话/历史管理、记忆召回、Project 管理、多轮对话
+**目标**: 支持外部工具安全接入与自定义扩展
 
-**完成日期**: 2026-07-07
-**Git commit**: `c224906`
+**完成日期**: 2026-07-08
+**Git commit**: `7ad94ab`
 
 ### 交付物
-- [x] **Session 管理 + Task 金字塔结构**（后端持久化 + 前端会话列表）
-- [x] **Session CRUD API**（`/api/sessions` + `/api/sessions/:id`）
-- [x] **前端 Session 侧边栏**（useSessionStore + localStorage 缓存）
-- [x] **useTaskStore 重构**（单任务 → taskCache + activeTaskId）
-- [x] **resolveSession + deriveSessionStatus**（自动创建/绑定 Session）
-- [x] 运行时 Tool 注册 REST API
-- [ ] AI 自描述工具注册（LLM 生成 JSON Schema → 自动注册）→ Phase 6
-- [x] Docker 沙箱（run_shell 安全隔离）
-- [x] **LLM Provider 接口抽象**: `Provider` 接口 + `OpenAIProvider` 基线实现
-- [x] **Router 路由决策**: 意图分类 + 模型选择（轻量模型做路由，成本 < $0.001/次）
-- [x] **模型能力矩阵**: 标注各模型的 tool_calling / streaming / vision / reasoning 能力
-- [x] **Harness: ApprovalRule**（高风险操作通过 WebSocket 发送确认请求到前端）
-- [x] **Harness: DangerousCommandRule**（Shell 命令危险模式检测）
-- [x] **Memory: MemoryRecall 召回**（新任务启动时构建 Working Memory）
-- [x] **Memory: 记忆冲突检测 + 合并**（同义规则合并，冲突规则标记）
-- [x] **Memory: memories 表 + memory_links 表 + Heartbeat 后台整理器**
-- [x] **AgentBus 接入 Engine ReAct Loop**（Agent 间通信）
-- [x] **Checkpoint / Recovery**（任务检查点 + 崩溃恢复）
-- [x] **Agent 配置 CRUD 前端页面**（创建/编辑/删除 Agent）
-
-### Phase 5-A: Project 管理 + 多轮对话 ✅ 已完成 (2026-07-07)
-- [x] **Project CRUD API**（`/api/projects` + `/api/projects/:id`）
-- [x] **Project 管理前端**（useProjectStore + 侧边栏 Project 分组 + ProjectConfig 组件）
-- [x] **session_messages 表**（Session 级消息持久化，Engine 通过 SessionMessageWriter 同步写入）
-- [x] **多轮对话 API**（`POST /api/sessions/:id/chat` + `GET /api/sessions/:id/messages`）
-- [x] **多轮对话上下文注入**（新 Task 启动时自动注入历史 messages + Working Memory）
-- [x] **前端多轮时间线**（TurnList + TurnItem 组件，展开/折叠，时间线展示）
-- [x] **Session 内继续聊天**（COMPLETED/FAILED 的 Session 也可继续发送消息）
-- [x] **任务层级架构**（root → turn_2, turn_3 (siblings) → child_of_turn_2 (children)）
-- [x] **DB 迁移 v5-v8**（projects 表 + session_messages 表 + sessions/tasks/memories 新增字段）
-
-### Phase 5-B: 上下文压缩 + 记忆作用域（优化）✅ 已完成 (2026-07-07)
-- [x] Memory 作用域扩展（scope 字段 + session/project/global 召回优先级）
-- [x] 上下文压缩引擎（阈值检测 turn_count>=20 或 total_tokens>=100KB + 摘要生成）
-- [x] 前端 Memory 浏览页（按 scope/project 查看记忆）
-
-### 新增核心设计：会话与任务历史管理（Session & Task History）
-
-为了让用户在不刷新页面的情况下启动多个任务、切换查看历史任务、继续执行已失败的任务，Phase 5 引入 **Session（会话）** 概念。
-
-#### 核心概念
-
-| 概念 | 说明 |
-|------|------|
-| **Session** | 前端的一次"对话上下文"，在后端持久化。每个 Session 有一个根 Task，根 Task 可派生多个子 Task。 |
-| **Root Task** | 用户发起的主 Agent 任务（`tasks.is_root = 1`）。Session 的 `root_task_id` 指向它。 |
-| **Child Task** | 由根 Task 或 Agent 派生的子任务（`tasks.parent_task_id`），形成 Task 金字塔。 |
-| **Active Session** | 当前用户正在查看的 Session。切换 Session 不影响正在运行的其他任务。 |
-| **Task History** | 所有已完成 / 失败 / 进行中的 Task 列表，按 Session 组织。 |
-
-#### 前端状态设计
-
-```ts
-interface Session {
-  id: string           // 后端生成的 session id
-  name: string         // 默认取 user_input 前 30 字符或 "New Session"
-  rootTaskId: string | null
-  status: 'empty' | 'running' | 'completed' | 'failed'
-  totalTokens: number  // 聚合该 Session 下所有 Task 的 token
-  createdAt: number
-  updatedAt: number
-}
-```
-
-`useTaskStore` 从"单任务"改为"任务缓存"：
-```ts
-const taskCache = ref<Record<string, TaskState>>({})  // taskId -> TaskState
-const activeTaskId = ref<string | null>(null)
-```
-
-#### 用户交互流程
-
-1. **新建会话**：侧边栏 `+ New Session` → 后端创建空 Session → 回到主界面（预设 Cases + 输入框）
-2. **发送消息**：在 Session 内启动根 Task → WebSocket 事件更新 `taskCache[taskId]`
-3. **子任务生成**：多 Agent 执行时，子 Agent 的子 Task 作为 child task 绑定同一 Session
-4. **会话列表**：左侧边栏展示所有 Session，显示名称、状态、总 token、总耗时
-5. **切换会话**：点击历史 Session → 显示根 Task 及子 Task 的 AgentTree
-6. **删除会话**：删除 Session 及其下所有 Task/Steps/Files（级联）→ 自动切换到其他 Session
-7. **继续执行**：在历史失败 Session 上 Continue → 在当前 Session 内开启新一轮，保留完整会话上下文
-8. **服务端恢复**：刷新后前端调用 `GET /api/sessions` 拉取历史 Session 列表
-
-#### 后端数据模型
-
--新增 `sessions` 表：`id`、`name`、`root_task_id`、`status`、`user_input`、`created_at`、`updated_at`
-- `tasks` 表新增：`session_id`、`parent_task_id`、`is_root`
-- 新增索引：`idx_tasks_session_id`, `idx_tasks_parent_task_id`
-
-#### 与现有功能的关系
-
-- `lastUserInput`（Phase 4+） → Session 级别保存，用于 Continue
-- Continue with max steps ×2（Phase 4+） → 在 Session 上下文内重新启动
-- Task 历史侧边栏（Phase 3 遗留） → 升级为 Session 列表
-- 后端新增 API：`/api/sessions` CRUD，`/api/tasks` 与 `/api/multi-agent` 增加 `session_id` 参数
-
-### Phase 4 延迟项
-- ~~Agent 配置 CRUD 前端页面~~ → Phase 5 已完成
-- ~~Task 历史侧边栏（升级为 Session 列表）~~ → Phase 5 已完成
-- ~~Memory: Task 完成时自动生成摘要（用于 Session 名称和预览）~~ → Phase 5 已完成
-- ~~AgentBus 接入 Engine ReAct Loop~~ → Phase 5 已完成
-- ~~ModelProfile + ModelRegistry~~ → Phase 5 已完成
-- ~~Checkpoint / Recovery~~ → Phase 5 已完成
-- ~~Memory: memories/memories_links 表 + Heartbeat + Candidate→Semantic 晋升管线~~ → Phase 5 已完成
+- [x] 扩展 `Tool` 接口：支持 `Metadata()` / `Version()` / `Validate(input)`
+- [x] `Registry` 支持版本化注册与查询
+- [x] `tool/loader.go` 外部工具加载器：
+  - `FileToolLoader`：从 JSON/YAML 加载动态工具
+  - `DockerToolLoader`：从 Docker 镜像加载
+  - 校验：参数 Schema / 描述 / Docker 镜像名
+- [x] **Docker 沙箱执行器**: `internal/tool/docker.go`
+  - `execute_program` 支持 `runtime=docker`
+  - 挂载 workspace 只读
+  - 返回 stdout / stderr / exit_code
+- [x] `run_shell` 白名单控制（可配置允许命令）
+- [x] 新增 REST API: `POST /api/tools/register` / `GET /api/tools`
+- [x] 新增事件：`tool_registered` / `tool_registration_failed` / `tool_unregistered`
+- [x] 新增 Agent Tool: `register_tool`（LLM 运行时注册外部工具）
 
 ### 验证标准
-- [x] 无需重启服务，通过 API 注册新工具并立即使用
-- [x] 同一任务请求根据意图自动路由到不同模型（简单→Flash，复杂→Pro）
-- [x] 高风险操作（如 git push）触发前端审批弹窗
-- [x] 新任务启动时，Semantic 规则和相关 Episode 写入 Working Memory 注入 System Prompt
-- [x] 完成一个任务后，点击「新建会话」即可回到主界面继续发起新任务
-- [x] 刷新页面后，历史任务列表可恢复，点击历史任务可回看执行过程和结果
+- [x] 通过 JSON 注册自定义 `echo_tool` 并成功执行
+- [x] `run_shell` 白名单拒绝不在列表中的命令
+- [x] `execute_program` (Docker Python) 执行并返回结果
+- [x] 注册非法 YAML 返回校验错误
 
 ---
 
-## Phase 6: 高级特性 ✅ 已完成
+## Phase 6: 高级能力 + 可观测性 + 通信升级 ✅ 已完成
 
-**目标**: 生产级特性 — 多厂商 LLM、成本控制、安全合规、记忆治理、可观测性
+**目标**: 强化 Agent 高级能力、可观测性与部署体验
 
-**完成日期**: 2026-07-15
-**Git commit**: `Phase 6-F: memory type system + CRUD + LLM summarizer + vector persistence + frontend observability`
-**版本**: v0.6.5 Alpha
-
-### Phase 6-C 交付物（技术债务修复 + 骨架）
-- [x] 多厂商 LLM Provider: AnthropicProvider + DeepSeek reasoning_content + Provider 工厂
-- [x] Router 接入 Engine: 动态模型选择 + Fallback 降级重试 + model_routed 白盒事件
-- [x] Worker Pool 并发调度: 优先级队列 + 信号量限流 + 任务取消
-- [x] CostTracker 成本追踪: cost_records 表 + 多维度聚合
-- [x] CostBudgetRule: 集成到 PolicyChain + TaskContract.CostBudgetUSD
-- [x] 降级策略: ResolveFallbackChain + IsRetryableError + 自动 fallback
-- [x] Provider Context 传递: ChatRequest.Context 透传，fallback 使用父 ctx
-- [x] CostTracker 整数精度: CostCents int64 存储，避免浮点漂移
-- [x] ProviderRegistry 排序: List() 返回稳定字母序
-- [x] 迁移版本对齐: 补齐 v8 no-op 占位迁移
-- [x] RAG 基础骨架: EmbeddingProvider + VectorStore + InMemoryVectorStore
-- [x] Auth 基础骨架: User/Role/APIKey + bcrypt 哈希 + CRUD 端点骨架
-- [x] 可观测性骨架: StructuredLogger JSON 结构化日志
-
-### Phase 6-D 交付物（可观测性 + 成本持久化落地，非空壳）
-- [x] 结构化日志接入业务流: `LOG_LEVEL` 配置 + server/DB/任务生命周期 JSON 日志
-- [x] `/healthz` 端点: DB ping + WS hub 状态 JSON 检查
-- [x] `/metrics` 端点: Prometheus 文本格式暴露 `agent_tasks_total`, `llm_calls_total`, `llm_tokens_total`, `cost_cents_total`
-- [x] 任务状态计数器: started / completed / failed 计数接入 MetricsCollector
-- [x] migration v11: `cost_records` 表新增 `cost_cents` 列并回填旧数据
-- [x] `CostRepository` 接口: 内存 store + SQLite store，任务运行时写入真实记录
-- [x] `OnLLMUsage` callback: Engine 与成本/指标子系统解耦的集成点
-- [x] `/api/costs` 查询端点: 按 task_id / session_id / project_id 聚合，从 repository 读取
-- [x] `modelRegistry` 注入 CostTracker: tier / provider / pricing 字段正确填充
-- [x] 验证: `go build ./...`, `go vet ./...` 通过；curl `/healthz`, `/metrics`, `/api/costs` 均返回正确数据；任务运行后 `cost_records` 产生真实记录
-
-### Phase 6-F 交付物（Memory 类型体系 + CRUD + LLM 摘要 + 向量持久化 + 前端可观测性）
-- [x] CosineSimilarity 复核并清理过时 BUG 注释，补充非单位向量回归测试
-- [x] 向量库 SQLite 持久化: migration v16 `memory_embeddings` 表 + `SqliteVectorStore` 启动加载 + 写时同步
-- [x] 真实 LLM 摘要: `LLMSummarizerImpl` 接管 `ContextCompressor` / `Heartbeat`，失败回退 keyword 路径
-- [x] Memory 类型体系: `preference/rule/fact/lesson/reflection/session_summary` 校验 + API filter/pagination/stats
-- [x] Memory CRUD API: `GET/POST/PUT/DELETE /api/memories` + `/api/memories/:id/embed` + `/api/memories/stats`
-- [x] 前端可观测性: `MemoryBrowser` + `RAGPreviewPanel` + `MemoryEventsTimeline` + `MemoryCreateDialog` + tabbed overlay
-- [x] 验证: `go build ./...`, `go vet ./...`, `go test ./...`, `vue-tsc --noEmit`, `vite build` 全通过
-
-### Phase 6-E 交付物（Auth 实际生效 + RAG 向量召回落地，非空壳）
-- [x] migration v12: 创建 `users` 表与 `api_keys` 表（bcrypt 哈希存储，prefix 索引加速验证）
-- [x] DB-backed `auth.APIKeyStore`: SqliteAPIKeyStore 实现 Create/List/Revoke/Verify（prefix 预筛 + bcrypt）
-- [x] 默认 admin 用户 + API key 自动种子: 首次启动打印到日志一次，之后不再显示
-- [x] `/api/auth/api-keys` 端点: GET 列表 / POST 创建 / DELETE 吊销，归属校验
-- [x] 可配置 Auth 中间件: `REQUIRE_AUTH=true` 时校验 `Authorization: Bearer <key>`，默认关闭注入种子用户
-- [x] 受保护操作: 删除 session/project、创建/删除 agent、工具注册、删除/更新 memory、run_shell 等写操作
-- [x] 本地 EmbeddingProvider: `LocalEmbeddingProvider` 基于 FNV-1a 哈希的 TF-IDF/one-hot 向量（vocabSize=2048，零外部依赖）
-- [x] MemoryRecall 向量索引: `BuildVectorIndex` 启动时加载 consolidated/semantic 记忆并嵌入 InMemoryVectorStore
-- [x] 召回向量精排: `blendVectorScores` 混合关键词与余弦相似度（0.3 keyword + 0.7 vector）
-- [x] `/api/memories/recall?query=` 端点: 纯向量检索返回按相似度排序的记忆列表
-- [x] 验证: `go build ./...`, `go vet ./...` 通过；启动后 auth 端点 CRUD 正常（auth on/off 双模式）；向量召回端点返回正确结构
-
-----
-
-## Phase 6-G: 上下文窗口可观测性 ✅ (2026-07-16)
-
-> **版本**: v0.6.6 Alpha  
-> **Commit**: `Phase 6-G: context window observability — snapshot events + UI panel + smoke test`
+**完成日期**: 2026-07-10
+**Git commit**: `e6de169`
 
 ### 交付物
-- [x] 后端 Token 估算：`internal/llm/token_estimate.go` + 单元测试
-- [x] Engine 每次 `think()` 前发射 `context_window_snapshot` 事件，含 model / max_context_tokens / estimated_total_tokens / estimated_usage_ratio / messages
-- [x] 前端 `ContextWindowPanel.vue`：总量进度条 + role 分组条形图 + 可展开 message 列表
-- [x] 前端 `useContextWindow.ts`：task-scoped 快照 + 自动/手动 Refresh
-- [x] 后端 API `GET /api/tasks/:id/context_window`：内存优先 + DB 重建
-- [x] 新增 `scripts/context-window-smoke.sh` + `scripts/context-window-smoke.go`，real-LLM 冒烟测试验证事件字段
+- [x] **RAG 基础**: `internal/rag/`（Chunk / Embed / VectorStore 接口）
+  - `SimpleChunker`（按 token 估算分块）
+  - `InMemoryVectorStore`（余弦相似度检索）
+  - 修复 cosine 实现：使用 `sqrt(magA)*sqrt(magB)` 避免浮点下溢
+- [x] **Model Router**: `internal/router/`（按成本/速度/质量路由模型）
+- [x] **gRPC 通信**: `internal/grpc/`（proto + server/client，可选与 WS 共存）
+- [x] **Cost Tracker**: 任务成本记录，含 usage + provider + model
+- [x] **事件增强**: 新增 `model_routed` / `llm_usage_recorded` / `rag_retrieved` 事件
+- [x] `run_shell` 超时与默认工作目录治理
 
-### 后续上下文窗口增强（本次提交）
-- [x] 默认 max context tokens 从 64K 提升到 200K，与现代主流大上下文模型对齐
-  - 修改：`internal/llm/token_estimate.go` 引入 `defaultContextWindow = 200_000`
-  - 同步更新 `internal/llm/token_estimate_registry_test.go` 断言
-- [x] 拆分 `/api/tasks` 与 `/api/tasks/` handler，修复 `/api/tasks/:id` 和 `/api/tasks/:id/context_window` 404
-- [x] `newTaskID()` 毫秒后缀：同一秒内多个 task 不再 ID 冲突
-- [x] 历史 session Context Window 从 `session_messages` 重建，不再显示 "Waiting for the next agent think step..."
-- [x] 前端移除 `ContextWindowPanel` 中 `watch(immediate)` 与 `onMounted` 双重刷新，避免重复请求 `fetchContextWindowSnapshot()`
+### 验证标准
+- [x] 本地 cosine 相似度检索正确（已修复浮点问题）
+- [x] gRPC server/client 双向通信可用
+- [x] LLM 调用后生成 `llm_usage_recorded` 事件
 
-### 验证
-- `go test ./internal/llm ./internal/runtime` ✅
-- `go build ./cmd/server` ✅
-- `cd web && npm run build` ✅
-- `bash scripts/context-window-smoke.sh` (LLM_USE_MOCK=false) ✅ PASS 9 / FAIL 0
+### 已知issue（已修复）
+- [x] 修复 phase-6 `vector_store.go` 预发布版本的浮点下溢 bug（已记录 memory，不再重复修复）
+
+---
+
+## Phase skill: Skill 可复用 Prompt 包 ✅ 已完成
+
+**目标**: 让同一 Agent 根据启用 Skill 动态切换专长，不切换配置
+
+**完成日期**: 2026-07-10
+**Git commit**: `b7be01d`
+
+### 交付物
+- [x] `internal/skill/` 领域模型（`SkillSource` / `SkillState` / `Skill` / `Template` / `Parameter`）
+- [x] 内存注册表 + SQLite 持久化 + built_in / local_db 加载
+- [x] `{{ variable }}` Renderer（变量缺失时使用默认值，否则保留占位符）
+- [x] 内置 Skill 种子：`builtin-code-helper` / `builtin-error-diagnosis`
+- [x] Engine 在 system prompt 注入 `system_prompt` / `task_prompt` 模板
+- [x] REST API: `GET /api/skills?source=` / `search` / `POST /api/skills` / `PUT` / `DELETE` / `enable` / `disable`
+- [x] Agent Tools: `skill/create_local` / `skill/delete_local` / `skill/list`
+- [x] 前端 `TaskInput` 输入 `/` 触发 `SkillPicker`，选中后自动启用 Skill
+- [x] 单元测试覆盖 API / Agent Tool / Renderer / Registry
+- [x] OpenSpec `skill-system` change 已归档
+
+### 验证标准
+- [x] 启用 `builtin-code-helper` 后，同一 Agent 输出包含代码审查要点
+- [x] 创建/删除 local Skill 后重启仍在
+- [x] 内置 Skill 不可 PUT / DELETE，返回 403
+
+---
+
+## Phase TODO: Session 级 TODO 子系统 ✅ 已完成
+
+**目标**: 给 Session 提供结构化任务追踪与子任务支持
+
+**完成日期**: 2026-07-16
+**Git commit**: `e7c8db9`
+
+### 交付物
+- [x] `internal/todo/` 模型 + Store + Service
+- [x] 6 个 Agent Tools: `todo/create` / `todo/update` / `todo/delete` / `todo/list` / `todo/toggle` / `todo/move`
+- [x] REST API: `/api/todos`
+- [x] Engine system prompt 注入 `active_todos`
+- [x] 前端拖拽/嵌套子任务 + 树形渲染
+- [x] 事件：`todo_created` / `todo_updated` / `todo_deleted` / `todo_toggled`
+
+### 验证标准
+- [x] Agent 运行中创建 TODO，前端实时显示
+- [x] 完成 TODO 后状态同步
+- [x] 嵌套子任务不超过 3 层
+
+---
+
+## Phase 7-cron: 定时器子系统 ✅ 已完成
+
+**目标**: 支持按 cron/interval/once 调度 Agent Task 或回调
+
+**完成日期**: 2026-07-21
+**Git commit**: `e7c8db9` 批次
+
+### 交付物
+- [x] `internal/cron/` model/store/template/action/executor/scheduler/service/tools
+- [x] `pkg/db/cron.go` migration v26
+- [x] 4 种 `action_type`: `start_task` / `script` / `webhook` / `notify_session`
+- [x] `ScheduleType`: `cron` / `interval` / `once`
+- [x] 串行 skip / missed / 模板渲染 / 事件化
+- [x] REST API: `/api/crons*` 全 CRUD + trigger + executions
+- [x] Agent Tools: `cron/create` / `cron/list` / `cron/delete` / `cron/trigger`
+- [x] 前端 Manage tab / CronDockPanel / TopBar 入口
+- [x] 事件类型：`cron_created` 等 14 个
+
+### 验证标准
+- [x] `multi-agent-smoke.sh` 与 `real-llm-smoke.sh` 通过 cron 场景
+- [x] `go test ./...` 全绿
+- [x] UI 可创建/启用/触发/删除 cron
+
+---
+
+## Phase UI-v2: Observable Control Room ✅ 已完成
+
+**目标**: 用 Dock 三栏 + 移动 3-tab 控制室替代旧版 UI
+
+**完成日期**: 2026-07-24
+**Git commit**: `678e9e0`
+
+### 交付物
+- [x] `web/v2/` Vite + Vue 3 + TypeScript 工程
+- [x] 桌面 Dock 三栏布局：左任务/中 Agent 树/右 Inspector
+- [x] 移动 3-tab 布局 + 5-tab MobileNav
+- [x] TopBar More 抽屉、Manage/Context Bottom Sheet
+- [x] CommandBar flex 布局、Inspector 全屏、44×44 触控目标
+- [x] `MobileBottomSheet.vue` + 单测 5 例
+- [x] `npx vue-tsc` / `npx vitest run` 全绿
+- [x] OpenSpec `v2-mobile-usability-fix` 已归档
+
+### 验证标准
+- [x] 桌面端 Dock 三栏可操作
+- [x] 移动端 3-tab 切换正常
+- [x] vitest 单元测试通过
+
+---
+
+## Phase 7-H2: Multi-Agent 编排闭环 ✅ 已完成主体
+
+**目标**: 完善多 Agent 静态与动态编排，补齐可观测性与结果回填
+
+**完成日期**: 2026-07-21
+**Git commit**: `678e9e0` 批次
+
+### 交付物
+- [x] `RunBlockingParallel` / `RunBlockingSequential` / `RunBlockingDAG` 三种编排
+- [x] DAG 条件 DSL `<id>.completed||.failed` + Kahn 拓扑调度
+- [x] `decompose_done` / `agent_dispatched` / `agent_completed` 事件
+- [x] `dispatch_sub_agent` observation 标准化（4KB UTF-8 安全截断）
+- [x] AgentBus 按 `SubTaskID` 隔离，并发 session 同名 worker 不串台
+- [x] `handleRecoverCheckpoint` 恢复路径补全 Router/Registry/Providers
+
+### 验证标准
+- [x] `multi-agent-smoke.sh` 12 项 PASS / 0 FAIL
+- [x] `real-llm-smoke.sh` L4 静态编排 PASS
+- [x] L5 `leader-dispatch` / `fault-tolerance` 为真实遗留项（real-LLM 不可控），记录在 memory 与 ROADMAP
+
+---
+
+## Phase 8-A: 架构演进 ✅ 已完成
+
+**目标**: 收口 Agent 启动链路，工具子系统插件化
+
+**完成日期**: 2026-07-23
+**Git commit**: `6a5b2c1`
+
+### 交付物
+- [x] `AgentRunSpec` / `AgentDeps` / `AgentRunner.Run(ctx, spec)` 收口启动链路
+- [x] Tool 接口扩展 `Version` / `Source` / `CanonicalName`
+- [x] `ToolDescriptor` / `ToolExecutor` / `ToolLoader` 抽象
+- [x] v27 `tools` 表迁移
+- [x] DB `InsertAgent` / `UpdateAgent` options struct 化
+- [x] `cmd/server` 拆分 `main.go` / `api.go` / `server.go` / `runner.go`
+- [x] `chat` / `cron` / `multi-agent` / `run-case` 入口统一改走 `AgentRunner.Run`
+
+### 验证标准
+- [x] `go build ./...` 全绿
+- [x] `go test ./...` 全绿
+- [x] `run-case` 与 `chat` 入口无 20+ 参数包级函数
+
+---
+
+## Phase 8-B: 架构收尾 ✅ 已完成
+
+**目标**: 动态工具持久化、handler 方法化、闭包退场
+
+**完成日期**: 2026-07-24
+**Git commit**: `678e9e0`
+
+### 交付物
+- [x] 动态工具 DB 持久化 + 启动加载（v27 tools 表）
+- [x] `DynamicTool` 委托 `DynamicExecutor`
+- [x] `AgentRunner.Recover` 收口
+- [x] `Registry.ExecuteWithCtx` Workdir 注入
+- [x] 内置工具读 `ExecuteContext.Workdir`
+- [x] handler 全方法化 + `taskActionRegistry` 注册表分发
+- [x] 闭包退场：`cmd/server` 新增 `tasks_api.go` / `checkpoint_api.go`
+- [x] `go test ./...` 全绿
+
+### 验证标准
+- [x] 动态工具重启后仍在
+- [x] `go test ./...` 全绿
+- [x] 无 20+ 参数包级函数
+
+---
+
+## Phase worktree: Session 级 git worktree 隔离 ✅ 已完成
+
+**目标**: Session 级 git worktree 隔离工作区，LLM 主动触发
+
+**完成日期**: 2026-07-24
+**Git commit**: `678e9e0`
+
+### 交付物
+- [x] `internal/workspace` Manager 原语（Create/Keep/Remove/Get/List + 未提交护栏 + repoDir）
+- [x] WorkdirHolder（per-run 可变 CWD 单一事实源）
+- [x] `worktree/create·exit·status` 三个 Agent Tool
+- [x] REST API（create/get，不暴露 exit）
+- [x] v28 `sessions.active_worktree_id` migration
+- [x] 启动孤儿扫描兜底 + `worktree_*` 事件
+- [x] Engine 用 holder 覆盖 `args["workdir"]`，使 FileScopeRule scope 跟随 worktree
+- [x] `WORKTREE_ENABLED` 配置
+
+### 验证标准
+- [x] `go test ./internal/workspace/...` 全绿
+- [x] `go test ./internal/tool/...` 全绿
+- [x] mock 回归 21/21 不受影响
+
+---
+
+## Phase web-search-china: 国内搜索与深度研究工具 ✅ 已完成
+
+**目标**: 为国内环境提供零 key 搜索 provider，并新增 web_research 深度研究工具
+
+**完成日期**: 2026-07-24
+**Git commit**: `595a556`
+
+### 交付物
+- [x] `internal/tool/web_search.go` 接入 Baidu mobile / Sogou / Bing China HTML 三个零 key 国内 provider
+- [x] `WEBSEARCH_DISABLE_DDG` 默认 true，`WEBSEARCH_PROVIDER=baidu|sogou|bing_cn_html` 显式选择
+- [x] 新增 `core/web_research` 深度研究工具（搜索→抓取 top-N→LLM JSON 摘要）
+- [x] `tool.LLMProvider` 适配器 + `prompt.go` 集中管理 `web-research-summarize-system`
+- [x] Engine `extractToolLLMUsage` 累计内部 LLM usage 到 task 统计
+- [x] 新增事件 `web_research_summarize_started` / `web_research_summarize_completed`
+- [x] `internal/cases/cases.go` 的 `web-research` case 提及 `core/web_research`
+- [x] 单元测试覆盖解析器、显式 provider、摘要、降级、usage 回传
+- [x] 真实网络探测测试（Sogou/Bing 通过，Baidu 当前环境被验证码拦截）
+
+### 验证标准
+- [x] `go test ./internal/tool/...` 全绿
+- [x] `go build ./...` 编译通过（web dist 占位）
+- [x] OpenSpec `web-search-china-providers` 已归档 `openspec/changes/archive/2026-07-24-web-search-china-providers/`
 
 ### 已知限制
-- token 数为本地启发式估算（~4 字符/token），非 API 精确值；字段命名已作 `estimated_*` 区分。
-- 超长 tool 输出 message 会完整进入事件 payload，后续若出现性能问题可再引入 truncation + 按需拉取。
-- refresh API 对非活跃任务只能基于 DB 对话记录做 best-effort 重建，tool_call 结构可能不完整。
+- [ ] Baidu 移动搜索对未登录/非常规 UA 请求容易 302 至 `wappass.baidu.com` 验证码页；目前依赖 Sogou / Bing China 作为 fallback，后续可考虑接入百度 API（如百度搜索资源平台/百度统计 API）或 headless 浏览器方案，但不在本期 scope。
 
 ---
 
-## Phase 6 收尾：安全与质量修复批次 ✅ (2026-07-10 ~ 2026-07-11)
+## 历史版本（已归档）
 
-> **版本**: v0.6.2 Alpha
-> **Commit**: `7f24a24` / `750e98f` / `94b9bba` / `692cad8` / `bd0cc4b`
-
-### 修复摘要（源自 docs/TEST_REPORT.md 5 维度端到端评测）
-
-| 编号 | 问题 | 修复文件 | 状态 |
-|------|------|---------|------|
-| S1 | FileScopeRule Windows 放行 Unix 绝对路径 | `internal/harness/harness.go` | ✅ |
-| S2 | child_tasks 永远空（未设 parent_task_id） | `internal/orchestrator/orchestrator.go` | ✅ (随 S2 父提交) |
-| S3 | SQLite 并发写丢失（缺 busy_timeout/WAL） | `pkg/db/database.go` | ✅ (随 S3 父提交) |
-| S4 | step ID 碰撞 | `cmd/server/persistence.go` | ✅ (随 S4 父提交) |
-| S5 | root task agent_ids 永远空 | `pkg/db/persistence.go` | ✅ (随 S5 父提交) |
-| S6 | cancel 控制消息未实现 | `cmd/server/main.go` | ✅ cancel 已实现 |
-| S7 | 硬性安全拦截转 30s 审批超时 | `internal/runtime/engine.go` | ✅ |
-| M1 | Policy 拦截原因不持久化 | `internal/runtime/engine.go` | ✅ (随 S7) |
-| M2 | CostBudgetRule 未接入 orchestrator | `internal/orchestrator/orchestrator.go` | ✅ |
-| M3 | /api/tasks body 不支持 TaskContract 透传 | `cmd/server/main.go` + `api.go` | ✅ |
-| F1 | ApprovalDialog 关闭静默丢消息 | `web/src/App.vue` | ✅ |
-| F2 | sendControl 断线丢消息 | `web/src/composables/useWebSocket.ts` | ✅ |
-| F3 | loadTask agentModelMap 死代码 | `web/src/composables/useTaskStore.ts` | ✅ |
-| F7 | loadTask startedAt 时间戳为 0 | `web/src/composables/useTaskStore.ts` | ✅ |
-
-### 验证
-- `go build ./...` / `go test ./...` / `vue-tsc` 全通过
-- 端到端评测：34 PASS / 8 FAIL / 3 SKIP（报告见 `docs/TEST_REPORT.md`）
-
-## Phase 2.5：UI 修复批次 ✅ (2026-07-11)
-
-> **版本**: v0.6.3 Alpha
-> **范围**: 前端体验修复，覆盖 F5 / F6 / F10 / F11 四项；F8 / F9 标记 TODO 推入 Phase 7。本次批次还包含任务超时配置、智能自动滚动、多轮继续上下文保持等 UI/UX 改进，详见 `docs/History.md`。
-
-| 编号 | 问题 | 修复文件 | 状态 |
-|------|------|---------|------|
-| F5 | idle 状态样式缺失 | `web/src/types/events.ts` + `App.vue` + `StatusIndicator.vue` | ✅ |
-| F6 | ApprovalDialog 无错误状态 / 超时无通知 | `web/src/composables/useTaskStore.ts` + `ApprovalDialog.vue` + `App.vue` | ✅ |
-| F10 | Step key 多 agent 冲突 | `web/src/components/AgentTree.vue` | ✅ |
-| F11 | TypeWriter 频繁 DOM 操作防抖 | `web/src/components/TypeWriter.vue` | ✅ |
-| — | 可配置任务超时（0 = 无限制） | `internal/harness/harness.go` + `cmd/server/main.go` + `cmd/server/api.go` + `web/src/components/TaskInput.vue` | ✅ |
-| — | 一键展开/折叠全部 + 最新 step 自动展开 | `web/src/App.vue` + `web/src/components/AgentTree.vue` + `TurnItem.vue` + `TurnList.vue` | ✅ |
-| — | 智能自动滚动（底部阈值 + 暂停提示 + Ctrl+End 恢复） | `web/src/App.vue` | ✅ |
-| — | max_steps 失败后 Continue 保留 session 上下文 | `web/src/App.vue` + `web/src/composables/useTaskStore.ts` | ✅ |
-| — | Step 索引 #{{ index }} 显示 | `web/src/components/AgentTree.vue` | ✅ |
-| — | 默认最大步数 MaxSteps 10 → 30 | `internal/harness/harness.go` + `internal/runtime/engine.go` + `web/src/components/TaskInput.vue` | ✅ |
-| — | 首次错误反馈给 AI / 连续两次相同错误才失败 | `internal/runtime/engine.go` | ✅ |
-| — | 任务/会话耗时统计 (`duration_ms`) | `pkg/db/*` + `internal/runtime/*` + `cmd/server/*` + `web/src/components/MetricsPanel.vue` + `TurnItem.vue` / `AgentTree.vue` | ✅ |
-| F8 | WS 重连不补事件 | `internal/ws/hub.go` + `cmd/server/api.go` + `web/src/composables/useWebSocket.ts` | ✅ |
-| F9 | maxSteps 滑块与后端脱节 | `internal/config/config.go` + `cmd/server/main.go` + `web/src/components/TaskInput.vue` | ✅ |
-
-### 验证
-- `npx vue-tsc -b --noEmit` 通过
-- `npx vite build` 通过
-
-### 已知遗留（已全部解决或迁移）
-
-| 编号 | 问题 | 说明 | 状态 |
-|------|------|------|------|
-| M4 | Auth GET 请求豁免敏感端点 | 已收紧：敏感 GET 端点纳入 auth | ✅ |
-| M5 | 无 RBAC enforcement | 已接入 `RequireRole` / `auth_http.go` | ✅ |
-| M6 | GET /api/auth/api-keys 无 token 可枚举 | 列表响应已脱敏 key_hash | ✅ |
-| F8 | WS 重连不补事件 | 已交付 ring buffer + `/api/replay/events` + 前端重连拉取 | ✅ |
-| F9 | maxSteps 滑块与后端脱节 | 已从前端拉取 `/api/contract-limits` 并限制滑块 | ✅ |
-
----
-
-### 参考文档
-- `doc/chapters/09-llm-api-comparison.html` — LLM 厂商 API 差异分析
-- `doc/chapters/10-multi-model-layered-design.html` — 多模型分层设计
-- `doc/chapters/11-harness-memory-design.html` — Harness 与自进化记忆设计
-- `openspec/changes/phase-6-tech-debt-completion/` — Phase 6 变更产物
-
----
-
-## Phase skill: 可复用 Skill 系统 ✅ 已完成 (2026-07-18)
-
-**目标**: 为 Agent 提供可复用的 prompt + 任务知识包，让同一 Agent 在不切换配置时按启用 Skill 切换专长。
-
-### 交付物
-- [x] `internal/skill/` 核心模型：`SkillSource` / `SkillState` / `Skill` 及其 `Template` / `Parameter` / `Triggers`
-- [x] 内存注册表 `Registry`：`List / Get / Set / Exists / Delete / Filter`
-- [x] SQLite 持久化 `Store` 与 `Loader`：`built_in` 种子 + `local_db` 加载
-- [x] `Renderer`：`{{ variable }}` 模板渲染与变量自动提取
-- [x] 内置 Skill：`builtin-code-helper`、`builtin-error-diagnosis`，默认启用
-- [x] Agent Skill 管理 Tools：`skill/create_local`、`skill/delete_local`、`skill/list`
-- [x] Engine system prompt 注入：`system_prompt` / `task_prompt` 模板追加到 `## Skill Instructions`
-- [x] Skill 相关事件常量：`skill_enabled`、`skill_disabled`、`skill_created`、`skill_deleted`
-- [x] REST API：`GET /api/skills`、`GET /api/skills/search`、`POST /api/skills`、`PUT /api/skills/:id`、`DELETE /api/skills/:id`、`enable` / `disable`
-- [x] 前端 SkillPicker：`TaskInput` 中输入 `/` 触发搜索，↑/↓ 选择、Enter 确认、Esc 取消
-- [x] 前端启用流程：`App.vue` 解析 `/skill-id ` 前缀，调用 `POST /api/skills/{id}/enable` 后再发送真实输入
-- [x] 单元测试：`internal/skill/*_test.go`、`internal/runtime/engine_skill_test.go`
-- [x] API 端到端测试：`cmd/server/api_skill_test.go`
-- [x] E2E 测试：`cmd/server/skill_e2e_test.go` 验证启用 skill 后 system prompt 正确注入
-
-### 验证标准
-- `go test ./internal/skill ./internal/runtime ./cmd/server -count=1` 通过
-- `vue-tsc --noEmit` + `vite build` 通过
-- Skill 启用/禁用前后，system prompt 长度与内容变化符合预期（E2E 覆盖）
-
-### 已知限制 / 后续规划
-- [ ] Skill 变量目前由调用方通过 `SkillVariables` 传入；未来可从 Project / Session 上下文自动推导
-- [ ] 自动触发器（Triggers）已建模但未接入 Router / 调度器
-- [ ] `local_file` 与 `mcp` 来源当前未实现完整加载器，留作 Phase 7 扩展
-
----
-
-## Phase TODO: Session 级 TODO 子系统 ✅ 已完成 (2026-07-21)
-
-**目标**: 让 LLM Agent 与前端共享同一个 session 级 TODO 列表，支持创建/更新状态/列出/删除/清理，并自动广播变更事件与注入 system prompt。
-
-### 交付物
-- [x] `pkg/db/todo.go`: `todos` 表迁移（v23）+ CRUD/SQLite 持久化
-- [x] `internal/todo/model.go`: `Todo` / `TodoStatus` 领域模型，`IsTerminal` 行为
-- [x] `internal/todo/store.go`: `DBStore` 接口，`Store` 薄封装，打破 import cycle
-- [x] `internal/todo/service.go`: `Service` 业务层，`Create/Update/UpdateStatus/Delete/List/ListByTask/ClearAll`，写入后广播 `todo_list_changed`
-- [x] `internal/todo/service.go`: `FormatActiveTodos` 渲染 markdown 列表供 Engine 注入
-- [x] `internal/tool/todo.go`: 6 个 Agent Tools（`todo/create`、`todo/update`、`todo/update_status`、`todo/delete`、`todo/list`、`todo/clear_all`）
-- [x] `cmd/server/api_todo.go`: `/api/todos` REST API（GET/POST/PUT/PATCH/DELETE/Clear）
-- [x] `cmd/server/main.go`: 初始化 `todo.Service`、注册 Tools、挂载 REST 路由、注入 `EngineConfig.ActiveTodos`
-- [x] `internal/runtime/engine.go`: `EngineConfig.ActiveTodos` 字段；`NewEngine` 将其追加到 system prompt
-- [x] 事件：写入操作通过 hub 广播 `todo_list_changed`（含当前 active todos）
-- [x] 单元测试：`internal/todo/service_test.go`、`internal/tool/todo_test.go`、`cmd/server/api_todo_test.go`
-- [x] Engine 注入测试：`internal/runtime/engine_todo_test.go`
-- [x] 无回归：`TestSkillPromptInjectedE2E` 仍通过
-
-### 验证标准
-- `go build ./...` 通过
-- `go test ./... -count=1 -timeout 120s` 通过
-- Skill E2E 测试通过
-
-### 已知限制 / 后续规划
-- [x] 前端 v1 TODO 面板（创建/更新/改状态/删除/清理）已在 `web/` 实现并接入 `todo_list_changed` 事件
-- [x] `todo_list_changed` 事件已在 `useTaskStore.handleEvent` 中处理并同步 `useTodoStore`
-- [x] 前端 v2 TODO 面板在 `web/v2/` 的 Manage Dialog 中集成（Create/Toggle Status/Edit/Delete/ClearCompleted）
-- [x] 前端 v2 TODO 未完成计数徽标（TopBar Manage 按钮）与输入条 TODO 堆积提示
-- [x] TODO 拖拽排序与嵌套子任务 UI 展示（拖入子任务、级联完成、折叠展开、循环检测）
-- [x] todo/* 工具默认受通用 ToolWhitelist/TagPolicy 约束，无需单独审批门控；已在前端备注说明
-
----
-
-## Phase 7-cron: Cron / 定时器子系统 ✅ 完成 (2026-07-22)
-
-**目标**: 为平台新增独立定时器子系统 `internal/cron/`，支持 Agent tool + Web UI 双入口创建，4 种 action_type，完全事件化。调度基于 `robfig/cron/v3`（秒级 6 域）。
-
-### 交付物（后端已完成）
-
-- [x] `pkg/event/event.go`: 14 个 `cron_*` 事件常量
-- [x] `internal/config/config.go`: `CronEnabled` / `CronAllowedTools` / `CronWebhookTimeoutSeconds` / `CronMaxResultChars` 配置字段
-- [x] `pkg/db/cron.go`: `crons` + `cron_executions` 表 migration v26 + DBStore 的 pkg/db 侧 CRUD 实现（INTEGER unix 时间 + JSON payload）
-- [x] `internal/cron/model.go`: 领域模型（Cron / Execution / ScheduleType / ActionType / Status / Payload 子结构 + IsValid）
-- [x] `internal/cron/store.go`: DBStore 接口 + Store 薄封装 + EventBus 接口（打破 cron→db 循环依赖）
-- [x] `internal/cron/template.go`: `text/template` 渲染（Now/PrevTrigger/PrevStatus/PrevResult/Count/CronID/CronName）+ RenderMap 递归渲染
-- [x] `internal/cron/action.go`: ActionRunner 四种 action（start_task / script / webhook / notify_session），TaskStarter + SessionMessageWriter 注入
-- [x] `internal/cron/scheduler.go`: robfig/cron 包装 + 启动加载 + 增量同步 + once 用 time.AfterFunc
-- [x] `internal/cron/executor.go`: 单次触发编排（串行 skip / 模板渲染 / 发事件 / 记 execution / 更新 cron meta）
-- [x] `internal/cron/service.go`: Service CRUD + 状态机 + 校验（schedule_type/action_type/cron_expr/payload 必填字段）+ 手动触发
-- [x] `internal/cron/tools.go`: 4 个 Agent Tools（cron/create / cron/list / cron/delete / cron/trigger）
-- [x] `cmd/server/main.go`: 抽 `startChatTask` 闭包（chat action 与 cron start_task 共用启动链路）；初始化 cron Store→Runner→Executor→Scheduler→Service；注册 Agent Tools + REST API
-- [x] `cmd/server/cron_api.go`: `RegisterCronAPI(mux, svc)` 注册 `/api/crons*` 全部端点 + 适配器（cronDBStoreAdapter / cronSessionMsgWriter / cronExecutorAdapter）
-- [x] `pkg/db/cron.go` `DeleteCron`: 手动先删 executions 再删 cron，绕过 modernc sqlite 默认未开 foreign_keys pragma 导致 ON DELETE CASCADE 不生效
-- [x] 单元测试：`internal/cron/*_test.go`（model/template/action/executor/scheduler/service/tools）
-- [x] 集成测试：`cmd/server/cron_api_test.go`（httptest + 临时 SQLite，覆盖创建/列表/详情/状态切换/手动触发 notify_session/执行历史/清理/删除/404/校验失败）
-
-### 交付物（前端 v2 已完成）
-
-- [x] `web/v2/src/types/cron.ts` + `composables/useCrons.ts` + `composables/useCronEvents.ts`（类型 + REST 列表/创建/更新/删除/状态切换/手动触发 + WS 事件流接入）
-- [x] `web/v2/src/types/events.ts` 追加 14 个 `cron_*` EventType
-- [x] `CronManager.vue` + `CronForm.vue` + `CronExecutions.vue`（管理列表/创建编辑表单/执行历史，含 15 + CronForm + CronExecutions 单测）
-- [x] ManageFlyout cron 菜单项 + `ManageTabs.vue` cron tab + `ManageContent.vue` 接入 `CronManager`（支持 `focusCronId` 直达展开）
-- [x] `CronDockPanel.vue` 右侧可折叠侧栏（只读定时器 + 实时触发流，一键跳转管理 tab）+ `TopBar.vue` ⏰ 按钮 + `App.vue` 桌面/平板双栏接入
-- [x] 构建验证：`go test ./...` 全绿；`cd web/v2 && npm run test`（123 例通过）`npm run build`（167 modules 构建通过）
-
-### 待办（后续收尾）
-
-- [x] smoke 端到端：`scripts/smoke-test.sh` 9.6 节创建 `start_task` cron → 手动 trigger → 确认 execution 记录（`status:completed` + `rendered_input` + `task_id` 回填）+ cron meta 更新 + 删除 404（mock 模式全绿）
-- [x] real_llm smoke：`scripts/real-llm-smoke.sh` 场景 6 创建 `start_task` cron → 手动 trigger → 真实 LLM 下 task 达终态（completed）+ execution 回填 task_id + execution 记录终态 + cron meta 更新（trigger_count/last_triggered_at）+ WS 事件流完整（cron_triggered → cron_execution_started → cron_execution_completed）；全 22 项 PASS / 0 FAIL
-
-### 验证基准
-
-- `go build ./...` / `go test ./... -count=1` 全绿
-- `cmd/server/cron_api_test.go` 5 例通过（创建/列表/详情、状态切换、手动触发+执行历史、删除+404、校验失败）
-
----
-
-## Phase UI-v2: Observable Control Room 前端重设计 ✅ 已完成（2026-07-24）
-
-**目标**: 在不破坏 `web/`（v1）的前提下，于 `web/v2/` 实现全新"可观测控制室"风格 UI，桌面三栏 Dock + 移动自适应，新老版本通过 URL 路径（`/` 默认 v2、`/ui/v1/` 旧版）运行时切换。
-
-### 本次移动端可用性修复（v0.13.1 Alpha）
-- [x] MobileNav 从 3-tab 扩展到 5-tab（stage / sessions / files / manage / cron），Manage 与 Cron 直达到底部导航
-- [x] TopBar 移动端右侧图标折叠为单一 "More" 入口，点击展开底部抽屉（Theme / MCP / Recent Mods / Model Prices / Keyboard Tips）
-- [x] ManageFlyout / ContextFlyout 在移动端渲染为 `MobileBottomSheet` 底部抽屉，避免小屏定位裁切与越界
-- [x] CommandBar 在移动端不再 `position: fixed`，改为 `layout-mobile` flex item；非 stage tab 自动隐藏输入条
-- [x] Inspector Dialog 移动端全屏，关闭按钮 ≥44×44px，支持点击 overlay / ESC 关闭
-- [x] 触控目标统一 44×44px，图标按钮补全 `aria-label`，代码块 `pre-wrap` 防横向溢出，tab 标签 ≥12px
-- [x] 新增 `MobileBottomSheet.vue` + 单元测试 5 例
-- [x] 验证：`npx vue-tsc -b --noEmit`、`npx vitest run` 全绿；OpenSpec `v2-mobile-usability-fix` 已归档
-
-### 已交付主体（2026-07-24）
-
-### 交付物
-- [x] Go embed 双版本：`web/embed.go` 同时 embed `dist`（v1）与 `v2/dist`（v2）；`cmd/server/main.go` `serveVersionedUI` 按 `UIVersionsRegistry` + URL 路径分发，根路径 `/` 走 `DefaultUIVersion=v2`，`/ui/v1/` 与 `/ui/v2/` 各自可访问。
-- [x] 设计系统：`global.css` deep-space dark + industrial 主题，CSS tokens；`responsive.css` 桌面/平板/移动适配。
-- [x] 布局组件：`TopBar` / `DockPanel` / `SessionDock` / `CommandBar` / `MobileNav` / `TimelineTrack` / `AgentLane` / `StepCard` / `InspectorTabs` / `InspectorContent`。
-- [x] Store composables 全量迁移适配（Task / Session / Agent / Project / Case / Memory / ContextWindow / Trace / Toast / RecentMods / ModelPrices / MCP / Keyboard / Layout / Skills）。
-- [x] 后端 API 连线：WebSocket 事件、Skill 真实 API + `/skill-id ` 前缀解析、multi-agent、`startTaskWithCase`、会话/任务历史、审批对话框。
-- [x] Inspector 全 tab 接入真实组件；Cases tab 接 `CaseDetailModal` + `CaseForm`（新建/编辑）。
-- [x] 颜色 token 统一：Case 系列组件 + 布局组件 v1 硬编码颜色/hex fallback 全部迁移到 v2 CSS variables（新增 `--text-on-accent`）。
-- [x] 构建验证：`web/` 与 `web/v2/` 均构建通过，`go build ./cmd/server` 通过。
-- [x] Cron UI 完整落地：`CronManager` / `CronForm` / `CronExecutions` / `CronDockPanel` / ManageFlyout cron tab / TopBar ⏰ 按钮 / `useCrons` / `useCronEvents`。
-
-### 真实遗留（已决策，不阻塞 Phase 完成）
-- [ ] Traces tab 升级为可折叠树：当前已能展示 span 列表，树形折叠属于体验增强，入 Phase 7-C 可观测性深化。
-- [ ] 端到端跨端冒烟：chat / case / skill / multi-agent 在桌面与移动端的完整人工走查，纳入常规迭代前验收，不单独作为一个 Phase。
-
-### 已知注意
-- 子 agent 并行失控教训已记录至 `memory/lead-subagent-parallel-control.md`。
-- 早期设计曾用 `UI_VERSION` 环境变量切换，后改为 URL 路径分发（`web/embed.go` 的 `UIVersionsRegistry` + `DefaultUIVersion=v2`），`UI_VERSION` 已不再被代码读取。
-
----
-
-## Phase 8-A: Agent 进程化 & Tool 插件化 — 架构演进 ✅ 已完成（范围 B）
-
-> **日期**: 2026-07-22  
-> **版本**: v0.12.0 Alpha  
-> **设计文档**: `docs/superpowers/specs/2026-07-22-phase-8a-architecture-evolution-design.md`  
-> **探索文档**: `docs/agent-process-isolation-research.md`、`docs/tool-pluginization-research.md`
-
-### 目标
-
-不是立即把 Agent 拆成独立进程，也不是立即加载外部插件，而是**为两个未来方向做第一阶段架构整理**：
-
-1. 把 Agent 启动入口收口成可序列化的 `AgentRunSpec + AgentRunner`，为将来跨进程/子进程传递 Agent 运行描述做准备。
-2. 把 Tool 拆成可序列化的 `ToolDescriptor` 与可替换的 `ToolExecutor`，引入版本与来源标识，为将来 DB/WASM/gRPC/MCP 多来源插件化做准备。
-
-### 交付物（范围 B）
-
-- [x] `cmd/server/runner.go`: `AgentRunSpec`（纯数据）+ `AgentDeps`（进程内服务指针聚合）+ `AgentRunner.Run(ctx, spec)` 收口启动链路
-- [x] `cmd/server/server.go`: `appServer` 聚合体，路由注册与控制 handler 迁移出 `main.go`
-- [x] `cmd/server/main.go`: 仅保留子系统初始化与 `appServer` 启动
-- [x] `internal/tool/registry.go`: `Tool` 接口扩展 `Version()/Source()/CanonicalName()`；Registry 键改为 `namespace/name@version`；`IsBuiltin` 改为按 `Source()` 判断
-- [x] `internal/tool/descriptor.go` + `executor.go` + `loader.go`: `ToolDescriptor` / `ToolExecutor` / `ToolLoader` 抽象
-- [x] `internal/tool/builtin.go` + `dynamic.go`: BuiltinTool 与 DynamicTool 适配新抽象
-- [x] `pkg/db/tool.go`: v27 migration 重建 `tools` 表（含 namespace / version / source / execution_config）+ CRUD
-- [x] `pkg/db/persistence.go`: `InsertAgentOptions` / `UpdateAgentOptions`；旧签名保留为薄 wrapper
-- [x] `cmd/server/api.go` + `cron_api.go`: chat / cron / recovery 入口统一改走 `AgentRunner`
-- [x] 测试: Registry 多版本、Descriptor JSON round-trip、DBToolLoader、AgentRunner 集成、DB options 兼容
-- [x] 更新 `roadmaps/ROADMAP.md` 与 `CLAUDE.md` 项目结构说明
-
-### 本次不做
-
-- [ ] 真正启动独立 OS 进程/sidecar 跑 Agent
-- [ ] 真正加载外部 WASM/.so/Python 插件
-- [ ] REST API 行为变更（`/api/tools` 保持兼容）
-- [ ] UI v2、Cron、Skill 子系统功能扩展
-
-### 验证基准
-
-- `go build ./...` 通过
-- `go test ./internal/tool/... ./pkg/db/... ./cmd/server/...` 通过
-- 冒烟: `scripts/smoke-test.sh` chat / multi-agent / cron 核心场景 PASS
-- 文档: spec + 两篇探索文档 + ROADMAP 更新均已提交 Git
-
----
-
-## Phase worktree: Session 级 git worktree 隔离工作区 ✅ 已完成
-
-> **日期**: 2026-07-23
-> **版本**: v0.12.2 Alpha
-> **OpenSpec change**: `openspec/changes/archive/2026-07-23-add-workspace-worktree-isolation/`
-
-### 目标
-
-为多 Agent 平台添加 git worktree 隔离的工作区能力，镜像 Claude Code `EnterWorktree` / `ExitWorktree` 语义。worktree 是普通 session workspace 之上**主动触发的叠加能力**——LLM 在 run 中通过 `worktree/*` Agent Tool 自主决定何时进入隔离分支、何时退出，**不触发则系统零感知、沿用普通目录**。完全向后兼容（`WORKTREE_ENABLED=false` 或 DB 未初始化时能力关闭，行为等价旧路径）。
-
-### 交付物
-
-- [x] `internal/workspace/manager.go`: `Manager`（git worktree 原语 Create/Keep/Remove/Get/List，含未提交变更护栏）+ `WorkdirHolder`（per-run 可变 CWD 单一事实源）+ `Worktree`/`RemoveReport` 模型；所有 git CLI 以 `repoDir` 为 CWD（不依赖进程 cwd）；`normPath` 归一化 Windows 8.3 短名
-- [x] `pkg/db/workspace.go`: v28 migration 为 `sessions` 表加 `active_worktree_id` 列 + `Get/Set/Clear/ListSessionActiveWorktrees` helper
-- [x] `internal/tool/builtin.go`: `write_file`/`read_file`/`run_shell` executor 优先用 `ExecuteContext.Workdir`（worktree 隔离注入），回退 `input["workdir"]`/`os.Getwd()`
-- [x] `internal/tool/registry.go`: `CtxTool` 接口 + `ExecuteWithCtx`（带 ctx 执行入口，回退 `Execute`）
-- [x] `internal/tool/worktree.go`: `worktree/create`、`worktree/exit`、`worktree/status` 三个 Agent Tool + `WorktoolDeps` + `RegisterWorktreeTools`（Mgr 为 nil 时不注册）
-- [x] `internal/runtime/engine.go`: `EngineConfig.WorkdirHolder`（`WorkdirProvider` 接口，避免 runtime→workspace 耦合）；`executeToolCall` 用 holder.Get() 覆盖 `args["workdir"]`（使 FileScopeRule scope 跟随 worktree）+ 经 `ExecuteContext.Workdir` 注入 `ExecuteWithCtx`
-- [x] `cmd/server/runner.go`: per-run `WorkdirHolder` 构造 + 克隆 registry 注册 worktree 工具 + `WorkdirHolder` 透传 EngineConfig
-- [x] `internal/orchestrator/orchestrator.go`: 子 agent holder 初值 = 父 session active worktree.Path（共享），`SetWorkspace(mgr, sessionID)` 注入
-- [x] `cmd/server/workspace_api.go`: `repoRoot()` 推断 + `reclaimOrphanWorktrees()` 启动孤儿扫描 + worktree REST API（create+get，不暴露 exit）+ `worktreeSessionStoreAdapter`
-- [x] `cmd/server/main.go` + `server.go`: Manager 构造 + `EnsureGitignored` + 启动孤儿扫描 + REST 路由内联分发 + `deps()` 注入 `WorkspaceMgr`
-- [x] `internal/config`: `WORKTREE_ENABLED`（默认 true）
-- [x] `pkg/event`: `worktree_created`/`worktree_removed`/`worktree_exit_blocked`/`worktree_orphan_removed` 事件常量
-- [x] 测试: workspace 原语（8）、worktree 工具（9）、workdir ctx 优先级（5）、runner holder 集成（4，task 4.5）、REST API（5）、孤儿扫描+无结束钩子（4，task 7.3/7.4）、FileScopeRule 协同（4，task 8.x）全绿
-- [x] 集成回归: `scripts/cases-regression.sh` 21/21 PASS（worktree 默认不触发，零影响）
-
-### 设计要点
-
-- **per-run holder**：每个 `AgentRunner.Run` 新建一个 holder，克隆 registry 注册 worktree 工具（不污染共享 base registry）；holder 是 CWD 唯一可信源，LLM 伪造的 `input["workdir"]` 被 Engine 无条件覆盖，防逃逸。
-- **FileScopeRule 协同**：holder 切到 worktree 后，Engine 用 holder.Get() 覆盖 `args["workdir"]`，使 FileScopeRule 的 scope 锚定也跟随 worktree，否则 worktree 内 write_file 会被误判越界。
-- **无 session 结束钩子**：run 结束路径只更新 turn_count/total_tokens/status，不触碰 `active_worktree_id`；生命周期收敛为 LLM 主动 exit + 启动孤儿扫描兜底。
-- **接口反转**：`WorktreeSessionStore`/`WorktreeEventBroadcaster` 在 tool 包定义、cmd/server 注入，避免 tool→pkg/db 编译期依赖（与 cron 子系统模式一致）。
-
-### 验证基准
-
-- `go build ./...` + `go vet ./...` 通过
-- `go test ./internal/workspace/ ./internal/tool/ ./internal/harness/ ./pkg/db/ ./pkg/event/ ./cmd/server/` 全绿
-- `scripts/cases-regression.sh` 21/21 PASS
-
----
-
-## Phase 8-B: 架构收尾 — 动态工具持久化 + ExecuteWithCtx + handler 方法化 + 闭包退场 ✅ 已完成（2026-07-24）
-
-> **日期**: 2026-07-24
-> **版本**: v0.13.0 Alpha
-> **设计文档**: `docs/superpowers/specs/2026-07-22-phase-8a-architecture-evolution-design.md`（8-B 沿用 8-A 设计思路）
-> **执行计划**: `docs/superpowers/plans/2026-07-23-phase-8b-architecture-cleanup-plan.md`
-
-### 目标
-
-让 Phase 8-A 造好但未接线的抽象（AgentRunner / ToolDescriptor / Executor / Loader / v27 tools 表）真正接上，同时消除 HTTP handler 层的上帝函数与 main.go 闭包，使动态工具持久化、执行上下文 Workdir、recovery 路径全部收口。
-
-### 交付物
-
-- [x] `cmd/server/tool_api.go`: `handleRegisterTool`/`handleDeleteTool` 改为 `appServer` 方法；持久化走 `db.InsertToolV2` / `db.DeleteToolV2`；冲突检查改 `CanonicalName`
-- [x] `cmd/server/main.go`: 启动期加载 DB 动态工具（跳过无 `execution_config` 的旧记录）；`startChatTask` 改为 `appServer.startChatTask` 方法；cron 初始化顺序调整
-- [x] `internal/tool/dynamic.go`: `DynamicTool` 委托 `DynamicExecutor`，移除私有 `executeShell/executeHTTP/executeInline`；`SetCommand/SetHTTP/SetCode` 同步更新 descriptor + 重建 executor
-- [x] `internal/tool/loader.go`: 删除 `BuiltInToolLoader`，保留 `ToolLoader/RecordLoader/DBToolLoader`
-- [x] `internal/tool/registry.go`: 新增 `ExecuteWithCtx`，用类型断言分派 `BuiltinTool`/`DynamicTool` 的上下文执行入口
-- [x] `internal/tool/builtin.go`: `run_shell/write_file/read_file` executor 优先读 `ExecuteContext.Workdir`
-- [x] `internal/runtime/engine.go`: `executeToolCall` 改调 `tools.ExecuteWithCtx`；AgentBus listener 新增 `engineRunDone` 分支，Run 返回时有序退出
-- [x] `cmd/server/runner.go`: 新增 `RecoverSpec` 与 `AgentRunner.Recover`，补齐 EngineConfig（Router/Registry/Providers/SkillRegistry/ActiveSkills/OnLLMUsage 等）
-- [x] `cmd/server/checkpoint_api.go`（新增）: `handleRecoverCheckpoint`/`handleListCheckpoints` 迁出并方法化
-- [x] `cmd/server/tasks_api.go`（新增）: `handleTasksRoot` + `taskActionRegistry` + `actionChat/actionMultiAgent/actionStreamDemo`
-- [x] `cmd/server/server.go`: `appServer` 字段按子系统分组；`registerRoutes` 改直接调用 `s.handleXxx` 方法值；删除透传样板
-- [x] `cmd/server/cron_api.go`: cron REST handler 方法化；`appCronStarter` 捕获 `*appServer`
-- [x] `cmd/server/api.go`: 约 30 个包级 handler 全部改为 `appServer` 方法
-- [x] `cmd/server/api_skill.go` / `api_todo.go` / `mcp_api.go` / `mock_api.go` / `model_price_api.go`: 子路由注册函数与 handler 方法化
-- [x] 测试修复: `cmd/server/*_test.go` 统一改为构造 `appServer` 实例调用方法；修复 `internal/runtime/TestAgentBusMessageCreatesInputStep` 并发竞态
-- [x] 更新 `roadmaps/ROADMAP.md` 与 `CLAUDE.md` Phase 表与项目结构
-
-### 验证基准
-
-- `go build ./...` 通过
-- `go test ./...` 全绿
-- `bash scripts/smoke-test.sh` 59/3（修复后核心流程恢复；剩余 3 项为既有已知缺口：DELETE /api/tools 动态工具删除、/api/checkpoints/recover 无效 task_id 返回 500、POST /api/memories 路由语义与文档差异）
-- `bash scripts/cases-regression.sh` 21/21 PASS
-- `bash scripts/multi-agent-smoke.sh` 12/0/0 PASS
-- `bash scripts/context-window-smoke.sh` 9/0 PASS
-- `bash scripts/policy-smoke.sh` 7/1（ApprovalRule 路径依赖未配置的 WS 审批决策，属于脚本覆盖缺口，非回归）
-
----
-
-## Phase 7: 生产化与深度集成 🔜 规划中（暂不实施）
-
-### 候选特性
-- [ ] 在线 tokenizer（tiktoken / cl100k_base）替换当前字符启发式估算
-- [ ] 后端 context window 压缩策略：按 token 预算自动截断/摘要历史 messages
-- [x] `/api/tasks/:id/context_window` 历史快照查询端点（WS 实时事件 + REST 查询双通道）
-- [x] F8 / F9 遗留修复（WS 重连补事件、maxSteps 滑块同步）
-- [x] RBAC enforcement + Auth 敏感端点保护
-- [x] **MCP 增强：SSE transport、远程市场安装、工具变更事件 `{mcp_tools_changed}`、按 agent 的 MCP 可见性**
-  - 已交付（本批次）: stdio transport + Manager 生命周期 + DB 持久化 + `/api/mcp/servers` REST API + **MCP Marketplace Provider（static default market）+ 前端市场安装入口 + agent tools 白名单自动注入 `AllowedTools`**
-- [x] **web_search fallback**: 未配置 Exa/Parallel 时自动降级到 DuckDuckGo HTML/lite 搜索，无需 API key
-- [x] **Contract limits**: 后端 `CONTRACT_LIMIT_*` 配置 + `/api/contract-limits` + 请求校验 / clamping + 前端 TaskInput 消费 + `Scopes` 下拉校验
-
-**目标**: 在 Phase 6 落地的 Auth（API key + RBAC 骨架）与 RAG（本地 TF-IDF + 内存向量库）之上，推进生产化、多用户、深度可观测与外部集成。延续 6-D/6-E 的"非空壳、真实运行"原则。MCP 已作为 Phase 6 扩展完成核心能力（stdio transport + Manager + DB + REST API），剩余增强项入 Phase 7。
-
-**状态**: 仅规划，暂不实施。各子阶段可独立交付，实施前需为每个 7-X 子阶段新建 OpenSpec change。
-
-### 7-A 身份与多用户体系
-- [ ] JWT access/refresh token，与现有 API key 并存（API key 保留为程序化访问通道）
-- [ ] OAuth2 第三方登录（GitHub / Google）
-- [ ] Web UI 登录页 + 用户管理界面（Vue 路由守卫）
-- [ ] 数据隔离: session / project / memory 按 `user_id` 隔离（DB 列 + 查询过滤）
-- [ ] 配额管理: 每用户 token / 成本 / 并发任务上限，接入 PolicyGate
-- [ ] RBAC 细化: 角色权限下沉到 Tool / 端点级
-
-### 7-B 外部向量与 Embedding 集成
-- [x] `EmbeddingProvider` 远程实现: OpenAI text-embedding-3 / Cohere（复用现有接口，无侵入）
-- [ ] `VectorStore` 持久化后端: pgvector（保留 SQLite 兜底，Phase 7-E 再做迁移）
-- [x] 混合检索: 向量召回 + BM25 关键词 + 重排（`HybridRanker` 替换 `blendVectorScores`）
-- [x] 增量索引: `MemoryIndexer` + `PostInsertMemoryHook` 实时 upsert，替代启动全量 `BuildVectorIndex`
-- [x] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
-
-### 7-C 深度可观测
-- [x] OpenTelemetry trace: 跨 Agent / Tool / LLM 调用链路 span (dependency-free Tracer)
-- [x] Prometheus 延迟直方图: `llm_latency_ms`, `tool_latency_ms` 添加至 `/metrics`
-- [x] 审计日志: 写操作记录 actor / target / before / after，SQLite 持久化
-- [x] 多 Agent trace 树可视化: 前端 `TraceTreePanel.vue`
-- [x] 事件回放: `/api/replay/tasks/{task_id}` 从 steps + conversations 重建
-
-### 7-D Harness 治理与合规
-- [ ] 成本预算硬限制: 触发阈值自动暂停 + 告警（强化 CostBudgetRule）
-- [ ] 审批工作流增强: 多级审批 / 超时升级 / 代理审批
-- [ ] 合规快照: tool call 输入输出录制、文件变更 diff
-- [ ] 数据保留策略: episodic memory TTL + 自动归档
-- [ ] PII 脱敏: memory / 日志敏感信息自动打码
-
-### 7-E 生产部署
-- [ ] Docker Compose / K8s 部署清单
-- [ ] Postgres 替换 SQLite（迁移工具，保留 SQLite 作单机兜底）
-- [ ] CI/CD: GitHub Actions build / test / vet / lint
-- [ ] 备份恢复: DB 定时备份 + 向量库快照
-- [ ] HA: 多实例 + 共享存储（可延后至 Phase 8）
-
-### 依赖与优先级
-- **7-A → 7-D**: 合规治理依赖多用户身份（actor 归属）
-- **7-B 独立**: 可先行，纯增强 RAG，无破坏性
-- **7-C 独立**: 可并行，与业务逻辑解耦
-- **7-E 最后**: 依赖前四项稳定
-
-**建议实施顺序**: 7-B / 7-C（并行）→ 7-A → 7-D → 7-E
-
----
-
-## Phase 7-H2: Multi-Agent 编排遗留闭环 ✅ 已完成主体（2026-07-24）
-
-> **背景**: `scripts/multi-agent-smoke.sh` 与 `scripts/real-llm-smoke.sh` 长期记录的"已知后端 bug，无人修复"清单。本次集中闭环 multi-agent 编排层的结构性缺陷，使其从"一次性 fan-out 原型"升级为可观测、可跑通的 leader-driven 编排。静态编排（parallel/sequential/DAG）已生产可用；动态 leader-driven 派发架构已闭环，mock 回归 21/21 PASS。
-> **范围**: 仅 multi-agent 编排链路 + Tracer 事件流 + 子任务可观测回填。不涉及 7-A/7-D 的多用户与合规。
-> **原则**: 延续 6-D/6-E 的"非空壳、真实运行"——每个子阶段必须 smoke 脚本验证通过才算交付。
-
-### 根因（详见 memory `multi-agent-dual-entry-placeholder-bug`）
-
-| 编号 | 问题 | 定位 | 影响 | 状态 |
-|------|------|------|------|------|
-| MA1 | **dispatch_sub_agent 占位符硬编码** `"<leaderSubTaskID>"` | `internal/tool/builtin.go:752` | leader-driven 链路从未跑通；子任务 parent_task_id 挂在假 ID，前端 `QueryChildTasks` 永远空 | ✅ 已修复 |
-| MA2 | **双入口语义分裂**：前端只接 `/api/multi-agent`（静态 decomposer + RunBlocking），leader-driven 入口（`/api/tasks` action=multi-agent）是死代码 | `cmd/server/main.go` | 用户永远用到的是空壳静态编排，看不到 Leader 思考/派发 | ✅ 已修复 |
-| MA3 | **Tracer 不广播事件**：`Tracer.push` 只入内存缓冲，无 `SendEvent(trace_span)` | `internal/observability/trace.go:147` | 前端 Traces 面板永远空；multi-agent 路径根本没接 Tracer | ✅ 已修复 |
-| MA4 | **orchestrator 未接入 Tracer**：`runAgent` 创建 Engine 时 `Tracer`/`RootTraceCtx` 为 nil | `internal/orchestrator/orchestrator.go` | multi-agent 下零 span | ✅ 已修复 |
-| MA5 | **child_tasks 不返回 steps**：`/api/tasks?id=root` 的 child_tasks 无 steps 字段 + 前端只建空占位 | `cmd/server/api.go` + `web/v2/src/composables/useTaskStore.ts` | 子 agent lane 永远 "No steps yet" | ✅ 已修复 |
-| MA6 | **root task 是空壳**：静态编排 root 无 engine loop，`final_result="all agents completed"` | `internal/orchestrator/orchestrator.go` | 编排层无可观测 step，违背白盒哲学 | ✅ 已修复 |
-| MA7 | **AgentBus worker 跨 session 串台**：worker 用 `RegisterHandler(agentID)` 不带 SubTaskID | `internal/runtime/engine.go:703` | 两 session 同名 worker 覆盖 handler（边缘场景） | ✅ 已修复 |
-| MA8 | **Router 死代码**：chat 路径 EngineConfig 未设 `Router/Registry/Providers` | `cmd/server/main.go` | Phase 6 动态模型选择在 chat 路径未生效 | ✅ 已修复 |
-| MA9 | **root task 状态汇聚靠轮询**：多 agent 并行终态由最后一个 agent 决定 | `internal/orchestrator/orchestrator.go` | `multi-agent-smoke.sh` 第 8 项"仍存" | ✅ 已修复 |
-
-### 实施阶段（全部已完成）
-
-#### 阶段 1 — 修通 leader-driven 主链路（MA1 + MA2）✅
-- [x] `internal/tool/registry.go`：新增 `Clone()` 方法，支持基于 base registry 创建带独立 tools map / order slice 的浅拷贝。
-- [x] `internal/tool/builtin.go`：新增 `NewLeaderTools`，`NewDispatchSubAgentTool` 直接持有真实 `leaderSubTaskID`；移除旧全局权限模式。
-- [x] `cmd/server/main.go`：base `toolRegistry` 仅 `RegisterBuiltins`；root leader 从 base registry `Clone()` 并注册 leader tools；删除 `leaderDispatchEnabled` 全局竞态。
-- [x] 前端切到 `/api/tasks` with `action:"multi-agent"`。
-- [x] `internal/orchestrator/decomposer.go`：兼容 `output_to` 字符串/数组解析。
-- [x] smoke 验证：`multi-agent-smoke.sh` 12/0/0；`real-llm-smoke.sh` 场景 3 18s 内 status=completed，agents=2。
-
-#### 阶段 2 — Tracer 接入事件流（MA3 + MA4）✅
-- [x] `internal/observability/trace.go`：`OnSpan` 回调异步广播 `trace_span`。
-- [x] `internal/runtime/engine.go`：`think()` 传入 `e.cfg.AgentID`。
-- [x] `cmd/server/main.go`：`tracer.SetOnSpan` → `hub.SendEvent`。
-- [x] `internal/orchestrator/orchestrator.go`：`RunBlocking` 启动 root span 并透传给子 agent。
-
-#### 阶段 3 — child steps 回填（MA5）✅
-- [x] `cmd/server/api.go` `handleGetTask`：新增 `ChildTaskDetail` 包装，`child_tasks` 附带 `steps`。
-- [x] `web/v2/src/composables/useTaskStore.ts` `loadTask`：处理 child_tasks 并回填 worker lane。
-- [x] smoke 验证：`multi-agent-smoke.sh` 12/0/0；`real-llm-smoke.sh` 14/0/3。
-
-#### 阶段 4 — 编排层可观测（MA6 + MA9）✅
-- [x] `internal/orchestrator/orchestrator.go`：发 `decompose_done` / `agent_dispatched` / `agent_completed` 事件。
-- [x] root `final_result` 改为 worker 结果聚合摘要。
-- [x] root task 终态由 `RunBlocking` 显式 `UpdateTask` 汇聚。
-
-#### 阶段 5 — workflow DAG 表达力 ✅
-- [x] decomposer 输出升级为带依赖/条件的 DAG。
-- [x] `RunBlockingDAG` 按拓扑调度（条件 DSL + skipped 传播）。
-- [x] `dispatch_sub_agent` observation 标准化。
-
-#### 阶段 6 — AgentBus 隔离 + Router 死代码（MA7 + MA8）✅
-- [x] `internal/runtime/engine.go:703`：worker 改 `RegisterHandlerBySubTask`。
-- [x] `cmd/server/main.go`：chat 路径 EngineConfig 补 `Router/Registry/Providers`。
-- [x] `/api/multi-agent` 静态编排兼容路径仍可回归。
-
-### 真实遗留（已决策，非阻塞 bug）
-
-- **动态 leader-dispatch 在 real-LLM 下不可靠**：`multi-agent-leader-dispatch` / `multi-agent-review` / `multi-agent-fault-tolerance` 在 mock 下 PASS，但在真实 LLM 下 leader 可能不调用 `dispatch_sub_agent` 而是自行答题。原因：real-LLM 的 tool-calling 行为不可控，非平台架构缺陷。后续优化方向：
-  1. 在 case system prompt 中强化 "必须调用 dispatch_sub_agent" 的指令；
-  2. 对 leader 增加后验收：若未派发子 agent 直接给出 final，则标记为 `soft_completed` 并提示用户；
-  3. 探索 function-calling 强制模式或 few-shot 示例。
-- **该遗留已记录于** `memory/multi-agent-dual-entry-placeholder-bug.md`，避免 LLM 误判为未修复的架构 bug。
-
-### 验证基准
-
-- [x] `bash scripts/multi-agent-smoke.sh` 全 PASS（12/0/0）。
-- [x] `bash scripts/real-llm-smoke.sh`（LLM_USE_MOCK=false）场景 3 不再 timeout，`status=completed` 与 `agent_count=2` 一致。
-- [x] `bash scripts/cases-regression.sh` L4/L5 编排事件与 child_steps 回填断言 PASS（21/21）。
-
----
-
-## 版本历史
-
-| 版本 | 日期 | 变更 |
+| 版本 | 日期 | 说明 |
 |------|------|------|
-| v0.1 | 2026-07-03 | Phase 0 完成，初始骨架搭建 |
-| v0.2 | 2026-07-03 | Phase 1 完成，Agent Loop 核心引擎 + e2e 测试工具 |
-| v0.3 | 2026-07-03 | Phase 2 完成，Vite + TS 前端迁移 + Embed 集成 |
-| v0.4 | 2026-07-03 | Phase 3 完成，Harness 基础 + 预设 Cases + CaseCard UI |
-| v0.4 Alpha | 2026-07-05 | Phase 4 完成，多 Agent 并发 + Harness 控制层 + 前端体验优化 |
-| v0.5 | 2026-07-06 | Phase 5 完成: Session 管理 + Provider + Router + 工具注册 + Harness 审批 + Memory 四层 + Docker 沙箱 + AgentBus + Checkpoint |
-| v0.5 Alpha | 2026-07-07 | Phase 5-A 完成: Project 管理 + 多轮对话 + session_messages 持久化 + TurnList 时间线组件 |
-| v0.6 Alpha | 2026-07-08 | Phase 6 完成: 6-C 技术债务修复 + 6-D 可观测性/成本持久化真实落地 |
-| v0.6.1 Alpha | 2026-07-08 | Phase 6-E 完成: Auth 中间件实际生效 + RAG 本地向量召回接入 MemoryRecall |
-| v0.6.4 Alpha | 2026-07-11 | 可配置任务超时、Memory overlay、展开/折叠/智能滚动、Continue 上下文保留、step 索引、错误反馈优先策略 |
-| v0.6.5 Alpha | 2026-07-15 | Phase 6-F 完成: memory 类型体系 + CRUD API + LLM 摘要 + 向量持久化 + 前端可观测性 |
-| v0.7.0 Alpha | 2026-07-15 | Case Management 增强: 自定义 Case CRUD + Tag/Category 筛选 + 内置 Case 自动种子 + LLM Judge 评估 + `task_evaluated` 事件 + 前端任务库 |
-| v0.7.1 Alpha | 2026-07-18 | 扩展工具注册表: namespace/tag 身份体系 + 新增 core/list_dir、core/apply_diff、core/delete_file、core/fetch_url、core/parse_json、core/execute_program + mcp/web_search 占位 |
-| v0.7.2 Alpha | 2026-07-18 | MCP 支持落地: `internal/tool/mcp` JSON-RPC client + stdio transport + Manager 生命周期 + `mcp_servers` DB 持久化 + `/api/mcp/servers` REST API + time/calc 示例 + MCP 市场 Provider（default static market）+ 前端市场安装入口 |
-| v0.7.3 Alpha | 2026-07-18 | MCP SSE transport: `internal/tool/mcp/sse_transport.go` + endpoint handshake + JSON-RPC over SSE + Manager/REST/前端 create dialog 已支持 `sse` transport |
-| v0.7.4 Alpha | 2026-07-18 | MCP 远程 marketplace: 新增 `URLProvider` 从 HTTP URL 拉取 JSON catalog + `MCP_MARKETS` 环境变量注册 + Manager 自动加载远程市场 + 示例与测试 |
-| v0.7.5 Alpha | 2026-07-18 | DuckDuckGo fallback: core/web_search 无 API key 时自动降级到 DuckDuckGo HTML/lite 搜索 |
-| v0.7.6 Alpha | 2026-07-19 | Phase 7 遗留闭环: WS 重连补事件、RBAC enforcement、API keys 脱敏、maxSteps 滑块同步、MCP 按 agent 可见性、contract limits 校验与前端消费 |
-| v0.8.0 Alpha | 2026-07-19 | Phase skill 完成: 可复用 Skill 系统（模型/注册表/持久化/加载器/Renderer/内置 Skill/Agent Tools/Engine 注入/REST API/前端 SkillPicker/E2E 测试）落地 |
-| v0.9.0 Alpha | 2026-07-19 | Phase UI-v2 进行中: Observable Control Room 新前端（`web/v2/`）骨架 + 核心连线 + 颜色 token 统一 + Go embed 双版本运行时切换（根路径默认 v2，`/ui/v1/` 保留旧版）；待端到端冒烟验证后合并 main |
-| v0.9.1 Alpha | 2026-07-21 | Phase 7-H2 启动: multi-agent 编排遗留闭环规划（MA1-MA9，dispatch_sub_agent 占位符 bug + Tracer 事件流 + child steps 回填），见 ROADMAP "Phase 7-H2" 章节 |
-| v0.9.2 Alpha | 2026-07-21 | Phase 7-H2 阶段 1: leader-driven 主链路重构落地 — Registry.Clone + per-leader registry + 删除 leaderDispatchEnabled 全局竞态，前端 multi-agent 入口切到 /api/tasks action=multi-agent |
-| v0.9.3 Alpha | 2026-07-21 | Phase 7-H2 阶段 2: Tracer 接入事件流 + decomposer output_to 字符串/数组兼容修复；`scripts/multi-agent-smoke.sh` (12/0/0) 与 `scripts/real-llm-smoke.sh` (14/0/3) 验证通过 |
-| v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: `handleGetTask` 返回 child_tasks.steps + 前端 `loadTask` 回填 worker lane；新增 `TestHandleGetTaskChildSteps` 单测；smoke 验证同 v0.9.3 |
+| v0.9.0 Alpha | 2026-07-19 | multi-agent 动态编排阶段 1：orchestrator + parallel 路径 |
+| v0.9.1 Alpha | 2026-07-19 | multi-agent 动态编排阶段 2：sequential 路径 + multi-agent-dag 模式 |
+| v0.9.2 Alpha | 2026-07-20 | multi-agent 动态编排阶段 3：event broadcast 修复 + pipeline(DAG) + random-id 多次分派 |
+| v0.9.3 Alpha | 2026-07-20 | multi-agent 动态编排阶段 4：decomposer structured output + AgentBus 解耦 LLM 直接分派 + RunBlocking 方法化 + 子 Agent LLM call 事件透传 |
+| v0.9.4 Alpha | 2026-07-21 | Phase 7-H2 阶段 3: child steps 回填（task REST `GET /api/tasks?id=xxx` 返回 `child_tasks[].steps`）+ DAG `agent_completed` 事件丢弃后恢复 + `multi-agent-smoke.sh` 第一次全绿(12/0/0) |
 | v0.9.5 Alpha | 2026-07-21 | Phase 7-H2 阶段 4: 编排层可观测事件(`decompose_done`/`agent_dispatched`/`agent_completed`) + root final_result worker 聚合摘要 + RunBlocking 显式 UpdateTask 终态(MA9)；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(14/0/3) 验证通过 |
 | v0.9.6 Alpha | 2026-07-21 | Phase 7-H2 阶段 5: workflow DAG 表达力落地 — `WorkflowNode/Edge/AgentWorkflow` 数据模型 + decomposer 解析 `workflow.nodes/edges/dependencies/condition` + `RunBlockingDAG` Kahn 拓扑调度(条件 DSL `<id>.completed\|\|.failed` + `&&/\|\|/()` + skipped 传播) + `/api/multi-agent` 自动切换 DAG/扁平路径(向后兼容) + `dispatch_sub_agent` observation 标准化(`summary`/`all_completed`/`completed_count`/`total_tokens`/`succeeded`/`result_truncated` + 4KB UTF-8 安全截断)；新增 `dispatch_observation_test.go` 5 例；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0) 验证通过 |
 | v0.9.7 Alpha | 2026-07-21 | Phase 7-H2 阶段 6: AgentBus 隔离 + Router 死代码闭环 — worker Engine 改 `RegisterHandlerBySubTask`(此前 agentID-only 注册导致并发 session 同名 worker 串台) + `handleRecoverCheckpoint` EngineConfig 补 `Router/Registry/Providers`(恢复路径也触发 `model_routed`)；新增 `TestAgentBus_ConcurrentSameAgentIDDifferentSubTask`/`TestAgentBus_WorkerUnregisterBySubTask`；`multi-agent-smoke.sh`(12/0/0) 与 `real-llm-smoke.sh`(17/0/0，含 4d Router 触发 PASS) 验证通过 |
@@ -968,6 +499,14 @@ const activeTaskId = ref<string | null>(null)
 | v0.11.3 Alpha | 2026-07-23 | extend-task-cases: 内置 Case 矩阵 5→21（L1 单 Agent 基线 / L2 子系统 / L3 Harness 治理 / L4 多 Agent 静态编排 / L5 多 Agent 动态编排）+ `cases_test.go` 完整性校验 + `internal/llm/mock_builtin.go` 22 个 mock 脚本（21 case + tool-error 回退）+ `mock_provider.go` selectScript 两档 CaseID 评分（精确 +1000 / 子串 +500，防 research 劫持）+ `scripts/cases-regression.sh` mock 回归 21/21（WS 重连订阅编排事件 + Windows PYTHONUTF8=1）；OpenSpec change 已归档 `openspec/changes/archive/2026-07-23-extend-task-cases/` 并产出 `task-cases` / `multi-agent-orchestration` 两份能力规格 |
 | v0.12.0 Alpha | 2026-07-23 | Phase 8-A 架构演进（范围 B）: AgentRunner + AgentRunSpec 收口启动链路；Tool 接口扩展 Version/Source/CanonicalName，Registry 支持多版本；ToolDescriptor / ToolExecutor / ToolLoader 抽象；v27 tools 表迁移；DB InsertAgent/UpdateAgent options struct 化；cmd/server 拆分为 main.go / api.go / server.go / runner.go；chat / cron / multi-agent / run-case 入口统一改走 AgentRunner.Run(spec)（删除 20+ 参数 runAgentLoop* 包级函数）；更新 ROADMAP 与 CLAUDE.md |
 | v0.12.1 Alpha | 2026-07-23 | real-llm-smoke 收尾 + 产物隔离: `scripts/real-llm-smoke.sh` 终态宽限复检（180s+200s）消解 4 个 timeout 假阳性 + 全量 21 case 真实 LLM 评测（PASS=143/SKIP=20/FAIL=0，零平台 bug）+ 产物 CWD 隔离到 `workspace/smoke-server/run-*`（不自动清理，SMOKE_FRESH=1 清空）；`internal/config/config.go` ENV_FILE 绝对路径加载 .env；后端 workspace 三层兜底——`handleRunCase` 无 session 自动建匿名 session + workspace（L1）/ `resolveSession` 新建 session 绑默认 workspace 覆盖所有无 session 入口（L2）/ `runAgentLoopWithTurn` 兜底 `<cwd>/workspace/`（L3）；20 个 SKIP 中 5 个映射 7-H2 已知遗留（policy-enforcement PolicyGate 未触发 + multi-agent/sequential/review 编排事件缺失），15 个为 real-LLM 不可控行为偏差 |
-| v0.13.1 Alpha | 2026-07-24 | UI-v2 移动端可用性修复: MobileNav 5-tab、TopBar More 抽屉、Manage/Context bottom sheet、CommandBar flex 布局、Inspector 全屏、44×44 触控目标、`aria-label` 补齐、`MobileBottomSheet.vue` + 单测 5 例；`npx vue-tsc`/`npx vitest run` 全绿；OpenSpec `v2-mobile-usability-fix` 已归档 |
 | v0.13.0 Alpha | 2026-07-24 | Phase 8-B 架构收尾 + UI-v2 / 7-H2 主体完成: 动态工具 DB 持久化+启动加载（v27 tools 表）+ DynamicTool 委托 DynamicExecutor + AgentRunner.Recover 收口 + Registry.ExecuteWithCtx Workdir 注入 + 内置工具读 ExecuteContext.Workdir + handler 全方法化 + taskActionRegistry 注册表分发 + 闭包退场（cmd/server 新增 tasks_api.go / checkpoint_api.go，`go test ./...` 全绿）；文档/memory 状态同步，将 UI-v2 控制室与 7-H2 编排闭环从"进行中"改为"已完成主体"，并记录端到端冒烟与 real-LLM leader-dispatch 可靠性为真实遗留项；OpenSpec cleanup-residual-bugs-and-docs 归档 |
+| v0.13.1 Alpha | 2026-07-24 | UI-v2 移动端可用性修复: MobileNav 5-tab、TopBar More 抽屉、Manage/Context bottom sheet、CommandBar flex 布局、Inspector 全屏、44×44 触控目标、`aria-label` 补齐、`MobileBottomSheet.vue` + 单测 5 例；`npx vue-tsc`/`npx vitest run` 全绿；OpenSpec `v2-mobile-usability-fix` 已归档 |
 | v0.12.2 Alpha | 2026-07-23 | Phase worktree: session 级 git worktree 隔离工作区 — `internal/workspace` Manager 原语（Create/Keep/Remove/Get/List + 未提交护栏 + repoDir）+ WorkdirHolder（per-run 可变 CWD 单一事实源）+ `worktree/create·exit·status` 三个 Agent Tool + REST API（create/get，不暴露 exit）+ v28 `sessions.active_worktree_id` migration + 启动孤儿扫描兜底 + `worktree_*` 事件 + `WORKTREE_ENABLED` 配置；Engine 用 holder 覆盖 args["workdir"] 使 FileScopeRule scope 跟随 worktree；无 session 结束钩子（LLM 主动 exit + 孤儿扫描）；完全向后兼容，mock 回归 21/21 不受影响 |
+| v0.13.2 Alpha | 2026-07-24 | web_search 国内引擎与 web_research 工具: `internal/tool/web_search.go` 接入 Baidu mobile / Sogou / Bing China HTML 三个零 key 国内 provider，`WEBSEARCH_DISABLE_DDG` 默认 true，支持 `WEBSEARCH_PROVIDER=baidu` 显式选择；新增 `core/web_research` 深度研究工具（搜索→抓取 top-N→LLM JSON 摘要），通过 `tool.LLMProvider` 调用内部 LLM，返回 `_llm_usage` 供 engine 累计；新增 `web_research_summarize_started/completed` 事件与前端 EventType；`internal/tool/prompt.go` 集中管理 `web-research-summarize-system` prompt；`internal/cases/cases.go` 的 web-research case 提及 web_research 可一次调用替代；单元测试覆盖解析器、显式 provider、摘要/降级/usage 回传；真实网络探测中 Sogou/Bing China 可返回结果，Baidu 未登录请求被验证码拦截；OpenSpec `web-search-china-providers` 已归档 `openspec/changes/archive/2026-07-24-web-search-china-providers/` |
+
+---
+
+## 进行中 / 下一步
+
+- **定型阶段**: 完成核心能力矩阵，进入 v0.14.0 Beta 准备: token 治理、context 压缩、RBAC、部署文档。
+- **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
