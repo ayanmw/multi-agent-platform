@@ -1002,8 +1002,45 @@ func main() {
 	}
 	server.registerRoutes()
 
-}
 	// 从嵌入式文件系统提供 Vue SPA（生产模式）。
+	// 开发模式下用户可运行 `cd web && npm run dev` 使用 Vite 的 dev server
+	// 与 HMR。构建 Go binary 时使用嵌入式 dist/。
+	//
+	// Phase UI-v2: 同时嵌入 v1 (web/dist) 与 v2 (web/v2/dist)，通过 URL 路径分发：
+	//   - 根路径 "/" 永远服务最新默认版本（当前为 v2）。
+	//   - "/ui/v1/" 与 "/ui/v2/" 分别服务对应历史版本。
+	//   未来新增版本时，在 web/embed.go 的 UIVersionsRegistry 注册即可。
+	serveVersionedUI()
+
+	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
+	fallbackUserID := ""
+	if authAPI != nil {
+		fallbackUserID = authAPI.SeedUserID()
+	}
+
+	log.Printf("========================================")
+	log.Printf("Multi-Agent Platform %s", version.Version)
+	log.Printf("========================================")
+	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
+	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
+	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
+	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
+	log.Printf("LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
+	log.Printf("Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
+	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
+	log.Printf("========================================")
+
+	// 用 auth middleware 包装默认 mux。REQUIRE_AUTH 为 true 时，它保护
+	// 改状态的路由和敏感读 endpoint，而公开路由 (/healthz、/metrics、
+	// /health) 仍然开放。REQUIRE_AUTH 为 false 时，所有路由都放行，
+	// 但会注入 seed user ID。
+	handler := auth.NewAuthMiddleware(authStore, fallbackUserID, requireAuth, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
+
+	if err := http.ListenAndServe(":"+cfg.ServerPort, handler); err != nil {
+		log.Fatal(err)
+	}
+}
+
 // streamTask 发射一组演示事件序列，模拟多步 agent 任务。
 func streamTask(hub *ws.Hub, taskID string) {
 	agentID := "agent_test_001"
