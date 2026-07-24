@@ -1019,9 +1019,11 @@ func streamTask(hub *ws.Hub, taskID string) {
 		{"llm_thinking", map[string]any{"content": "Starting analysis..."}, 200},
 		{"llm_delta", map[string]any{"content": "I need to research the latest "}, 50},
 		{"llm_delta", map[string]any{"content": "AI developments in 2026. "}, 50},
-		// TODO: Phase 6 —— web_fetch + web_search tool 尚未注册。
-		// 等这些 tool 实现并接入 tool registry 后，用真实注册的 tool
-		// 替换本演示序列。
+		// stream-demo 是纯前端事件演示，不经过真实 Agent runtime。
+		// web_fetch / web_search 已由 registerBuiltinTools 注册到 toolRegistry，
+		// 但为了让演示序列在没有真实 LLM 的情况下仍能稳定展示工具调用流程，
+		// 此处继续用 run_shell 作为示例工具。如需改成真实 web 工具，可在
+		// streamTask 显式创建并执行一个独立的 BuiltinTool 实例。
 		{"llm_delta", map[string]any{"content": "Let me use the run_shell tool first."}, 100},
 		{"llm_message_complete", nil, 200},
 		{"step_complete", map[string]any{"step": 0}, 100},

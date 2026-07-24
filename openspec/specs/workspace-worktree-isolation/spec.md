@@ -1,7 +1,7 @@
 # workspace-worktree-isolation Specification
 
 ## Purpose
-TBD - created by archiving change add-workspace-worktree-isolation. Update Purpose after archive.
+本规格定义 session 级 git worktree 隔离工作区能力。Worktree 是普通 session workspace 之上主动触发的叠加隔离层：LLM 在单次 run 中通过 Agent Tool 自主决定何时进入隔离分支、何时退出，系统不设 session 结束钩子自动回收，生命周期收敛为 LLM 主动 exit、用户手动操作与启动孤儿扫描兜底。该能力完全向后兼容，`WORKTREE_ENABLED=false` 时行为等价于旧路径。
 ## Requirements
 ### Requirement: Worktree Manager 原语
 系统 SHALL 提供 `internal/workspace.Manager` 封装 git worktree 原语,支持 Create / Keep / Remove / Get / List,worktree 目录统一落在 `.claude/worktrees/<id>` 下,不散落到其它路径。

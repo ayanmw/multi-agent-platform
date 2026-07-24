@@ -1,7 +1,7 @@
 # multi-agent-orchestration Specification
 
 ## Purpose
-TBD - created by archiving change extend-task-cases. Update Purpose after archive.
+本规格定义平台多 Agent 编排层的期望行为，覆盖 L4 静态编排（parallel / sequential / DAG）与 L5 动态编排（leader-driven dispatch）。编排层在任务启动前或运行时决定将工作拆分为多个子 Agent，并通过 AgentBus 在子 Agent 之间转发输入与结果；所有拆分、派发、完成决策都以可观测事件形式广播，支撑"白盒 Agent"的可观测要求。mock 回归已覆盖全部 21 个内置 case（含 L4/L5 编排事件断言），real-LLM 下 leader 动态派发的可靠性仍受模型能力波动影响，属于已知限制而非架构缺失。
 ## Requirements
 ### Requirement: 静态编排策略 Case 覆盖
 平台 MUST 提供覆盖三种静态编排策略的内置 case：parallel（worker 并行）、sequential（worker 顺序链式，前序输出作为后序输入）、DAG（带依赖的 A→B→C 编排）。静态编排的 agent 集合 MUST 在任务启动前由 decomposer 一次性确定，运行时不变。
