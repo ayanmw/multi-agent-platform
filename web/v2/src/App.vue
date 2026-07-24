@@ -11,6 +11,9 @@ import CommandBar from './components/CommandBar.vue'
 import ContextFlyout from './components/ContextFlyout.vue'
 import ManageFlyout from './components/ManageFlyout.vue'
 import CronDockPanel from './components/CronDockPanel.vue'
+import CronManager from './components/CronManager.vue'
+import ThemePalette from './components/ThemePalette.vue'
+import MobileBottomSheet from './components/MobileBottomSheet.vue'
 import MobileNav from './components/MobileNav.vue'
 import TimelineTrack from './components/TimelineTrack.vue'
 import Toast from './components/Toast.vue'
@@ -57,6 +60,8 @@ const {
   leftDockOpen,
   rightFilesOpen,
   activeMobileTab,
+  mobileMoreOpen,
+  isCommandBarVisible,
   leftDockWidth,
   rightFilesWidth,
   commandAreaHeight,
@@ -523,7 +528,7 @@ onUnmounted(() => {
 
 // === 全局滚轮：在标题/空白处滚动时驱动主舞台滚动，
 // 左右 Dock 与底部输入区保持自身滚动独立。
-const SCROLLABLE_SELECTORS = ['.dock-body', '.command-area', '.context-flyout-body', '.context-flyout']
+const SCROLLABLE_SELECTORS = ['.dock-body', '.command-area', '.context-flyout-body', '.context-flyout', '.mobile-sheet-body']
 function findScrollableAncestor(el: EventTarget | null): HTMLElement | null {
   let node: Node | null = el as Node
   while (node && node instanceof HTMLElement) {
@@ -542,7 +547,7 @@ function findScrollableAncestor(el: EventTarget | null): HTMLElement | null {
 function handleGlobalWheel(e: WheelEvent) {
   if (e.deltaY === 0) return
   const target = e.target as HTMLElement
-  if (target.closest('.inspector-dialog-overlay, .modal, .dialog, .manage-flyout, .context-flyout')) return
+  if (target.closest('.inspector-dialog-overlay, .modal, .dialog, .manage-flyout, .context-flyout, .mobile-sheet-overlay')) return
 
   const scrollable = findScrollableAncestor(target)
   if (scrollable) {
@@ -938,6 +943,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       :show-inspector-toggle="showInspectorToggle"
       :manage-open="manageFlyoutOpen"
       :cron-open="rightCronOpen"
+      @open-mobile-more="mobileMoreOpen = true"
       @toggle-left-dock="toggleLeftDock"
       @toggle-recent-mods="showRecentMods"
       @toggle-model-prices="modelPricesVisible = true"
@@ -1184,31 +1190,90 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           <SessionFiles :session-id="activeSessionId || ''" />
         </DockPanel>
       </div>
+      <div v-else-if="activeMobileTab === 'manage'" class="mobile-tab-view">
+        <DockPanel side="left" title="Manage" :open="true" @close="activeMobileTab = 'stage'">
+          <ManageContent
+            initial-tab="memory"
+            :focus-cron-id="''"
+            @run-case="handleRunCase"
+            @trigger-skill="handleTriggerSkill"
+          />
+        </DockPanel>
+      </div>
+      <div v-else-if="activeMobileTab === 'cron'" class="mobile-tab-view">
+        <DockPanel side="right" title="Cron" :open="true" @close="activeMobileTab = 'stage'">
+          <CronManager :focus-cron-id="''" />
+        </DockPanel>
+      </div>
+
+      <CommandBar
+        v-if="isCommandBarVisible"
+        ref="commandBarRef"
+        :disabled="isAgentRunning"
+        :is-running="isAgentRunning"
+        :is-pending="isTaskPending"
+        :prefill="prefilledCommand"
+        v-model:context-open="contextFlyoutOpen"
+        :context-anchor-rect="contextAnchorRect"
+        :agents="agentOptions"
+        :available-tools="availableToolOptions"
+        @send="handleSend"
+        @pause="pauseTask"
+        @resume="resumeTask"
+        @cancel="cancelTask"
+        @update:prefill="prefilledCommand = ''"
+        @update:multiAgent="onMultiAgentChange"
+        @multiAgentChange="onMultiAgentChange"
+        @open-cases="openInspectorDialog('cases')"
+        @open-agents="openInspectorDialog('agents')"
+      />
+
+      <MobileNav />
     </div>
 
-    <!-- 移动端底部 CommandBar 单独放置，桌面/平板已由中栏承载 -->
-    <CommandBar
-      v-if="isMobile && activeMobileTab === 'stage'"
-      ref="commandBarRef"
-      class="command-bar-mobile"
-      :disabled="isAgentRunning"
-      :is-running="isAgentRunning"
-      :is-pending="isTaskPending"
-      :prefill="prefilledCommand"
-      v-model:context-open="contextFlyoutOpen"
-      :context-anchor-rect="contextAnchorRect"
-      :agents="agentOptions"
-      :available-tools="availableToolOptions"
-      @send="handleSend"
-      @pause="pauseTask"
-      @resume="resumeTask"
-      @cancel="cancelTask"
-      @update:prefill="prefilledCommand = ''"
-      @update:multiAgent="onMultiAgentChange"
-      @multiAgentChange="onMultiAgentChange"
-      @open-cases="openInspectorDialog('cases')"
-      @open-agents="openInspectorDialog('agents')"
-    />
+    <MobileBottomSheet
+      :open="mobileMoreOpen"
+      title="More"
+      @update:open="mobileMoreOpen = $event"
+    >
+      <div class="mobile-more-sheet-body">
+        <button
+          class="mobile-more-item"
+          aria-label="MCP Server"
+          @click="mcpServerDialogVisible = true; mobileMoreOpen = false"
+        >
+          <span class="mobile-more-item-icon">🔌</span>
+          <span class="mobile-more-item-label">MCP Server</span>
+        </button>
+        <button
+          class="mobile-more-item"
+          aria-label="Recent Mods"
+          @click="recentModsVisible = true; mobileMoreOpen = false"
+        >
+          <span class="mobile-more-item-icon">📝</span>
+          <span class="mobile-more-item-label">Recent Mods</span>
+        </button>
+        <button
+          class="mobile-more-item"
+          aria-label="Model Prices"
+          @click="modelPricesVisible = true; mobileMoreOpen = false"
+        >
+          <span class="mobile-more-item-icon">💲</span>
+          <span class="mobile-more-item-label">Model Prices</span>
+        </button>
+        <button
+          class="mobile-more-item"
+          aria-label="Keyboard Tips"
+          @click="showTips = true; mobileMoreOpen = false"
+        >
+          <span class="mobile-more-item-icon">⌨</span>
+          <span class="mobile-more-item-label">Keyboard Tips</span>
+        </button>
+        <div class="mobile-more-item mobile-more-item--theme">
+          <ThemePalette />
+        </div>
+      </div>
+    </MobileBottomSheet>
 
     <ContextFlyout
       :active-task-id="activeTaskId ?? ''"
@@ -1229,8 +1294,8 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             <div class="inspector-dialog-header">
               <span class="inspector-dialog-title">🎛 管理</span>
               <div class="inspector-dialog-actions">
-                <button class="inspector-dialog-reset" title="Reset column widths" @click="resetWidths">↺ Reset Layout</button>
-                <button class="inspector-dialog-close" @click="closeInspectorDialog" title="Close">×</button>
+                <button class="inspector-dialog-reset" title="Reset column widths" aria-label="Reset column widths" @click="resetWidths">↺ Reset Layout</button>
+                <button class="inspector-dialog-close" aria-label="Close" title="Close" @click="closeInspectorDialog">×</button>
               </div>
             </div>
             <div class="inspector-dialog-body">
@@ -1323,8 +1388,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 }
 
 .layout-desktop,
-.layout-tablet,
-.layout-mobile {
+.layout-tablet {
   flex: 1;
   display: flex;
   min-height: 0;
@@ -1332,7 +1396,24 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 }
 
 .layout-mobile {
-  margin-bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px));
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: var(--topbar-height, 48px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.layout-mobile > .main-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.layout-mobile .command-bar {
+  flex-shrink: 0;
+  position: static;
+  inset: auto;
+  max-width: 100vw;
 }
 
 .center-column {
@@ -1535,7 +1616,6 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 @media (max-width: 767px) {
   .main-stage {
     padding: var(--space-sm);
-    padding-bottom: calc(var(--commandbar-height) + var(--mobile-nav-height) + var(--space-sm));
   }
 
   .mobile-tab-view .dock-panel,
@@ -1550,11 +1630,29 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
     z-index: 10;
   }
 
+  .mobile-tab-view .dock-panel :deep(.dock-body),
+  .mobile-tab-view :deep(.dock-panel) :deep(.dock-body) {
+    padding-bottom: var(--space-md);
+  }
+
   .inspector-dialog-panel {
     width: 100vw;
     max-width: 100vw;
     height: 100vh;
     border-radius: 0;
+  }
+
+  .inspector-dialog-close {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .inspector-dialog-overlay {
+    padding: 0;
   }
 }
 
@@ -1574,5 +1672,49 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
   .layout-desktop {
     margin-bottom: 0;
   }
+}
+
+/* === Mobile more bottom sheet contents === */
+.mobile-more-sheet-body {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.mobile-more-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  min-height: 56px;
+  background: var(--bg-panel, #11141a);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  color: var(--text-secondary, #9aa3b2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: var(--font-display, 'Chakra Petch', sans-serif);
+  text-align: left;
+}
+
+.mobile-more-item:hover {
+  background: var(--bg-hover, #202632);
+  color: var(--text-primary, #e8ebf0);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.mobile-more-item-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.mobile-more-item-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.mobile-more-item--theme {
+  grid-column: 1 / -1;
+  justify-content: center;
 }
 </style>

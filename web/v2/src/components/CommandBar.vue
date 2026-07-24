@@ -6,7 +6,10 @@ import { useTodoStore } from '@/composables/useTodoStore'
 import { useSessionStore } from '@/composables/useSessionStore'
 
 /**
- * 底部命令输入条（TaskInput 的 v2 升级版），现在作为中栏底部输入区使用。
+ * 底部命令输入条（TaskInput 的 v2 升级版）。
+ *
+ * 桌面/平板：作为中栏底部输入区，固定在中栏内，高度可拖拽。
+ * 移动端：作为 layout-mobile flex item 被 App.vue 控制显隐；不再使用 fixed 定位。
  *
  * props:
  *   - disabled: 输入框是否禁用
@@ -114,17 +117,16 @@ function adjustTextareaHeight() {
   const el = textareaRef.value
   if (!el) return
   el.style.height = 'auto'
-  const lineHeight = 20 // 14px * 1.4 + 少量
+  const lineHeight = 20
   const minRows = 1
   const maxRows = 12
-  const minHeight = lineHeight * minRows + 22 // padding + border
+  const minHeight = lineHeight * minRows + 22
   const maxHeight = lineHeight * maxRows + 22
   const desired = Math.min(Math.max(el.scrollHeight, minHeight), maxHeight)
   el.style.height = `${desired}px`
 }
 
 watch(text, () => {
-  // input 事件已负责调整，这里保留兜底
   nextTick(adjustTextareaHeight)
 })
 
@@ -142,7 +144,6 @@ function submit() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  // Enter 换行；Ctrl/Cmd + Enter 发送
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
     submit()
@@ -156,13 +157,11 @@ watch(
   },
 )
 
-// multi-agent 开关同步到父组件（同时支持 v-model 和事件）
 watch(multiAgent, (value) => {
   emit('update:multiAgent', value)
   emit('multiAgentChange', value)
 })
 
-// 外部预填充文本：非空且与当前内容不同时写入输入框，并通知父组件已消费
 watch(
   () => props.prefill,
   (value) => {
@@ -179,12 +178,11 @@ watch(
 </script>
 
 <template>
-  <div class="command-bar" :class="{ running: isRunning || isPending }">
+  <div class="command-bar" :class="{ running: isRunning || isPending, 'command-bar--mobile': isMobile }">
     <div v-if="isRunning || isPending" class="progress-strip">
       <div class="progress-fill" :style="{ width: progress + '%' }" />
     </div>
 
-    <!-- TODO 堆积提醒：有活跃 TODO 时显示在输入条主体上方，不占用输入框空间。 -->
     <div v-if="showTodoNotice" class="todo-notice" :class="{ 'todo-notice--urgent': todoHighPriorityCount > 0 }">
       <span class="todo-notice-icon">📝</span>
       <span class="todo-notice-text">
@@ -202,17 +200,18 @@ watch(
           ref="optionsBtnRef"
           class="options-toggle"
           :class="{ open: optionsOpen }"
+          aria-label="Options"
           title="Options"
           @click="toggleOptions"
         >
           ⚙
         </button>
 
-        <!-- Context 入口：左侧，点击展开 Context Window 浮窗 -->
         <button
           ref="contextBtnRef"
           class="options-toggle context-btn"
           :class="{ open: contextOpen }"
+          aria-label="打开 Context Window"
           title="打开 Context Window"
           @click.stop="emit('update:contextOpen', !contextOpen)"
         >
@@ -232,9 +231,9 @@ watch(
       />
 
       <div class="command-right">
-        <!-- Case 入口：右侧发送按钮左侧，点开 Inspector 并直接定位 Cases tab。 -->
         <button
           class="options-toggle cases-btn"
+          aria-label="Open Case Library"
           title="Open Case Library"
           @click="emit('openCases')"
         >
@@ -242,15 +241,20 @@ watch(
         </button>
 
         <template v-if="isRunning">
-          <button class="control-btn pause" title="Pause" @click="emit('pause')">⏸</button>
-          <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
+          <button class="control-btn pause" aria-label="Pause" title="Pause" @click="emit('pause')">⏸</button>
+          <button class="control-btn cancel" aria-label="Cancel" title="Cancel" @click="emit('cancel')">✕</button>
         </template>
         <template v-else-if="isPending">
-          <button class="control-btn pause" title="Pause" disabled>⏸</button>
-          <button class="control-btn cancel" title="Cancel" @click="emit('cancel')">✕</button>
+          <button class="control-btn pause" aria-label="Pause" title="Pause" disabled>⏸</button>
+          <button class="control-btn cancel" aria-label="Cancel" title="Cancel" @click="emit('cancel')">✕</button>
         </template>
         <template v-else>
-          <button class="send-btn" :disabled="!text.trim() || disabled" @click="submit">
+          <button
+            class="send-btn"
+            aria-label="Send"
+            :disabled="!text.trim() || disabled"
+            @click="submit"
+          >
             ➤
           </button>
         </template>
@@ -276,8 +280,7 @@ watch(
 
 <style scoped>
 .command-bar {
-  position: fixed;
-  inset: auto 0 0 0;
+  flex-shrink: 0;
   z-index: 35;
   background: var(--bg-panel, #11141a);
   border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
@@ -285,6 +288,15 @@ watch(
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
+}
+
+/* 桌面/平板：App.vue 的 .command-area 为 fixed 容器（≥1024px 不需要，≤1023px fixed 覆盖键盘）。 */
+@media (min-width: 768px) {
+  .command-bar {
+    position: static;
+    inset: auto;
+    height: 100%;
+  }
 }
 
 .todo-notice {
@@ -462,7 +474,9 @@ watch(
 
 @media (max-width: 767px) {
   .command-bar {
-    bottom: var(--mobile-nav-height, 56px);
+    position: static;
+    inset: auto;
+    border-top: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
     padding: 8px 12px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   }
@@ -470,17 +484,37 @@ watch(
   .command-main {
     flex-wrap: wrap;
     gap: 6px;
-    min-height: 40px;
+    min-height: 44px;
     align-items: stretch;
   }
 
   .command-input {
-    min-height: 40px;
-    font-size: 16px; /* prevent iOS zoom */
+    min-height: 48px;
+    font-size: 16px;
+    order: 1;
+    flex-basis: 100%;
+  }
+
+  .command-left,
+  .command-right {
+    order: 2;
+  }
+
+  .command-right {
+    margin-left: auto;
   }
 
   .command-input::-webkit-scrollbar {
     display: none;
+  }
+
+  .options-toggle,
+  .send-btn,
+  .control-btn {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
   }
 }
 </style>

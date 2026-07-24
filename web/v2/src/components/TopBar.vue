@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import StatusIndicator from './StatusIndicator.vue'
 import VersionSwitcher from './VersionSwitcher.vue'
 import ThemePalette from './ThemePalette.vue'
 import { useTodoStore } from '@/composables/useTodoStore'
 import { useSessionStore } from '@/composables/useSessionStore'
-import { computed } from 'vue'
+import { useLayout } from '@/composables/useLayout'
 
 /**
  * 顶部状态栏
@@ -24,9 +25,10 @@ import { computed } from 'vue'
  *   - toggle-mcp: 请求打开 MCP Server 管理弹窗
  *   - toggle-keyboard-tips: 请求打开键盘快捷键提示
  *   - toggle-manage: 请求切换 Manage 下拉浮窗
+ *   - open-mobile-more: 移动端展开 "More" 底部菜单
  */
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     status?: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'pending'
     statusLabel?: string
@@ -54,21 +56,53 @@ const emit = defineEmits<{
   (e: 'toggle-mcp'): void
   (e: 'toggle-keyboard-tips'): void
   (e: 'toggle-manage'): void
+  (e: 'open-mobile-more'): void
   /** 切换右侧 Cron 侧边面板 */
   (e: 'toggle-cron'): void
 }>()
+
+const { isMobile } = useLayout()
 
 // TODO Badge: 展示当前 session 下未完成的 TODO 数量，高优先级数量 >0 时用危险色提示。
 const { activeCount, highPriorityCount } = useTodoStore()
 const { activeSession } = useSessionStore()
 const todoBadgeCount = computed(() => activeSession.value ? activeCount(activeSession.value.id) : 0)
 const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(activeSession.value.id) > 0 : false)
+
+// 移动端 "More" 菜单项目：聚合非核心入口。Cron/Manage 已下沉到底部 tab，因此不进 More。
+type MoreActionId = 'mcp' | 'mods' | 'prices' | 'keyboard'
+
+const moreItems: { id: string; label: string; icon: string; emit: MoreActionId | null }[] = [
+  { id: 'theme', label: 'Theme', icon: '🎨', emit: null },
+  { id: 'mcp', label: 'MCP Server', icon: '🔌', emit: 'mcp' },
+  { id: 'mods', label: 'Recent Mods', icon: '📝', emit: 'mods' },
+  { id: 'prices', label: 'Model Prices', icon: '💲', emit: 'prices' },
+  { id: 'keyboard', label: 'Keyboard Tips', icon: '⌨', emit: 'keyboard' },
+]
+
+function emitMore(action: typeof moreItems[number]) {
+  if (action.emit) {
+    const map: Record<MoreActionId, () => void> = {
+      mcp: () => emit('toggle-mcp'),
+      mods: () => emit('toggle-recent-mods'),
+      prices: () => emit('toggle-model-prices'),
+      keyboard: () => emit('toggle-keyboard-tips'),
+    }
+    map[action.emit]()
+  }
+  emit('open-mobile-more')
+}
 </script>
 
 <template>
   <header class="topbar">
     <div class="topbar-left">
-      <button class="dock-toggle" title="Toggle Sessions" @click="emit('toggle-left-dock')">
+      <button
+        class="dock-toggle"
+        aria-label="Toggle Sessions"
+        title="Toggle Sessions"
+        @click="emit('toggle-left-dock')"
+      >
         ≡
       </button>
       <span class="logo">◈ Multi-Agent Platform</span>
@@ -81,15 +115,17 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
       </span>
     </div>
 
-    <div class="topbar-right">
+    <!-- 桌面/平板：保留完整的右侧图标群 -->
+    <div v-if="!isMobile" class="topbar-right">
       <ThemePalette />
-      <button class="icon-btn" title="MCP Server" @click="emit('toggle-mcp')">🔌</button>
-      <button class="icon-btn" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
-      <button class="icon-btn" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
-      <button class="icon-btn" title="Keyboard Tips" @click="emit('toggle-keyboard-tips')">⌨</button>
+      <button class="icon-btn" aria-label="MCP Server" title="MCP Server" @click="emit('toggle-mcp')">🔌</button>
+      <button class="icon-btn" aria-label="Recent Mods (Ctrl+M)" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
+      <button class="icon-btn" aria-label="Model Prices" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
+      <button class="icon-btn" aria-label="Keyboard Tips" title="Keyboard Tips" @click="emit('toggle-keyboard-tips')">⌨</button>
       <button
         class="icon-btn"
         :class="{ active: cronOpen }"
+        aria-label="Cron 定时器侧栏"
         title="Cron 定时器侧栏"
         @click="emit('toggle-cron')"
       >⏰</button>
@@ -98,6 +134,7 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
       <button
         class="icon-btn manage-toggle"
         :class="{ active: manageOpen }"
+        aria-label="Manage panels"
         title="Manage panels"
         @click="emit('toggle-manage')"
       >
@@ -116,7 +153,39 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
       <span class="version-switch">v2</span>
       <VersionSwitcher />
     </div>
+
+    <!-- 移动端：右侧只保留状态与 "More" 入口 -->
+    <div v-else class="topbar-right topbar-right--mobile">
+      <button
+        v-if="todoBadgeCount > 0"
+        class="icon-btn manage-toggle"
+        :class="{ active: manageOpen }"
+        aria-label="Manage panels"
+        title="Manage panels"
+        @click="emit('toggle-manage')"
+      >
+        🎛
+        <span
+          class="todo-badge"
+          :class="{ 'todo-badge--urgent': todoBadgeUrgent }"
+          :title="`${todoBadgeCount} active TODO${todoBadgeCount > 1 ? 's' : ''}${todoBadgeUrgent ? ', high priority pending' : ''}`"
+        >
+          {{ todoBadgeCount }}
+        </span>
+      </button>
+
+      <button
+        class="icon-btn more-toggle"
+        aria-label="More options"
+        title="More options"
+        @click="emit('open-mobile-more')"
+      >
+        ⋮
+      </button>
+    </div>
   </header>
+
+  <!-- 移动端 "More" 底部面板（bottom sheet），由 App.vue 注入到 Teleport -->
 </template>
 
 <style scoped>
@@ -225,7 +294,7 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
   padding: 0 4px;
   border-radius: 8px;
   background: var(--accent-running);
-  color: var(--text-on-accent, #0b0d10);
+  color: var(--text-on-accent);
   font-family: var(--font-mono);
   font-size: 0.65rem;
   font-weight: 700;
@@ -283,6 +352,37 @@ const todoBadgeUrgent = computed(() => activeSession.value ? highPriorityCount(a
   .task-badge,
   .version-switch {
     display: none;
+  }
+
+  .topbar-right--mobile {
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+
+  .topbar-right--mobile .icon-btn,
+  .topbar-right--mobile .manage-toggle,
+  .topbar-right--mobile .more-toggle {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
+  }
+
+  .topbar-right--mobile .manage-toggle {
+    padding: 0;
+  }
+
+  .topbar-right--mobile .todo-badge {
+    top: 2px;
+    right: 2px;
+  }
+
+  .topbar-left {
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
   }
 }
 </style>

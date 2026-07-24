@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, watch } from 'vue'
+import MobileBottomSheet from './MobileBottomSheet.vue'
+import { useLayout } from '@/composables/useLayout'
 
 /**
- * ManageFlyout — TopBar 右侧 "管理" 按钮下拉浮窗
+ * ManageFlyout — 管理入口浮窗
  *
- * 设计意图：
- *   将 Inspector 中除 Context 之外的入口（Memory、RAG、Cases、Agents、
- *   Project、Skills、Traces）集中到一个管理菜单。点击任一项目
- *   打开大 Inspector Dialog 并定位到对应 tab。
+ * 桌面/平板：TopBar 右下角 anchored dropdown。
+ * 移动端：渲染为底部抽屉（MobileBottomSheet），避免小屏定位失效与越界。
  *
  * Props:
- *   - open: 是否显示管理浮窗
+ *   - open: 是否显示
  *
  * Emits:
  *   - update:open: 浮窗显隐状态变化
@@ -25,6 +25,8 @@ const emit = defineEmits<{
   (e: 'expand', tab?: string): void
 }>()
 
+const { isMobile } = useLayout()
+
 const menuItems = [
   { id: 'memory', label: 'Memory', icon: '🧠' },
   { id: 'rag', label: 'RAG', icon: '📚' },
@@ -37,9 +39,6 @@ const menuItems = [
   { id: 'traces', label: 'Traces', icon: '📡' },
 ] as const
 
-const panelRef = ref<HTMLElement | null>(null)
-const anchorRef = ref<HTMLElement | null>(null)
-
 function close() {
   emit('update:open', false)
 }
@@ -50,34 +49,92 @@ function openTab(tab: string) {
 }
 
 function expandAll() {
-  // 不指定 tab：由 App.vue 保留上次 inspectorInitialTab（默认 memory）。
   emit('expand')
   close()
 }
 
-// 点击外部关闭浮窗
+// 桌面端：点击外部关闭浮窗。移动端由 MobileBottomSheet 内部 overlay 处理。
 function handleDocClick(e: MouseEvent) {
-  const target = e.target as Node
-  if (panelRef.value && !panelRef.value.contains(target)) {
+  if (!props.open || isMobile.value) return
+  const target = e.target
+  const el = target instanceof Element ? target : (target instanceof Node ? target.parentElement : null)
+  if (panelRef.value && !panelRef.value.contains(e.target as Node) && !(el && el.closest('.mobile-sheet-overlay'))) {
     close()
   }
 }
 
-// 打开时监听文档点击，关闭时移除；避免在 prop 变化之外还要手动清理。
-watch(
-  () => props.open,
-  (isOpen) => {
+import { ref, onMounted, onUnmounted } from 'vue'
+
+const panelRef = ref<HTMLElement | null>(null)
+const anchorRef = ref<HTMLElement | null>(null)
+
+onMounted(() => {
+  if (!isMobile.value) {
+    document.addEventListener('click', handleDocClick, true)
+  }
+})
+
+onUnmounted(() => {
+  if (!isMobile.value) {
+    document.removeEventListener('click', handleDocClick, true)
+  }
+})
+
+// ESC 关闭（桌面端）
+function handleKeydown(e: KeyboardEvent) {
+  if (props.open && e.key === 'Escape' && !isMobile.value) {
+    close()
+  }
+}
+
+watch(() => props.open, (isOpen) => {
+  if (!isMobile.value) {
     if (isOpen) {
-      document.addEventListener('click', handleDocClick, true)
+      document.addEventListener('keydown', handleKeydown)
     } else {
-      document.removeEventListener('click', handleDocClick, true)
+      document.removeEventListener('keydown', handleKeydown)
     }
-  },
-)
+  }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
-  <div ref="anchorRef" class="manage-anchor">
+  <template v-if="isMobile">
+    <MobileBottomSheet
+      :open="open"
+      title="Manage"
+      @update:open="emit('update:open', $event)"
+    >
+      <div class="manage-bottom-sheet-body">
+        <button
+          class="manage-expand-bottom"
+          aria-label="展开管理"
+          @click="expandAll"
+        >
+          <span>⤢</span>
+          <span>展开管理</span>
+        </button>
+        <div class="manage-flyout-grid manage-flyout-grid--mobile">
+          <button
+            v-for="item in menuItems"
+            :key="item.id"
+            class="manage-item"
+            :aria-label="item.label"
+            @click="openTab(item.id)"
+          >
+            <span class="manage-item-icon">{{ item.icon }}</span>
+            <span class="manage-item-label">{{ item.label }}</span>
+          </button>
+        </div>
+      </div>
+    </MobileBottomSheet>
+  </template>
+
+  <div v-else ref="anchorRef" class="manage-anchor">
     <Transition name="manage-flyout">
       <div
         v-if="open"
@@ -88,7 +145,7 @@ watch(
       >
         <div class="manage-flyout-header">
           <span class="manage-title">🎛 管理</span>
-          <button class="manage-expand" title="展开管理" @click="expandAll">
+          <button class="manage-expand" aria-label="展开管理" title="展开管理" @click="expandAll">
             ⤢ 展开管理
           </button>
         </div>
@@ -98,6 +155,7 @@ watch(
             :key="item.id"
             class="manage-item"
             role="menuitem"
+            :aria-label="item.label"
             @click="openTab(item.id)"
           >
             <span class="manage-item-icon">{{ item.icon }}</span>
@@ -176,17 +234,22 @@ watch(
   padding: 10px;
 }
 
+.manage-flyout-grid--mobile {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .manage-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--bg-panel, #11141a);
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
   color: var(--text-secondary, #9aa3b2);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+  min-height: 44px;
 }
 
 .manage-item:hover {
@@ -201,16 +264,41 @@ watch(
 }
 
 .manage-item-label {
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 500;
   font-family: var(--font-display, 'Chakra Petch', sans-serif);
 }
 
+.manage-bottom-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manage-expand-bottom {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  color: var(--accent-running, #00e5ff);
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-display, 'Chakra Petch', sans-serif);
+}
+
+.manage-expand-bottom:hover {
+  background: rgba(0, 229, 255, 0.1);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
 @media (max-width: 767px) {
-  .manage-flyout {
-    right: 0;
-    left: 0;
-    width: auto;
+  .manage-anchor {
+    display: none;
   }
 }
 

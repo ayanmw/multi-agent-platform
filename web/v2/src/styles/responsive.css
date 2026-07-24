@@ -45,8 +45,8 @@
   :root {
     /* IncreaseCommandBar height for larger touch targets */
     --commandbar-height: 74px;
-    --mobile-nav-height: 56px;
-    --dock-header-height: 40px;
+    --mobile-nav-height: 64px;
+    --dock-header-height: 48px;
   }
 
   .app-shell {
@@ -57,18 +57,21 @@
   /* The main stage on mobile should not horizontally scroll; content scrolls inside. */
   .main-stage {
     padding: var(--space-sm);
-    padding-bottom: calc(var(--commandbar-height) + var(--mobile-nav-height) + var(--space-sm));
   }
+
+  /* 移除 .main-stage 额外 padding-bottom，因为 CommandBar 已改为 layout-mobile 内 flex item */
 
   /* Mobile tab views fill the available space within the single-column layout. */
   .mobile-tab-view {
     position: relative;
     width: 100%;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 
-  .mobile-tab-view .dock-panel {
+  .mobile-tab-view .dock-panel,
+  .mobile-tab-view :deep(.dock-panel) {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -84,6 +87,22 @@
   .command-bar,
   .mobile-nav {
     max-width: 100vw;
+  }
+
+  /* Mobile bottom sheet helpers — referenced by Vue scoped classes */
+  .mobile-bottom-sheet,
+  .mobile-more-sheet {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 100;
+    max-width: 100vw;
+    max-height: 92dvh;
+    border-radius: 16px 16px 0 0;
+    background: var(--bg-elevated, #181c24);
+  }
+
+  .hidden-command-bar-mobile {
+    display: none !important;
   }
 }
 
@@ -120,9 +139,14 @@
   button,
   [role='button'],
   .tab-button,
-  .mobile-tab {
-    min-height: 40px;
-    min-width: 40px;
+  .mobile-tab,
+  .icon-btn,
+  .dock-toggle,
+  .options-toggle,
+  .send-btn,
+  .control-btn {
+    min-height: 44px;
+    min-width: 44px;
   }
 
   textarea.command-input {

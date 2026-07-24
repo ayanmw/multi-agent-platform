@@ -39,8 +39,14 @@ export function useLayout() {
   /** 桌面端右侧 Files 面板是否展开 */
   const rightFilesOpen = ref(true)
 
-  /** 移动端当前 tab：stage / sessions / files */
-  const activeMobileTab = ref<'stage' | 'sessions' | 'files'>('stage')
+  /** 移动端当前 tab：stage / sessions / files / manage / cron */
+  const activeMobileTab = ref<'stage' | 'sessions' | 'files' | 'manage' | 'cron'>('stage')
+
+  /** 移动端 More 菜单是否打开（TopBar 右侧折叠入口） */
+  const mobileMoreOpen = ref(false)
+
+  /** 当前激活的移动端 tab 是否应当显示 CommandBar：只有 stage 需要输入条。 */
+  const isCommandBarVisible = computed(() => !isMobile.value || activeMobileTab.value === 'stage')
 
   // === 三栏宽度持久化 ===
   // 用户拖拽分隔条后会写入 localStorage，下次进入直接还原。
@@ -174,8 +180,18 @@ export function useLayout() {
     rightFilesOpen.value = !rightFilesOpen.value
   }
 
-  function setActiveMobileTab(tab: 'stage' | 'sessions' | 'files') {
+  function setActiveMobileTab(tab: 'stage' | 'sessions' | 'files' | 'manage' | 'cron') {
     activeMobileTab.value = tab
+    // 切换 tab 时自动关闭辅助浮层，避免层级堆叠。
+    mobileMoreOpen.value = false
+  }
+
+  function setMobileMoreOpen(open: boolean) {
+    mobileMoreOpen.value = open
+  }
+
+  function toggleMobileMore() {
+    mobileMoreOpen.value = !mobileMoreOpen.value
   }
 
   onMounted(() => {
@@ -199,6 +215,8 @@ export function useLayout() {
     leftDockOpen,
     rightFilesOpen,
     activeMobileTab,
+    mobileMoreOpen,
+    isCommandBarVisible,
     // 宽度与拖拽
     leftDockWidth,
     rightFilesWidth,
@@ -215,5 +233,7 @@ export function useLayout() {
     toggleLeftDock,
     toggleRightFiles,
     setActiveMobileTab,
+    setMobileMoreOpen,
+    toggleMobileMore,
   }
 }

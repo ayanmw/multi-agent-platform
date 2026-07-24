@@ -358,8 +358,8 @@ function formatDuration(ms: number): string {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1.5;
-  white-space: pre;
-  word-break: normal;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .observation-body {
@@ -398,6 +398,8 @@ function formatDuration(ms: number): string {
     font-size: 0.7rem;
     max-height: 160px;
     -webkit-overflow-scrolling: touch;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 }
 .status--failed {

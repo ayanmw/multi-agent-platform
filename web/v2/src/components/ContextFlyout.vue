@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import ContextWindowPanel from './ContextWindowPanel.vue'
+import MobileBottomSheet from './MobileBottomSheet.vue'
 import { useFlyoutResize } from '@/composables/useFlyoutResize'
 import { useTaskStore } from '@/composables/useTaskStore'
+import { useLayout } from '@/composables/useLayout'
 import type { TaskState } from '@/types/events'
 import type { AgentRecord } from '@/composables/useAgentStore'
 
@@ -10,10 +12,8 @@ import type { AgentRecord } from '@/composables/useAgentStore'
  * ContextFlyout — 底部输入条右侧弹出的 Context Window 浮窗
  *
  * 设计意图：
- *   将 Context 从 Inspector 大面板中抽出，贴近输入框展示，便于用户
- *   在查看当前任务上下文时不需要先打开 Inspector 大 Dialog。
- *   浮窗内部渲染 ContextWindowPanel，并在顶部显示 session 级统计信息栏
- *   （Task 状态、Agents 数量、Session tokens、Duration）。
+ *   桌面/平板：Context 从 CommandBar 的 Context 按钮向上弹出 anchored flyout，可拖拽大小。
+ *   移动端：Context 渲染为底部抽屉（MobileBottomSheet），避免小屏定位失效。
  *
  * Props:
  *   - activeTaskId: 当前激活任务 ID
@@ -21,7 +21,7 @@ import type { AgentRecord } from '@/composables/useAgentStore'
  *   - sessionTotalDuration: 当前 session 总耗时（毫秒）
  *   - wsStatus: WebSocket 连接状态
  *   - agents: 当前已加载 agent 列表
- *   - anchorRect: 触发按钮的 DOMRect，用于定位浮窗
+ *   - anchorRect: 触发按钮的 DOMRect，用于桌面端定位浮窗
  *   - open: 是否显示浮窗
  *
  * Emits:
@@ -40,6 +40,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
 }>()
+
+const { isMobile } = useLayout()
 
 const { taskCache } = useTaskStore()
 
@@ -100,29 +102,28 @@ function computePosition() {
   if (w != null) flyoutStyle.value.width = `${w}px`
 }
 
+import { ref } from 'vue'
+
 watch(() => props.open, (open) => {
-  if (open) nextTick(computePosition)
+  if (open && !isMobile.value) nextTick(computePosition)
 })
 watch(() => props.anchorRect, () => {
-  if (props.open) nextTick(computePosition)
+  if (props.open && !isMobile.value) nextTick(computePosition)
 })
 // 用户拖拽改变宽度后重新计算定位，防止越界。
 watch(() => size.value.width, () => {
-  if (props.open) nextTick(computePosition)
+  if (props.open && !isMobile.value) nextTick(computePosition)
 })
 
 function close() {
   emit('update:open', false)
 }
 
-// 点击外部或按 Esc 关闭浮窗，提升操作效率。
+// 桌面端：点击外部或按 Esc 关闭浮窗，提升操作效率。
 function handleDocClick(e: MouseEvent) {
-  if (!props.open || isResizing.value) return
+  if (!props.open || isResizing.value || isMobile.value) return
   const target = e.target as Node | null
   if (!target) return
-  // 二级弹窗（如 prompt 详情）通过 Teleport 渲染到 body，不在本浮窗 panelRef 内。
-  // 点击二级弹窗（含其内部文字/按钮）时不应误关一级浮窗，否则关闭二级后还要重新打开 Context。
-  // target 可能是文本节点（无 closest），先归一到其所属 Element 再判断。
   const el = target instanceof Element ? target : target.parentElement
   if (el && el.closest('.prompt-dialog-overlay')) return
   if (panelRef.value && !panelRef.value.contains(target)) {
@@ -131,10 +132,24 @@ function handleDocClick(e: MouseEvent) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (props.open && e.key === 'Escape') {
+  if (props.open && e.key === 'Escape' && !isMobile.value) {
     close()
   }
 }
+
+onMounted(() => {
+  if (!isMobile.value) {
+    document.addEventListener('click', handleDocClick, true)
+    document.addEventListener('keydown', handleKeydown)
+  }
+})
+
+onUnmounted(() => {
+  if (!isMobile.value) {
+    document.removeEventListener('click', handleDocClick, true)
+    document.removeEventListener('keydown', handleKeydown)
+  }
+})
 
 // 任务状态文字。优先取当前 task 的 status，否则根据 wsStatus。
 const taskStatusText = computed(() => {
@@ -170,20 +185,51 @@ function formatDurationMs(ms: number): string {
 
 const tokenText = computed(() => formatTokens(props.sessionTotalTokens || 0))
 const durationText = computed(() => formatDurationMs(props.sessionTotalDuration || 0))
-
-onMounted(() => {
-  document.addEventListener('click', handleDocClick, true)
-  document.addEventListener('keydown', handleKeydown)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleDocClick, true)
-  document.removeEventListener('keydown', handleKeydown)
-})
 </script>
 
 <template>
-  <Transition name="context-flyout">
+  <template v-if="isMobile">
+    <MobileBottomSheet
+      :open="open"
+      title="Context Window"
+      @update:open="emit('update:open', $event)"
+    >
+      <div class="context-mobile-body">
+        <div class="session-info-bar session-info-bar--mobile">
+          <div class="info-cell" title="当前任务状态">
+            <span class="info-value">{{ taskStatusText }}</span>
+            <span class="info-label">Task</span>
+          </div>
+          <div class="info-cell" title="当前会话中的 Agents 数量">
+            <span class="info-value">{{ agentCountText }}</span>
+            <span class="info-label">Agents</span>
+          </div>
+          <div class="info-cell" title="当前会话总 Token 数">
+            <span class="info-value">{{ tokenText }}</span>
+            <span class="info-label">Tokens</span>
+          </div>
+          <div class="info-cell" title="当前会话总耗时">
+            <span class="info-value">{{ durationText }}</span>
+            <span class="info-label">Duration</span>
+          </div>
+        </div>
+
+        <label v-if="subTaskOptions.length > 0" class="context-agent-select context-agent-select--mobile">
+          <select v-model="selectedSubTaskId" title="选择 Agent 实例">
+            <option value="">All / root</option>
+            <option v-for="opt in subTaskOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </label>
+
+        <ContextWindowPanel
+          :active-task-id="activeTaskId"
+          :sub-task-id="selectedSubTaskId"
+        />
+      </div>
+    </MobileBottomSheet>
+  </template>
+
+  <Transition v-else name="context-flyout">
     <div
       v-if="open"
       ref="panelRef"
@@ -216,9 +262,10 @@ onUnmounted(() => {
             class="context-reset-btn"
             :class="{ hidden: size.width == null && size.height == null }"
             title="恢复自适应大小"
+            aria-label="恢复自适应大小"
             @click="resetSize"
           >⤢</button>
-          <button class="context-close-btn" title="关闭" @click="close">×</button>
+          <button class="context-close-btn" title="关闭" aria-label="关闭" @click="close">×</button>
         </div>
       </div>
 
@@ -262,10 +309,8 @@ onUnmounted(() => {
 <style scoped>
 .context-flyout {
   position: fixed;
-  /* 动态由 JS 计算 left / bottom / width / height */
   display: flex;
   flex-direction: column;
-  /* 默认内容自适应：宽度按内容收缩但有 max 兜底，高度由内容增长。 */
   max-width: 860px;
   min-width: 320px;
   background: var(--bg-elevated, #181c24);
@@ -277,7 +322,6 @@ onUnmounted(() => {
   font-family: var(--font-mono, monospace);
 }
 
-/* 拖拽期间禁用过渡，避免尺寸跳变迟滞。 */
 .context-flyout.is-resizing {
   transition: none !important;
 }
@@ -286,7 +330,6 @@ onUnmounted(() => {
   cursor: ns-resize !important;
 }
 
-/* 调节手柄：极简的隐形热区，hover 才显形。 */
 .flyout-resize-handle {
   position: absolute;
   z-index: 2;
@@ -500,22 +543,37 @@ onUnmounted(() => {
   border-radius: 0;
 }
 
-@media (max-width: 767px) {
-  .context-flyout {
-    right: 12px !important;
-    left: 12px !important;
-    width: auto !important;
-    bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px) + 10px) !important;
-  }
+/* 移动端 Context 底部抽屉内容区 */
+.context-mobile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
 
-  .context-flyout-title span:last-child {
-    display: none;
-  }
+.session-info-bar--mobile {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
 
-  /* 移动端空间有限，隐藏手柄，保持全宽自适应。 */
-  .flyout-resize-handle {
-    display: none;
-  }
+.context-agent-select--mobile select {
+  width: 100%;
+  padding: 8px 28px 8px 10px;
+  font-size: 0.78rem;
+  background: var(--bg-canvas, #0b0d10);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-md);
+  color: var(--text-secondary, #9aa3b2);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa3b2' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.context-agent-select--mobile select:focus {
+  outline: none;
+  border-color: var(--accent-running, #00e5ff);
 }
 
 .context-flyout-enter-active,
