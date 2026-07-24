@@ -219,8 +219,12 @@ func GetToolV2(namespace, name, version string) (ToolRecord, error) {
 	return tr, nil
 }
 
-// InsertTool 是兼容旧 API 的薄 wrapper：以 local_db 来源、空 namespace、
-// 默认版本 1.0.0 写入一条工具记录。保持 cmd/server/tool_api.go 现有调用点不破。
+// InsertTool 是旧 API 的兼容 wrapper（legacy）。
+//
+// 它写 v27 表，但 Source 固定为 local_db，ExecutionConfig 为空对象，因此注册
+// 后 DynamicExecutor 执行时会因 type 缺失而失败。Phase 8-B 起生产代码应使用
+// InsertToolV2（携带 ExecutionConfig）。本函数仅保留给历史调用点/单元测试过渡。
+// TODO: Phase 8-B+ 清理，删除本函数并统一迁移到 InsertToolV2。
 func InsertTool(name, description string, schema map[string]any, enabled bool) error {
 	return InsertToolV2(ToolRecord{
 		Name:        name,
@@ -231,9 +235,11 @@ func InsertTool(name, description string, schema map[string]any, enabled bool) e
 	})
 }
 
-// DeleteTool 是兼容旧 API 的薄 wrapper：按 name 删除（namespace 为空、
-// version 为默认 1.0.0）的所有匹配记录。注意旧 API 只以 name 标识工具，
-// 新表为复合主键，这里删除 name 匹配的全部版本，以最大兼容旧行为。
+// DeleteTool 是旧 API 的兼容 wrapper（legacy）。
+//
+// 它删除 name 匹配的所有版本，无法精确指定 namespace/version。Phase 8-B 起
+// 生产代码应使用 DeleteToolV2。
+// TODO: Phase 8-B+ 清理，删除本函数并统一迁移到 DeleteToolV2。
 func DeleteTool(name string) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
