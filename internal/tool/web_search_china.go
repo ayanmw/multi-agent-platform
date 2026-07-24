@@ -235,7 +235,10 @@ func callBingCnHTML(ctx context.Context, cfg WebSearchConfig, query string, numR
 }
 
 var (
-	bingCnResultRe = regexp.MustCompile(`<li[^>]*class="b_algo"[^>]*>[\s\S]*?<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>[\s\S]*?</h2>[\s\S]*?<div[^>]*class="b_caption"[^>]*>[\s\S]*?<p>([\s\S]*?)</p>[\s\S]*?</div>[\s\S]*?</li>`)
+	// 必应中国自然结果块。<h2> 内通常是标题链接；b_caption 内可能直接是 <p>
+	// 或先嵌套 <div class="b_snippet"> 再放 <p>，因此用两个独立的块级正则：
+	// 一个带 caption 的完整版，一个仅标题链接的兜底版。
+	bingCnResultRe = regexp.MustCompile(`<li[^>]*class="b_algo"[^>]*>[\s\S]*?<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>[\s\S]*?</h2>[\s\S]*?<div[^>]*class="b_caption"[^>]*>[\s\S]*?(?:<p>([\s\S]*?)</p>|[\s\S]*?</div>)[\s\S]*?</li>`)
 	bingCnSimpleRe = regexp.MustCompile(`<li[^>]*class="b_algo"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>[\s\S]*?</li>`)
 )
 
