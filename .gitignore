@@ -56,3 +56,5 @@ web/v2/tsconfig.tsbuildinfo
 /*.lnk
 /.claude/worktrees
 .worktrees/
+/web/v2/pnpm-lock.yaml
+/web/v2/pnpm-workspace.yaml
