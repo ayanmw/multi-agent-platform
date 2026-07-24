@@ -19,11 +19,14 @@ import (
 
 // recordingBus 是一个测试用 EventBus，捕获每一条发送的事件。
 type recordingBus struct {
+	mu     sync.Mutex
 	events []event.Event
 }
 
 func (b *recordingBus) SendEvent(e event.Event) {
+	b.mu.Lock()
 	b.events = append(b.events, e)
+	b.mu.Unlock()
 }
 
 // fakeJudgeProvider 是一个最小化的 llm.Provider 实现，对非流式 Chat 调用
