@@ -27,19 +27,19 @@
   - [x] 4-3 `cmd/server` 把同一个 `RateLimiter` 传给 Router 和 EngineConfig
   - [x] 4-4 新增测试验证真实调用后限流生效
   - [x] 4-5 运行测试 + 提交
-- [ ] **Task P3-5**: 新增 Engine 路由事件测试
-  - [ ] 5-1 创建 `internal/runtime/engine_routing_test.go`
-  - [ ] 5-2 测试 `cost_budget_exceeded` 事件与任务失败
-  - [ ] 5-3 测试 `model_fallback_used` 事件与成功重试
-  - [ ] 5-4 运行测试 + 提交
-- [ ] **Task P3-6**: 前端 RoutingPanel 增强
-  - [ ] 6-1 `useRouteEvents.ts` 增加 `fallbacks` / `budgetExceeded` 聚合
-  - [ ] 6-2 `RoutingPanel.vue` 渲染 fallback / budget 状态徽章
-  - [ ] 6-3 `npm run build` 通过
-  - [ ] 6-4 运行测试 + 提交
-- [ ] **Task P3-7**: 全量验证与归档
-  - [ ] 7-1 `go test ./...` 全绿
-  - [ ] 7-2 `web/v2 npm run build` 通过
-  - [ ] 7-3 更新 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` 标注 P3 完成
-  - [ ] 7-4 更新 `roadmaps/ROADMAP.md` 到 v0.14.1 Alpha
-  - [ ] 7-5 提交并归档 OpenSpec change 到 `openspec/changes/archive/`
+- [x] **Task P3-5**: 新增 Engine 路由事件测试
+  - [x] 5-1 创建 `internal/runtime/engine_routing_test.go`
+  - [x] 5-2 测试 `cost_budget_exceeded` 事件与任务失败
+  - [x] 5-3 测试 `model_fallback_used` 事件与成功重试
+  - [x] 5-4 运行测试 + 提交
+- [x] **Task P3-6**: 前端 RoutingPanel 增强
+  - [x] 6-1 `useRouteEvents.ts` 增加 `fallbacks` / `budgetExceeded` 聚合
+  - [x] 6-2 `RoutingPanel.vue` 渲染 fallback / budget 状态徽章
+  - [x] 6-3 `npm run build` 通过
+  - [x] 6-4 运行测试 + 提交
+- [x] **Task P3-7**: 全量验证与归档
+  - [x] 7-1 `go test ./...` 全绿
+  - [x] 7-2 `web/v2 npm run build` 通过
+  - [x] 7-3 更新 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` 标注 P3 完成
+  - [x] 7-4 更新 `roadmaps/ROADMAP.md` 到 v0.14.1 Alpha
+  - [x] 7-5 提交并归档 OpenSpec change 到 `openspec/changes/archive/`
