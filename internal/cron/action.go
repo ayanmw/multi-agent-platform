@@ -63,13 +63,14 @@ type ActionResult struct {
 
 // ActionRunner 执行四种 action。
 type ActionRunner struct {
-	tools          *tool.Registry
-	allowedTools   map[string]bool
-	webhookTimeout time.Duration
-	maxResultChars int
-	bus            EventBus
-	startTask      TaskStarter
-	msgWriter      SessionMessageWriter
+	tools           *tool.Registry
+	allowedTools    map[string]bool
+	webhookTimeout  time.Duration
+	maxResultChars  int
+	bus             EventBus
+	startTask       TaskStarter
+	msgWriter       SessionMessageWriter
+	urlValidator    *URLValidator
 }
 
 // ActionRunnerConfig 是 ActionRunner 的构造参数。
@@ -81,6 +82,7 @@ type ActionRunnerConfig struct {
 	Bus             EventBus
 	StartTask       TaskStarter
 	MessageWriter   SessionMessageWriter
+	WebhookAllowPrivate bool // true 时允许 webhook 访问 loopback/私有地址
 }
 
 // NewActionRunner 创建 ActionRunner。
@@ -98,13 +100,14 @@ func NewActionRunner(cfg ActionRunnerConfig) *ActionRunner {
 		maxChars = 2000
 	}
 	return &ActionRunner{
-		tools:          cfg.Tools,
-		allowedTools:   allowed,
-		webhookTimeout: timeout,
-		maxResultChars: maxChars,
-		bus:            cfg.Bus,
-		startTask:      cfg.StartTask,
-		msgWriter:      cfg.MessageWriter,
+		tools:           cfg.Tools,
+		allowedTools:    allowed,
+		webhookTimeout:  timeout,
+		maxResultChars:  maxChars,
+		bus:             cfg.Bus,
+		startTask:       cfg.StartTask,
+		msgWriter:       cfg.MessageWriter,
+		urlValidator:    &URLValidator{AllowPrivate: cfg.WebhookAllowPrivate},
 	}
 }
 
@@ -268,6 +271,9 @@ func (r *ActionRunner) runWebhook(ctx context.Context, c Cron, payload map[strin
 	}
 	if wp.URL == "" {
 		return ActionResult{}, fmt.Errorf("webhook: url is required")
+	}
+	if err := r.urlValidator.ValidateWebhookURL(wp.URL); err != nil {
+		return ActionResult{}, fmt.Errorf("webhook: %w", err)
 	}
 	if wp.Method == "" {
 		wp.Method = "POST"

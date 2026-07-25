@@ -145,7 +145,7 @@ func TestRunWebhookSuccess(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
-	r := newRunner(t, ActionRunnerConfig{WebhookTimeout: 5e9})
+	r := newRunner(t, ActionRunnerConfig{WebhookAllowPrivate: true, WebhookTimeout: 5e9})
 	res, err := r.Run(context.Background(), Cron{ID: "cron_1", ActionType: ActionWebhook}, map[string]any{
 		"method":  "POST",
 		"url":     srv.URL,
@@ -166,7 +166,7 @@ func TestRunWebhookNon2xx(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	r := newRunner(t, ActionRunnerConfig{})
+	r := newRunner(t, ActionRunnerConfig{WebhookAllowPrivate: true})
 	_, err := r.Run(context.Background(), Cron{ActionType: ActionWebhook}, map[string]any{"url": srv.URL})
 	if err == nil {
 		t.Fatal("expected error for 500")

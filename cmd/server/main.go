@@ -871,13 +871,14 @@ func main() {
 		// appServer 在下方构造；这里先创建 starter，后续把 server 注入。
 		cronStarter = &appCronStarter{}
 		runner := cron.NewActionRunner(cron.ActionRunnerConfig{
-			Tools:          toolRegistry,
-			AllowedTools:   cfg.CronAllowedTools,
-			WebhookTimeout: time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
-			MaxResultChars: cfg.CronMaxResultChars,
-			Bus:            bus,
-			StartTask:      cronStarter.Start,
-			MessageWriter:  &cronSessionMsgWriter{},
+			Tools:               toolRegistry,
+			AllowedTools:        cfg.CronAllowedTools,
+			WebhookTimeout:      time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
+			MaxResultChars:      cfg.CronMaxResultChars,
+			Bus:                 bus,
+			StartTask:           cronStarter.Start,
+			MessageWriter:       &cronSessionMsgWriter{},
+			WebhookAllowPrivate: cfg.CronWebhookAllowPrivate,
 		})
 		executor := cron.NewExecutor(cronStore, runner, bus, cfg.CronMaxResultChars)
 		// Service 通过 ExecutorPort2(无 ctx 版本) 调用 ExecuteOnce；

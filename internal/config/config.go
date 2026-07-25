@@ -58,10 +58,11 @@ type Config struct {
 	// CronAllowedTools 限制 script action 可调用的 tool 名白名单，复用现有 run_shell 等 tool 的 sandbox/policy。
 	// CronWebhookTimeoutSeconds webhook action 的 HTTP 超时。
 	// CronMaxResultChars execution.result_summary 的截断长度，避免长结果撑爆存储与前端。
-	CronEnabled               bool
-	CronAllowedTools          []string
-	CronWebhookTimeoutSeconds int
-	CronMaxResultChars        int
+	CronEnabled                bool
+	CronAllowedTools           []string
+	CronWebhookTimeoutSeconds  int
+	CronMaxResultChars         int
+	CronWebhookAllowPrivate    bool // CRON_WEBHOOK_ALLOW_PRIVATE=true 时允许 webhook 访问 loopback/私有地址
 
 	// Workspace worktree 隔离配置。
 	// WorktreeEnabled 总开关，默认 true：worktree 是主动触发的叠加能力，
@@ -221,6 +222,9 @@ func Load() (*Config, error) {
 	}
 	cfg.CronWebhookTimeoutSeconds = parseEnvIntDefault("CRON_WEBHOOK_TIMEOUT_SECONDS", 10)
 	cfg.CronMaxResultChars = parseEnvIntDefault("CRON_MAX_EXECUTION_RESULT_CHARS", 2000)
+	if v := os.Getenv("CRON_WEBHOOK_ALLOW_PRIVATE"); v != "" {
+		cfg.CronWebhookAllowPrivate = strings.EqualFold(v, "true") || v == "1"
+	}
 
 	// Workspace worktree 隔离：默认启用（主动触发的叠加能力，不触发则零感知）。
 	cfg.WorktreeEnabled = true

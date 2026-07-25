@@ -305,10 +305,33 @@ func NewRunShellTool() *BuiltinTool {
 // 它解析 shell 二进制文件、创建带超时的 context，并通过 exec.CommandContext
 // 运行命令。结果包含 stdout、stderr 与 exit_code。
 // CWD 优先取 ExecuteContext.Workdir（worktree 隔离注入），回退 input["workdir"]。
+// 当 ExecuteContext.Workdir 非空时，会校验它必须落在允许的 scope（session
+// WorkspaceDir 或 active worktree path）内，防止 LLM 伪造 workdir 逃逸。
 func executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	cmdStr, ok := input["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command must be a string")
+	}
+
+	// 确定实际使用的工作目录。
+	// worktree holder 注入优先；若 ctx.Workdir 为空则回退 input["workdir"]。
+	workdir := ""
+	if ctx.Workdir != "" {
+		workdir = ctx.Workdir
+	} else if wd, ok := input["workdir"].(string); ok && wd != "" {
+		workdir = wd
+	}
+
+	// 当 ExecuteContext.Workdir 非空时做 scope 校验：必须属于 session workspace
+	// 或 active worktree。空 workdir 保留旧行为。
+	if ctx.Workdir != "" {
+		if err := validateWorkdirScope(ctx.Workdir, ctx.Workdir, input); err != nil {
+			return map[string]any{
+				"stdout":    "",
+				"stderr":    err.Error(),
+				"exit_code": -1,
+			}, nil
+		}
 	}
 
 	// 根据当前 OS 确定 shell 二进制文件与对应 flag。
@@ -338,10 +361,8 @@ func executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 
 	cmd := exec.CommandContext(execCtx, shell, shellFlag, cmdStr)
 
-	// CWD：worktree holder 注入优先，回退 input["workdir"]。
-	if ctx.Workdir != "" {
-		cmd.Dir = ctx.Workdir
-	} else if workdir, ok := input["workdir"].(string); ok && workdir != "" {
+	// CWD：前面已完成 scope 校验，这里直接使用 workdir。
+	if workdir != "" {
 		cmd.Dir = workdir
 	}
 
