@@ -349,6 +349,8 @@ const durationText = computed(() => formatDurationMs(props.sessionTotalDuration 
 
 .context-flyout.is-resizing {
   transition: none !important;
+  /* 不设置全局 cursor；仅在手柄元素上设置 ns/ew-resize，避免覆盖外部控件。
+     参见 .flyout-resize-h / .flyout-resize-w 的 cursor 规则。 */
 }
 
 /* 拖拽期间仅手柄与手柄内部元素显示对应光标，避免全局覆盖触发按钮等外部控件。 */

@@ -329,7 +329,7 @@ function scorePercent(score: number): string {
 }
 
 .rag-score-bar {
-  height:100%;
+  height: 100%;
   background:linear-gradient(90deg, var(--accent-running), var(--accent-success));
   border-radius: var(--radius-sm);
   transition:width 0.3s ease;

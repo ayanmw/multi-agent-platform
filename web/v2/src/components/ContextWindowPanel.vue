@@ -533,7 +533,7 @@ const ringDash = computed(() => {
   padding: 1.125rem;
   backdrop-filter: blur(0.625rem);
   box-shadow: 0 1px 0 transparent inset,
-    0 0.625rem 1.875rem rgba(0, 0, 0, 0.25);
+    0 0.625rem 1.875rem var(--overlay-bg);
 }
 
 .card-label {
@@ -658,14 +658,14 @@ const ringDash = computed(() => {
   background:var(--border-subtle);
   overflow:hidden;
   margin-bottom:1.125rem;
-  box-shadow:inset 0 1px 0.125rem rgba(0, 0, 0, 0.25);
+  box-shadow:inset 0 1px 0.125rem var(--overlay-bg);
 }
 
 .spectrum-fill {
-  height:100%;
-  width:100%;
+  height: 100%;
+  width: 100%;
   border-radius: var(--radius-lg);
-  transition:background 0.5s ease;
+  transition: background 0.5s ease;
 }
 
 .role-grid {
@@ -876,13 +876,13 @@ const ringDash = computed(() => {
   min-width:320px;
   max-width:min(900px, 90vw);
   max-height:min(800px, 85vh);
-  background:var(--bg-canvas, #0b0d10);
-  border:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background:var(--bg-canvas);
+  border:1px solid var(--border-default);
   border-radius:14px;
   display:flex;
   flex-direction:column;
   overflow:hidden;
-  box-shadow:0 30px 90px rgba(0, 0, 0, 0.7);
+  box-shadow:0 30px 90px var(--overlay-bg);
 }
 
 .prompt-dialog-header {
@@ -892,8 +892,8 @@ const ringDash = computed(() => {
   justify-content:space-between;
   gap:12px;
   padding:12px 18px;
-  border-bottom:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
-  background:var(--bg-elevated, #181c24);
+  border-bottom:1px solid var(--border-default);
+  background:var(--bg-elevated);
 }
 
 .prompt-dialog-title {
@@ -905,7 +905,7 @@ const ringDash = computed(() => {
   font-weight:600;
   letter-spacing:0.04em;
   text-transform:uppercase;
-  color:var(--text-primary, #e8ebf0);
+  color:var(--text-primary);
 }
 
 .prompt-dialog-dot {
@@ -933,9 +933,9 @@ const ringDash = computed(() => {
   align-items:center;
   justify-content:center;
   background:transparent;
-  border:1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  border:1px solid var(--border-default);
   border-radius:6px;
-  color:var(--text-secondary, #9aa3b2);
+  color:var(--text-secondary);
   font-size:18px;
   line-height:1;
   cursor:pointer;
@@ -943,9 +943,9 @@ const ringDash = computed(() => {
 }
 
 .prompt-dialog-close:hover {
-  background:var(--bg-hover, #202632);
-  color:var(--text-primary, #e8ebf0);
-  border-color:var(--border-active, rgba(0, 229, 255, 0.4));
+  background:var(--bg-hover);
+  color:var(--text-primary);
+  border-color:var(--border-active);
 }
 
 .prompt-dialog-body {
@@ -990,7 +990,7 @@ const ringDash = computed(() => {
   letter-spacing:0.1em;
   color:var(--text-muted);
   padding:0.438rem 0.625rem;
-  background:rgba(0, 0, 0, 0.15);
+  background:var(--overlay-bg);
   border-bottom:1px solid var(--border-subtle);
 }
 
@@ -1033,7 +1033,7 @@ const ringDash = computed(() => {
 .timeline::-webkit-scrollbar-thumb:hover,
 .block-content::-webkit-scrollbar-thumb:hover,
 .prompt-dialog-body::-webkit-scrollbar-thumb:hover {
-  background:rgba(255, 255, 255, 0.16);
+  background:var(--border-active);
 }
 
 @media (max-width: 767px) {

@@ -78,7 +78,7 @@ defineEmits<{
   border-radius: 12px;
   max-width: 440px;
   width: 100%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 32px var(--overlay-bg);
 }
 
 .tips-header {

@@ -58,11 +58,11 @@
 - [x] 8.1 Add theme-derived overlay/glass tokens (`--overlay-bg`, `--panel-gradient-top`, `--glass-bg`) to `themes.css`.
 - [x] 8.2 Replace hard-coded `rgba()` values in `ContextWindowPanel.vue` with new theme tokens.
 - [x] 8.3 Replace hard-coded hex values in `KeyboardTips.vue` with existing theme tokens.
-- [ ] 8.4 Choose icon library (recommend Phosphor) and add it to `package.json` / dependencies.
-- [ ] 8.5 Replace emoji-only buttons in `TopBar.vue` and `CommandBar.vue` with SVG icons from the chosen library, preserving `aria-label`.
-- [ ] 8.6 Fix `ContextFlyout.vue` resize cursor: use `ew-resize` for width handle, `ns-resize` for height handle, remove global `*` override.
-- [ ] 8.7 Run full formatter/linter pass to fix formatting drift (e.g., `height:100%;` in `ContextWindowPanel.vue` line 396).
-- [ ] 8.8 Review all changed components under each theme (obsidian, terminal, amber, dusk, solar, ice, auto).
+- [x] 8.4 Choose icon library (recommend Phosphor) and add it to `package.json` / dependencies.
+- [x] 8.5 Replace emoji-only buttons in `TopBar.vue` and `CommandBar.vue` with SVG icons from the chosen library, preserving `aria-label`.
+- [x] 8.6 Fix `ContextFlyout.vue` resize cursor: use `ew-resize` for width handle, `ns-resize` for height handle, remove global `*` override.
+- [x] 8.7 Run full formatter/linter pass to fix formatting drift (e.g., `height:100%;` in `ContextWindowPanel.vue` line 396).
+- [x] 8.8 Review all changed components under each theme (obsidian, terminal, amber, dusk, solar, ice, auto).
 
 ## 9. State & Progress Cleanup
 
