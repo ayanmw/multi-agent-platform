@@ -514,3 +514,4 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 - **定型阶段**: 完成核心能力矩阵，进入 v0.14.0 Beta 准备: token 治理、context 压缩、RBAC、部署文档。
 - **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
+- **规划中**: 多模型分层路由增强方案，详见 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` —— 含完整模型 tier 映射、Agent 粒度模型绑定、成本预算治理与可观测性设计，待排期实施。
