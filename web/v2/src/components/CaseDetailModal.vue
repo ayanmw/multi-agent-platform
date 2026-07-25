@@ -17,34 +17,52 @@
 -->
 <script setup lang="ts">
 import type { Case } from '../types/case'
+import { useFocusTrap } from '../composables/useFocusTrap'
+import { ref } from 'vue'
 
-defineProps<{
+const props = defineProps<{
   caseData: Case | null
   visible: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
   run: [caseId: string]
   edit: [caseId: string]
 }>()
+
+const dialogRef = ref<HTMLElement | null>(null)
+const runBtnRef = ref<HTMLElement | null>(null)
+
+useFocusTrap({
+  containerRef: dialogRef,
+  visible: { get value() { return props.visible } },
+  close: () => emit('close'),
+  initialFocus: runBtnRef,
+})
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="visible && caseData" class="modal-overlay" @click.self="$emit('close')">
-        <div class="modal-content">
+      <div v-if="visible && caseData" class="modal-overlay" @click.self="emit('close')">
+        <div
+          ref="dialogRef"
+          class="modal-content"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="case-detail-title"
+        >
           <!-- Header -->
           <div class="modal-header">
             <div class="modal-header-left">
-              <span class="modal-icon">{{ caseData.icon }}</span>
+              <span class="modal-icon" aria-hidden="true">{{ caseData.icon }}</span>
               <div>
-                <h2 class="modal-title">{{ caseData.name }}</h2>
+                <h2 id="case-detail-title" class="modal-title">{{ caseData.name }}</h2>
                 <span class="modal-category">{{ caseData.category }}</span>
               </div>
             </div>
-            <button class="modal-close-btn" @click="$emit('close')" title="Close">✕</button>
+            <button class="modal-close-btn" @click="emit('close')" title="Close" aria-label="Close">✕</button>
           </div>
 
           <div class="modal-body">
@@ -143,15 +161,15 @@ defineEmits<{
 
           <!-- Footer -->
           <div class="modal-footer">
-            <button class="modal-cancel-btn" @click="$emit('close')">Cancel</button>
+            <button class="modal-cancel-btn" @click="emit('close')">Cancel</button>
             <button
               v-if="!caseData.is_builtin"
               class="modal-edit-btn"
-              @click="$emit('edit', caseData.id)"
+              @click="emit('edit', caseData.id)"
             >
               ✎ Edit
             </button>
-            <button class="modal-run-btn" @click="$emit('run', caseData.id)">▶ Run</button>
+            <button ref="runBtnRef" class="modal-run-btn" @click="emit('run', caseData.id)">▶ Run</button>
           </div>
         </div>
       </div>
@@ -163,7 +181,7 @@ defineEmits<{
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay-bg, rgba(0, 0, 0, 0.6));
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;

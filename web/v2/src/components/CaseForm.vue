@@ -15,10 +15,11 @@
        - Acceptance criteria are edited as structured rows (type, target, description)
 -->
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from 'vue'
+import { ref, watch, computed, nextTick, toRef } from 'vue'
 import type { Case, CreateCaseRequest, UpdateCaseRequest, TaskContract } from '../types/case'
 import { useCaseStore } from '../composables/useCaseStore'
 import { useClickOutside } from '../composables/useClickOutside'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
 const props = defineProps<{
   caseData: Case | null
@@ -31,6 +32,16 @@ const emit = defineEmits<{
 }>()
 
 const store = useCaseStore()
+
+const dialogRef = ref<HTMLElement | null>(null)
+const firstInputRef = ref<HTMLInputElement | null>(null)
+
+useFocusTrap({
+  containerRef: dialogRef,
+  visible: { get value() { return props.visible } },
+  close: () => emit('close'),
+  initialFocus: firstInputRef,
+})
 
 // 20 个预设 emoji 图标，禁止自由输入
 const ICON_OPTIONS = [
@@ -404,10 +415,16 @@ function handleClose() {
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="visible" class="modal-overlay" @click.self="handleClose">
-        <div class="modal-content">
+        <div
+          ref="dialogRef"
+          class="modal-content"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="case-form-title"
+        >
           <div class="modal-header">
-            <h2 class="modal-title">{{ modalTitle }}</h2>
-            <button class="modal-close-btn" @click="handleClose" title="关闭">✕</button>
+            <h2 id="case-form-title" class="modal-title">{{ modalTitle }}</h2>
+            <button class="modal-close-btn" @click="handleClose" title="关闭" aria-label="关闭">✕</button>
           </div>
 
           <div class="modal-body">
@@ -416,7 +433,13 @@ function handleClose() {
             <div class="form-grid">
               <div class="form-field">
                 <label for="case-name">名称 <span class="required">*</span></label>
-                <input id="case-name" v-model="name" type="text" placeholder="请输入 Case 名称" />
+                <input
+                  id="case-name"
+                  ref="firstInputRef"
+                  v-model="name"
+                  type="text"
+                  placeholder="请输入 Case 名称"
+                />
               </div>
 
               <div class="form-field category-field" ref="categoryWrapRef">
@@ -473,6 +496,7 @@ function handleClose() {
               <div class="form-field icon-field" ref="iconWrapRef">
                 <label>图标</label>
                 <button
+                  ref="firstInputRef"
                   type="button"
                   class="icon-trigger"
                   aria-haspopup="grid"

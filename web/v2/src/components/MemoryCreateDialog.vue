@@ -4,6 +4,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { CreateMemoryPayload } from '../composables/useMemoryStore'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
 const props = defineProps<{
   visible: boolean
@@ -14,6 +15,16 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'create', payload: CreateMemoryPayload): void
 }>()
+
+const dialogRef = ref<HTMLElement | null>(null)
+const contentRef = ref<HTMLTextAreaElement | null>(null)
+
+useFocusTrap({
+  containerRef: dialogRef,
+  visible: { get value() { return props.visible } },
+  close: () => emit('close'),
+  initialFocus: contentRef,
+})
 
 const memoryTypes = [
   'preference',
@@ -74,10 +85,16 @@ function handleSubmit() {
 <template>
   <Teleport to="body">
     <div v-if="visible" class="dialog-overlay" @click.self="handleClose">
-      <div class="dialog-panel">
+      <div
+        ref="dialogRef"
+        class="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-create-title"
+      >
         <div class="dialog-header">
-          <h3 class="dialog-title">Create Memory</h3>
-          <button class="dialog-close" @click="handleClose" title="Close">×</button>
+          <h3 id="memory-create-title" class="dialog-title">Create Memory</h3>
+          <button class="dialog-close" @click="handleClose" title="Close" aria-label="Close">×</button>
         </div>
 
         <div class="dialog-body">
@@ -87,6 +104,7 @@ function handleSubmit() {
               <button
                 v-for="t in memoryTypes"
                 :key="t"
+                type="button"
                 :class="['type-chip', { active: type === t }]"
                 @click="type = t"
               >
@@ -96,28 +114,29 @@ function handleSubmit() {
           </div>
 
           <div class="form-row">
-            <label class="form-label">Scope</label>
-            <select v-model="scope" class="form-select">
+            <label class="form-label" for="memory-scope">Scope</label>
+            <select id="memory-scope" v-model="scope" class="form-select">
               <option v-for="s in scopeOptions" :key="s" :value="s">{{ s }}</option>
             </select>
           </div>
 
           <div v-if="scope === 'session'" class="form-row">
-            <label class="form-label">Session ID</label>
-            <input v-model="sessionId" type="text" class="form-input" placeholder="Optional session ID" />
+            <label class="form-label" for="memory-session-id">Session ID</label>
+            <input id="memory-session-id" v-model="sessionId" type="text" class="form-input" placeholder="Optional session ID" />
           </div>
 
           <div class="form-row">
-            <label class="form-label">Tier</label>
-            <select v-model="tier" class="form-select">
+            <label class="form-label" for="memory-tier">Tier</label>
+            <select id="memory-tier" v-model="tier" class="form-select">
               <option value="semantic">Semantic</option>
               <option value="consolidated">Consolidated</option>
             </select>
           </div>
 
           <div class="form-row">
-            <label class="form-label">Confidence</label>
+            <label class="form-label" for="memory-confidence">Confidence</label>
             <input
+              id="memory-confidence"
               v-model.number="confidence"
               type="number"
               min="0"
@@ -128,8 +147,10 @@ function handleSubmit() {
           </div>
 
           <div class="form-row">
-            <label class="form-label">Content</label>
+            <label class="form-label" for="memory-content">Content</label>
             <textarea
+              id="memory-content"
+              ref="contentRef"
               v-model="content"
               class="form-textarea"
               rows="6"
@@ -139,8 +160,8 @@ function handleSubmit() {
         </div>
 
         <div class="dialog-footer">
-          <button class="btn-secondary" @click="handleClose">Cancel</button>
-          <button class="btn-primary" :disabled="!isValid" @click="handleSubmit">
+          <button type="button" class="btn-secondary" @click="handleClose">Cancel</button>
+          <button type="button" class="btn-primary" :disabled="!isValid" @click="handleSubmit">
             Create
           </button>
         </div>

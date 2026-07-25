@@ -25,6 +25,7 @@
  */
 import { ref, computed, watch } from 'vue'
 import type { Session } from '@/composables/useSessionStore'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
 const props = defineProps<{
   visible: boolean
@@ -43,6 +44,16 @@ const mode = ref<'keep' | 'auto' | 'custom'>('keep')
 const customPath = ref('')
 const error = ref<string | null>(null)
 const saving = ref(false)
+
+const dialogRef = ref<HTMLElement | null>(null)
+const nameInputRef = ref<HTMLInputElement | null>(null)
+
+useFocusTrap({
+  containerRef: dialogRef,
+  visible: { get value() { return props.visible } },
+  close: () => emit('close'),
+  initialFocus: nameInputRef,
+})
 
 /** 当前 session 的 workspace 展示文案：体现 workspace_dir 与 auto 标志的关系。 */
 const currentWorkspaceText = computed(() => {
@@ -140,10 +151,16 @@ function formatTs(ts: number): string {
 <template>
   <Teleport to="body">
     <div v-if="visible && session" class="dialog-overlay" @click.self="handleClose">
-      <div class="dialog-panel">
+      <div
+        ref="dialogRef"
+        class="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-edit-title"
+      >
         <div class="dialog-header">
-          <h3 class="dialog-title">Session 详情</h3>
-          <button class="dialog-close" @click="handleClose" title="Close">×</button>
+          <h3 id="session-edit-title" class="dialog-title">Session 详情</h3>
+          <button class="dialog-close" @click="handleClose" title="Close" aria-label="Close">×</button>
         </div>
 
         <div class="dialog-body">
@@ -191,6 +208,7 @@ function formatTs(ts: number): string {
             <label class="form-label" for="session-edit-name">Name <span class="required">*</span></label>
             <input
               id="session-edit-name"
+              ref="nameInputRef"
               v-model="name"
               type="text"
               class="form-input"

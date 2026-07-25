@@ -39,12 +39,12 @@
 
 ## 6. Dialog Focus Management & ARIA
 
-- [ ] 6.1 Create `useFocusTrap.ts` composable that captures Tab/Shift+Tab focus within a dialog and closes on Escape.
-- [ ] 6.2 Add focus restoration to the triggering element on dialog close.
-- [ ] 6.3 Apply `useFocusTrap` to Inspector dialog, Case Detail/Form dialog, Approval dialog, and other modal overlays.
-- [ ] 6.4 Add `role="dialog"`, `aria-modal="true"`, and `aria-labelledby` to all modal dialogs and full-screen drawers.
-- [ ] 6.5 Make `.dock-rail` in `DockPanel.vue` keyboard operable (`tabindex="0"`, `role="button"`, Enter/Space handling, `aria-expanded`).
-- [ ] 6.6 Make `.tree-row` in `FileTreeNode.vue` keyboard operable (`tabindex="0"`, `role="treeitem"`, Enter/Space handling).
+- [x] 6.1 Create `useFocusTrap.ts` composable that captures Tab/Shift+Tab focus within a dialog and closes on Escape.
+- [x] 6.2 Add focus restoration to the triggering element on dialog close.
+- [x] 6.3 Apply `useFocusTrap` to Inspector dialog, Case Detail/Form dialog, Approval dialog, and other modal overlays.
+- [x] 6.4 Add `role="dialog"`, `aria-modal="true"`, and `aria-labelledby` to all modal dialogs and full-screen drawers.
+- [x] 6.5 Make `.dock-rail` in `DockPanel.vue` keyboard operable (`tabindex="0"`, `role="button"`, Enter/Space handling, `aria-expanded`).
+- [x] 6.6 Make `.tree-row` in `FileTreeNode.vue` keyboard operable (`tabindex="0"`, `role="treeitem"`, Enter/Space handling).
 
 ## 7. Status & Accessibility Improvements
 
