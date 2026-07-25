@@ -33,9 +33,15 @@ type Config struct {
 	AnthropicAPIKey   string // ANTHROPIC_API_KEY
 	GeminiEndpoint    string // GEMINI_ENDPOINT
 	GeminiAPIKey      string // GEMINI_API_KEY
-	AzureOpenAIEndpoint string // AZURE_OPENAI_ENDPOINT
-	AzureOpenAIAPIKey   string // AZURE_OPENAI_API_KEY
+	AzureOpenAIEndpoint   string // AZURE_OPENAI_ENDPOINT
+	AzureOpenAIAPIKey     string // AZURE_OPENAI_API_KEY
 	AzureOpenAIAPIVersion string // AZURE_OPENAI_API_VERSION
+
+	// LLMProviders 是从 LLM_PROVIDERS 加载的多 Provider 配置列表，
+	// 用于启动时按 endpoint 自动发现模型。api_key 仅保存在内存，不入 DB。
+	// ModelTierMapping 是从 MODEL_TIER_* 环境变量加载的 tier 通配符映射。
+	LLMProviders     []LLMProviderConfig
+	ModelTierMapping map[string]string
 
 	// LLM mock 开关:全局默认、按 case 的真实例外,以及 endpoint/hint 覆盖。
 	// 用于在测试 / demo 时将 LLM 调用路由到 MockProvider 而非真实 provider。
@@ -158,6 +164,15 @@ type ModelConfig struct {
 	Provider string // provider 类型:"openai"、"anthropic"、"deepseek"
 	Endpoint string // provider API base URL
 	APIKey   string // provider API key
+}
+
+// LLMProviderConfig 描述 .env 中声明的单个 LLM Provider。
+// 与 internal/llm.ProviderConfig 解耦，避免 internal/config 引入 llm 包。
+type LLMProviderConfig struct {
+	Name     string `json:"name"`     // Provider 名，例如 "deepseek"
+	Type     string `json:"type"`     // Provider 类型
+	Endpoint string `json:"endpoint"` // API base URL
+	APIKey   string `json:"api_key"`  // API key（仅内存，不入 DB）
 }
 
 // MCPMarketConfig 描述一个远程 MCP marketplace catalog。
@@ -389,6 +404,10 @@ func Load() (*Config, error) {
 	if err := cfg.LoadMultiModelConfig(); err != nil {
 		return nil, fmt.Errorf("load multi-model config: %w", err)
 	}
+
+	// 加载多 Provider 配置与 tier 通配符映射。
+	cfg.LoadLLMProviderConfig()
+	cfg.LoadModelTierMapping()
 
 	// 加载静态 MCP server 配置
 	if err := cfg.LoadMCPConfig(); err != nil {
@@ -715,4 +734,71 @@ func loadIndexedModelConfigs() []ModelConfig {
 		})
 	}
 	return models
+}
+// LoadLLMProviderConfig 从 LLM_PROVIDERS 环境变量加载多 Provider 配置。
+// 若未配置，则根据旧的 LLM_ENDPOINT / LLM_API_KEY / LLMModel 合成一个名为
+// default、类型为 openai 的 Provider，保证向后兼容。
+func (cfg *Config) LoadLLMProviderConfig() {
+	if jsonStr := os.Getenv("LLM_PROVIDERS"); jsonStr != "" {
+		var providers []LLMProviderConfig
+		if err := json.Unmarshal([]byte(jsonStr), &providers); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to parse LLM_PROVIDERS JSON: %v\n", err)
+			return
+		}
+		cfg.LLMProviders = normalizeLLMProviderTypes(providers)
+		return
+	}
+
+	// 向后兼容：未配置 LLM_PROVIDERS 时，用旧字段合成 default Provider。
+	cfg.LLMProviders = []LLMProviderConfig{{
+		Name:     "default",
+		Type:     "openai",
+		Endpoint: cfg.LLMEndpoint,
+		APIKey:   cfg.LLMAPIKey,
+	}}
+}
+
+// normalizeLLMProviderTypes 将 provider type 规范化为内部使用的值，
+// 并对不支持的类型给出 warning 后回退到 openai-compatible。
+func normalizeLLMProviderTypes(providers []LLMProviderConfig) []LLMProviderConfig {
+	valid := map[string]bool{"openai": true, "anthropic": true, "gemini": true, "self-hosted": true}
+	for i, p := range providers {
+		t := strings.ToLower(strings.TrimSpace(p.Type))
+		switch t {
+		case "deepseek":
+			// DeepSeek 完全 OpenAI-compatible，统一按 openai 处理。
+			t = "openai"
+		case "self-hosted":
+			// self-hosted 也走 OpenAI-compatible 协议。
+			t = "openai"
+		}
+		if !valid[t] {
+			fmt.Fprintf(os.Stderr, "Warning: unknown provider type %q for provider %q, falling back to openai\n", p.Type, p.Name)
+			t = "openai"
+		}
+		providers[i].Type = t
+	}
+	return providers
+}
+
+// LoadModelTierMapping 扫描所有以 MODEL_TIER_ 开头的环境变量，
+// 构造 model ID 通配符到 tier 的映射。键保留原始大小写。
+func (cfg *Config) LoadModelTierMapping() {
+	cfg.ModelTierMapping = make(map[string]string)
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := strings.TrimSpace(parts[1])
+		if !strings.HasPrefix(key, "MODEL_TIER_") {
+			continue
+		}
+		pattern := strings.TrimPrefix(key, "MODEL_TIER_")
+		if pattern == "" {
+			continue
+		}
+		cfg.ModelTierMapping[pattern] = val
+	}
 }
