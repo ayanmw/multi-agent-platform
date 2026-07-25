@@ -120,7 +120,7 @@ func (l *Loader) UnloadServer(name string) error {
     l.mu.Unlock()
 
     if !ok {
-        return fmt.Errorf("server not loaded: %s", name)
+        return nil
     }
 
     // 注销该 server 公告的所有 tool。

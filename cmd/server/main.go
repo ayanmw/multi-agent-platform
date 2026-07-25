@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -246,15 +247,8 @@ func main() {
 	hub := ws.NewHub()
 	hubInstance = hub
 	go hub.Run()
-	// 捕获终止信号，驱动优雅关闭。
-	signal.Notify(serverShutdown, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-serverShutdown
-		observability.DefaultLogger.Info("server", "shutting down WebSocket hub", nil)
-		if err := hub.Shutdown(context.Background()); err != nil {
-			observability.DefaultLogger.Warn("server", "hub shutdown error", map[string]any{"error": err.Error()})
-		}
-	}()
+	// 初始化全局关闭管理器。
+	shutdown := newShutdownManager()
 
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
 
@@ -414,6 +408,10 @@ func main() {
 	heartbeat := harness.NewHeartbeat(memDB, summarizer)
 	go heartbeat.Start(context.Background())
 	log.Println("Memory Heartbeat started (5min interval, adaptive)")
+	shutdown.Register("heartbeat", func(ctx context.Context) error {
+		heartbeat.Stop()
+		return nil
+	})
 
 	// 初始化 MemoryRecall，携带 vector store 以支持语义记忆召回。
 	// 本地 embedding provider（TF-IDF/one-hot hash）与基于 SQLite 的
@@ -793,6 +791,9 @@ func main() {
 
 	log.Printf("MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
 	defer mcpManager.Close()
+	shutdown.Register("mcp-manager", func(ctx context.Context) error {
+		return mcpManager.Close()
+	})
 
 	// Phase 5: run_shell tool 的 Docker sandbox。
 	// 启动时检查 Docker 可用性。若可用，把 run_shell tool 包装成
@@ -914,6 +915,12 @@ func main() {
 		// Cron REST API 注册移至 appServer.registerRoutes（Phase 8-A），
 		// 通过 appServer.cronService 字段引用。
 		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
+		if cronSched != nil {
+			shutdown.Register("cron-scheduler", func(ctx context.Context) error {
+				cronSched.Stop()
+				return nil
+			})
+		}
 	} else {
 		log.Println("Cron subsystem: disabled (no database)")
 	}
@@ -1052,9 +1059,35 @@ func main() {
 	// 但会注入 seed user ID。
 	handler := auth.NewAuthMiddleware(authStore, fallbackUserID, requireAuth, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
 
-	if err := http.ListenAndServe(":"+cfg.ServerPort, handler); err != nil {
+	// 捕获终止信号，统一驱动优雅关闭。
+	signal.Notify(serverShutdown, os.Interrupt, syscall.SIGTERM)
+
+	// 使用 http.Server 以支持优雅 Shutdown；把 listener 与 handler 交给 server。
+	srv := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: handler,
+	}
+	// 注册关闭顺序：先停 HTTP（不再接受新连接），再停 Hub（停止广播）。
+	shutdown.Register("http-server", func(ctx context.Context) error {
+		if err := srv.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	})
+	shutdown.Register("websocket-hub", func(ctx context.Context) error {
+		return hub.Shutdown(ctx)
+	})
+
+	// 信号 goroutine 只负责触发 shutdownManager；关闭顺序与超时由 manager 统一管理。
+	go func() {
+		<-serverShutdown
+		shutdown.Shutdown()
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	log.Println("Server exited")
 }
 
 // streamTask 发射一组演示事件序列，模拟多步 agent 任务。

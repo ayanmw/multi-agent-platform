@@ -56,6 +56,9 @@ type Heartbeat struct {
 	state      *HeartbeatState
 	mu         sync.Mutex
 	cancel     context.CancelFunc
+	// wg 等待后台 goroutine 完全退出。Stop() 在 cancel 之后调用 wg.Wait()，
+	// 保证 Beat 不会在主流程退出后仍然访问 DB 或产生副作用。
+	wg sync.WaitGroup
 }
 
 // HeartbeatState 跟踪 heartbeat 的进度，以便重启后能从上次 checkpoint 恢复。它以
@@ -178,13 +181,15 @@ func NewHeartbeat(database MemoryDB, summarizer LLMSummarizer) *Heartbeat {
 }
 
 // Start 在后台 goroutine 中启动 heartbeat loop。它创建可取消的 context 并在每个 tick
-// 上运行 Beat()。调用 Stop() 可优雅停止 heartbeat。
+// 上运行 Beat()。调用 Stop() 可优雅停止 heartbeat，并等待后台 goroutine 退出。
 func (hb *Heartbeat) Start(ctx context.Context) {
 	ctx, hb.cancel = context.WithCancel(ctx)
 	log.Printf("[Heartbeat] Started with interval %v", hb.interval)
 
+	hb.wg.Add(1)
 	// 启动时立即运行一次，然后按 tick 运行
 	go func() {
+		defer hb.wg.Done()
 		// 初始 beat
 		report, err := hb.Beat(ctx)
 		if err != nil {
@@ -221,11 +226,12 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 	}()
 }
 
-// Stop 优雅停止 heartbeat loop。
+// Stop 优雅停止 heartbeat loop，并等待后台 goroutine 完全退出。
 func (hb *Heartbeat) Stop() {
 	if hb.cancel != nil {
 		hb.cancel()
 	}
+	hb.wg.Wait()
 }
 
 // Beat 执行单次 heartbeat 周期：
