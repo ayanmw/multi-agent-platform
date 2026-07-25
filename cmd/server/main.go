@@ -580,6 +580,7 @@ func main() {
 	}
 	var modelRouter *llm.Router
 	routerProviders := map[string]llm.Provider{}
+	rateLimiter := llm.NewRateLimiter()
 	if routerClassifier != nil {
 		// 把配置的默认 model 同时以 provider name 与 model name 两个 key
 		// 写入 provider 查找 map —— engine 会先通过 providers[profile.Provider]
@@ -606,7 +607,7 @@ func main() {
 			}
 			_, _ = llm.DefaultMockStore.Save(clsScript)
 		}
-		modelRouter = llm.NewRouter(modelRegistry, routerClassifier)
+		modelRouter = llm.NewRouter(modelRegistry, routerClassifier, rateLimiter)
 		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
 	} else {
 		log.Printf("[Router] disabled (no classifier provider)")

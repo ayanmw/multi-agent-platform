@@ -172,8 +172,9 @@ type RouteDecision struct {
 // Router 可安全并发使用 —— registry 是 goroutine 安全的，
 // 每次 Select 调用相互独立。
 type Router struct {
-	registry   *ModelRegistry
-	classifier Provider // 用于 intent 分类的便宜 model
+	registry    *ModelRegistry
+	classifier  Provider    // 用于 intent 分类的便宜 model
+	rateLimiter *RateLimiter // 可选；非 nil 时按模型 RPM 过滤候选
 }
 
 // NewRouter 以给定的 model registry 与分类器创建新的 Router。
@@ -181,10 +182,13 @@ type Router struct {
 // 分类器应是便宜快速的 model（例如 Haiku 或 DeepSeek Flash），
 // 因为每个请求都会调用它。单次分类成本应 < $0.001，
 // 以保持路由开销可忽略。
-func NewRouter(registry *ModelRegistry, classifier Provider) *Router {
+//
+// rateLimiter 为可选；nil 时禁用按模型 RPM 限流过滤。
+func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLimiter) *Router {
 	return &Router{
-		registry:   registry,
-		classifier: classifier,
+		registry:    registry,
+		classifier:  classifier,
+		rateLimiter: rateLimiter,
 	}
 }
 
@@ -442,7 +446,7 @@ func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*Mo
 			}
 			seen[m.Name] = true
 
-			if r.meetsRequirements(m, req) {
+			if r.meetsRequirements(m, req) && !r.isRateLimited(m) {
 				candidates = append(candidates, m)
 			}
 		}
@@ -506,12 +510,20 @@ func (r *Router) pickCheaperModel(primary *ModelProfile, req *RouteRequest, maxT
 			if m.Name == primary.Name {
 				continue
 			}
-			if r.meetsRequirements(m, req) {
+			if r.meetsRequirements(m, req) && !r.isRateLimited(m) {
 				return m
 			}
 		}
 	}
 	return nil
+}
+
+// isRateLimited 检查模型是否触发 RPM 限流。未配置限流器时返回 false。
+func (r *Router) isRateLimited(m *ModelProfile) bool {
+	if r.rateLimiter == nil {
+		return false
+	}
+	return r.rateLimiter.IsLimitExceeded(m.Name)
 }
 
 // buildReason 构造人类可读的路由决策说明。
