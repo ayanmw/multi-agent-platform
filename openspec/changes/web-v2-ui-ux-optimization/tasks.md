@@ -74,8 +74,8 @@
 
 ## 10. Verification & Documentation
 
-- [ ] 10.1 Run `npm run test` in `web/v2` and fix any failing Vitest tests.
-- [ ] 10.2 Run `npm run build` in `web/v2` and resolve build/lint errors.
+- [x] 10.1 Run `npm run test` in `web/v2` and fix any failing Vitest tests.
+- [x] 10.2 Run `npm run build` in `web/v2` and resolve build/lint errors.
 - [ ] 10.3 Manually verify layouts at 375px, 414px, 768px, 1024px, 1280px, 1920px viewports.
 - [ ] 10.4 Manually verify keyboard navigation through dialogs, dock rail, and file tree.
 - [ ] 10.5 Run axe-core or Lighthouse accessibility audit and address critical issues introduced by changes.

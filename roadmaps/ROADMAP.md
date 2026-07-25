@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-25
-> **当前版本**: v0.13.4 Alpha（Phase 8-B cleanup-2 收尾: taskActions 注册表内聚到 appServer，保持 handler 方法化；合并 `phase-8b-cleanup-2` 时 ROADMAP 版本冲突已解决）
+> **当前版本**: v0.13.5 Alpha（web-v2-ui-ux-optimization: 响应式布局、Dock 宽度治理、Dialog 焦点捕获与 ARIA、主题 token 统一等 UI/UX 优化，`npm run test`/`npm run build` 全绿）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -351,6 +351,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - [x] `MobileBottomSheet.vue` + 单测 5 例
 - [x] `npx vue-tsc` / `npx vitest run` 全绿
 - [x] OpenSpec `v2-mobile-usability-fix` 已归档
+- [x] **UI-v2 体验优化（2026-07-25）**: CommandBar 响应式重构、桌面 Dock 宽度治理与自动折叠、Flyout 边界安全定位、触控目标扩展、Hover/点击混合交互、Dialog 焦点捕获与 ARIA 属性、`useFocusTrap` 组合式、状态标签可访问性优化、emoji 按钮 `aria-label` 全量补齐、Toast live region `aria-atomic`、减少动画偏好保持生效、主题 token 统一（overlay/glass）、ContextFlyout 拖拽光标按方向显式设置；`npm run test` 128 通过、`npm run build` 通过
 
 ### 验证标准
 - [x] 桌面端 Dock 三栏可操作
@@ -507,6 +508,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.2 Alpha | 2026-07-24 | web_search 国内引擎与 web_research 工具: `internal/tool/web_search.go` 接入 Baidu mobile / Sogou / Bing China HTML 三个零 key 国内 provider，`WEBSEARCH_DISABLE_DDG` 默认 true，支持 `WEBSEARCH_PROVIDER=baidu` 显式选择；新增 `core/web_research` 深度研究工具（搜索→抓取 top-N→LLM JSON 摘要），通过 `tool.LLMProvider` 调用内部 LLM，返回 `_llm_usage` 供 engine 累计；新增 `web_research_summarize_started/completed` 事件与前端 EventType；`internal/tool/prompt.go` 集中管理 `web-research-summarize-system` prompt；`internal/cases/cases.go` 的 web-research case 提及 `web_research` 可一次调用替代；单元测试覆盖解析器、显式 provider、摘要/降级/usage 回传；真实网络探测中 Sogou/Bing China 可返回结果，Baidu 未登录请求被验证码拦截；OpenSpec `web-search-china-providers` 已归档 `openspec/changes/archive/2026-07-24-web-search-china-providers/` |
 | v0.13.3 Alpha | 2026-07-25 | 冒烟测试失败修复: `internal/tool/registry.go` 的 `Unregister` 增加 `FullName` fallback，修复 `DELETE /api/tools?name=echo_smoke` 404；`scripts/smoke-test.sh` 前置清理同名动态工具、接受 checkpoint recover 500；`scripts/policy-smoke.sh` 修复 `parse_detail` stdin JSON 解析、ApprovalRule 期望路径从硬编码 `./etc/` 改为按 `session_id` 动态取 `workspace_dir` 下的 `etc/policy_approval_test.txt`；`smoke-test.sh` PASS=63/FAIL=0，`policy-smoke.sh` PASS=8/FAIL=0 |
 | v0.13.4 Alpha | 2026-07-25 | Phase 8-B cleanup-2 收尾: `handleTasksRoot` 的 `switch req.Action` 改为 `appServer.taskActions` 注册表分发，`actionChat/actionMultiAgent/actionStreamDemo` 保持 `(s *appServer)` 方法化；`go build ./...` + `go test ./...` 全绿；分支 `phase-8b-cleanup-2` 已合并到 `main` 并删除 worktree |
+| v0.13.5 Alpha | 2026-07-25 | UI-v2 UI/UX 优化（OpenSpec `web-v2-ui-ux-optimization`）: 响应式布局/Dock 宽度治理/Flyout 边界定位/触控目标/Hover-点击混合/Dialog 焦点捕获与 ARIA/状态标签可访问性/emoji 按钮 `aria-label`/Toast `aria-atomic`/减少动画偏好/主题 token 统一（overlay/glass）；`npm run test` 128 通过、`npm run build` 通过 |
 
 ---
 
