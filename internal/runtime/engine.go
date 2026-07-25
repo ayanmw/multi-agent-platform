@@ -966,6 +966,19 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// 不是快速失败。
 			// -----------------------------------------------------------------
 			obsContent := fmt.Sprintf("[LLM ERROR] %s", normalizeErrorFingerprint(err.Error()))
+			// 预算超限属于政策性终态错误，不应走 feedback-first 重试，
+			// 否则会把同一 cost_budget_exceeded 事件重复广播并空转。
+			if strings.Contains(err.Error(), "cost budget") {
+				e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"reason": "cost_budget_exceeded",
+					"error":  err.Error(),
+				}))
+				e.durationMs = time.Since(e.startTime).Milliseconds()
+				e.updateTask("failed", "", e.totalTokens)
+				e.updateTaskDuration()
+				DeleteTaskContextSnapshot(e.cfg.SubTaskID)
+				return "", e.totalTokens, err
+			}
 			if e.isRepeatingError(obsContent) {
 				e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 					"reason": "llm_error",
@@ -1647,15 +1660,14 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			PreferredModel:  e.cfg.PreferredModel,
 			PreferredTier:   parsePreferredTier(e.cfg.PreferredTier),
 			AllowCheapFirst: e.cfg.AllowAutoRoute,
-			BudgetUSD:       e.cfg.MaxCostUSD,
 			AgentRole:       string(e.cfg.Role),
 		}
 
 		var errRoute error
 		routeDecision, errRoute = e.cfg.Router.Select(ctx, routeReq)
 
-		// Router 选择后增加 Agent 级成本预算的最前锋拦截：
-		// 若已累计成本 + 本次调用最小输入成本预估 > MaxCostUSD，直接失败并广播
+		// 在 Router 选择成功后、调用真实 LLM 前，增加 Agent 级成本预算的最前锋拦截：
+		// 若已累计成本 + 本次调用最小输入成本预估 >= MaxCostUSD，直接失败并广播
 		// cost_budget_exceeded 事件，避免把请求发出去才发现超预算。
 		// MaxCostUSD=0 表示未设置预算限制。
 		if errRoute == nil && routeDecision != nil && routeDecision.Primary != nil {
@@ -1663,7 +1675,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				profile := routeDecision.Primary
 				// 用输入报价和已有对话长度做保守预估（不含输出），作为上界拦截。
 				minEstimate := float64(contextLen) * profile.InputPrice / 1_000_000
-				if e.runningCostUSD+minEstimate > e.cfg.MaxCostUSD {
+				if e.runningCostUSD+minEstimate >= e.cfg.MaxCostUSD {
 					e.bus.SendEvent(event.NewEventWithSubTask(event.EventCostBudgetExceeded, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"current_cost_usd": e.runningCostUSD,
 						"max_cost_usd":     e.cfg.MaxCostUSD,
