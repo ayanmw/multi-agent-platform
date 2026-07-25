@@ -94,6 +94,7 @@ type AgentDeps struct {
 	CostRepo        cost.CostRepository
 	ModelRegistry   *llm.ModelRegistry
 	ModelRouter     *llm.Router
+	RateLimiter     *llm.RateLimiter // Phase multi-model-routing P3-4
 	RouterProviders map[string]llm.Provider
 	CaseService     *cases.Service
 	TodoSvc         *todo.Service
@@ -907,11 +908,15 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 			}
 			return todo.FormatActiveTodos(activeTodos)
 		}(),
+		// Phase multi-model-routing P3-4: 把同一个 rateLimiter 注入 EngineConfig，
+		// 让 Engine 在每次成功 LLM 调用后自动 RecordCall，Router 下次选择模型时
+		// 能根据 RPM 限流状态过滤已被限流的模型。
+		RateLimiter: r.Deps.RateLimiter,
 		// Phase multi-model-routing P3-2: Agent 级路由偏好注入 EngineConfig。
-		PreferredModel: preferredModel,
-		PreferredTier:  preferredTier,
-		AllowAutoRoute: allowAutoRoute,
-		MaxCostUSD:     maxCostUSD,
+		PreferredModel:         preferredModel,
+		PreferredTier:          preferredTier,
+		AllowAutoRoute:         allowAutoRoute,
+		MaxCostUSD:             maxCostUSD,
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

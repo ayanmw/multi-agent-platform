@@ -81,6 +81,7 @@ type appServer struct {
 	costRepo        cost.CostRepository
 	modelRegistry   *llm.ModelRegistry
 	modelRouter     *llm.Router
+	rateLimiter     *llm.RateLimiter
 	routerProviders map[string]llm.Provider
 
 	// Subsystems
@@ -119,6 +120,7 @@ func (s *appServer) deps() AgentDeps {
 		CostRepo:        s.costRepo,
 		ModelRegistry:   s.modelRegistry,
 		ModelRouter:     s.modelRouter,
+		RateLimiter:     s.rateLimiter,
 		RouterProviders: s.routerProviders,
 		CaseService:     s.caseService,
 		TodoSvc:         s.todoSvc,

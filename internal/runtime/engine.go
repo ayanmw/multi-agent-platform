@@ -423,6 +423,11 @@ type EngineConfig struct {
 	// Phase 7 TODO 子系统引入。
 	ActiveTodos string
 
+	// RateLimiter 是可选的模型级 RPM 限流器。设置后，Engine 在每次成功 LLM
+	// 调用后通过 RecordCall(selectedModel) 记录调用，并使 Router 在下次选择
+	// 候选模型时能够根据限流状态过滤被限流的模型。为 nil 时禁用限流记录。
+	RateLimiter *llm.RateLimiter
+
 	// MaxCostUSD 是 Agent/任务级别的单次运行 USD 成本上限。若 >0，Engine
 	// 在每次 think 选择模型前会用累计 runningCostUSD 做预算拦截；累计成本
 	// 达到或超过上限时发出 cost_budget_exceeded 事件并终止任务。
@@ -1667,45 +1672,66 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 					return "", llm.Usage{}, nil, fmt.Errorf("cost budget exceeded (routing): $%.6f/$%.6f USD", e.runningCostUSD, e.cfg.MaxCostUSD)
 				}
 			}
-		}
 
-		if errRoute != nil {
-			log.Printf("[Engine] Router selection failed: %v, falling back to default model", errRoute)
-		} else if routeDecision != nil && routeDecision.Primary != nil {
-			selectedModel = routeDecision.Primary.Name
-			e.selectedModel = selectedModel //供 OnLLMUsage 上报真实调用模型
+			// 在路由成功且选定模型后，对 RateLimiter 做预检：
+			// 若该模型已被限流，直接发出 model_rate_limited 事件并尝试 fallback。
+			// 这不仅让 Router 过滤时可见，也让真实调用前多一道防线。
+			if e.cfg.RateLimiter != nil && e.cfg.RateLimiter.IsLimitExceeded(routeDecision.Primary.Name) {
+				e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRateLimited, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"model":  routeDecision.Primary.Name,
+					"tier":   routeDecision.Primary.Tier.String(),
+					"reason": "pre-call RPM limit exceeded in sliding window",
+				}))
+				if routeDecision.Fallback != nil {
+					log.Printf("[Engine] Primary model %s rate-limited, using fallback %s",
+						routeDecision.Primary.Name, routeDecision.Fallback.Name)
+					selectedModel = routeDecision.Fallback.Name
+					e.selectedModel = selectedModel
+					selectedProvider = resolveProvider(e.providers, routeDecision.Fallback.Provider, routeDecision.Fallback.Name)
+					if selectedProvider == nil {
+						selectedProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
+							e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
+					}
+				} else {
+					return "", llm.Usage{}, nil, fmt.Errorf("model %s rate-limited and no fallback configured", routeDecision.Primary.Name)
+				}
+			} else {
+				selectedModel = routeDecision.Primary.Name
+				e.selectedModel = selectedModel //供 OnLLMUsage 上报真实调用模型
 
-			// 从 providers map 解析所选模型对应的 provider。键可以是
-			// provider 名（如 "deepseek"）或模型名。
-			selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
+				// 从 providers map 解析所选模型对应的 provider。键可以是
+				// provider 名（如 "deepseek"）或模型名。
+				selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
 
-			if selectedProvider == nil {
-				// 最后兜底：从 engine 的默认 endpoint/key 构建一个全新的
-				// OpenAI-compatible provider，并以 router 选中模型名锚定。
-				// 即使调用方未在 Providers map 中为该模型预注册 provider，
-				// 仍能让被路由的模型生效。
-				selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
-					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
+				if selectedProvider == nil {
+					// 最后兜底：从 engine 的默认 endpoint/key 构建一个全新的
+					// OpenAI-compatible provider，并以 router 选中模型名锚定。
+					// 即使调用方未在 Providers map 中为该模型预注册 provider，
+					// 仍能让被路由的模型生效。
+					selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
+						e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
+				}
+				// 注意：当上面找到预注册 provider 时，我们不会重新锚定其模型——
+				// ChatRequest.Model 字段（下方设为 selectedModel）在
+				// OpenAIProvider.ChatStream 中优先，因此无论 provider 的默认
+				// 模型是什么，被路由的模型都会被尊重。
+
+				// model_routed 事件包含 fallback 信息，让前端可以预先展示
+				// fallback 目标模型（白盒透明）。
+				e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRouted, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"model":    selectedModel,
+					"intent":   routeDecision.Intent,
+					"tier":     routeDecision.Tier.String(),
+					"reason":   routeDecision.Reason,
+					"provider": routeDecision.Primary.Provider,
+					"fallback": routeDecision.Fallback,
+				}))
+				log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
+					selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
 			}
-			// 注意：当上面找到预注册 provider 时，我们不会重新锚定其模型——
-			// ChatRequest.Model 字段（下方设为 selectedModel）在
-			// OpenAIProvider.ChatStream 中优先，因此无论 provider 的默认
-			// 模型是什么，被路由的模型都会被尊重。
-
-			// model_routed 事件包含 fallback 信息，让前端可以预先展示
-			// fallback 目标模型（白盒透明）。
-			e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRouted, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-				"model":    selectedModel,
-				"intent":   routeDecision.Intent,
-				"tier":     routeDecision.Tier.String(),
-				"reason":   routeDecision.Reason,
-				"provider": routeDecision.Primary.Provider,
-				"fallback": routeDecision.Fallback,
-			}))
-			log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
-				selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
 		}
 	}
+
 
 	// =====================================================================
 	// Context window snapshot（白盒可观测）
@@ -1832,6 +1858,12 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		// think 残留的选择（虽然失败分支不会进 OnLLMUsage，但保持状态干净）。
 		e.selectedModel = ""
 		return "", usage, nil, err
+	}
+
+	// Phase multi-model-routing P3-4: 每次成功 LLM 调用后把所选模型记录到
+	// RateLimiter，让 Router 在后续 step 中按 RPM 限流状态过滤候选。
+	if e.cfg.RateLimiter != nil && selectedModel != "" {
+		e.cfg.RateLimiter.RecordCall(selectedModel)
 	}
 
 	// Phase 7-C: finish think span with attributes on success.

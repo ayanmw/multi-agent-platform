@@ -21,12 +21,12 @@
   - [x] 3-2 `intent_classified` 改用 `emitOnce`，`model_rate_limited` 保持每次广播
   - [x] 3-3 新增单测验证重复 `Select` 只产生一次 `intent_classified`
   - [x] 3-4 运行测试 + 提交
-- [ ] **Task P3-4**: RateLimiter 接入真实 LLM 调用
-  - [ ] 4-1 `EngineConfig` 新增 `RateLimiter` 字段
-  - [ ] 4-2 `Engine.think` 调用成功后 `RecordCall(selectedModel)`
-  - [ ] 4-3 `cmd/server` 把同一个 `RateLimiter` 传给 Router 和 EngineConfig
-  - [ ] 4-4 新增测试验证真实调用后限流生效
-  - [ ] 4-5 运行测试 + 提交
+- [x] **Task P3-4**: RateLimiter 接入真实 LLM 调用
+  - [x] 4-1 `EngineConfig` 新增 `RateLimiter` 字段
+  - [x] 4-2 `Engine.think` 调用成功后 `RecordCall(selectedModel)`
+  - [x] 4-3 `cmd/server` 把同一个 `RateLimiter` 传给 Router 和 EngineConfig
+  - [x] 4-4 新增测试验证真实调用后限流生效
+  - [x] 4-5 运行测试 + 提交
 - [ ] **Task P3-5**: 新增 Engine 路由事件测试
   - [ ] 5-1 创建 `internal/runtime/engine_routing_test.go`
   - [ ] 5-2 测试 `cost_budget_exceeded` 事件与任务失败

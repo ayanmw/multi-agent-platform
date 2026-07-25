@@ -1070,6 +1070,7 @@ func main() {
 		costRepo:         costRepo,
 		modelRegistry:    modelRegistry,
 		modelRouter:      modelRouter,
+		rateLimiter:      rateLimiter,
 		routerProviders:  routerProviders,
 		caseService:      caseService,
 		todoSvc:          todoSvc,
