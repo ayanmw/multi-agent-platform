@@ -23,6 +23,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -293,4 +294,48 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 	}
 
 	return contentBuilder.String(), usage, toolCalls, nil
+}
+
+// ListModels 调用 OpenAI-compatible GET /models 端点拉取可用模型列表。
+//
+// 该端点返回固定格式 { "object": "list", "data": [{ "id": "..." }] }，
+// 被 DeepSeek、Groq、Together 等兼容 provider 广泛支持。
+func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		if m.ID == "" {
+			continue
+		}
+		models = append(models, ModelInfo{
+			ID:       m.ID,
+			Provider: p.name,
+		})
+	}
+	return models, nil
 }

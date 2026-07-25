@@ -20,9 +20,11 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -515,6 +517,18 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 	}
 
 	return contentBuilder.String(), usage, toolCalls, nil
+}
+
+// ---------------------------------------------------------------------------
+// ListModels — Anthropic 不支持模型发现，返回空列表并记录 warning。
+// ---------------------------------------------------------------------------
+
+// ListModels 查询 provider 端可使用的 model 列表。
+// Anthropic 当前未提供公开模型发现端点，因此返回空列表。
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	_ = ctx
+	log.Printf("[AnthropicProvider] ListModels not supported for provider %q", p.name)
+	return []ModelInfo{}, nil
 }
 
 // ---------------------------------------------------------------------------

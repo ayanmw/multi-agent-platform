@@ -54,6 +54,11 @@ func (s *stubClassifier) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 	return s.intentJSON, Usage{}, nil, nil
 }
 
+func (s *stubClassifier) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	// stubClassifier 不用于模型发现，返回空列表。
+	return []ModelInfo{}, nil
+}
+
 // 编译期断言：stubClassifier 满足 Provider 接口。
 var _ Provider = (*stubClassifier)(nil)
 
@@ -359,6 +364,9 @@ func (emptyChoiceClassifier) Chat(req ChatRequest) (*ChatResponse, error) {
 }
 func (emptyChoiceClassifier) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	return "", Usage{}, nil, nil
+}
+func (emptyChoiceClassifier) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	return []ModelInfo{}, nil
 }
 
 var _ Provider = emptyChoiceClassifier{}

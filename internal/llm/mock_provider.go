@@ -68,6 +68,39 @@ func (p *MockProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) err
 	return p.chatStream(ctx, req, onChunk)
 }
 
+// ListModels 返回 mock provider 支持的所有模型。
+//
+// 模型来自 store 中的动态脚本与内置脚本；ID 取脚本的 CaseID，
+// Provider 固定为 "mock"，便于后续与 DefaultProfiles 合并。
+func (p *MockProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	scripts, err := p.store.List()
+	if err != nil {
+		return nil, fmt.Errorf("list mock scripts: %w", err)
+	}
+	// 内置脚本追加在后作为回退；map 去重。
+	scripts = append(scripts, p.builtinScripts...)
+	seen := make(map[string]struct{})
+	models := make([]ModelInfo, 0, len(scripts))
+	for _, s := range scripts {
+		id := s.CaseID
+		if id == "" {
+			id = s.ID
+		}
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		models = append(models, ModelInfo{
+			ID:       id,
+			Provider: "mock",
+		})
+	}
+	return models, nil
+}
+
 func (p *MockProvider) chatStream(ctx context.Context, req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	scripts, err := p.store.List()
 	if err != nil {

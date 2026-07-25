@@ -14,9 +14,11 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -163,6 +165,13 @@ func (p *GeminiProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 // 后续 Phase 将补齐流式解析（streamGenerateContent 及 SSE-style 响应）。
 func (p *GeminiProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	return "", Usage{}, nil, fmt.Errorf("GeminiProvider.ChatStream not implemented")
+}
+
+// ListModels 当前返回空列表；Gemini 模型列表通过本地配置与缺省画像管理。
+// 后续可接入 GET /v1beta/models 发现端点。
+func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	log.Printf("[GeminiProvider] ListModels not yet implemented for provider %q", p.name)
+	return []ModelInfo{}, nil
 }
 
 // buildGeminiRequest 将统一 ChatRequest 转换为 Gemini 格式。

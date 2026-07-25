@@ -68,6 +68,10 @@ func (p *routingFakeProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.S
 	return p.resp, llm.Usage{TotalTokens: 10}, nil, nil
 }
 
+func (p *routingFakeProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
+	return []llm.ModelInfo{}, nil
+}
+
 // newFakeRegistry 返回一个只含指定模型的 registry，避免被 DefaultProfiles 中
 // 大量模型和 fallback 链干扰，使测试对路由结果可预测。
 func newFakeRegistry(profiles []*llm.ModelProfile) *llm.ModelRegistry {
