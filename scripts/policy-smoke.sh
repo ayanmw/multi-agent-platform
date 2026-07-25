@@ -37,7 +37,7 @@ RM_TEST_DIR="/tmp/policy-smoke-rm-test-$$"
 # 注意:必须用 Windows 盘符绝对路径，Unix 风格 /tmp/ 在 Windows 上 filepath.IsAbs 返回 false
 SCOPE_TEST_FILE="C:/policy_scope_test_$$.txt"
 # 审批规则测试目标文件（在 scope 内但路径含 /etc/，触发 ApprovalRule 误判）
-APPROVAL_TEST_FILE="./etc/policy_approval_test.txt"
+APPROVAL_PATH_IN_WS="etc/policy_approval_test.txt"
 
 # WebSocket 用于发送 approve decision（如需要测试 approved 路径）
 WS_URL="ws://localhost:${PORT}/ws"
@@ -87,17 +87,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# PREPARE: 确保审批测试 etc 子目录存在于仓库根，且测试前无残留
+mkdir -p "./etc"
+if [[ -f "./etc/policy_approval_test.txt" ]]; then
+  rm -f "./etc/policy_approval_test.txt"
+fi
+
 # ---- 辅助函数 ---------------------------------------------------------------
+
+# 根据 task_id 获取对应 session 的 workspace_dir，并拼接审批测试文件路径
+approval_test_file_for_task() {
+  local tid="$1"
+  local detail sess ws
+  detail=$(get_task_detail "$tid")
+  sess=$(echo "$detail" | grep -o '"session_id":"[^"]*"' | head -1 | sed -E 's/"session_id":"([^"]*)".*/\1/')
+  ws=$(curl -s "${BASE}/api/sessions/${sess}/workspace/dir" 2>/dev/null | grep -o '"workspace_dir":"[^"]*"' | head -1 | sed -E 's/"workspace_dir":"([^"]*)".*/\1/')
+  if [[ -n "$ws" ]]; then
+    echo "${ws}/etc/policy_approval_test.txt"
+  else
+    echo "./etc/policy_approval_test.txt"
+  fi
+}
 
 # JSON 解析助手: 用 node 解析 task detail，返回结构化字段
 # parse_detail <json>  →  输出 JSON: {task_status, tool_steps_count, completed_tool_steps, ...}
 parse_detail() {
   local json="$1"
-  # 转义单引号用于 node 参数
-  local escaped
-  escaped=$(echo "$json" | sed "s/'/\\\\'/g")
-  node -e "
-const data = process.argv[1];
+  echo "$json" | node -e "
+let data = '';
+process.stdin.on('data', chunk => { data += chunk; });
+process.stdin.on('end', () => {
 try {
   const d = JSON.parse(data);
   const taskStatus = d.task ? d.task.status : 'unknown';
@@ -116,7 +135,8 @@ try {
     first_tool_name: toolSteps.length > 0 ? (toolSteps[0].tool_name || '') : ''
   }));
 } catch(e) { console.log(JSON.stringify({error: e.message})); }
-" "$escaped"
+});
+"
 }
 
 # 从 JSON 响应中提取第一个匹配的字符串字段值
@@ -275,9 +295,9 @@ post_json_file /api/mock/scripts /tmp/mock-pol-scope.json > /dev/null
 
 # --- 4. ApprovalRule: 路径含 /etc/ 但在 scope 内（相对路径） ---
 cat > /tmp/mock-pol-approval.json <<'MOCK_EOF'
-{"id":"pol-approval","case_id":"pol-approval","priority":200,"match_input":["policy-test-approval"],"responses":[{"type":"tool_call","tool_calls":[{"idx":0,"id":"call_approval","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"./etc/policy_approval_test.txt\",\"content\":\"approval test\"}"}}]}]}
+{"id":"pol-approval","case_id":"pol-approval","priority":200,"match_input":["policy-test-approval"],"responses":[{"type":"tool_call","tool_calls":[{"idx":0,"id":"call_approval","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"etc/policy_approval_test.txt\",\"content\":\"approval test\"}"}}]}]}
 MOCK_EOF
-echo "  注入 pol-approval (write_file ./etc/policy_approval_test.txt)"
+echo "  注入 pol-approval (write_file etc/policy_approval_test.txt)"
 post_json_file /api/mock/scripts /tmp/mock-pol-approval.json > /dev/null
 
 # --- 5. 控制测试: 安全 echo 命令 ---
@@ -510,8 +530,11 @@ APPR_DETAIL=$(get_task_detail "$TASK_APPROVAL")
 APPR_PARSED=$(parse_detail "$APPR_DETAIL")
 APPR_STATUS=$(pget "$APPR_PARSED" "task_status")
 APPR_TOOL_DONE=$(pget "$APPR_PARSED" "completed_tool_steps")
+# 文件实际落在对应 session 的 workspace/etc 下，而不是服务器 CWD
+APPROVAL_TEST_FILE=$(approval_test_file_for_task "$TASK_APPROVAL")
 APPR_FILE_EXISTS=$(test -f "$APPROVAL_TEST_FILE" && echo "yes" || echo "no")
 echo "  task_status=${APPR_STATUS}, completed_tool_steps=${APPR_TOOL_DONE}, target_file_exists=${APPR_FILE_EXISTS}"
+echo "  expected_file=${APPROVAL_TEST_FILE}"
 # 修复后期望: ./etc/ 是项目内合法子目录，不被误判为系统 /etc/。
 # 文件应被创建，task 应 completed（mock 脚本只一步 tool_call，无后续 text 终止
 # 可能导致 max_steps，但 tool_done > 0 且文件存在即说明未被审批拦截）。

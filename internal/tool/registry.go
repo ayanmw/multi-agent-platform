@@ -238,7 +238,11 @@ func (r *Registry) Unregister(name string) error {
 	}
 	tool, ok := r.tools[name]
 	if !ok {
-		return fmt.Errorf("tool not found: %s", name)
+		var found bool
+		tool, found = r.getByFullNameLocked(name)
+		if !found {
+			return fmt.Errorf("tool not found: %s", name)
+		}
 	}
 	// 移除主名称及所有指向该工具的已注册别名。
 	key := canonicalizeKey(tool)
