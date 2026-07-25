@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-25
-> **当前版本**: v0.13.5 Alpha（web-v2-ui-ux-optimization: 响应式布局、Dock 宽度治理、Dialog 焦点捕获与 ARIA、主题 token 统一等 UI/UX 优化，`npm run test`/`npm run build` 全绿）
+> **当前版本**: v0.13.6 Alpha（agent-config-permissions: Agent `config.permissions` OR 合并到 TaskContract、worker 审批委托回退用户审批、v2 AgentConfig 权限面板、v2 低风险 policy 自动审批）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,7 +9,7 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → agent-config-permissions ✅
   (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)
 ```
 
@@ -509,6 +509,41 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.3 Alpha | 2026-07-25 | 冒烟测试失败修复: `internal/tool/registry.go` 的 `Unregister` 增加 `FullName` fallback，修复 `DELETE /api/tools?name=echo_smoke` 404；`scripts/smoke-test.sh` 前置清理同名动态工具、接受 checkpoint recover 500；`scripts/policy-smoke.sh` 修复 `parse_detail` stdin JSON 解析、ApprovalRule 期望路径从硬编码 `./etc/` 改为按 `session_id` 动态取 `workspace_dir` 下的 `etc/policy_approval_test.txt`；`smoke-test.sh` PASS=63/FAIL=0，`policy-smoke.sh` PASS=8/FAIL=0 |
 | v0.13.4 Alpha | 2026-07-25 | Phase 8-B cleanup-2 收尾: `handleTasksRoot` 的 `switch req.Action` 改为 `appServer.taskActions` 注册表分发，`actionChat/actionMultiAgent/actionStreamDemo` 保持 `(s *appServer)` 方法化；`go build ./...` + `go test ./...` 全绿；分支 `phase-8b-cleanup-2` 已合并到 `main` 并删除 worktree |
 | v0.13.5 Alpha | 2026-07-25 | UI-v2 UI/UX 优化（OpenSpec `web-v2-ui-ux-optimization`）: 响应式布局/Dock 宽度治理/Flyout 边界定位/触控目标/Hover-点击混合/Dialog 焦点捕获与 ARIA/状态标签可访问性/emoji 按钮 `aria-label`/Toast `aria-atomic`/减少动画偏好/主题 token 统一（overlay/glass）；`npm run test` 128 通过、`npm run build` 通过 |
+| v0.13.6 Alpha | 2026-07-25 | Agent 默认权限 + v2 自动审批（OpenSpec `agent-config-permissions-and-v2-auto-approval`）: `agents.config.permissions` 持久化并 OR 合并到 `TaskContract.Permissions`；worker 审批委托缺失/超时时回退到用户审批；v2 `AgentConfig.vue` 增加权限勾选面板与风险标签；`useTaskStore` 对 `TagPolicyRule` + 仅 `network`/`mcp` tag 的审批请求自动发送 `approve` 控制消息；`go test ./...` 全绿、`npm run build` 通过 |
+
+---
+
+## Phase agent-config-permissions: Agent 默认权限与 v2 自动审批 ✅ 已完成
+
+**目标**: 让 Agent 配置可声明默认权限，修复 worker 审批委托失败导致的 web_search/web_research 报错，并在 v2 前端恢复低风险 policy 请求的自动审批能力。
+
+**完成日期**: 2026-07-25
+**Git commit**: `eb4f3c6`
+
+### 交付物
+- [x] `internal/agent/agent.go` 新增 `AgentConfig` / `TaskPermissions` 类型，映射 `config.permissions` JSON。
+- [x] `pkg/db/persistence.go` 的 `InsertAgentOptions` / `UpdateAgentOptions` 增加 `Config` 字段，写入 `agents.config` 列。
+- [x] `cmd/server/api.go` 的 `agentRequest` 与 `handleAgents` / `handleAgentByID` 读写 `config`。
+- [x] `cmd/server/runner.go` 新增 `applyAgentPermissions` 辅助，按 OR 语义合并到 `TaskContract.Permissions`。
+- [x] `cmd/server/tasks_api.go` 的 `startChatTask` 与 `cmd/server/api.go` 的 `handleRunCase` 在 contract 最终化后合并 Agent 权限。
+- [x] `internal/runtime/approval_delegation.go` 的 `handleApprovalDelegation` 在 supervisor 缺失/委托超时时回退到 `handleApprovalRequired`（用户审批路径）。
+- [x] `web/v2/src/composables/useAgentStore.ts` 扩展 `AgentRequest` / `defaultAgentRequest` 的 `config.permissions`。
+- [x] `web/v2/src/components/AgentConfig.vue` 增加权限勾选面板，含风险等级标签与 OR 合并说明。
+- [x] `web/v2/src/composables/useTaskStore.ts` 对 `TagPolicyRule` + 仅低风险 tag（`network`/`mcp`）的 `approval_required` 自动发送 approve 控制消息。
+- [x] 后端单元测试 `cmd/server/agent_config_permission_test.go` 覆盖 config CRUD 与权限合并。
+- [x] 前端单元测试 `web/v2/src/composables/useTaskStore.autoapprove.spec.ts` 覆盖自动审批决策逻辑。
+
+### 验证结果
+- `go test ./...` 全绿
+- `cd web/v2 && npm run build` 通过
+- `npx vitest run src/composables/useTaskStore.autoapprove.spec.ts` 6/6 通过
+
+### OpenSpec
+- 变更目录: `openspec/changes/agent-config-permissions-and-v2-auto-approval/`
+- 规格文档:
+  - `specs/agent-config-permissions/spec.md`
+  - `specs/approval-delegation-fallback/spec.md`
+  - `specs/v2-auto-approval/spec.md`
 
 ---
 
