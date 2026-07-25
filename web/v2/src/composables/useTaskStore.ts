@@ -83,6 +83,26 @@ export interface PendingApproval {
 }
 const pendingApproval = ref<PendingApproval | null>(null)
 
+const LOW_RISK_TAGS = new Set(['network', 'mcp'])
+const HIGH_RISK_TAGS = new Set([
+  'exec', 'exec:dangerous', 'shell', 'shell:dangerous',
+  'filesystem:destructive', 'filesystem:delete', 'filesystem:write',
+])
+
+/**
+ * Determine whether a pending approval request qualifies for automatic approval.
+ * Only TagPolicyRule requests with exclusively low-risk tags are auto-approved.
+ */
+function shouldAutoApprove(approval: PendingApproval): boolean {
+  if (approval.rule !== 'TagPolicyRule') return false
+  const tags = approval.tags || []
+  if (tags.length === 0) return false
+  // Any explicitly high-risk tag forces manual confirmation.
+  if (tags.some(tag => HIGH_RISK_TAGS.has(tag))) return false
+  // All tags must be recognized low-risk tags.
+  return tags.every(tag => LOW_RISK_TAGS.has(tag))
+}
+
 /**
  * F6: approval timeout timer.
  * 后端审批窗口是 30s，前端给 28s 倒计时留 2s 余量，超时后主动 deny 并弹 toast。
@@ -591,7 +611,7 @@ export function useTaskStore() {
         const infoType = evt.data.type as string
         if (infoType === 'approval_required') {
           const rawTags = evt.data.tags
-          pendingApproval.value = {
+          const approval: PendingApproval = {
             approvalId: (evt.data.approval_id as string) || '',
             taskId: evt.task_id,
             agentId: evt.agent_id || 'agent_default',
@@ -602,12 +622,25 @@ export function useTaskStore() {
             reason: (evt.data.reason as string) || 'Policy block',
             input: (evt.data.input as Record<string, any>) || {},
           }
-          // F6: 启动 28s 超时倒计时，到期自动 deny + toast
-          startApprovalTimer(
-            pendingApproval.value.approvalId,
-            pendingApproval.value.taskId,
-            pendingApproval.value.agentId,
-          )
+          if (shouldAutoApprove(approval)) {
+            // Auto-approve low-risk policy requests immediately.
+            if (sendControlFn) {
+              sendControlFn({
+                action: 'approve',
+                task_id: approval.taskId,
+                agent_id: approval.agentId,
+                approval_id: approval.approvalId,
+              })
+            }
+          } else {
+            pendingApproval.value = approval
+            // F6: 启动 28s 超时倒计时，到期自动 deny + toast
+            startApprovalTimer(
+              pendingApproval.value.approvalId,
+              pendingApproval.value.taskId,
+              pendingApproval.value.agentId,
+            )
+          }
         } else if (infoType === 'tool_visibility') {
           const v = evt.data as unknown as ToolVisibilityData
           const task = taskCache.value[evt.task_id]

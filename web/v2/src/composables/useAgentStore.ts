@@ -41,6 +41,18 @@ export interface AgentRequest {
   api_endpoint: string
   api_key: string
   tools: string[]
+  config: {
+    permissions: AgentPermissions
+  }
+}
+
+// AgentPermissions mirrors backend TaskPermissions
+export interface AgentPermissions {
+  allow_network: boolean
+  allow_file_write: boolean
+  allow_file_delete: boolean
+  allow_shell: boolean
+  allow_shell_dangerous: boolean
 }
 
 // Default values for a new agent form
@@ -55,6 +67,15 @@ export function defaultAgentRequest(): AgentRequest {
     api_endpoint: '',
     api_key: '',
     tools: [],
+    config: {
+      permissions: {
+        allow_network: false,
+        allow_file_write: false,
+        allow_file_delete: false,
+        allow_shell: false,
+        allow_shell_dangerous: false,
+      },
+    },
   }
 }
 

@@ -11,6 +11,30 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest, type ToolInfo } from '../composables/useAgentStore'
 
+// Permission definitions for UI: key maps to backend field name, label + risk shown to user
+interface PermissionDef {
+  key: keyof AgentRequest['config']['permissions']
+  label: string
+  risk: 'low' | 'medium' | 'high'
+  description: string
+}
+
+const PERMISSIONS: PermissionDef[] = [
+  { key: 'allow_network', label: 'Allow Network', risk: 'low', description: 'HTTP requests via web_search / web_research / MCP' },
+  { key: 'allow_file_write', label: 'Allow File Write', risk: 'low', description: 'Create or overwrite files in the workspace' },
+  { key: 'allow_file_delete', label: 'Allow File Delete', risk: 'medium', description: 'Delete files in the workspace' },
+  { key: 'allow_shell', label: 'Allow Shell', risk: 'medium', description: 'Execute shell commands' },
+  { key: 'allow_shell_dangerous', label: 'Allow Dangerous Shell', risk: 'high', description: 'Dangerous commands (e.g. rm -rf, force push)' },
+]
+
+const riskClass = (risk: PermissionDef['risk']) => {
+  switch (risk) {
+    case 'low': return 'risk-low'
+    case 'medium': return 'risk-medium'
+    case 'high': return 'risk-high'
+  }
+}
+
 const {
   agents,
   availableTools,
@@ -91,6 +115,7 @@ function openCreate() {
 /** Open the form for editing an existing agent */
 function openEdit(agent: AgentRecord) {
   editingId.value = agent.id
+  const perms = agent.config?.permissions as Record<string, boolean> | undefined
   form.value = {
     name: agent.name,
     description: agent.description || '',
@@ -101,6 +126,15 @@ function openEdit(agent: AgentRecord) {
     api_endpoint: agent.api_endpoint || '',
     api_key: agent.api_key || '',
     tools: agent.tools ? [...agent.tools] : [],
+    config: {
+      permissions: {
+        allow_network: perms?.allow_network ?? false,
+        allow_file_write: perms?.allow_file_write ?? false,
+        allow_file_delete: perms?.allow_file_delete ?? false,
+        allow_shell: perms?.allow_shell ?? false,
+        allow_shell_dangerous: perms?.allow_shell_dangerous ?? false,
+      },
+    },
   }
   formError.value = null
   showForm.value = true
@@ -396,6 +430,33 @@ function formatDate(iso: string): string {
             </button>
             <div v-if="testResult" :class="['test-result', testResult.ok ? 'test-success' : 'test-fail']">
               {{ testResult.message }}
+            </div>
+          </div>
+
+          <!-- Permissions -->
+          <div class="form-group">
+            <label class="form-label">Default Permissions</label>
+            <div class="permissions-help">
+              Permissions are OR-merged on top of case/request-level permissions.
+              They cannot revoke an already-granted permission.
+            </div>
+            <div class="permissions-list">
+              <label
+                v-for="perm in PERMISSIONS"
+                :key="perm.key"
+                class="permission-checkbox"
+                :title="perm.description"
+              >
+                <input
+                  type="checkbox"
+                  v-model="form.config.permissions[perm.key]"
+                />
+                <div class="permission-meta">
+                  <span class="permission-label">{{ perm.label }}</span>
+                  <span class="permission-desc">{{ perm.description }}</span>
+                  <span class="permission-risk" :class="riskClass(perm.risk)">{{ perm.risk }} risk</span>
+                </div>
+              </label>
             </div>
           </div>
 
