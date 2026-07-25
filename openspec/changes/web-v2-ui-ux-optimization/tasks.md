@@ -55,9 +55,9 @@
 
 ## 8. Theme Cleanup
 
-- [ ] 8.1 Add theme-derived overlay/glass tokens (`--overlay-bg`, `--panel-gradient-top`, `--glass-bg`) to `themes.css`.
-- [ ] 8.2 Replace hard-coded `rgba()` values in `ContextWindowPanel.vue` with new theme tokens.
-- [ ] 8.3 Replace hard-coded hex values in `KeyboardTips.vue` with existing theme tokens.
+- [x] 8.1 Add theme-derived overlay/glass tokens (`--overlay-bg`, `--panel-gradient-top`, `--glass-bg`) to `themes.css`.
+- [x] 8.2 Replace hard-coded `rgba()` values in `ContextWindowPanel.vue` with new theme tokens.
+- [x] 8.3 Replace hard-coded hex values in `KeyboardTips.vue` with existing theme tokens.
 - [ ] 8.4 Choose icon library (recommend Phosphor) and add it to `package.json` / dependencies.
 - [ ] 8.5 Replace emoji-only buttons in `TopBar.vue` and `CommandBar.vue` with SVG icons from the chosen library, preserving `aria-label`.
 - [ ] 8.6 Fix `ContextFlyout.vue` resize cursor: use `ew-resize` for width handle, `ns-resize` for height handle, remove global `*` override.

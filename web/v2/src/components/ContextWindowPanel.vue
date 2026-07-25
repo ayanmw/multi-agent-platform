@@ -392,18 +392,17 @@ const ringDash = computed(() => {
    Context Window Panel — Laboratory telemetry theme
    =================================================== */
 .context-panel {
-
-  height:100%;
-  display:flex;
-  flex-direction:column;
-  gap:1.125rem;
-  padding:1.375rem 1.625rem 1.625rem;
-  overflow:hidden;
-  background:radial-gradient(circle at 20% 0%, rgba(74, 158, 255, 0.06), transparent 35%),
-    radial-gradient(circle at 80% 100%, rgba(64, 211, 134, 0.04), transparent 30%),
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.125rem;
+  padding: 1.375rem 1.625rem 1.625rem;
+  overflow: hidden;
+  background: radial-gradient(circle at 20% 0%, var(--panel-gradient-top), transparent 35%),
+    radial-gradient(circle at 80% 100%, var(--panel-gradient-bottom), transparent 30%),
     var(--bg-canvas);
-  color:var(--text-primary);
-  font-family:var(--font-display, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  color: var(--text-primary);
+  font-family: var(--font-display, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
 }
 
 /* Header */
@@ -461,9 +460,9 @@ const ringDash = computed(() => {
 }
 
 .refresh-btn:hover:not(:disabled) {
-  background:rgba(255, 255, 255, 0.09);
-  color:var(--text-primary);
-  border-color:rgba(255, 255, 255, 0.16);
+  background: var(--border-subtle);
+  color: var(--text-primary);
+  border-color: var(--border-default);
 }
 
 .refresh-btn:disabled {
@@ -477,12 +476,12 @@ const ringDash = computed(() => {
 }
 
 .refresh-spinner {
-  width:0.875rem;
-  height:0.875rem;
-  border:2px solid rgba(255, 255, 255, 0.18);
-  border-top-color:var(--text-primary);
-  border-radius:50%;
-  animation:spin 0.9s linear infinite;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
 }
 
 @keyframes spin {
@@ -528,12 +527,12 @@ const ringDash = computed(() => {
 
 /* Glass card utility */
 .glass-card {
-  background:rgba(255, 255, 255, 0.025);
-  border:1px solid var(--border-default);
+  background: var(--glass-bg);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding:1.125rem;
-  backdrop-filter:blur(0.625rem);
-  box-shadow:0 1px 0 transparent inset,
+  padding: 1.125rem;
+  backdrop-filter: blur(0.625rem);
+  box-shadow: 0 1px 0 transparent inset,
     0 0.625rem 1.875rem rgba(0, 0, 0, 0.25);
 }
 
@@ -599,9 +598,9 @@ const ringDash = computed(() => {
   transition:stroke-dasharray 0.6s ease;
 }
 
-.ring-fill.ok { stroke:var(--accent-success); filter:drop-shadow(0 0 0.375rem rgba(64, 211, 134, 0.35)); }
-.ring-fill.warn { stroke:var(--accent-warning); filter:drop-shadow(0 0 0.375rem rgba(242, 184, 75, 0.35)); }
-.ring-fill.critical { stroke:var(--accent-danger); filter:drop-shadow(0 0 0.375rem rgba(255, 92, 92, 0.35)); }
+.ring-fill.ok { stroke: var(--accent-success); filter: drop-shadow(0 0 0.375rem var(--accent-success)); }
+.ring-fill.warn { stroke: var(--accent-warning); filter: drop-shadow(0 0 0.375rem var(--accent-warning)); }
+.ring-fill.critical { stroke: var(--accent-danger); filter: drop-shadow(0 0 0.375rem var(--accent-danger)); }
 
 .ring-center {
   position:absolute;
@@ -861,11 +860,11 @@ const ringDash = computed(() => {
 
 /* Prompt 详情弹窗 */
 .prompt-dialog-overlay {
-  position:fixed;
-  inset:0;
-  background:rgba(0, 0, 0, 0.72);
-  backdrop-filter:blur(3px);
-  z-index:210;
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(3px);
+  z-index: 210;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -975,8 +974,8 @@ const ringDash = computed(() => {
 }
 
 .reasoning-block {
-  background:rgba(155, 89, 255, 0.055);
-  border:1px solid rgba(155, 89, 255, 0.14);
+  background: var(--glass-bg);
+  border: 1px solid var(--border-default);
 }
 
 .content-block {

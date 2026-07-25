@@ -44,6 +44,12 @@ html[data-theme="obsidian"] {
 
   /* 聚焦光环 */
   --glow-focus: rgba(0, 229, 255, 0.08);
+
+  /* 遮罩/玻璃效果通用 token（在深色主题上作为轻量叠加层） */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --panel-gradient-top: rgba(74, 158, 255, 0.06);
+  --panel-gradient-bottom: rgba(64, 211, 134, 0.04);
+  --glass-bg: rgba(17, 20, 26, 0.72);
 }
 
 /* ---------- Modular Terminal 主题 ---------- */
@@ -82,6 +88,12 @@ html[data-theme="terminal"] {
 
   /* 聚焦光环 */
   --glow-focus: rgba(57, 255, 20, 0.1);
+
+  /* 遮罩/玻璃效果通用 token（终端主题使用更偏绿的微透叠加） */
+  --overlay-bg: rgba(0, 0, 0, 0.55);
+  --panel-gradient-top: rgba(90, 210, 100, 0.07);
+  --panel-gradient-bottom: rgba(80, 220, 120, 0.05);
+  --glass-bg: rgba(21, 26, 18, 0.75);
 }
 
 /* ---------- Amber CRT 主题 ---------- */
@@ -111,6 +123,12 @@ html[data-theme="amber"] {
   --text-on-accent: #0f0c06;
   --bg-code: #0c0a05;
   --glow-focus: rgba(255, 176, 0, 0.1);
+
+  /* 遮罩/玻璃效果通用 token（琥珀主题使用暖色微透叠加） */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --panel-gradient-top: rgba(255, 176, 0, 0.06);
+  --panel-gradient-bottom: rgba(255, 120, 0, 0.04);
+  --glass-bg: rgba(28, 23, 11, 0.72);
 }
 
 /* ---------- Dusk 暮光洋红 主题 ---------- */
@@ -140,6 +158,12 @@ html[data-theme="dusk"] {
   --text-on-accent: #0a040f;
   --bg-code: #09040d;
   --glow-focus: rgba(255, 105, 235, 0.12);
+
+  /* 遮罩/玻璃效果通用 token（暮光主题偏紫粉微透叠加） */
+  --overlay-bg: rgba(0, 0, 0, 0.48);
+  --panel-gradient-top: rgba(180, 80, 200, 0.08);
+  --panel-gradient-bottom: rgba(220, 60, 170, 0.05);
+  --glass-bg: rgba(22, 13, 31, 0.75);
 }
 
 /* ---------- Solar 日光纸业 主题（亮色） ---------- */
@@ -169,6 +193,12 @@ html[data-theme="solar"] {
   --text-on-accent: #ffffff;
   --bg-code: #f0ede4;
   --glow-focus: rgba(220, 80, 40, 0.12);
+
+  /* 遮罩/玻璃效果通用 token（亮色主题需要更深的遮罩保证对比） */
+  --overlay-bg: rgba(0, 0, 0, 0.55);
+  --panel-gradient-top: rgba(210, 75, 40, 0.06);
+  --panel-gradient-bottom: rgba(220, 120, 60, 0.04);
+  --glass-bg: rgba(255, 255, 255, 0.82);
 }
 
 /* ---------- Ice 极地冰川 主题 ---------- */
@@ -198,4 +228,10 @@ html[data-theme="ice"] {
   --text-on-accent: #02060b;
   --bg-code: #050a12;
   --glow-focus: rgba(110, 200, 255, 0.12);
+
+  /* 遮罩/玻璃效果通用 token（冰川主题使用冷色微透叠加） */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --panel-gradient-top: rgba(80, 170, 240, 0.07);
+  --panel-gradient-bottom: rgba(60, 200, 210, 0.05);
+  --glass-bg: rgba(13, 23, 36, 0.76);
 }

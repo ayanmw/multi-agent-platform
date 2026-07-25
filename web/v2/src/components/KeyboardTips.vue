@@ -63,7 +63,7 @@ defineEmits<{
 .tips-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--overlay-bg);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -73,8 +73,8 @@ defineEmits<{
 }
 
 .tips-panel {
-  background: #252525;
-  border: 1px solid #444;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   max-width: 440px;
   width: 100%;
@@ -86,20 +86,20 @@ defineEmits<{
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .tips-header h2 {
   font-size: 16px;
   font-weight: 600;
-  color: #e0e0e0;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .tips-close-btn {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
@@ -108,8 +108,8 @@ defineEmits<{
 }
 
 .tips-close-btn:hover {
-  color: #fff;
-  background: #333;
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .tips-body {
@@ -122,10 +122,11 @@ defineEmits<{
   gap: 8px;
   margin-bottom: 16px;
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
   padding: 8px 12px;
-  background: #1e1e1e;
+  background: var(--bg-canvas);
   border-radius: 6px;
+  border: 1px solid var(--border-default);
 }
 
 .tips-status-dot {
@@ -136,11 +137,11 @@ defineEmits<{
 }
 
 .tips-status-dot.running {
-  background: #51cf66;
+  background: var(--accent-success);
 }
 
 .tips-status-dot.idle {
-  background: #888;
+  background: var(--text-muted);
 }
 
 .tips-list {
@@ -154,9 +155,9 @@ defineEmits<{
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background: #1e1e1e;
+  background: var(--bg-canvas);
   border-radius: 6px;
-  border: 1px solid #333;
+  border: 1px solid var(--border-default);
 }
 
 .tips-item.tips-disabled {
@@ -167,11 +168,11 @@ defineEmits<{
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
   font-weight: 600;
-  color: #4a9eff;
-  background: #1a2a3a;
+  color: var(--accent-info);
+  background: var(--bg-panel);
   padding: 2px 8px;
   border-radius: 4px;
-  border: 1px solid #2a3a4a;
+  border: 1px solid var(--border-default);
   white-space: nowrap;
   min-width: 90px;
   text-align: center;
@@ -180,28 +181,28 @@ defineEmits<{
 .tips-desc {
   flex: 1;
   font-size: 13px;
-  color: #d4d4d4;
+  color: var(--text-primary);
 }
 
 .tips-active {
   font-size: 10px;
-  color: #888;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
 .tips-footer {
   padding: 12px 20px;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border-default);
   font-size: 12px;
-  color: #888;
+  color: var(--text-muted);
   text-align: center;
 }
 
 .tips-footer kbd {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 11px;
-  color: #4a9eff;
-  background: #333;
+  color: var(--accent-info);
+  background: var(--bg-hover);
   padding: 1px 6px;
   border-radius: 3px;
 }
