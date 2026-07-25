@@ -24,6 +24,7 @@ const tabs = [
   { id: 'rag', label: 'RAG' },
   { id: 'todos', label: 'TODOs' },
   { id: 'context', label: 'Context' },
+  { id: 'routing', label: 'Routing' },
   { id: 'cases', label: 'Cases' },
   { id: 'agents', label: 'Agents' },
   { id: 'project', label: 'Project' },

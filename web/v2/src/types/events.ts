@@ -68,9 +68,12 @@ export type EventType =
   | 'cron_execution_skipped'
   | 'cron_missed'
   | 'cron_notification'
-  // web_research tool events
-  | 'web_research_summarize_started'
-  | 'web_research_summarize_completed'
+  // Multi-model layered routing events (Phase multi-model-routing P2)
+  | 'model_routed'
+  | 'intent_classified'
+  | 'model_fallback_used'
+  | 'model_rate_limited'
+  | 'cost_budget_exceeded'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

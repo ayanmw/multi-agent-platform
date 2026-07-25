@@ -11,6 +11,7 @@ import CaseForm from './CaseForm.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import RAGPreviewPanel from './RAGPreviewPanel.vue'
 import ContextWindowPanel from './ContextWindowPanel.vue'
+import RoutingPanel from './RoutingPanel.vue'
 import AgentConfig from './AgentConfig.vue'
 import ProjectConfig from './ProjectConfig.vue'
 import { useCaseStore } from '@/composables/useCaseStore'
@@ -195,6 +196,10 @@ function handleMemorySelect(id: string) {
           </select>
         </div>
         <ContextWindowPanel :active-task-id="activeTaskId ?? ''" :sub-task-id="selectedSubTaskId" />
+      </div>
+
+      <div v-else-if="activeTab === 'routing'" class="tab-pane">
+        <RoutingPanel :task-id="activeTaskId ?? ''" />
       </div>
 
       <div v-else-if="activeTab === 'cases'" class="tab-pane">
