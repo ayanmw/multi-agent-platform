@@ -18,6 +18,10 @@ import (
 type ExecuteContext struct {
 	Workdir string
 
+	// Ctx 允许外部调用方传入带超时的 context，工具执行体应检查 ctx.Done()。
+	// 可能为 nil，调用方应先判断再使用。
+	Ctx context.Context
+
 	// 当前 tool 调用所属的任务/Agent/Step 身份,用于事件与日志。
 	TaskID    string
 	AgentID   string

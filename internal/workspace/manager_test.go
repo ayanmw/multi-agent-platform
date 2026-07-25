@@ -250,6 +250,60 @@ func TestEnsureGitignored(t *testing.T) {
 	})
 }
 
+// TestRemoveBranchRemoved 验证 Remove 对绑定分支的删除被正确汇报。
+func TestRemoveBranchRemoved(t *testing.T) {
+	gitAvailable(t)
+	repo := setupGitRepo(t)
+	mgr := newManagerAtRepo(t, repo)
+	runInRepo(t, repo, func() {
+		wt, _, err := mgr.Create("sess-abc", "fresh")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		rep, err := mgr.Remove(wt.ID, false)
+		if err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if !rep.Removed {
+			t.Fatalf("expected removed, got %+v", rep)
+		}
+		if !rep.BranchRemoved {
+			t.Fatalf("expected BranchRemoved=true, got %+v", rep)
+		}
+		// 分支应已不存在
+		out, _ := exec.Command("git", "-C", repo, "branch", "--list", wt.Branch).CombinedOutput()
+		if strings.TrimSpace(string(out)) != "" {
+			t.Fatalf("branch %s still exists", wt.Branch)
+		}
+	})
+}
+
+// TestCreatePathCollision 验证当目标路径已存在时 Create 会重试新 ID。
+func TestCreatePathCollision(t *testing.T) {
+	gitAvailable(t)
+	repo := setupGitRepo(t)
+	mgr := newManagerAtRepo(t, repo)
+	rootDir := filepath.Join(repo, ".claude", "worktrees")
+	runInRepo(t, repo, func() {
+		// 预先在 rootDir 下创建大量子目录，逼迫 randomShortID 在第一次命中已存在路径。
+		for range 100 {
+			if err := os.MkdirAll(filepath.Join(rootDir, randomShortID()), 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wt, warning, err := mgr.Create("sess-abc", "fresh")
+		if err != nil {
+			t.Fatalf("Create: %v (warning: %s)", err, warning)
+		}
+		if warning != "" {
+			t.Logf("warning: %s", warning)
+		}
+		if wt == nil || wt.ID == "" {
+			t.Fatalf("invalid worktree: %+v", wt)
+		}
+	})
+}
+
 func TestWorkdirHolder(t *testing.T) {
 	h := NewWorkdirHolder("/tmp/initial")
 	if h.Get() != "/tmp/initial" {

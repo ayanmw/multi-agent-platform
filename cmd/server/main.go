@@ -874,6 +874,7 @@ func main() {
 			Tools:               toolRegistry,
 			AllowedTools:        cfg.CronAllowedTools,
 			WebhookTimeout:      time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
+			ScriptActionTimeout: time.Duration(cfg.CronScriptActionTimeoutSeconds) * time.Second,
 			MaxResultChars:      cfg.CronMaxResultChars,
 			Bus:                 bus,
 			StartTask:           cronStarter.Start,

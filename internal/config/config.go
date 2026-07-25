@@ -57,12 +57,14 @@ type Config struct {
 	// CronEnabled 总开关，false 时 scheduler 不启动（仍可通过 REST/API 创建 cron，只是不会自动触发）。
 	// CronAllowedTools 限制 script action 可调用的 tool 名白名单，复用现有 run_shell 等 tool 的 sandbox/policy。
 	// CronWebhookTimeoutSeconds webhook action 的 HTTP 超时。
+	// CronScriptActionTimeoutSeconds script action 单条 tool 调用的超时。
 	// CronMaxResultChars execution.result_summary 的截断长度，避免长结果撑爆存储与前端。
-	CronEnabled                bool
-	CronAllowedTools           []string
-	CronWebhookTimeoutSeconds  int
-	CronMaxResultChars         int
-	CronWebhookAllowPrivate    bool // CRON_WEBHOOK_ALLOW_PRIVATE=true 时允许 webhook 访问 loopback/私有地址
+	CronEnabled                    bool
+	CronAllowedTools               []string
+	CronWebhookTimeoutSeconds      int
+	CronScriptActionTimeoutSeconds int // 默认 30
+	CronMaxResultChars             int
+	CronWebhookAllowPrivate        bool // CRON_WEBHOOK_ALLOW_PRIVATE=true 时允许 webhook 访问 loopback/私有地址
 
 	// Workspace worktree 隔离配置。
 	// WorktreeEnabled 总开关，默认 true：worktree 是主动触发的叠加能力，
@@ -221,6 +223,7 @@ func Load() (*Config, error) {
 		cfg.CronAllowedTools = splitAndTrim(v)
 	}
 	cfg.CronWebhookTimeoutSeconds = parseEnvIntDefault("CRON_WEBHOOK_TIMEOUT_SECONDS", 10)
+	cfg.CronScriptActionTimeoutSeconds = parseEnvIntDefault("CRON_SCRIPT_ACTION_TIMEOUT_SECONDS", 30)
 	cfg.CronMaxResultChars = parseEnvIntDefault("CRON_MAX_EXECUTION_RESULT_CHARS", 2000)
 	if v := os.Getenv("CRON_WEBHOOK_ALLOW_PRIVATE"); v != "" {
 		cfg.CronWebhookAllowPrivate = strings.EqualFold(v, "true") || v == "1"
