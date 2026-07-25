@@ -173,8 +173,16 @@ type RouteDecision struct {
 // 每次 Select 调用相互独立。
 type Router struct {
 	registry    *ModelRegistry
-	classifier  Provider    // 用于 intent 分类的便宜 model
-	rateLimiter *RateLimiter // 可选；非 nil 时按模型 RPM 过滤候选
+	classifier  Provider       // 用于 intent 分类的便宜 model
+	rateLimiter *RateLimiter   // 可选；非 nil 时按模型 RPM 过滤候选
+	broadcaster EventBroadcaster // 可选；路由事件广播器
+	taskID      string           // 事件 task_id
+	agentID     string           // 事件 agent_id
+}
+
+// EventBroadcaster 是 Router 用来广播路由相关事件的最小接口。
+type EventBroadcaster interface {
+	SendEvent(eventType string, data map[string]any)
 }
 
 // NewRouter 以给定的 model registry 与分类器创建新的 Router。
@@ -190,6 +198,21 @@ func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLi
 		classifier:  classifier,
 		rateLimiter: rateLimiter,
 	}
+}
+
+// SetBroadcaster 配置 Router 的事件广播器与身份标识，供外部注入。
+func (r *Router) SetBroadcaster(b EventBroadcaster, taskID, agentID string) {
+	r.broadcaster = b
+	r.taskID = taskID
+	r.agentID = agentID
+}
+
+// emit 在 broadcaster 存在时发送路由事件。
+func (r *Router) emit(eventType string, data map[string]any) {
+	if r.broadcaster == nil {
+		return
+	}
+	r.broadcaster.SendEvent(eventType, data)
 }
 
 // Select 为给定请求选择最合适的 model。
@@ -210,6 +233,16 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 		// 分类器失败 —— 回退到基于关键字的分类
 		intentClass = r.keywordClassify(req.UserInput)
 	}
+
+	// 广播 intent 分类完成事件，让前端 Inspector 看到分类结果（白盒）。
+	r.emit("intent_classified", map[string]any{
+		"primary_intent":    intentClass.PrimaryIntent,
+		"secondary_intents": intentClass.SecondaryIntents,
+		"confidence":        intentClass.Confidence,
+		"needs_tools":       intentClass.NeedsTools,
+		"estimated_steps":   intentClass.EstimatedSteps,
+		"source":            "classifier",
+	})
 
 	// Step 2：把 intent 映射到目标层级，并考虑角色 override 与 PreferredTier
 	targetTier := r.resolveTargetTier(req, intentClass)
@@ -519,11 +552,21 @@ func (r *Router) pickCheaperModel(primary *ModelProfile, req *RouteRequest, maxT
 }
 
 // isRateLimited 检查模型是否触发 RPM 限流。未配置限流器时返回 false。
+// 当模型被限流时，广播 model_rate_limited 事件，让前端 Inspector 看到被
+// 过滤原因（白盒透明）。
 func (r *Router) isRateLimited(m *ModelProfile) bool {
 	if r.rateLimiter == nil {
 		return false
 	}
-	return r.rateLimiter.IsLimitExceeded(m.Name)
+	exceeded := r.rateLimiter.IsLimitExceeded(m.Name)
+	if exceeded {
+		r.emit("model_rate_limited", map[string]any{
+			"model": m.Name,
+			"tier":  m.Tier.String(),
+			"reason": "RPM limit exceeded in sliding window",
+		})
+	}
+	return exceeded
 }
 
 // buildReason 构造人类可读的路由决策说明。
