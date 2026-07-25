@@ -395,6 +395,12 @@ func main() {
 		if svcErr != nil {
 			observability.DefaultLogger.Warn("cases", "failed to initialize case service", map[string]any{"error": svcErr.Error()})
 		}
+
+		// 服务启动扫尾：把上次进程崩溃/重启后遗留在 DB 中的 running task
+		// 标记为 failed。这些任务在内存中的 cancel/engine 注册表已随旧进程
+		// 消失，前端取消按钮无法定位它们；若不修复，session 状态将持续为
+		// running 并禁用 CommandBar 输入框。
+		repairStaleRunningTasks()
 	}
 
 	// 初始化 Memory 基础设施 —— Heartbeat 负责事件片段汇总
@@ -1159,6 +1165,47 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// repairStaleRunningTasks 在启动时修复崩溃遗留的 running task。
+//
+// cancelRegistry/engineRegistry 是内存结构，server 重启后为空；如果 DB 里存在
+// 上次进程崩溃时未完成的 'running' task，deriveSessionStatus 会一直返回 running，
+// 导致前端 CommandBar 被永久禁用。本函数把这些 task 标记为 failed，并重新计算
+// 受影响 session 的状态。
+func repairStaleRunningTasks() {
+	tasks, err := db.QueryTasksByStatus("running")
+	if err != nil {
+		log.Printf("[repair] 查询 running task 失败: %v", err)
+		return
+	}
+	if len(tasks) == 0 {
+		log.Println("[repair] 无遗留 running task")
+		return
+	}
+
+	affected := make(map[string]struct{})
+	repaired := 0
+	for _, t := range tasks {
+		if err := db.UpdateTask(t.ID, "failed", "server_restarted", 0); err != nil {
+			log.Printf("[repair] 修复 task %s 失败: %v", t.ID, err)
+			continue
+		}
+		repaired++
+		if t.SessionID != "" {
+			affected[t.SessionID] = struct{}{}
+		}
+	}
+
+	// 重新计算受影响 session 的状态，使其从 running 中恢复。
+	for sessionID := range affected {
+		newStatus := deriveSessionStatus(sessionID)
+		if err := db.UpdateSessionStatus(sessionID, newStatus); err != nil {
+			log.Printf("[repair] 更新 session %s 状态失败: %v", sessionID, err)
+		}
+	}
+
+	log.Printf("[repair] 共发现 %d 个 running task，已修复 %d 个，影响 %d 个 session", len(tasks), repaired, len(affected))
 }
 
 // seedDefaultAdminIfNeeded 在数据库中不存在任何用户时创建一个默认 admin

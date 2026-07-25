@@ -416,6 +416,36 @@ func InsertConversation(id, taskID, role, content string) error {
 	return err
 }
 
+// QueryTasksByStatus 按状态查询 task。用于启动扫尾：找出进程重启后
+// 仍停留在 running 的遗留任务。
+func QueryTasksByStatus(status string) ([]TaskRecord, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(
+		`SELECT id, user_input, status, agent_ids, COALESCE(final_result,''), COALESCE(total_tokens,0), COALESCE(duration_ms,0), started_at, completed_at, session_id, parent_task_id, is_root
+		 FROM tasks WHERE status=? ORDER BY started_at ASC`, status,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []TaskRecord
+	for rows.Next() {
+		var t TaskRecord
+		var agentIDsJSON string
+		var completedAt *time.Time
+		if err := rows.Scan(&t.ID, &t.UserInput, &t.Status, &agentIDsJSON, &t.FinalResult, &t.TotalTokens, &t.DurationMs, &t.StartedAt, &t.CompletedAt, &t.SessionID, &t.ParentTaskID, &t.IsRoot); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(agentIDsJSON), &t.AgentIDs)
+		t.CompletedAt = completedAt
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
 // QueryTasks 列出近期的 task（最新优先），按 limit 截断
 func QueryTasks(limit int) ([]TaskRecord, error) {
 	if DB == nil {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/harness"
 	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
+	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
 func TestIsAllowedScope(t *testing.T) {
@@ -67,5 +69,76 @@ func TestDefaultContractIncludesDefaultScope(t *testing.T) {
 	c := harness.DefaultContract("hello")
 	if c.Scope != "." {
 		t.Errorf("DefaultContract Scope = %q, want '.'", c.Scope)
+	}
+}
+
+func TestRepairStaleRunningTasks(t *testing.T) {
+	if err := db.Init(":memory:"); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+	defer func() {
+		if db.DB != nil {
+			db.DB.Close()
+			db.DB = nil
+		}
+	}()
+
+	now := time.Now()
+	sessionID := "sess_repair_1"
+	if err := db.InsertSession(db.SessionRecord{
+		ID:        sessionID,
+		Name:      "repair-test",
+		Status:    "running",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	runningTaskID := "task_repair_running"
+	completedTaskID := "task_repair_completed"
+	if err := db.InsertTask(db.TaskRecord{
+		ID:        runningTaskID,
+		UserInput: "running",
+		Status:    "running",
+		SessionID: sessionID,
+		StartedAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("insert running task: %v", err)
+	}
+	if err := db.InsertTask(db.TaskRecord{
+		ID:        completedTaskID,
+		UserInput: "done",
+		Status:    "completed",
+		SessionID: sessionID,
+		StartedAt: now,
+	}); err != nil {
+		t.Fatalf("insert completed task: %v", err)
+	}
+
+	repairStaleRunningTasks()
+
+	runningTask, err := db.QueryTaskByID(runningTaskID)
+	if err != nil {
+		t.Fatalf("query running task: %v", err)
+	}
+	if runningTask.Status != "failed" || runningTask.FinalResult != "server_restarted" {
+		t.Errorf("running task status=%q final_result=%q, want failed/server_restarted", runningTask.Status, runningTask.FinalResult)
+	}
+
+	completedTask, err := db.QueryTaskByID(completedTaskID)
+	if err != nil {
+		t.Fatalf("query completed task: %v", err)
+	}
+	if completedTask.Status != "completed" {
+		t.Errorf("completed task status=%q, want completed", completedTask.Status)
+	}
+
+	sess, err := db.QuerySessionByID(sessionID)
+	if err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if sess.Status != "completed" {
+		t.Errorf("session status=%q, want completed", sess.Status)
 	}
 }
