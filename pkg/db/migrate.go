@@ -399,6 +399,20 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 			SQL: `CREATE INDEX IF NOT EXISTS idx_todos_parent_todo_id ON todos(parent_todo_id);
 CREATE INDEX IF NOT EXISTS idx_todos_priority_sort_order_created_at ON todos(priority DESC, sort_order ASC, created_at ASC);`,
 		},
+
+		// v29：为 agents 表新增模型绑定字段，支撑 Agent 级别的多模型路由偏好。
+		// 注：v26 已被 cron 子系统（crons / cron_executions 表）占用，
+		//     v27 已被 tools 子系统（v27 tools 表）占用，
+		//     v28 已被 workspace 子系统（sessions.active_worktree_id）占用，
+		// 因此将 agents 字段迁移从原 v26 重新编号为 v29，避免 migration 去重冲突。
+		{
+			Version:     29,
+			Description: "Add preferred_model, preferred_tier, allow_auto_route, max_cost_usd to agents table",
+			SQL: `ALTER TABLE agents ADD COLUMN preferred_model TEXT;
+ALTER TABLE agents ADD COLUMN preferred_tier TEXT;
+ALTER TABLE agents ADD COLUMN allow_auto_route BOOLEAN DEFAULT 1;
+ALTER TABLE agents ADD COLUMN max_cost_usd REAL DEFAULT 0;`,
+		},
 	})
 
 // deduplicateMigrations 按 version 去重，保留第一次出现的条目。

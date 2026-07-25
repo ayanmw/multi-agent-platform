@@ -28,6 +28,7 @@ package llm
 import (
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -72,6 +73,25 @@ func (t ModelTier) String() string {
 		return "premium"
 	default:
 		return "unknown"
+	}
+}
+
+// ParseTier 把字符串解析为 ModelTier。它忽略大小写和前后空白，
+// 非法字符串返回 -1。调用方通常按空字符串即"未指定"处理。
+func ParseTier(s string) ModelTier {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "free":
+		return TierFree
+	case "efficient":
+		return TierEfficient
+	case "lightweight":
+		return TierLightweight
+	case "standard":
+		return TierStandard
+	case "premium":
+		return TierPremium
+	default:
+		return ModelTier(-1)
 	}
 }
 
@@ -267,19 +287,97 @@ func (r *ModelRegistry) List() []*ModelProfile {
 // DefaultProfiles 返回一组合理的默认 model profile。
 // 在未提供配置时使用，保证系统对常见可用 model 开箱即用。
 //
-// 价格来源（核实过的官方价，USD per 1M tokens）：
-//   - deepseek-v4-flash: Input $0.14, Output $0.28
-//     (DeepSeek 官方 api-docs.deepseek.com/quick_start/pricing，cache-miss 输入价)
-//   - deepseek-v4-pro:   Input $0.435, Output $0.87
-//     (DeepSeek 官方价)
+// 价格来源（USD per 1M tokens）：
+//   - DeepSeek 官方定价
+//   - Anthropic Claude 4 系列官方定价（2026-07）
+//   - OpenAI GPT-5 系列官方定价（2026-07）
+//   - Google Gemini 3 系列官方定价（2026-07）
+//   - 本地/免费模型成本按 0 计算，仅作为上限参考
 //
 // 历史踩坑：早期版本 deepseek-v4-flash 的 OutputPrice 写成 0.29（笔误），
 // deepseek-v4-pro 的 InputPrice/OutputPrice 写成 1.71/3.43（错误），
 // 导致 /api/costs 的 CostCents 偏高或与官方价不符。已于 2026-07 修正为官方价。
 // "deepseek-v4-flash-local" 等本地等效模型由 main.go 克隆本表第 0 项（flash）
 // 改名注册，沿用 0.14/0.28 作为本地 API 的上界成本参考。
+//
+// 新增（2026-07-25）: 本次扩展补齐 TierFree/TierLightweight/TierStandard/TierPremium 全层，
+// 引入 Claude / GPT / Gemini / Qwen / GLM / Kimi / MiniMax / Step 等模型，
+// 为 multi-model 分层路由提供完整候选池。Fallback 链路优先指向同生态的低价模型或本地模型，
+// 保证任一付费 API 失败时任务仍可继续。
 func DefaultProfiles() []*ModelProfile {
 	return []*ModelProfile{
+		// ┌────────────────────────────────────────────┐
+		// │ TierFree —— 本地/免费模型，成本为 0，用于冷备  │
+		// └────────────────────────────────────────────┘
+		{
+			Name:             "deepseek-v4-flash-local",
+			Provider:         "deepseek",
+			Tier:             TierFree,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     0, // 本地无限制
+			FallbackModel:    "",
+			AvgLatencyMs:     1500,
+		},
+		{
+			Name:             "qwen3.5-122b-local",
+			Provider:         "openai",
+			Tier:             TierFree,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     0,
+			FallbackModel:    "",
+			AvgLatencyMs:     2000,
+		},
+		{
+			Name:             "glm-4.7-local",
+			Provider:         "openai",
+			Tier:             TierFree,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     0,
+			FallbackModel:    "",
+			AvgLatencyMs:     1800,
+		},
+		{
+			Name:             "kimi-k2.7-code-local",
+			Provider:         "openai",
+			Tier:             TierFree,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     0,
+			FallbackModel:    "",
+			AvgLatencyMs:     1800,
+		},
+		{
+			Name:             "minimax-m2.5",
+			Provider:         "openai",
+			Tier:             TierFree,
+			Capabilities:     []ModelCapability{CapStreaming, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 32000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     100,
+			FallbackModel:    "",
+			AvgLatencyMs:     2000,
+		},
+
+		// ┌────────────────────────────────────────────┐
+		// │ TierEfficient —— 低成本高吞吐               │
+		// └────────────────────────────────────────────┘
 		{
 			Name:             "deepseek-v4-flash",
 			Provider:         "deepseek",
@@ -290,9 +388,82 @@ func DefaultProfiles() []*ModelProfile {
 			MaxContextWindow: 128000,
 			MaxOutputTokens:  4096,
 			RateLimitRPM:     500,
-			FallbackModel:    "",
+			FallbackModel:    "deepseek-v4-flash-local",
 			AvgLatencyMs:     800,
 		},
+		{
+			Name:             "gpt-5.4-mini",
+			Provider:         "openai",
+			Tier:             TierEfficient,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.75,
+			OutputPrice:      4.5,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     300,
+			FallbackModel:    "deepseek-v4-flash",
+			AvgLatencyMs:     700,
+		},
+		{
+			Name:             "gemini-3-flash-preview",
+			Provider:         "gemini",
+			Tier:             TierEfficient,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.5,
+			OutputPrice:      3.0,
+			MaxContextWindow: 1000000,
+			MaxOutputTokens:  8192,
+			RateLimitRPM:     300,
+			FallbackModel:    "deepseek-v4-flash",
+			AvgLatencyMs:     900,
+		},
+		{
+			Name:             "gpt-5.4-nano",
+			Provider:         "openai",
+			Tier:             TierEfficient,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       0.2,
+			OutputPrice:      1.25,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  2048,
+			RateLimitRPM:     600,
+			FallbackModel:    "deepseek-v4-flash",
+			AvgLatencyMs:     500,
+		},
+		{
+			Name:             "step-3.7-flash",
+			Provider:         "openai",
+			Tier:             TierEfficient,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     100,
+			FallbackModel:    "deepseek-v4-flash",
+			AvgLatencyMs:     1200,
+		},
+
+		// ┌────────────────────────────────────────────┐
+		// │ TierLightweight —— 快速分类/路由             │
+		// └────────────────────────────────────────────┘
+		{
+			Name:             "claude-haiku-4-5",
+			Provider:         "anthropic",
+			Tier:             TierLightweight,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapJSONMode},
+			InputPrice:       1.0,
+			OutputPrice:      5.0,
+			MaxContextWindow: 200000,
+			MaxOutputTokens:  4096,
+			RateLimitRPM:     400,
+			FallbackModel:    "deepseek-v4-flash",
+			AvgLatencyMs:     600,
+		},
+
+		// ┌────────────────────────────────────────────┐
+		// │ TierStandard —— 主力 Agent 执行             │
+		// └────────────────────────────────────────────┘
 		{
 			Name:             "deepseek-v4-pro",
 			Provider:         "deepseek",
@@ -305,6 +476,114 @@ func DefaultProfiles() []*ModelProfile {
 			RateLimitRPM:     200,
 			FallbackModel:    "deepseek-v4-flash",
 			AvgLatencyMs:     1500,
+		},
+		{
+			Name:             "claude-sonnet-4-5",
+			Provider:         "anthropic",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       3.0,
+			OutputPrice:      15.0,
+			MaxContextWindow: 200000,
+			MaxOutputTokens:  8192,
+			RateLimitRPM:     200,
+			FallbackModel:    "deepseek-v4-pro",
+			AvgLatencyMs:     1200,
+		},
+		{
+			Name:             "claude-sonnet-4-6",
+			Provider:         "anthropic",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       3.0,
+			OutputPrice:      15.0,
+			MaxContextWindow: 200000,
+			MaxOutputTokens:  8192,
+			RateLimitRPM:     200,
+			FallbackModel:    "deepseek-v4-pro",
+			AvgLatencyMs:     1200,
+		},
+		{
+			Name:             "gpt-5.4",
+			Provider:         "openai",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       2.5,
+			OutputPrice:      15.0,
+			MaxContextWindow: 256000,
+			MaxOutputTokens:  16384,
+			RateLimitRPM:     200,
+			FallbackModel:    "deepseek-v4-pro",
+			AvgLatencyMs:     1100,
+		},
+		{
+			Name:             "gpt-5.3-codex",
+			Provider:         "openai",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       1.75,
+			OutputPrice:      14.0,
+			MaxContextWindow: 256000,
+			MaxOutputTokens:  16384,
+			RateLimitRPM:     200,
+			FallbackModel:    "deepseek-v4-pro",
+			AvgLatencyMs:     1100,
+		},
+		{
+			Name:             "gemini-3.1-pro-preview",
+			Provider:         "gemini",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       2.0,
+			OutputPrice:      12.0,
+			MaxContextWindow: 2000000,
+			MaxOutputTokens:  8192,
+			RateLimitRPM:     200,
+			FallbackModel:    "deepseek-v4-pro",
+			AvgLatencyMs:     1300,
+		},
+		{
+			Name:             "qwen3.5-397b",
+			Provider:         "openai",
+			Tier:             TierStandard,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       0.0,
+			OutputPrice:      0.0,
+			MaxContextWindow: 128000,
+			MaxOutputTokens:  8192,
+			RateLimitRPM:     100,
+			FallbackModel:    "qwen3.5-122b-local",
+			AvgLatencyMs:     2500,
+		},
+
+		// ┌────────────────────────────────────────────┐
+		// │ TierPremium —— 顶级推理 / 编排决策            │
+		// └────────────────────────────────────────────┘
+		{
+			Name:             "claude-opus-4-5",
+			Provider:         "anthropic",
+			Tier:             TierPremium,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       5.0,
+			OutputPrice:      25.0,
+			MaxContextWindow: 200000,
+			MaxOutputTokens:  16384,
+			RateLimitRPM:     120,
+			FallbackModel:    "claude-sonnet-4-6",
+			AvgLatencyMs:     2500,
+		},
+		{
+			Name:             "claude-opus-4-6",
+			Provider:         "anthropic",
+			Tier:             TierPremium,
+			Capabilities:     []ModelCapability{CapToolCalling, CapStreaming, CapReasoning, CapJSONMode},
+			InputPrice:       5.0,
+			OutputPrice:      25.0,
+			MaxContextWindow: 200000,
+			MaxOutputTokens:  16384,
+			RateLimitRPM:     120,
+			FallbackModel:    "claude-sonnet-4-6",
+			AvgLatencyMs:     2500,
 		},
 	}
 }

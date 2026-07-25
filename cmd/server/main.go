@@ -594,17 +594,83 @@ func main() {
 	}
 	var modelRouter *llm.Router
 	routerProviders := map[string]llm.Provider{}
+	rateLimiter := llm.NewRateLimiter()
 	if routerClassifier != nil {
-		// 把配置的默认 model 同时以 provider name 与 model name 两个 key
-		// 写入 provider 查找 map —— engine 会先通过 providers[profile.Provider]
-		// 解析选中的 profile，再回退到 providers[profile.Name]
-		// (engine.go:1141-1147)。
+		// 把配置中显式声明的 Models 注册为 provider 查找 map 的条目。
+		// key 同时包含 model name 与 provider name，使 engine.resolveProvider
+		// 先按 provider 命中、再按 model 命中（engine.go:1120-1131）。
+		for _, mc := range cfg.Models {
+			if mc.Provider == "" {
+				mc.Provider = "openai"
+			}
+			pc := llm.ProviderConfig{
+				Name:     mc.Provider,
+				Endpoint: mc.Endpoint,
+				APIKey:   mc.APIKey,
+				Model:    mc.Name,
+			}
+			// 未配置 endpoint/api_key 时回退到对应 provider 的全局默认值。
+			if pc.Endpoint == "" || pc.APIKey == "" {
+				endpoint, apiKey := defaultEndpointAndKeyForProvider(cfg, mc.Provider)
+				if pc.Endpoint == "" {
+					pc.Endpoint = endpoint
+				}
+				if pc.APIKey == "" {
+					pc.APIKey = apiKey
+				}
+			}
+			p, err := llm.NewProvider(pc)
+			if err != nil {
+				observability.DefaultLogger.Warn("router", "failed to create provider for configured model", map[string]any{
+					"model":    mc.Name,
+					"provider": mc.Provider,
+					"error":    err.Error(),
+				})
+				continue
+			}
+			routerProviders[mc.Name] = p
+			routerProviders[mc.Provider] = p
+		}
+
+		// 把默认模型（cfg.LLMModel）作为兜底条目注册。它既可能已被 cfg.Models
+		// 覆盖，也可能从未声明；这里确保它一定存在，使 legacy 路径命中。
 		if p, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, ""); err == nil {
 			routerProviders[cfg.LLMModel] = p
-			// DefaultProfiles 里的模型 provider 都是 "deepseek"；用同一个 key
-			// 注册同一个 provider，使 profile.Provider 查找能命中。
+			// DefaultProfiles 中大量模型标记 Provider="deepseek"，用同一个 key
+			// 注册可让按 provider 名查找命中（仅当未显式配置 "deepseek" model 时）。
 			routerProviders["deepseek"] = p
 		}
+
+		// P3-1: 为所有 DefaultProfiles 中的 tier 模型预注册 provider。
+		// 这样 Router 无论选中哪一层级（TierFree/Premium/...），engine 都能解析
+		// 到对应 provider，而不是落入兜底 OpenAIProvider 后可能因 endpoint
+		// 不匹配导致真实调用失败。
+		modelNamesFromModels := make(map[string]bool)
+		for _, mc := range cfg.Models {
+			modelNamesFromModels[mc.Name] = true
+		}
+		for _, profile := range llm.DefaultProfiles() {
+			if profile == nil || modelNamesFromModels[profile.Name] {
+				continue
+			}
+			pc := providerConfigForProfile(cfg, profile)
+			p, err := llm.NewProvider(pc)
+			if err != nil {
+				observability.DefaultLogger.Warn("router", "failed to create provider for default profile", map[string]any{
+					"model":    profile.Name,
+					"provider": profile.Provider,
+					"error":    err.Error(),
+				})
+				continue
+			}
+			routerProviders[profile.Name] = p
+			routerProviders[profile.Provider] = p
+		}
+		observability.DefaultLogger.Info("router", "pre-registered providers", map[string]any{
+			"provider_keys": len(routerProviders),
+			"models":        len(llm.DefaultProfiles()),
+		})
+
 		// 在 mock 模式下注册 classifier mock 脚本，使 classifyIntent
 		// 确定性地返回一个合法的 intent token。真实模式下该脚本不会被用到
 		// （真实 provider 不读 store）。
@@ -620,7 +686,7 @@ func main() {
 			}
 			_, _ = llm.DefaultMockStore.Save(clsScript)
 		}
-		modelRouter = llm.NewRouter(modelRegistry, routerClassifier)
+		modelRouter = llm.NewRouter(modelRegistry, routerClassifier, rateLimiter)
 		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
 	} else {
 		log.Printf("[Router] disabled (no classifier provider)")
@@ -1018,6 +1084,7 @@ func main() {
 		costRepo:         costRepo,
 		modelRegistry:    modelRegistry,
 		modelRouter:      modelRouter,
+		rateLimiter:      rateLimiter,
 		routerProviders:  routerProviders,
 		caseService:      caseService,
 		todoSvc:          todoSvc,
@@ -1102,6 +1169,42 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("Server exited")
+}
+
+// defaultEndpointAndKeyForProvider 返回指定 provider 在全局配置中的默认
+// endpoint 与 api key。用于把 cfg.Models 中缺省 endpoint/key 的条目补齐。
+func defaultEndpointAndKeyForProvider(cfg *config.Config, provider string) (endpoint, apiKey string) {
+	switch provider {
+	case "anthropic":
+		endpoint = cfg.AnthropicEndpoint
+		apiKey = cfg.AnthropicAPIKey
+	case "gemini":
+		endpoint = cfg.GeminiEndpoint
+		apiKey = cfg.GeminiAPIKey
+	default:
+		endpoint = cfg.LLMEndpoint
+		apiKey = cfg.LLMAPIKey
+	}
+	if endpoint == "" {
+		endpoint = cfg.LLMEndpoint
+	}
+	if apiKey == "" {
+		apiKey = cfg.LLMAPIKey
+	}
+	return
+}
+
+// providerConfigForProfile 根据 model profile 的 provider 字段选择全局配置中
+// 的 endpoint/key，并构造创建 provider 所需的 ProviderConfig。
+// 未知 provider 回退到 OpenAI-compatible 全局默认值。
+func providerConfigForProfile(cfg *config.Config, profile *llm.ModelProfile) llm.ProviderConfig {
+	endpoint, apiKey := defaultEndpointAndKeyForProvider(cfg, profile.Provider)
+	return llm.ProviderConfig{
+		Name:     profile.Provider,
+		Endpoint: endpoint,
+		APIKey:   apiKey,
+		Model:    profile.Name,
+	}
 }
 
 // streamTask 发射一组演示事件序列，模拟多步 agent 任务。

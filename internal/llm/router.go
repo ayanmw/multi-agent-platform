@@ -16,8 +16,12 @@
 //
 //	simple_chat       —— 简单问答、闲聊、信息查询、格式转换
 //	code_generation   —— 代码编写、调试、重构、代码评审
+//	code_execution    —— 运行 shell、测试、build、部署脚本
 //	complex_reasoning —— 多步推理、数学、逻辑、架构设计
 //	multi_step        —— 需要多次 tool call、多阶段执行
+//	rag_retrieval     —— 需要检索记忆/文档再回答
+//	web_search        —— 需要外部搜索/实时信息
+//	safety_sensitive  —— 涉及权限、敏感数据、审批、安全决策
 //
 // # 用法
 //
@@ -32,24 +36,57 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
-// IntentClassifierPrompt 是 Router 分类器使用的 system prompt，
-// 用于对用户请求分类。分类器应仅回复一个类别名，不返回其他内容。
-const IntentClassifierPrompt = `You are a request classifier. Classify the user's request into exactly one category.
-Respond with ONLY the category name, nothing else.
+// IntentClassifierPrompt 是 Router 分类器使用的 system prompt。
+// 分类器输出 JSON，包含主要意图、次要意图、置信度、可能需要的工具及估计步数。
+const IntentClassifierPrompt = `You are a request classifier. Classify the user's request into exactly one primary category and any secondary categories.
+Respond with ONLY a JSON object, no markdown, no explanation.
 
 Categories:
 - simple_chat: Simple Q&A, chitchat, information lookup, format conversion, greetings
 - code_generation: Code writing, debugging, refactoring, code review, testing
+- code_execution: Running shell commands, tests, build, deployment scripts
 - complex_reasoning: Multi-step reasoning, math problems, logic analysis, architecture design, planning
 - multi_step: Requires multiple tool calls, multi-stage execution, agent orchestration
+- rag_retrieval: Needs to search/retrieve memories or documents before answering
+- web_search: Needs external search or real-time information
+- safety_sensitive: Involves permissions, sensitive data, approvals, security decisions
+
+JSON schema:
+{
+  "primary_intent": "<category>",
+  "secondary_intents": ["<category>"],
+  "confidence": 0.92,
+  "needs_tools": ["tool_name"],
+  "estimated_steps": 3
+}
 
 Request: %s
-Category:`
+JSON:`
+
+// IntentClassification 是 Router 分类器返回的结构化结果。
+type IntentClassification struct {
+	// PrimaryIntent 是主要意图类别，决定目标 tier。
+	PrimaryIntent string `json:"primary_intent"`
+
+	// SecondaryIntents 是次要意图类别，用于微调路由决策。
+	SecondaryIntents []string `json:"secondary_intents"`
+
+	// Confidence 是分类置信度，范围 [0,1]。
+	Confidence float64 `json:"confidence"`
+
+	// NeedsTools 预测任务可能需要的 tool 名称列表。
+	NeedsTools []string `json:"needs_tools"`
+
+	// EstimatedSteps 估计完成任务需要的 ReAct 步数。
+	EstimatedSteps int `json:"estimated_steps"`
+}
 
 // RouteRequest 是 Router Select 方法的输入。
 // 它描述影响 model 选择的任务特征。
@@ -75,6 +112,18 @@ type RouteRequest struct {
 	// PreferredTier 是可选的层级偏好。若设置，Router 倾向
 	// 该层级的 model（但可能回退到相邻层级）。
 	PreferredTier ModelTier
+
+	// PreferredModel 是可选的具体模型名偏好。若设置且存在于 Registry，
+	// 则直接命中该模型，跳过自动选择。
+	PreferredModel string
+
+	// AllowCheapFirst 表示是否允许先尝试更便宜层级的模型。
+	// 当任务可接受质量略低时，先用低成本模型试跑可降低整体成本。
+	AllowCheapFirst bool
+
+	// AgentRole 表示发起请求的 agent 角色，例如 "leader" / "worker" / "validator"。
+	// Router 可据此做角色到 tier 的 override（如 leader 强制 TierPremium）。
+	AgentRole string
 }
 
 // RouteDecision 是 Router Select 方法的输出。
@@ -87,8 +136,11 @@ type RouteDecision struct {
 	// 未配置 fallback 时可能为 nil。
 	Fallback *ModelProfile
 
-	// Intent 是分类得到的 intent 类别。
+	// Intent 是分类得到的主要 intent 类别（向后兼容）。
 	Intent string
+
+	// IntentClass 是完整的分类结果，包含置信度、次要意图、工具预测与步数估计。
+	IntentClass IntentClassification
 
 	// Reason 是人类可读的路由决策说明。
 	// 它会显示在前端，体现"白盒"透明度。
@@ -96,6 +148,18 @@ type RouteDecision struct {
 
 	// Tier 是选中的 model 层级。
 	Tier ModelTier
+
+	// Confidence 是分类置信度，复制自 IntentClass.Confidence。
+	Confidence float64
+
+	// NeedsTools 预测任务可能需要的 tool 列表，复制自 IntentClass.NeedsTools。
+	NeedsTools []string
+
+	// EstimatedSteps 估计完成任务的 ReAct 步数，复制自 IntentClass.EstimatedSteps。
+	EstimatedSteps int
+
+	// CheapFirstAttempt 表示当前是否是先用便宜模型试跑的决策。
+	CheapFirstAttempt bool
 }
 
 // Router 为给定任务请求选择最合适的 model。
@@ -109,8 +173,22 @@ type RouteDecision struct {
 // Router 可安全并发使用 —— registry 是 goroutine 安全的，
 // 每次 Select 调用相互独立。
 type Router struct {
-	registry   *ModelRegistry
-	classifier Provider // 用于 intent 分类的便宜 model
+	registry    *ModelRegistry
+	classifier  Provider       // 用于 intent 分类的便宜 model
+	rateLimiter *RateLimiter   // 可选；非 nil 时按模型 RPM 过滤候选
+	broadcaster EventBroadcaster // 可选；路由事件广播器
+	taskID      string           // 事件 task_id
+	agentID     string           // 事件 agent_id
+
+	// emitted 记录每个事件类型已经广播过的 key，用于 deduplication。
+	// 当前仅对 intent_classified 去重，model_rate_limited 仍每次都广播。
+	emitted    map[string]bool
+	emittedMu  sync.Mutex
+}
+
+// EventBroadcaster 是 Router 用来广播路由相关事件的最小接口。
+type EventBroadcaster interface {
+	SendEvent(eventType string, data map[string]any)
 }
 
 // NewRouter 以给定的 model registry 与分类器创建新的 Router。
@@ -118,11 +196,43 @@ type Router struct {
 // 分类器应是便宜快速的 model（例如 Haiku 或 DeepSeek Flash），
 // 因为每个请求都会调用它。单次分类成本应 < $0.001，
 // 以保持路由开销可忽略。
-func NewRouter(registry *ModelRegistry, classifier Provider) *Router {
+//
+// rateLimiter 为可选；nil 时禁用按模型 RPM 限流过滤。
+func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLimiter) *Router {
 	return &Router{
-		registry:   registry,
-		classifier: classifier,
+		registry:    registry,
+		classifier:  classifier,
+		rateLimiter: rateLimiter,
+		emitted:     make(map[string]bool),
 	}
+}
+
+// SetBroadcaster 配置 Router 的事件广播器与身份标识，供外部注入。
+func (r *Router) SetBroadcaster(b EventBroadcaster, taskID, agentID string) {
+	r.broadcaster = b
+	r.taskID = taskID
+	r.agentID = agentID
+}
+
+// emit 在 broadcaster 存在时发送路由事件。
+func (r *Router) emit(eventType string, data map[string]any) {
+	if r.broadcaster == nil {
+		return
+	}
+	r.broadcaster.SendEvent(eventType, data)
+}
+
+// emitOnce 与 emit 类似，但保证同一事件类型只广播一次，用于避免重复事件。
+// 注意：data 不参与去重 key 计算，仅按 eventType 去重。
+func (r *Router) emitOnce(eventType string, data map[string]any) {
+	r.emittedMu.Lock()
+	if r.emitted[eventType] {
+		r.emittedMu.Unlock()
+		return
+	}
+	r.emitted[eventType] = true
+	r.emittedMu.Unlock()
+	r.emit(eventType, data)
 }
 
 // Select 为给定请求选择最合适的 model。
@@ -138,14 +248,25 @@ func NewRouter(registry *ModelRegistry, classifier Provider) *Router {
 // 即使分类器不可用系统仍可用。
 func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision, error) {
 	// Step 1：分类 intent（失败回退到基于规则）
-	intent, err := r.classifyIntent(ctx, req.UserInput)
+	intentClass, err := r.classifyIntent(ctx, req.UserInput)
 	if err != nil {
 		// 分类器失败 —— 回退到基于关键字的分类
-		intent = r.keywordClassify(req.UserInput)
+		intentClass = r.keywordClassify(req.UserInput)
 	}
 
-	// Step 2：把 intent 映射到目标层级
-	targetTier := max(r.intentToTier(intent), req.PreferredTier)
+	// 广播 intent 分类完成事件，让前端 Inspector 看到分类结果（白盒）。
+	// 同一 Router 实例内只广播一次，避免 ReAct 多次 think 时重复刷屏。
+	r.emitOnce("intent_classified", map[string]any{
+		"primary_intent":    intentClass.PrimaryIntent,
+		"secondary_intents": intentClass.SecondaryIntents,
+		"confidence":        intentClass.Confidence,
+		"needs_tools":       intentClass.NeedsTools,
+		"estimated_steps":   intentClass.EstimatedSteps,
+		"source":            "classifier",
+	})
+
+	// Step 2：把 intent 映射到目标层级，并考虑角色 override 与 PreferredTier
+	targetTier := r.resolveTargetTier(req, intentClass)
 
 	// Step 3：按硬性要求过滤候选
 	candidates := r.filterCandidates(req, targetTier)
@@ -172,74 +293,87 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 	// Step 5：解析 fallback
 	fallback := r.registry.GetFallback(primary.Name)
 
+	// Step 6：根据 AllowCheapFirst 决定是否降级试跑
+	cheapFirst := false
+	if req.AllowCheapFirst && targetTier > TierFree {
+		if cheaper := r.pickCheaperModel(primary, req, targetTier-1); cheaper != nil {
+			fallback = primary
+			primary = cheaper
+			targetTier = cheaper.Tier
+			cheapFirst = true
+		}
+	}
+
 	return &RouteDecision{
-		Primary:  primary,
-		Fallback: fallback,
-		Intent:   intent,
-		Reason:   r.buildReason(intent, primary, targetTier),
-		Tier:     primary.Tier,
+		Primary:           primary,
+		Fallback:          fallback,
+		Intent:            intentClass.PrimaryIntent,
+		IntentClass:       intentClass,
+		Reason:            r.buildReason(intentClass, primary, targetTier, cheapFirst),
+		Tier:              targetTier,
+		Confidence:        intentClass.Confidence,
+		NeedsTools:        intentClass.NeedsTools,
+		EstimatedSteps:    intentClass.EstimatedSteps,
+		CheapFirstAttempt: cheapFirst,
 	}, nil
 }
 
 // classifyIntent 用便宜分类 model 对用户请求分类。
-// 返回 intent 类别字符串；分类器调用失败则返回 error。
-func (r *Router) classifyIntent(_ context.Context, userInput string) (string, error) {
+// 返回结构化的 IntentClassification；分类器调用失败则返回 error。
+func (r *Router) classifyIntent(_ context.Context, userInput string) (IntentClassification, error) {
 	prompt := fmt.Sprintf(IntentClassifierPrompt, userInput)
 
 	req := ChatRequest{
 		Model:       "", // 使用分类器的默认 model
 		Messages:    []Message{{Role: "user", Content: prompt}},
 		Temperature: 0, // 确定性分类
-		// NOTE：推理型 model（DeepSeek R1/V4、Step-3.x）会在思维链上烧光
-		// 整个 token 预算，然后才给出最终答案。预算很小（例如 10）时
-		// Content 一直为空，分类器总是回退。512 足以让推理收敛并让 model
-		// 在 Content 中吐出单个类别 token；在 Flash 层级 model 上单次
-		// 仍 < $0.001，符合"路由成本可忽略"的设计目标。
+		// 512 足以让 Flash 层级 model 输出完整 JSON 并收敛；
+		// 在 Flash 层级 model 上单次仍 < $0.001，符合"路由成本可忽略"目标。
 		MaxTokens: 512,
 		Stream:    false,
 	}
 
 	resp, err := r.classifier.Chat(req)
 	if err != nil {
-		return "", fmt.Errorf("classifier call failed: %w", err)
+		return IntentClassification{}, fmt.Errorf("classifier call failed: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("classifier returned empty response")
+		return IntentClassification{}, fmt.Errorf("classifier returned empty response")
 	}
 
-	// 归一化响应。部分推理型 model（DeepSeek R1/V4、Step-3.x）在
-	// max_tokens 很小时把输出放在 Message.Reasoning 中，Content 为空
-	//（推理耗尽预算，没产出 final answer）。回退到 Reasoning 让
-	// classifyIntent 仍能提取出类别 token；若两字段都没有已知类别，
-	// 下面的 default 分支会映射到 simple_chat。
-	intent := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if intent == "" {
-		intent = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
-	}
-	intent = strings.ToLower(intent)
-
-	// 对已知类别做校验。分类器可能给类别加上标点或尾巴
-	//（"simple_chat."、"category: code_generation"），
-	// 因此扫描首个已知类别子串而非要求精确匹配。这样既保持路由稳健，
-	// 又不削弱契约（无法识别的文本仍会走下面的 simple_chat 默认）。
-	for _, cat := range []string{"simple_chat", "code_generation", "complex_reasoning", "multi_step"} {
-		if strings.Contains(intent, cat) {
-			return cat, nil
-		}
+	// 归一化响应：Content 为空时回退到 Reasoning（部分推理 model 的 budget 耗尽行为）。
+	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if raw == "" {
+		raw = strings.TrimSpace(resp.Choices[0].Message.Reasoning)
 	}
 
-	// 未知类别 —— 默认 simple_chat，让路由优雅降级
-	//（最便宜层级），而不是让整个任务失败。
-	return "simple_chat", nil
+	var cls IntentClassification
+	if err := json.Unmarshal([]byte(raw), &cls); err != nil {
+		return IntentClassification{}, fmt.Errorf("classifier returned invalid JSON: %w", err)
+	}
+
+	// 校验主意图类别；未知则视为无效，触发上层 fallback。
+	if !r.isKnownIntent(cls.PrimaryIntent) {
+		return IntentClassification{}, fmt.Errorf("classifier returned unknown primary_intent: %s", cls.PrimaryIntent)
+	}
+
+	cls.PrimaryIntent = strings.ToLower(strings.TrimSpace(cls.PrimaryIntent))
+	for i := range cls.SecondaryIntents {
+		cls.SecondaryIntents[i] = strings.ToLower(strings.TrimSpace(cls.SecondaryIntents[i]))
+	}
+
+	return cls, nil
 }
 
 // keywordClassify 是基于关键字匹配的回退分类方法。
 // 在分类 model 不可用时（网络错误、限流等）使用。
-func (r *Router) keywordClassify(userInput string) string {
+// 返回结构化的 IntentClassification，主意图由关键字决定；次要意图与置信度
+// 保持保守默认值，让 downstream 仍有统一的数据结构可用。
+func (r *Router) keywordClassify(userInput string) IntentClassification {
 	lower := strings.ToLower(userInput)
 
-	// multi_step 指示词
+	// multi_step 指示词（最先检查，优先级最高）
 	multiStepKeywords := []string{
 		"multi-step", "multi step", "pipeline", "orchestrate",
 		"first", "then", "after that", "finally",
@@ -247,7 +381,52 @@ func (r *Router) keywordClassify(userInput string) string {
 	}
 	for _, kw := range multiStepKeywords {
 		if strings.Contains(lower, kw) {
-			return "multi_step"
+			return IntentClassification{PrimaryIntent: "multi_step", Confidence: 0.7, EstimatedSteps: 3}
+		}
+	}
+
+	// safety_sensitive 指示词
+	safetyKeywords := []string{
+		"permission", "approve", "secret", "password", "credential", "token",
+		"access control", "security", "confidential", "private key",
+	}
+	for _, kw := range safetyKeywords {
+		if strings.Contains(lower, kw) {
+			return IntentClassification{PrimaryIntent: "safety_sensitive", Confidence: 0.7, EstimatedSteps: 2}
+		}
+	}
+
+	// web_search 指示词
+	webKeywords := []string{
+		"search", "look up", "latest", "current", "news", "weather",
+		"real-time", "realtime", "what is the price", "who won",
+	}
+	for _, kw := range webKeywords {
+		if strings.Contains(lower, kw) {
+			return IntentClassification{PrimaryIntent: "web_search", Confidence: 0.7, EstimatedSteps: 2}
+		}
+	}
+
+	// code_execution 指示词
+	execKeywords := []string{
+		"run shell", "execute", "run the test", "run tests", "run command",
+		"build project", "deploy", "start the server", "npm test", "go test",
+		"python ", "bash ", "sh ", "terminal",
+	}
+	for _, kw := range execKeywords {
+		if strings.Contains(lower, kw) {
+			return IntentClassification{PrimaryIntent: "code_execution", Confidence: 0.75, EstimatedSteps: 2}
+		}
+	}
+
+	// rag_retrieval 指示词
+	ragKeywords := []string{
+		"from my documents", "from the knowledge base", "retrieve", "recall",
+		"memory", "remember", "what did we discuss", "previous conversation",
+	}
+	for _, kw := range ragKeywords {
+		if strings.Contains(lower, kw) {
+			return IntentClassification{PrimaryIntent: "rag_retrieval", Confidence: 0.7, EstimatedSteps: 2}
 		}
 	}
 
@@ -259,7 +438,7 @@ func (r *Router) keywordClassify(userInput string) string {
 	}
 	for _, kw := range codeKeywords {
 		if strings.Contains(lower, kw) {
-			return "code_generation"
+			return IntentClassification{PrimaryIntent: "code_generation", Confidence: 0.75, EstimatedSteps: 2}
 		}
 	}
 
@@ -271,31 +450,28 @@ func (r *Router) keywordClassify(userInput string) string {
 	}
 	for _, kw := range reasoningKeywords {
 		if strings.Contains(lower, kw) {
-			return "complex_reasoning"
+			return IntentClassification{PrimaryIntent: "complex_reasoning", Confidence: 0.75, EstimatedSteps: 3}
 		}
 	}
 
 	// 默认：simple chat
-	return "simple_chat"
+	return IntentClassification{PrimaryIntent: "simple_chat", Confidence: 0.6, EstimatedSteps: 1}
 }
 
 // intentToTier 将 intent 类别映射到 model 层级。
 //
 // 映射理由：
-//   - simple_chat → TierEfficient：琐碎任务，用最便宜 model
-//   - code_generation → TierStandard：需要可靠的 tool calling 与代码质量
-//   - complex_reasoning → TierPremium：需要深度推理能力
-//   - multi_step → TierStandard：跨多步需要可靠 tool calling
+//   - simple_chat / web_search → TierEfficient：琐碎任务与搜索+摘要，用低成本 model
+//   - code_generation / code_execution / multi_step / rag_retrieval → TierStandard：需要可靠 tool calling 与代码质量
+//   - complex_reasoning / safety_sensitive → TierPremium：需要深度推理与保守决策
 func (r *Router) intentToTier(intent string) ModelTier {
 	switch intent {
-	case "simple_chat":
+	case "simple_chat", "web_search":
 		return TierEfficient
-	case "code_generation":
+	case "code_generation", "code_execution", "multi_step", "rag_retrieval":
 		return TierStandard
-	case "complex_reasoning":
+	case "complex_reasoning", "safety_sensitive":
 		return TierPremium
-	case "multi_step":
-		return TierStandard
 	default:
 		return TierEfficient
 	}
@@ -324,7 +500,7 @@ func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*Mo
 			}
 			seen[m.Name] = true
 
-			if r.meetsRequirements(m, req) {
+			if r.meetsRequirements(m, req) && !r.isRateLimited(m) {
 				candidates = append(candidates, m)
 			}
 		}
@@ -364,17 +540,83 @@ func (r *Router) meetsRequirements(m *ModelProfile, req *RouteRequest) bool {
 	return true
 }
 
+// resolveTargetTier 综合 intent、PreferredTier、AgentRole 决定目标 tier。
+func (r *Router) resolveTargetTier(req *RouteRequest, intent IntentClassification) ModelTier {
+	// 角色 override：leader/decomposer 不低于 TierStandard，validator/summarizer 不高于 TierLightweight
+	switch req.AgentRole {
+	case "leader", "decomposer":
+		return max(max(r.intentToTier(intent.PrimaryIntent), TierStandard), req.PreferredTier)
+	case "validator", "summarizer":
+		// 这些角色通常不需要强模型；但仍尊重 PreferredTier 的升级请求。
+		if req.PreferredTier > 0 {
+			return req.PreferredTier
+		}
+		return min(r.intentToTier(intent.PrimaryIntent), TierLightweight)
+	}
+
+	return max(r.intentToTier(intent.PrimaryIntent), req.PreferredTier)
+}
+
+// pickCheaperModel 在指定层级（及以下）选择一个满足硬性要求且比 primary 便宜的 model。
+func (r *Router) pickCheaperModel(primary *ModelProfile, req *RouteRequest, maxTier ModelTier) *ModelProfile {
+	for t := maxTier; t >= TierFree; t-- {
+		for _, m := range r.registry.GetByTier(t) {
+			if m.Name == primary.Name {
+				continue
+			}
+			if r.meetsRequirements(m, req) && !r.isRateLimited(m) {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+// isRateLimited 检查模型是否触发 RPM 限流。未配置限流器时返回 false。
+// 当模型被限流时，广播 model_rate_limited 事件，让前端 Inspector 看到被
+// 过滤原因（白盒透明）。
+func (r *Router) isRateLimited(m *ModelProfile) bool {
+	if r.rateLimiter == nil {
+		return false
+	}
+	exceeded := r.rateLimiter.IsLimitExceeded(m.Name)
+	if exceeded {
+		r.emit("model_rate_limited", map[string]any{
+			"model": m.Name,
+			"tier":  m.Tier.String(),
+			"reason": "RPM limit exceeded in sliding window",
+		})
+	}
+	return exceeded
+}
+
 // buildReason 构造人类可读的路由决策说明。
-func (r *Router) buildReason(intent string, primary *ModelProfile, targetTier ModelTier) string {
+func (r *Router) buildReason(intent IntentClassification, primary *ModelProfile, targetTier ModelTier, cheapFirst bool) string {
+	suffix := ""
+	if cheapFirst {
+		suffix = " (cheap-first attempt)"
+	}
 	return fmt.Sprintf(
-		"Intent: %s → Tier: %s → Model: %s (%s, $%.2f/$%.2f per 1M tokens)",
-		intent,
+		"Intent: %s (%.2f)%s → Tier: %s → Model: %s (%s, $%.2f/$%.2f per 1M tokens)",
+		intent.PrimaryIntent,
+		intent.Confidence,
+		suffix,
 		targetTier.String(),
 		primary.Name,
 		primary.Provider,
 		primary.InputPrice,
 		primary.OutputPrice,
 	)
+}
+
+// isKnownIntent 检查给定的 intent 字符串是否在 8 类合法集合中。
+func (r *Router) isKnownIntent(intent string) bool {
+	switch strings.ToLower(strings.TrimSpace(intent)) {
+	case "simple_chat", "code_generation", "code_execution", "complex_reasoning",
+		"multi_step", "rag_retrieval", "web_search", "safety_sensitive":
+		return true
+	}
+	return false
 }
 
 // SelectModel 是便捷方法，仅返回选中的 model 名。

@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-25
-> **当前版本**: v0.13.7 Alpha（configurable-auto-approval: v2 Options 浮窗可配置自动审批标签、前后端一致判定、后端 5s 未响应自动批准兜底）
+> **当前版本**: v0.14.1 Alpha（multi-model layered routing P3: 启动时全 tier Provider 预注册、Agent 绑定 RouteRequest、Router intent_classified 去重、RateLimiter 接入真实 LLM 调用、Engine 路由事件测试、前端 RoutingPanel fallback/budget 徽章与事件时间线）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → agent-config-permissions ✅ → configurable-auto-approval ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (Agent 默认权限)       (可配置自动审批)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅ → multi-model-routing ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)   (多模型分层路由P1-P2)
 ```
 
 ---
@@ -511,6 +511,49 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.5 Alpha | 2026-07-25 | UI-v2 UI/UX 优化（OpenSpec `web-v2-ui-ux-optimization`）: 响应式布局/Dock 宽度治理/Flyout 边界定位/触控目标/Hover-点击混合/Dialog 焦点捕获与 ARIA/状态标签可访问性/emoji 按钮 `aria-label`/Toast `aria-atomic`/减少动画偏好/主题 token 统一（overlay/glass）；`npm run test` 128 通过、`npm run build` 通过 |
 | v0.13.6 Alpha | 2026-07-25 | Agent 默认权限 + v2 自动审批（OpenSpec `agent-config-permissions-and-v2-auto-approval`）: `agents.config.permissions` 持久化并 OR 合并到 `TaskContract.Permissions`；worker 审批委托缺失/超时时回退到用户审批；v2 `AgentConfig.vue` 增加权限勾选面板与风险标签；`useTaskStore` 对 `TagPolicyRule` + 仅 `network`/`mcp` tag 的审批请求自动发送 `approve` 控制消息；`go test ./...` 全绿、`npm run build` 通过 |
 | v0.13.7 Alpha | 2026-07-25 | 可配置自动审批（OpenSpec `add-configurable-auto-approval`）: v2 `CommandBar` Options 浮窗新增「自动审批」区，列出 `network`/`mcp`/`exec`/`shell`/`filesystem:*` 等候选标签，支持一键全选/清空，至少选一个才开启；配置持久化 LocalStorage 并同步到后端；`internal/harness` 新增 `AutoApprovalPolicy` 与 `WebSocketApprovalHandler` 5s 恩典窗口自动批准；空集/非 `TagPolicyRule`/未全匹配 tags 仍走手动审批；前后端单元测试覆盖；`go test ./...` 全绿、`npm run build` 通过 |
+| v0.14.1 Alpha | 2026-07-25 | multi-model-routing P3: 启动时预注册所有 tier RouterProviders / Agent 配置绑定 RouteRequest / Router intent_classified 事件去重 / RateLimiter 接入真实 LLM 调用并 RecordCall / Engine 路由事件测试（model_routed / model_fallback_used / cost_budget_exceeded）并修复预算拦截重复事件 / web/v2 RoutingPanel 增加 fallback / budget 状态徽章与事件时间线；`go test ./...` 全绿、`web/v2` `npm run build` 与 `npm run test`（128 例）全绿 |
+
+---
+
+---
+
+## 进行中 / 下一步
+
+- **定型阶段**: 完成核心能力矩阵，进入 v0.15.0 Beta 准备: token 治理、context 压缩、RBAC、真实多 Provider 接入、部署文档。
+- **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
+- **已落地**: 多模型分层路由 P1-P2 已按 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` 实施，后续 P3 为精细化调度与生产化治理。
+
+---
+
+## Phase multi-model-routing: 多模型分层路由 P1-P3 ✅ 已完成
+
+**目标**: 实现按 intent/tier/cost 的模型分层路由，补充限流、预算治理、fallback 与前端可观测性
+
+**完成日期**: 2026-07-25（P1-P2） / 2026-07-25（P3）
+**Git commit**: `7a35e15` 批次（P1-P2） / `490d780` / `2f33a94` 批次（P3）
+
+### 交付物
+- [x] 5-tier 模型分层（`TierFree` / `TierEfficient` / `TierLightweight` / `TierStandard` / `TierPremium`）扩展 `ModelProfile`
+- [x] Agent 配置扩展模型绑定字段（`ModelID` / `AllowedTiers` / `MaxCostUSD` / `CheapFirst`）
+- [x] Intent 分类器增强：输出 8 类 intent + confidence / needs_tools / suggested_tier
+- [x] Provider 工厂函数 `NewProvider` / `CreateProviderFromConfig`：支持 openai / deepseek / anthropic / gemini / mock，未知协议回退 OpenAI-compatible
+- [x] `RateLimiter` 基于 1 分钟滑动窗口的 per-model RPM 限流；RPM=0 无限制；`SetLimit` 测试/动态配置
+- [x] Router `filterCandidates` / `pickCheaperModel` 集成 `isRateLimited` 检查
+- [x] Engine 运行期成本累计 `runningCostUSD` + `MaxCostUSD` 预算拦截 + `cost_budget_exceeded` 事件
+- [x] Fallback 重试：`RouteDecision.Fallback`、主模型失败切换 fallback、`model_fallback_used` 事件
+- [x] 路由事件常量：`model_routed` / `intent_classified` / `model_fallback_used` / `model_rate_limited` / `cost_budget_exceeded`
+- [x] Router `EventBroadcaster` 接口 + `emit` 辅助，Select 中广播 `intent_classified`，isRateLimited 中广播 `model_rate_limited`
+- [x] web/v2 前端：`useRouteEvents` 模块级 singleton 聚合路由事件；`RoutingPanel.vue` Inspector 面板；`ManageTabs` / `ManageContent` 接入 `routing` tab
+- [x] 单元测试：`provider_factory_test.go`、`router_event_test.go`、`rate_limiter_test.go`、Engine 预算/fallback 路径测试
+
+### 验证标准
+- [x] `go test ./...` 全绿
+- [x] `web/v2` `npm run build` 通过（`vue-tsc -b && vite build`）
+
+### 已知待优化
+- [ ] 真实 Provider 实现（Anthropic/Gemini）当前为 stub，需接入官方 SDK
+- [ ] 动态模型配置热加载（当前依赖 `.env` + 启动时静态注册）
+- [ ] 跨模型 tokenizer 成本校准（当前使用 `ModelProfile.CostPer1KTokens` 估算）
 
 ---
 
@@ -545,14 +588,6 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
   - `specs/agent-config-permissions/spec.md`
   - `specs/approval-delegation-fallback/spec.md`
   - `specs/v2-auto-approval/spec.md`
-
----
-
-## 进行中 / 下一步
-
-- **定型阶段**: 完成核心能力矩阵，进入 v0.14.0 Beta 准备: token 治理、context 压缩、RBAC、部署文档。
-- **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
-- **规划中**: 多模型分层路由增强方案，详见 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` —— 含完整模型 tier 映射、Agent 粒度模型绑定、成本预算治理与可观测性设计，待排期实施。
 
 ---
 

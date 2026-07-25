@@ -26,6 +26,17 @@ type Config struct {
 	ProviderDefault string           // 多 model 路由的默认 provider 名称
 	Models        []ModelConfig     // 多 model 配置列表
 
+	// Anthropic / Gemini / Azure 多 provider 配置。
+	// 每个 provider 可独立设置 endpoint 与 API key；未配置时工厂会回退到
+	// 默认的 OpenAI-compatible 字段（LLMEndpoint / LLMAPIKey）。
+	AnthropicEndpoint string // ANTHROPIC_ENDPOINT
+	AnthropicAPIKey   string // ANTHROPIC_API_KEY
+	GeminiEndpoint    string // GEMINI_ENDPOINT
+	GeminiAPIKey      string // GEMINI_API_KEY
+	AzureOpenAIEndpoint string // AZURE_OPENAI_ENDPOINT
+	AzureOpenAIAPIKey   string // AZURE_OPENAI_API_KEY
+	AzureOpenAIAPIVersion string // AZURE_OPENAI_API_VERSION
+
 	// LLM mock 开关:全局默认、按 case 的真实例外,以及 endpoint/hint 覆盖。
 	// 用于在测试 / demo 时将 LLM 调用路由到 MockProvider 而非真实 provider。
 	// LLMUseMock 默认为 true,使新部署在显式配置为其他值(或 case 被列入 LLMRealCases)
@@ -203,6 +214,35 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("LLM_MOCK_ENDPOINTS"); v != "" {
 		cfg.LLMMockEndpoints = splitAndTrim(v)
+	}
+
+	// Anthropic / Gemini / Azure 多 provider 端点与凭据配置
+	if v := os.Getenv("ANTHROPIC_ENDPOINT"); v != "" {
+		cfg.AnthropicEndpoint = v
+	} else {
+		cfg.AnthropicEndpoint = "https://api.anthropic.com"
+	}
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("GEMINI_ENDPOINT"); v != "" {
+		cfg.GeminiEndpoint = v
+	} else {
+		cfg.GeminiEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+	}
+	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
+		cfg.GeminiAPIKey = v
+	}
+	if v := os.Getenv("AZURE_OPENAI_ENDPOINT"); v != "" {
+		cfg.AzureOpenAIEndpoint = v
+	}
+	if v := os.Getenv("AZURE_OPENAI_API_KEY"); v != "" {
+		cfg.AzureOpenAIAPIKey = v
+	}
+	if v := os.Getenv("AZURE_OPENAI_API_VERSION"); v != "" {
+		cfg.AzureOpenAIAPIVersion = v
+	} else {
+		cfg.AzureOpenAIAPIVersion = "2024-08-01-preview"
 	}
 
 	// Sandbox 配置:默认关闭,通过 SANDBOX_ENABLE=true 启用。

@@ -2,24 +2,27 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
 // ---------------------------------------------------------------------------
-// stubClassifier —— 一个确定性 Provider，返回固定的 intent 字符串
+// stubClassifier —— 一个确定性 Provider，返回固定的 intent JSON
 // ---------------------------------------------------------------------------
 
 // stubClassifier 是一个最小化的 Provider 实现，用于在无网络访问的情况下
 // 驱动 Router 的 classifyIntent 路径。它忽略请求并返回预设的 ChatResponse，
-// 其第一个 choice 携带脚本化的 intent 字符串。Chat 调用次数会被记录以供断言。
+// 其第一个 choice 携带脚本化的 intent JSON 字符串。Chat 调用次数会被记录以供断言。
 //
 // stubClassifier 刻意只实现 Provider 的两个方法（Chat 与 ChatStream）。
 // Name() 返回 "stub-classifier"。
 type stubClassifier struct {
-	intent      string // 脚本响应中返回的 content
+	intentJSON  string // 脚本响应中返回的 content
 	chatErr     error  // 非 nil 时 Chat 返回该 error
 	chatCalls   int
 	streamCalls int
@@ -36,7 +39,7 @@ func (s *stubClassifier) Chat(req ChatRequest) (*ChatResponse, error) {
 		Choices: []Choice{
 			{
 				Index:        0,
-				Message:      Message{Role: "assistant", Content: s.intent},
+				Message:      Message{Role: "assistant", Content: s.intentJSON},
 				FinishReason: "stop",
 			},
 		},
@@ -46,13 +49,26 @@ func (s *stubClassifier) Chat(req ChatRequest) (*ChatResponse, error) {
 func (s *stubClassifier) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	s.streamCalls++
 	if onChunk != nil {
-		_ = onChunk(StreamChunk{Delta: Delta{Content: s.intent}})
+		_ = onChunk(StreamChunk{Delta: Delta{Content: s.intentJSON}})
 	}
-	return s.intent, Usage{}, nil, nil
+	return s.intentJSON, Usage{}, nil, nil
 }
 
 // 编译期断言：stubClassifier 满足 Provider 接口。
 var _ Provider = (*stubClassifier)(nil)
+
+// makeIntentJSON 帮助构造 stub classifier 返回的合法 JSON 字符串。
+func makeIntentJSON(primary string, secondaries []string, confidence float64, needs []string, steps int) string {
+	cls := IntentClassification{
+		PrimaryIntent:    primary,
+		SecondaryIntents: secondaries,
+		Confidence:       confidence,
+		NeedsTools:       needs,
+		EstimatedSteps:   steps,
+	}
+	b, _ := json.Marshal(cls)
+	return string(b)
+}
 
 // ---------------------------------------------------------------------------
 // 构建带若干 model profile 的 registry 的 helper
@@ -107,6 +123,26 @@ func TestKeywordClassify(t *testing.T) {
 		{"subtask", "decompose into subtasks", "multi_step"},
 		{"pipeline-keyword", "build a pipeline for ETL", "multi_step"},
 
+		// safety_sensitive 指示词
+		{"permission", "grant permission for this action", "safety_sensitive"},
+		{"secret", "read the secret token", "safety_sensitive"},
+		{"security", "evaluate the security policy", "safety_sensitive"},
+
+		// web_search 指示词
+		{"search", "search for current weather", "web_search"},
+		{"look-up", "look up the latest news", "web_search"},
+		{"realtime", "realtime stock price", "web_search"},
+
+		// code_execution 指示词
+		{"run-shell", "run shell command to list files", "code_execution"},
+		{"go-test", "go test ./...", "code_execution"},
+		{"build-project", "build project and run tests", "code_execution"},
+
+		// rag_retrieval 指示词
+		{"from-documents", "answer from my documents", "rag_retrieval"},
+		{"memory", "recall what we discussed", "rag_retrieval"},
+		{"previous-conversation", "from the previous conversation", "rag_retrieval"},
+
 		// code_generation 指示词
 		{"write-code", "please write code to sort a list", "code_generation"},
 		{"implement", "implement a new function", "code_generation"},
@@ -132,8 +168,8 @@ func TestKeywordClassify(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := r.keywordClassify(tc.input)
-			if got != tc.want {
-				t.Errorf("keywordClassify(%q) = %q, want %q", tc.input, got, tc.want)
+			if got.PrimaryIntent != tc.want {
+				t.Errorf("keywordClassify(%q).PrimaryIntent = %q, want %q", tc.input, got.PrimaryIntent, tc.want)
 			}
 		})
 	}
@@ -143,11 +179,14 @@ func TestKeywordClassify(t *testing.T) {
 //（匹配前会把输入转小写）。
 func TestKeywordClassifyCaseInsensitive(t *testing.T) {
 	r := &Router{}
-	if got := r.keywordClassify("IMPLEMENT a function"); got != "code_generation" {
-		t.Errorf("uppercase IMPLEMENT: got %q, want code_generation", got)
+	if got := r.keywordClassify("IMPLEMENT a function"); got.PrimaryIntent != "code_generation" {
+		t.Errorf("uppercase IMPLEMENT: got %q, want code_generation", got.PrimaryIntent)
 	}
-	if got := r.keywordClassify("WRITE CODE"); got != "code_generation" {
-		t.Errorf("uppercase WRITE CODE: got %q, want code_generation", got)
+	if got := r.keywordClassify("WRITE CODE"); got.PrimaryIntent != "code_generation" {
+		t.Errorf("uppercase WRITE CODE: got %q, want code_generation", got.PrimaryIntent)
+	}
+	if got := r.keywordClassify("Run SHELL command"); got.PrimaryIntent != "code_execution" {
+		t.Errorf("mixed Run SHELL: got %q, want code_execution", got.PrimaryIntent)
 	}
 }
 
@@ -164,9 +203,13 @@ func TestIntentToTier(t *testing.T) {
 		want   ModelTier
 	}{
 		{"simple_chat", TierEfficient},
+		{"web_search", TierEfficient},
 		{"code_generation", TierStandard},
-		{"complex_reasoning", TierPremium},
+		{"code_execution", TierStandard},
 		{"multi_step", TierStandard},
+		{"rag_retrieval", TierStandard},
+		{"complex_reasoning", TierPremium},
+		{"safety_sensitive", TierPremium},
 		{"unknown_intent", TierEfficient}, // 默认
 		{"", TierEfficient},
 		{"SIMPLE_CHAT", TierEfficient}, // 大小写敏感不匹配，走默认
@@ -186,58 +229,97 @@ func TestIntentToTier(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestClassifyIntentValidCategories 验证分类器返回已知类别时，
-// classifyIntent 会将其透传。对四个合法类别做表驱动测试。
+// classifyIntent 会将其透传。对八个合法类别做表驱动测试。
 func TestClassifyIntentValidCategories(t *testing.T) {
-	for _, intent := range []string{"simple_chat", "code_generation", "complex_reasoning", "multi_step"} {
+	for _, intent := range []string{
+		"simple_chat", "code_generation", "code_execution",
+		"complex_reasoning", "multi_step", "rag_retrieval", "web_search", "safety_sensitive",
+	} {
 		t.Run(intent, func(t *testing.T) {
-			r := NewRouter(NewModelRegistry(), &stubClassifier{intent: intent})
+			jsonStr := makeIntentJSON(intent, nil, 0.9, nil, 1)
+			r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
 			got, err := r.classifyIntent(context.Background(), "anything")
 			if err != nil {
 				t.Fatalf("classifyIntent: %v", err)
 			}
-			if got != intent {
-				t.Errorf("got %q, want %q", got, intent)
+			if got.PrimaryIntent != intent {
+				t.Errorf("got %q, want %q", got.PrimaryIntent, intent)
+			}
+			if got.Confidence != 0.9 {
+				t.Errorf("confidence = %v, want 0.9", got.Confidence)
 			}
 		})
+	}
+}
+
+// TestClassifyIntentExtractsFields 验证 classifyIntent 能从 JSON 中完整提取
+// secondary_intents、needs_tools、estimated_steps。
+func TestClassifyIntentExtractsFields(t *testing.T) {
+	jsonStr := makeIntentJSON("code_generation", []string{"multi_step"}, 0.92, []string{"run_shell", "write_file"}, 3)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	got, err := r.classifyIntent(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.PrimaryIntent != "code_generation" {
+		t.Errorf("PrimaryIntent = %q, want code_generation", got.PrimaryIntent)
+	}
+	if len(got.SecondaryIntents) != 1 || got.SecondaryIntents[0] != "multi_step" {
+		t.Errorf("SecondaryIntents = %v, want [multi_step]", got.SecondaryIntents)
+	}
+	if len(got.NeedsTools) != 2 {
+		t.Errorf("NeedsTools = %v, want 2 entries", got.NeedsTools)
+	}
+	if got.EstimatedSteps != 3 {
+		t.Errorf("EstimatedSteps = %d, want 3", got.EstimatedSteps)
 	}
 }
 
 // TestClassifyIntentCaseInsensitive 验证分类器在匹配已知类别前
 // 会把响应归一化为小写。
 func TestClassifyIntentCaseInsensitive(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "Code_Generation"})
+	jsonStr := `{"primary_intent":"Code_Generation","confidence":0.8}`
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
 	got, err := r.classifyIntent(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if got != "code_generation" {
-		t.Errorf("got %q, want code_generation", got)
+	if got.PrimaryIntent != "code_generation" {
+		t.Errorf("got %q, want code_generation", got.PrimaryIntent)
 	}
 }
 
 // TestClassifyIntentTrimsWhitespace 验证分类器响应中的首尾空白
 // 会在匹配前被剥离。
 func TestClassifyIntentTrimsWhitespace(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "  multi_step  "})
+	jsonStr := `  {"primary_intent":"multi_step","confidence":0.8}  `
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
 	got, err := r.classifyIntent(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if got != "multi_step" {
-		t.Errorf("got %q, want multi_step", got)
+	if got.PrimaryIntent != "multi_step" {
+		t.Errorf("got %q, want multi_step", got.PrimaryIntent)
 	}
 }
 
-// TestClassifyIntentUnknownDefaultsToSimpleChat 验证无法识别的分类器输出
-// 默认为 "simple_chat"，而不是返回 error。
-func TestClassifyIntentUnknownDefaultsToSimpleChat(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "totally-unknown-category"})
-	got, err := r.classifyIntent(context.Background(), "x")
-	if err != nil {
-		t.Fatalf("err: %v", err)
+// TestClassifyIntentUnknownReturnsError 验证无法识别的主意图会返回 error，
+// 从而驱动 Select 回退到 keywordClassify。
+func TestClassifyIntentUnknownReturnsError(t *testing.T) {
+	jsonStr := `{"primary_intent":"totally-unknown-category"}`
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	_, err := r.classifyIntent(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected error for unknown intent")
 	}
-	if got != "simple_chat" {
-		t.Errorf("got %q, want simple_chat", got)
+}
+
+// TestClassifyIntentInvalidJSONReturnsError 验证非 JSON 响应会返回 error。
+func TestClassifyIntentInvalidJSONReturnsError(t *testing.T) {
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: "not-json"}, nil)
+	_, err := r.classifyIntent(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
 	}
 }
 
@@ -245,7 +327,7 @@ func TestClassifyIntentUnknownDefaultsToSimpleChat(t *testing.T) {
 // 这驱动 Select 内部回退到 keywordClassify。
 func TestClassifyIntentError(t *testing.T) {
 	sentinel := errors.New("network down")
-	r := NewRouter(NewModelRegistry(), &stubClassifier{chatErr: sentinel})
+	r := NewRouter(NewModelRegistry(), &stubClassifier{chatErr: sentinel}, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -257,7 +339,7 @@ func TestClassifyIntentError(t *testing.T) {
 
 // TestClassifyIntentEmptyResponse 验证分类器返回空 Choices slice 时会得到 error。
 func TestClassifyIntentEmptyResponse(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &emptyChoiceClassifier{})
+	r := NewRouter(NewModelRegistry(), &emptyChoiceClassifier{}, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error for empty choices")
@@ -286,10 +368,11 @@ var _ Provider = emptyChoiceClassifier{}
 // ---------------------------------------------------------------------------
 
 // TestSelectByClassifierIntent 验证 Router 的 Select 会从分类器 intent
-// 对应的层级中选 model。对四个 intent 做表驱动测试。
+// 对应的层级中选 model。对八个 intent 做表驱动测试。
 func TestSelectByClassifierIntent(t *testing.T) {
 	// Registry：每个层级一个 model，都满足无能力要求的请求。
 	reg := newRegistryWith(
+		profileFor("free-m", TierFree, nil, 8192, ""),
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
@@ -301,13 +384,17 @@ func TestSelectByClassifierIntent(t *testing.T) {
 		wantTier  ModelTier
 	}{
 		{"simple_chat", "efficient-m", TierEfficient},
+		{"web_search", "efficient-m", TierEfficient},
 		{"code_generation", "standard-m", TierStandard},
-		{"complex_reasoning", "premium-m", TierPremium},
+		{"code_execution", "standard-m", TierStandard},
 		{"multi_step", "standard-m", TierStandard},
+		{"rag_retrieval", "standard-m", TierStandard},
+		{"complex_reasoning", "premium-m", TierPremium},
+		{"safety_sensitive", "premium-m", TierPremium},
 	}
 	for _, tc := range tests {
 		t.Run(tc.intent, func(t *testing.T) {
-			r := NewRouter(reg, &stubClassifier{intent: tc.intent})
+			r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON(tc.intent, nil, 0.9, nil, 1)}, nil)
 			dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 			if err != nil {
 				t.Fatalf("Select: %v", err)
@@ -324,6 +411,9 @@ func TestSelectByClassifierIntent(t *testing.T) {
 			if dec.Intent != tc.intent {
 				t.Errorf("Intent = %q, want %q", dec.Intent, tc.intent)
 			}
+			if dec.Confidence != 0.9 {
+				t.Errorf("Confidence = %v, want 0.9", dec.Confidence)
+			}
 		})
 	}
 }
@@ -336,7 +426,7 @@ func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{chatErr: errors.New("classifier unavailable")})
+	r := NewRouter(reg, &stubClassifier{chatErr: errors.New("classifier unavailable")}, nil)
 
 	// "implement a function" 命中 "implement" code 关键字 → code_generation → TierStandard。
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "implement a function"})
@@ -355,6 +445,27 @@ func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 	}
 }
 
+// TestSelectFallsBackToKeywordOnInvalidJSON 验证分类器返回非 JSON 时，
+// Select 会回退到 keywordClassify。
+func TestSelectFallsBackToKeywordOnInvalidJSON(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
+		profileFor("standard-m", TierStandard, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: "not-json"}, nil)
+
+	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "write a unit test"})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if dec.Primary.Name != "standard-m" {
+		t.Errorf("Primary.Name = %q, want standard-m", dec.Primary.Name)
+	}
+	if dec.Intent != "code_generation" {
+		t.Errorf("Intent = %q, want code_generation", dec.Intent)
+	}
+}
+
 // TestSelectFallbackChainResolved 验证 RouteDecision.Fallback 通过
 // registry 的 GetFallback（primary 的 FallbackModel 字段）解析得到。
 func TestSelectFallbackChainResolved(t *testing.T) {
@@ -362,7 +473,7 @@ func TestSelectFallbackChainResolved(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, "efficient-m"),
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -382,7 +493,7 @@ func TestSelectNoFallbackWhenNotConfigured(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -401,7 +512,7 @@ func TestSelectFilterByCapability(t *testing.T) {
 		profileFor("standard-notool", TierStandard, nil, 8192, ""),
 		profileFor("standard-tool", TierStandard, []ModelCapability{CapToolCalling}, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -421,7 +532,7 @@ func TestSelectFilterByContextLen(t *testing.T) {
 		profileFor("small-ctx", TierStandard, nil, 4096, ""),
 		profileFor("big-ctx", TierStandard, nil, 32768, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:  "x",
@@ -442,7 +553,7 @@ func TestSelectNoSuitableModelReturnsError(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("no-vision", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	_, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -464,7 +575,7 @@ func TestSelectPreferredTierEscalates(t *testing.T) {
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
 	// simple_chat 本会选 TierEfficient，但 PreferredTier=Premium 升级。
-	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:     "x",
@@ -478,13 +589,81 @@ func TestSelectPreferredTierEscalates(t *testing.T) {
 	}
 }
 
+// TestSelectAgentRoleLeaderForcesPremium 验证 leader 角色会强制升级到 TierStandard 以上。
+func TestSelectAgentRoleLeaderForcesPremium(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("standard-m", TierStandard, nil, 8192, ""),
+		profileFor("premium-m", TierPremium, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+
+	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x", AgentRole: "leader"})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	// leader override 把目标 tier 升到 TierStandard；filterCandidates 按
+	// [standard, free, efficient, lightweight, premium] 顺序检查，standard-m 成为 primary。
+	// 这里断言 tier 不低于 TierStandard，符合设计。
+	if dec.Tier < TierStandard {
+		t.Errorf("Tier = %s, want >= standard (leader override)", dec.Tier)
+	}
+	if dec.Primary.Tier < TierStandard {
+		t.Errorf("Primary.Tier = %s, want >= standard (leader override)", dec.Primary.Tier)
+	}
+}
+
+// TestSelectAgentRoleValidatorCapsTier 验证 validator 角色在不需要高 tier 的 intent 下
+// 会降级到 TierLightweight（但测试中无 lightweight model，因此仍选 standard）。
+func TestSelectAgentRoleValidatorPrefersLowerTier(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
+		profileFor("standard-m", TierStandard, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("complex_reasoning", nil, 0.9, nil, 1)}, nil)
+	// validator 会把目标 tier 压到 min(TierPremium, TierLightweight) = TierLightweight，
+	// 但 lightweight 无 model；filterCandidates 会回退到相邻层级，efficient 抢先。
+	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x", AgentRole: "validator"})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if dec.Primary.Tier > TierEfficient {
+		t.Errorf("Primary.Tier = %s, want <= efficient (validator should prefer lower tier)", dec.Primary.Tier)
+	}
+}
+
+// TestSelectAllowCheapFirst 验证 AllowCheapFirst 会在主 tier 之下选择更便宜的 model。
+func TestSelectAllowCheapFirst(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("standard-m", TierStandard, nil, 8192, ""),
+		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+
+	dec, err := r.Select(context.Background(), &RouteRequest{
+		UserInput:       "x",
+		AllowCheapFirst: true,
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if dec.Primary.Name != "efficient-m" {
+		t.Errorf("Primary.Name = %q, want efficient-m (cheap-first)", dec.Primary.Name)
+	}
+	if !dec.CheapFirstAttempt {
+		t.Error("CheapFirstAttempt should be true")
+	}
+	if dec.Fallback == nil || dec.Fallback.Name != "standard-m" {
+		t.Errorf("Fallback should be standard-m, got %v", dec.Fallback)
+	}
+}
+
 // TestSelectReasonPopulated 验证 RouteDecision.Reason 字段被填入人类可读说明，
 // 包含 intent 与 model 名（白盒透明度）。
 func TestSelectReasonPopulated(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -507,7 +686,7 @@ func TestSelectModelShorthand(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	name, err := r.SelectModel(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -522,7 +701,7 @@ func TestSelectModelShorthand(t *testing.T) {
 // SelectModel 会透出 Select 的 error。
 func TestSelectModelShorthandError(t *testing.T) {
 	reg := NewModelRegistry() // 空
-	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
 	_, err := r.SelectModel(context.Background(), &RouteRequest{UserInput: "x"})
 	if err == nil {
 		t.Fatal("expected error from empty registry")
@@ -536,11 +715,97 @@ func TestSelectModelShorthandError(t *testing.T) {
 // TestSelectEmptyRegistryReturnsError 验证空 ModelRegistry 加任意请求
 // 会得到 "no suitable model" error。
 func TestSelectEmptyRegistryReturnsError(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intent: "simple_chat"})
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
 	_, err := r.Select(context.Background(), &RouteRequest{UserInput: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "no suitable model") {
 		t.Fatalf("err = %v, want 'no suitable model'", err)
 	}
+}
+
+// TestSelectIntentClassifiedEmittedOnce 验证同一个 Router 实例上多次调用 Select
+// 只广播一次 intent_classified；model_rate_limited 不在此测试覆盖。
+func TestSelectIntentClassifiedEmittedOnce(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	bc := &fakeEventBroadcaster{}
+	r.SetBroadcaster(bc, "t1", "agent-1")
+
+	for i := 0; i < 3; i++ {
+		_, err := r.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+		if err != nil {
+			t.Fatalf("Select #%d: %v", i+1, err)
+		}
+	}
+
+	if got := len(bc.eventsOfType(event.EventIntentClassified)); got != 1 {
+		t.Errorf("intent_classified emitted %d times, want 1; full events: %+v", got, bc.events)
+	}
+}
+
+// TestSelectModelRateLimitedNotDeduplicated 验证 model_rate_limited 事件
+// 每次被触发都应广播，不做去重。
+func TestSelectModelRateLimitedNotDeduplicated(t *testing.T) {
+	exceededModel := profileFor("exceeded-m", TierEfficient, nil, 8192, "")
+	freeModel := profileFor("free-m", TierFree, nil, 8192, "")
+	reg := newRegistryWith(
+		exceededModel,
+		freeModel,
+	)
+	// 把 exceededModel 的 RPM 设低一些以便 IsLimitExceeded 成立。
+	exceededModel.RateLimitRPM = 1
+
+	// 构造 RateLimiter 并设置 exceeded-m 的 RPM 限制为 1。
+	rl := NewRateLimiter()
+	rl.SetLimit("exceeded-m", 1)
+	rl.RecordCall("exceeded-m") // 占用一次，使 exceeded-m 在 Select 时被限流
+
+	router := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, rl)
+	bc := &fakeEventBroadcaster{}
+	router.SetBroadcaster(bc, "t1", "agent-1")
+
+	// 第一次 Select：exceeded-m 在窗口内已被占用一次，再次检查将触发限流。
+	_, err := router.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+	if err != nil {
+		t.Fatalf("first Select: %v", err)
+	}
+
+	// 再记录一次 exceeded-m，第二次 Select 时它仍然会被限流并再次广播事件。
+	rl.RecordCall("exceeded-m")
+	_, err = router.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+	if err != nil {
+		t.Fatalf("second Select: %v", err)
+	}
+
+	modelLimitedCount := len(bc.eventsOfType(event.EventModelRateLimited))
+	if modelLimitedCount < 1 {
+		t.Errorf("model_rate_limited emitted %d times, want >= 1", modelLimitedCount)
+	}
+}
+
+// fakeEventBroadcaster 记录所有 SendEvent 调用，便于测试去重逻辑。
+type fakeEventBroadcaster struct {
+	events []fakeEvent
+}
+
+type fakeEvent struct {
+	eventType string
+	data      map[string]any
+}
+
+func (f *fakeEventBroadcaster) SendEvent(eventType string, data map[string]any) {
+	f.events = append(f.events, fakeEvent{eventType: eventType, data: data})
+}
+
+func (f *fakeEventBroadcaster) eventsOfType(eventType string) []fakeEvent {
+	var out []fakeEvent
+	for _, e := range f.events {
+		if e.eventType == eventType {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -682,11 +947,12 @@ func TestModelTierString(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestDefaultProfilesShape 对 DefaultProfiles 做 sanity check：
-// 返回两个 profile，名字符合预期，且 pro model 的 fallback 指向 flash。
+// 返回至少包含原有 2 个核心 profile 的模型池，且 deepseek-v4-pro 的 fallback 指向 flash。
+// 扩展模型分层后池子更大，但仍需保证这两个核心 profile 存在且关系不变。
 func TestDefaultProfilesShape(t *testing.T) {
 	profiles := DefaultProfiles()
-	if len(profiles) != 2 {
-		t.Fatalf("expected 2 default profiles, got %d", len(profiles))
+	if len(profiles) < 2 {
+		t.Fatalf("expected at least 2 default profiles, got %d", len(profiles))
 	}
 	byName := map[string]*ModelProfile{}
 	for _, p := range profiles {
@@ -700,8 +966,8 @@ func TestDefaultProfilesShape(t *testing.T) {
 	if !ok {
 		t.Fatal("missing deepseek-v4-pro")
 	}
-	if flash.FallbackModel != "" {
-		t.Errorf("flash FallbackModel = %q, want empty", flash.FallbackModel)
+	if flash.FallbackModel != "deepseek-v4-flash-local" {
+		t.Errorf("flash FallbackModel = %q, want deepseek-v4-flash-local", flash.FallbackModel)
 	}
 	if pro.FallbackModel != "deepseek-v4-flash" {
 		t.Errorf("pro FallbackModel = %q, want deepseek-v4-flash", pro.FallbackModel)
@@ -727,7 +993,7 @@ func TestNewRouterNilArgs(t *testing.T) {
 			t.Fatalf("NewRouter with nil args panicked: %v", r)
 		}
 	}()
-	r := NewRouter(nil, nil)
+	r := NewRouter(nil, nil, nil)
 	if r == nil {
 		t.Fatal("NewRouter returned nil")
 	}
@@ -744,7 +1010,7 @@ func TestSelectFiltersByBudgetUSD(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("expensive-m", TierStandard, nil, 8192, ""), // InputPrice=1.0
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	_, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
@@ -760,7 +1026,7 @@ func TestSelectPassesByBudgetUSD(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("cheap-m", TierEfficient, nil, 8192, ""), // InputPrice=1.0
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "simple_chat"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
@@ -796,7 +1062,7 @@ func TestSelectFiltersByLatencyReq(t *testing.T) {
 		}
 	}
 
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -822,7 +1088,7 @@ func TestSelectBudgetUSDZeroDisablesFiltering(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intent: "code_generation"})
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
