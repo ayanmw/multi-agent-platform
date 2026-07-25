@@ -1,7 +1,8 @@
 // tasks_api.go — /api/tasks 根路由与 chat task 启动逻辑。
 //
 // Phase 8-B: 把原来 main.go 中的 handleTasksRoot 与 startChatTask 闭包迁移到本文件，
-// 并改为 appServer 方法，彻底消除包级闭包变量。/api/tasks 改用 taskActionRegistry 注册表分发。
+// 并改为 appServer 方法，彻底消除包级闭包变量；任务 action 由 appServer.taskActions
+// 注册表分发，保持 handler 方法化。
 package main
 
 import (
@@ -37,25 +38,33 @@ type taskRequest struct {
 }
 
 // taskAction 是 /api/tasks POST action 的处理函数签名。
-// 统一接收 (s *appServer, w, r, req, caseID)，由 taskActionRegistry 查找分发。
-type taskAction func(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, caseID string)
+// 方法值注册到 appServer.taskActions 后，receiver 已被绑定，签名中不再含 *appServer。
+type taskAction func(w http.ResponseWriter, r *http.Request, req taskRequest, caseID string)
 
-// taskActionRegistry 是 /api/tasks 的 action 分发注册表。
-// Phase 8-B 用注册表替代原来的 switch req.Action，使新增 action 只需注册即可扩展。
-var taskActionRegistry = map[string]taskAction{
-	"chat":         actionChat,
-	"multi-agent":  actionMultiAgent,
-	"stream-demo":  actionStreamDemo,
+// initTaskActions 初始化 appServer 的 taskActions 注册表，供 handleTasksRoot 按需分发。
+// 在 appServer 构造后调用一次（如 registerRoutes 中），保持 handler 方法化的同时获得
+// 注册表的可扩展性。
+func (s *appServer) initTaskActions() {
+	if s.taskActions != nil {
+		return
+	}
+	s.taskActions = map[string]taskAction{
+		"chat":        s.actionChat,
+		"multi-agent": s.actionMultiAgent,
+		"stream-demo": s.actionStreamDemo,
+	}
 }
 
 // handleTasksRoot 是 /api/tasks 的 POST 入口（chat / multi-agent / stream-demo
 // action）。Phase 8-B 改为 appServer 方法，所有依赖从 s 获取，并通过
-// taskActionRegistry 分发具体 action。
+// s.taskActions 注册表分发具体 action。
 func (s *appServer) handleTasksRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+
+	s.initTaskActions()
 
 	lookupCase := func(caseID string) *cases.Case {
 		if caseID == "" {
@@ -115,16 +124,16 @@ func (s *appServer) handleTasksRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	action, ok := taskActionRegistry[req.Action]
+	action, ok := s.taskActions[req.Action]
 	if !ok {
 		http.Error(w, "unknown action (use 'chat', 'multi-agent' or 'stream-demo')", http.StatusBadRequest)
 		return
 	}
-	action(s, w, r, req, caseID)
+	action(w, r, req, caseID)
 }
 
 // actionMultiAgent 处理 action=multi-agent：启动一个 leader-driven multi-agent 任务。
-func actionMultiAgent(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
+func (s *appServer) actionMultiAgent(w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
 	if len(req.Agents) > s.cfg.ContractLimits.MaxSubAgents {
 		http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", s.cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
 		return
@@ -216,7 +225,7 @@ func actionMultiAgent(s *appServer, w http.ResponseWriter, r *http.Request, req 
 }
 
 // actionStreamDemo 处理 action=stream-demo：发射一组演示事件。
-func actionStreamDemo(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
+func (s *appServer) actionStreamDemo(w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
 	sessionID, taskID, err := resolveSession(req.SessionID, "", s.persist)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -231,7 +240,7 @@ func actionStreamDemo(s *appServer, w http.ResponseWriter, r *http.Request, req 
 }
 
 // actionChat 处理 action=chat：调用 startChatTask 并返回任务信息。
-func actionChat(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, caseID string) {
+func (s *appServer) actionChat(w http.ResponseWriter, r *http.Request, req taskRequest, caseID string) {
 	if caseID != "" {
 		lookupCase := func(caseID string) *cases.Case {
 			if caseID == "" {
