@@ -682,11 +682,12 @@ func TestModelTierString(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestDefaultProfilesShape 对 DefaultProfiles 做 sanity check：
-// 返回两个 profile，名字符合预期，且 pro model 的 fallback 指向 flash。
+// 返回至少包含原有 2 个核心 profile 的模型池，且 deepseek-v4-pro 的 fallback 指向 flash。
+// 扩展模型分层后池子更大，但仍需保证这两个核心 profile 存在且关系不变。
 func TestDefaultProfilesShape(t *testing.T) {
 	profiles := DefaultProfiles()
-	if len(profiles) != 2 {
-		t.Fatalf("expected 2 default profiles, got %d", len(profiles))
+	if len(profiles) < 2 {
+		t.Fatalf("expected at least 2 default profiles, got %d", len(profiles))
 	}
 	byName := map[string]*ModelProfile{}
 	for _, p := range profiles {
@@ -700,8 +701,8 @@ func TestDefaultProfilesShape(t *testing.T) {
 	if !ok {
 		t.Fatal("missing deepseek-v4-pro")
 	}
-	if flash.FallbackModel != "" {
-		t.Errorf("flash FallbackModel = %q, want empty", flash.FallbackModel)
+	if flash.FallbackModel != "deepseek-v4-flash-local" {
+		t.Errorf("flash FallbackModel = %q, want deepseek-v4-flash-local", flash.FallbackModel)
 	}
 	if pro.FallbackModel != "deepseek-v4-flash" {
 		t.Errorf("pro FallbackModel = %q, want deepseek-v4-flash", pro.FallbackModel)
