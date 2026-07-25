@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -178,6 +179,11 @@ type Router struct {
 	broadcaster EventBroadcaster // 可选；路由事件广播器
 	taskID      string           // 事件 task_id
 	agentID     string           // 事件 agent_id
+
+	// emitted 记录每个事件类型已经广播过的 key，用于 deduplication。
+	// 当前仅对 intent_classified 去重，model_rate_limited 仍每次都广播。
+	emitted    map[string]bool
+	emittedMu  sync.Mutex
 }
 
 // EventBroadcaster 是 Router 用来广播路由相关事件的最小接口。
@@ -197,6 +203,7 @@ func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLi
 		registry:    registry,
 		classifier:  classifier,
 		rateLimiter: rateLimiter,
+		emitted:     make(map[string]bool),
 	}
 }
 
@@ -213,6 +220,19 @@ func (r *Router) emit(eventType string, data map[string]any) {
 		return
 	}
 	r.broadcaster.SendEvent(eventType, data)
+}
+
+// emitOnce 与 emit 类似，但保证同一事件类型只广播一次，用于避免重复事件。
+// 注意：data 不参与去重 key 计算，仅按 eventType 去重。
+func (r *Router) emitOnce(eventType string, data map[string]any) {
+	r.emittedMu.Lock()
+	if r.emitted[eventType] {
+		r.emittedMu.Unlock()
+		return
+	}
+	r.emitted[eventType] = true
+	r.emittedMu.Unlock()
+	r.emit(eventType, data)
 }
 
 // Select 为给定请求选择最合适的 model。
@@ -235,7 +255,8 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 	}
 
 	// 广播 intent 分类完成事件，让前端 Inspector 看到分类结果（白盒）。
-	r.emit("intent_classified", map[string]any{
+	// 同一 Router 实例内只广播一次，避免 ReAct 多次 think 时重复刷屏。
+	r.emitOnce("intent_classified", map[string]any{
 		"primary_intent":    intentClass.PrimaryIntent,
 		"secondary_intents": intentClass.SecondaryIntents,
 		"confidence":        intentClass.Confidence,

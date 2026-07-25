@@ -16,11 +16,11 @@
   - [x] 2-3 在 `Engine.think` 中把这些字段传给 `RouteRequest`
   - [x] 2-4 添加 `ParseTier` helper 解析 tier 字符串
   - [x] 2-5 运行测试 + 提交
-- [ ] **Task P3-3**: Router `intent_classified` 事件去重
-  - [ ] 3-1 在 `Router` 中新增 `emitted` map + `emitOnce` 方法
-  - [ ] 3-2 `intent_classified` 改用 `emitOnce`，`model_rate_limited` 保持每次广播
-  - [ ] 3-3 新增单测验证重复 `Select` 只产生一次 `intent_classified`
-  - [ ] 3-4 运行测试 + 提交
+- [x] **Task P3-3**: Router `intent_classified` 事件去重
+  - [x] 3-1 在 `Router` 中新增 `emitted` map + `emitOnce` 方法
+  - [x] 3-2 `intent_classified` 改用 `emitOnce`，`model_rate_limited` 保持每次广播
+  - [x] 3-3 新增单测验证重复 `Select` 只产生一次 `intent_classified`
+  - [x] 3-4 运行测试 + 提交
 - [ ] **Task P3-4**: RateLimiter 接入真实 LLM 调用
   - [ ] 4-1 `EngineConfig` 新增 `RateLimiter` 字段
   - [ ] 4-2 `Engine.think` 调用成功后 `RecordCall(selectedModel)`

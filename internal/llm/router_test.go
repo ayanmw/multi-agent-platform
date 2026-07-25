@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
 // ---------------------------------------------------------------------------
@@ -718,6 +720,92 @@ func TestSelectEmptyRegistryReturnsError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no suitable model") {
 		t.Fatalf("err = %v, want 'no suitable model'", err)
 	}
+}
+
+// TestSelectIntentClassifiedEmittedOnce 验证同一个 Router 实例上多次调用 Select
+// 只广播一次 intent_classified；model_rate_limited 不在此测试覆盖。
+func TestSelectIntentClassifiedEmittedOnce(t *testing.T) {
+	reg := newRegistryWith(
+		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
+	)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	bc := &fakeEventBroadcaster{}
+	r.SetBroadcaster(bc, "t1", "agent-1")
+
+	for i := 0; i < 3; i++ {
+		_, err := r.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+		if err != nil {
+			t.Fatalf("Select #%d: %v", i+1, err)
+		}
+	}
+
+	if got := len(bc.eventsOfType(event.EventIntentClassified)); got != 1 {
+		t.Errorf("intent_classified emitted %d times, want 1; full events: %+v", got, bc.events)
+	}
+}
+
+// TestSelectModelRateLimitedNotDeduplicated 验证 model_rate_limited 事件
+// 每次被触发都应广播，不做去重。
+func TestSelectModelRateLimitedNotDeduplicated(t *testing.T) {
+	exceededModel := profileFor("exceeded-m", TierEfficient, nil, 8192, "")
+	freeModel := profileFor("free-m", TierFree, nil, 8192, "")
+	reg := newRegistryWith(
+		exceededModel,
+		freeModel,
+	)
+	// 把 exceededModel 的 RPM 设低一些以便 IsLimitExceeded 成立。
+	exceededModel.RateLimitRPM = 1
+
+	// 构造 RateLimiter 并设置 exceeded-m 的 RPM 限制为 1。
+	rl := NewRateLimiter()
+	rl.SetLimit("exceeded-m", 1)
+	rl.RecordCall("exceeded-m") // 占用一次，使 exceeded-m 在 Select 时被限流
+
+	router := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, rl)
+	bc := &fakeEventBroadcaster{}
+	router.SetBroadcaster(bc, "t1", "agent-1")
+
+	// 第一次 Select：exceeded-m 在窗口内已被占用一次，再次检查将触发限流。
+	_, err := router.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+	if err != nil {
+		t.Fatalf("first Select: %v", err)
+	}
+
+	// 再记录一次 exceeded-m，第二次 Select 时它仍然会被限流并再次广播事件。
+	rl.RecordCall("exceeded-m")
+	_, err = router.Select(context.Background(), &RouteRequest{UserInput: "hi"})
+	if err != nil {
+		t.Fatalf("second Select: %v", err)
+	}
+
+	modelLimitedCount := len(bc.eventsOfType(event.EventModelRateLimited))
+	if modelLimitedCount < 1 {
+		t.Errorf("model_rate_limited emitted %d times, want >= 1", modelLimitedCount)
+	}
+}
+
+// fakeEventBroadcaster 记录所有 SendEvent 调用，便于测试去重逻辑。
+type fakeEventBroadcaster struct {
+	events []fakeEvent
+}
+
+type fakeEvent struct {
+	eventType string
+	data      map[string]any
+}
+
+func (f *fakeEventBroadcaster) SendEvent(eventType string, data map[string]any) {
+	f.events = append(f.events, fakeEvent{eventType: eventType, data: data})
+}
+
+func (f *fakeEventBroadcaster) eventsOfType(eventType string) []fakeEvent {
+	var out []fakeEvent
+	for _, e := range f.events {
+		if e.eventType == eventType {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
