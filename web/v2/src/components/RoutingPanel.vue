@@ -17,7 +17,7 @@ const props = defineProps<{
   taskId: string
 }>()
 
-const { routeEvents, decisionsByTask } = useRouteEvents()
+const { routeEvents, decisionsByTask, hasFallback, hasBudgetExceeded } = useRouteEvents()
 
 const filteredEvents = computed<AgentEvent[]>(() => {
   if (!props.taskId) return routeEvents.value
@@ -76,9 +76,27 @@ function formatTime(ts: number): string {
         <span class="decision-label">Fallback</span>
         <span class="decision-value">{{ currentDecision.fallback }}</span>
       </div>
+      <div v-if="currentDecision.fallbacks && currentDecision.fallbacks.length" class="decision-row">
+        <span class="decision-label">Switches</span>
+        <span class="decision-value">
+          {{ currentDecision.fallbacks.map(f => `${f.primary} → ${f.fallback}`).join(', ') }}
+        </span>
+      </div>
+      <div v-if="currentDecision.budgetExceeded" class="budget-exceeded-badge">
+        Budget exceeded: ${{ Number(currentDecision.budgetExceeded.currentCostUSD).toFixed(6) }} / ${{ Number(currentDecision.budgetExceeded.maxCostUSD).toFixed(6) }}
+      </div>
       <div v-if="currentDecision.reason" class="decision-reason">
         {{ currentDecision.reason }}
       </div>
+    </div>
+
+    <div class="routing-status-badges">
+      <span v-if="hasFallback(props.taskId)" class="status-badge status-badge--fallback">
+        Fallback used
+      </span>
+      <span v-if="hasBudgetExceeded(props.taskId)" class="status-badge status-badge--budget">
+        Budget exceeded
+      </span>
     </div>
 
     <div v-if="filteredEvents.length === 0" class="routing-empty">
@@ -253,6 +271,43 @@ function formatTime(ts: number): string {
 .routing-event--fallback { color: var(--accent-warning); border-color: rgba(255,171,0,0.25); }
 .routing-event--rate-limited { color: var(--accent-danger); border-color: rgba(255,77,77,0.25); }
 .routing-event--budget { color: var(--accent-danger); border-color: rgba(255,77,77,0.25); }
+.routing-status-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+.status-badge {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+}
+.status-badge--fallback {
+  color: var(--accent-warning);
+  background: rgba(255, 171, 0, 0.1);
+  border-color: rgba(255, 171, 0, 0.25);
+}
+.status-badge--budget {
+  color: var(--accent-danger);
+  background: rgba(255, 77, 77, 0.1);
+  border-color: rgba(255, 77, 77, 0.25);
+}
+.budget-exceeded-badge {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--accent-danger);
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.25);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm);
+  margin-top: var(--space-xs);
+}
 .routing-time {
   font-family: var(--font-mono);
   font-size: 0.6rem;

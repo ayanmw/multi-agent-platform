@@ -53,6 +53,8 @@ const decisionsByTask = computed(() => {
       fallback?: string
       reason?: string
       cheapFirst?: boolean
+      fallbacks: Array<{ primary: string; fallback: string; reason?: string }>
+      budgetExceeded?: { currentCostUSD: number; maxCostUSD: number; reason?: string }
       events: AgentEvent[]
     }
   > = {}
@@ -64,6 +66,7 @@ const decisionsByTask = computed(() => {
         taskId: ev.task_id,
         subTaskId: ev.sub_task_id,
         agentId: ev.agent_id,
+        fallbacks: [],
         events: [],
       }
     }
@@ -85,7 +88,18 @@ const decisionsByTask = computed(() => {
     }
     if (ev.type === 'model_fallback_used') {
       const d = ev.data || {}
-      entry.fallback = String(d.fallback || '')
+      const primary = String(d.primary || entry.model || '')
+      const fallback = String(d.fallback || '')
+      entry.fallback = fallback
+      entry.fallbacks.push({ primary, fallback, reason: d.reason ? String(d.reason) : undefined })
+    }
+    if (ev.type === 'cost_budget_exceeded') {
+      const d = ev.data || {}
+      entry.budgetExceeded = {
+        currentCostUSD: Number(d.current_cost_usd || 0),
+        maxCostUSD: Number(d.max_cost_usd || 0),
+        reason: d.reason ? String(d.reason) : undefined,
+      }
     }
   }
 
@@ -94,6 +108,16 @@ const decisionsByTask = computed(() => {
 
 /** 最近事件流，按时间倒序。 */
 const recentEvents = computed(() => [...routeEvents.value].reverse())
+
+function hasFallback(taskId: string): boolean {
+  const d = decisionsByTask.value[taskId] || decisionsByTask.value['']
+  return d ? d.fallbacks.length > 0 || Boolean(d.fallback) : false
+}
+
+function hasBudgetExceeded(taskId: string): boolean {
+  const d = decisionsByTask.value[taskId] || decisionsByTask.value['']
+  return d ? Boolean(d.budgetExceeded) : false
+}
 
 export function useRouteEvents() {
   if (!unsubscribe) {
@@ -104,6 +128,8 @@ export function useRouteEvents() {
   return {
     routeEvents: recentEvents,
     decisionsByTask,
+    hasFallback,
+    hasBudgetExceeded,
     clear,
   }
 }
