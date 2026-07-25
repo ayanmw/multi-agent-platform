@@ -428,6 +428,12 @@ type EngineConfig struct {
 	// 达到或超过上限时发出 cost_budget_exceeded 事件并终止任务。
 	// 0 表示未设置成本上限。
 	MaxCostUSD float64
+
+	// Phase multi-model-routing P3-2: Agent 级路由偏好字段。
+	// 这些字段从 AgentRunSpec / DB agent 配置传递而来，直接注入 RouteRequest。
+	PreferredModel string // 显式指定模型名，空字符串表示自动路由
+	PreferredTier  string // 偏好层级字符串，如 "standard" / "premium"
+	AllowAutoRoute bool   // 是否允许在未命中优先模型时先用更便宜 tier 试跑
 }
 
 // OnLLMUsage 是每次成功 LLM 调用后被调用的回调类型。
@@ -639,6 +645,16 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		consecutiveErrors: 0,
 		resumeCh:          make(chan struct{}),
 	}
+}
+
+// parsePreferredTier 解析 EngineConfig.PreferredTier 字符串，非法值视为未指定。
+// 返回 ModelTier(-1) 表示未指定，Router 会忽略该偏好。
+func parsePreferredTier(s string) llm.ModelTier {
+	tier := llm.ParseTier(s)
+	if tier == llm.ModelTier(-1) {
+		return llm.ModelTier(-1)
+	}
+	return tier
 }
 
 // appendMessage 以线程安全方式追加一条消息到 Engine.messages。
@@ -1620,9 +1636,14 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		}
 
 		routeReq := &llm.RouteRequest{
-			UserInput:    userInput,
-			ContextLen:   contextLen,
-			RequiredCaps: []llm.ModelCapability{llm.CapToolCalling, llm.CapStreaming},
+			UserInput:       userInput,
+			ContextLen:      contextLen,
+			RequiredCaps:    []llm.ModelCapability{llm.CapToolCalling, llm.CapStreaming},
+			PreferredModel:  e.cfg.PreferredModel,
+			PreferredTier:   parsePreferredTier(e.cfg.PreferredTier),
+			AllowCheapFirst: e.cfg.AllowAutoRoute,
+			BudgetUSD:       e.cfg.MaxCostUSD,
+			AgentRole:       string(e.cfg.Role),
 		}
 
 		var errRoute error

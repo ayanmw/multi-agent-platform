@@ -28,6 +28,7 @@ package llm
 import (
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -72,6 +73,25 @@ func (t ModelTier) String() string {
 		return "premium"
 	default:
 		return "unknown"
+	}
+}
+
+// ParseTier 把字符串解析为 ModelTier。它忽略大小写和前后空白，
+// 非法字符串返回 -1。调用方通常按空字符串即"未指定"处理。
+func ParseTier(s string) ModelTier {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "free":
+		return TierFree
+	case "efficient":
+		return TierEfficient
+	case "lightweight":
+		return TierLightweight
+	case "standard":
+		return TierStandard
+	case "premium":
+		return TierPremium
+	default:
+		return ModelTier(-1)
 	}
 }
 

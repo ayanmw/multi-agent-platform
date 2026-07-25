@@ -10,12 +10,12 @@
   - [x] 1-2 为 deepseek/openai/anthropic/gemini model 创建对应 provider
   - [x] 1-3 注入 `AgentDeps.RouterProviders` 并验证 `resolveProvider` 路径
   - [x] 1-4 `go test ./cmd/server/...` + `go build ./...` + 提交
-- [ ] **Task P3-2**: Agent 配置绑定到 RouteRequest
-  - [ ] 2-1 扩展 `AgentRunSpec` 携带 `PreferredModel` / `PreferredTier` / `AllowAutoRoute` / `MaxCostUSD` / `AgentRole`
-  - [ ] 2-2 在 `runner.go` 中通过 Agent DB 记录或 spec 字段填充 `EngineConfig.MaxCostUSD`
-  - [ ] 2-3 在 `Engine.think` 中把这些字段传给 `RouteRequest`
-  - [ ] 2-4 添加 `ParseTier` helper 解析 tier 字符串
-  - [ ] 2-5 运行测试 + 提交
+- [x] **Task P3-2**: Agent 配置绑定到 RouteRequest
+  - [x] 2-1 扩展 `AgentRunSpec` 携带 `PreferredModel` / `PreferredTier` / `AllowAutoRoute` / `MaxCostUSD` / `AgentRole`
+  - [x] 2-2 在 `runner.go` 中通过 Agent DB 记录或 spec 字段填充 `EngineConfig.MaxCostUSD`
+  - [x] 2-3 在 `Engine.think` 中把这些字段传给 `RouteRequest`
+  - [x] 2-4 添加 `ParseTier` helper 解析 tier 字符串
+  - [x] 2-5 运行测试 + 提交
 - [ ] **Task P3-3**: Router `intent_classified` 事件去重
   - [ ] 3-1 在 `Router` 中新增 `emitted` map + `emitOnce` 方法
   - [ ] 3-2 `intent_classified` 改用 `emitOnce`，`model_rate_limited` 保持每次广播

@@ -71,6 +71,13 @@ type AgentRunSpec struct {
 	CanDefineWorkflow    bool
 	ApproverMode         string // "user" / "leader"
 	SupervisorSubTaskID  string
+
+	// Phase multi-model-routing P3-2: Agent 级模型路由偏好，
+	// 将传给 EngineConfig 与 Router RouteRequest。
+	PreferredModel string  // 显式指定模型名，空字符串表示自动路由
+	PreferredTier  string  // 偏好层级，如 "standard" / "premium"，空字符串表示不指定
+	AllowAutoRoute bool    // 是否允许在 PreferredModel 未命中时自动重选
+	MaxCostUSD     float64 // 单次 task 成本预算上限，0 表示无限制
 }
 
 // AgentDeps 聚合一次 agent 运行所需的全部共享依赖。
@@ -748,6 +755,37 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// sessionID，则给本次 run 注册 worktree/* Agent Tool，注入 holder 与 sessionID。
 	// Manager 为 nil（worktree 未启用）时跳过，holder 仍构造但只用于普通 CWD
 	// 一致性（无 worktree 工具，holder 值恒为 WorkspaceDir，行为等价旧路径）。
+	// Phase multi-model-routing P3-2: 从 Agent DB 记录或 AgentRunSpec 提取
+	// Agent 级路由与预算配置。DB 记录优先，spec 字段兜底，都没设置则 Router
+	// 自动选择。这些值将注入 EngineConfig 与 Router RouteRequest。
+	preferredModel := spec.PreferredModel
+	preferredTier := spec.PreferredTier
+	allowAutoRoute := spec.AllowAutoRoute
+	maxCostUSD := spec.MaxCostUSD
+	if db.DB != nil && agentID != "" {
+		if agent, err := db.QueryAgentByID(agentID); err == nil && agent != nil {
+			if agent.PreferredModel != "" {
+				preferredModel = agent.PreferredModel
+			}
+			if agent.PreferredTier != "" {
+				preferredTier = agent.PreferredTier
+			}
+			// AllowAutoRoute 是 bool，DB 值显式覆盖 spec（因为 agent 配置是持久化偏好）。
+			allowAutoRoute = agent.AllowAutoRoute
+			if agent.MaxCostUSD > 0 {
+				maxCostUSD = agent.MaxCostUSD
+			}
+		} else if err != nil {
+			// agent 不存在时不阻塞运行；其它 DB 错误记录 warning。
+			if !strings.Contains(err.Error(), "no rows") {
+				observability.DefaultLogger.Warn("agent", "failed to load agent config for routing", map[string]any{
+					"agent_id": agentID,
+					"error":    err.Error(),
+				})
+			}
+		}
+	}
+
 	holder := workspace.NewWorkdirHolder(workspaceDir)
 	if r.Deps.WorkspaceMgr != nil && sessionID != "" {
 		if engineTools == tools {
@@ -869,6 +907,11 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 			}
 			return todo.FormatActiveTodos(activeTodos)
 		}(),
+		// Phase multi-model-routing P3-2: Agent 级路由偏好注入 EngineConfig。
+		PreferredModel: preferredModel,
+		PreferredTier:  preferredTier,
+		AllowAutoRoute: allowAutoRoute,
+		MaxCostUSD:     maxCostUSD,
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
