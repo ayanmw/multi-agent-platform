@@ -150,12 +150,16 @@ function eventClass(type: string): string {
 <style scoped>
 .cron-dock {
   display: flex; flex-direction: column;
+  width: var(--cron-dock-width, 280px);
+  min-width: 240px;
+  max-width: 360px;
   height: 100%; gap: var(--space-sm);
   padding: var(--space-sm);
   background: var(--bg-panel);
   border-left: 1px solid var(--border-default);
   overflow: hidden;
   font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 .dock-header {
   display: flex; align-items: center; justify-content: space-between;

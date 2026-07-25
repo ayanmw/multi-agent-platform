@@ -64,15 +64,21 @@ const emit = defineEmits<{
 
   <!-- 折叠态：18px 细 rail，点击整条 rail 重新展开。
        箭头朝向内容区（左栏 ▶ 向右展开回主区，右栏 ◀ 向左展开回主区），
-       与折叠三角形方向相反，符合"箭头指向展开后出现的位置"的直觉。 -->
+       与折叠三角形方向相反，符合"箭头指向展开后出现的位置"的直觉。
+       键盘可访问：tabindex、role="button"、aria-expanded、Enter/Space 触发。 -->
   <aside
     v-else
     class="dock-rail"
     :class="'dock-' + side"
     :title="`Show ${title}`"
+    tabindex="0"
+    role="button"
+    :aria-expanded="false"
+    :aria-label="`Show ${title}`"
     @click="emit('reopen')"
+    @keydown.enter.space.prevent="emit('reopen')"
   >
-    <span class="dock-rail-arrow">{{ side === 'left' ? '▶' : '◀' }}</span>
+    <span class="dock-rail-arrow" aria-hidden="true">{{ side === 'left' ? '▶' : '◀' }}</span>
   </aside>
 </template>
 
@@ -123,13 +129,20 @@ const emit = defineEmits<{
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 4px;
   transition: background 0.15s, color 0.15s;
+}
+
+@media (max-width: 767px) {
+  .dock-collapse {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .dock-collapse:hover {

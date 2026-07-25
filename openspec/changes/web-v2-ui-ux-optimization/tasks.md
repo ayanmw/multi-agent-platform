@@ -2,18 +2,18 @@
 
 ## 1. Layout & Responsive Foundation
 
-- [ ] 1.1 Refactor `App.vue` to separate tablet and mobile CommandBar positioning models: tablet uses flex flow, mobile keeps fixed bottom with stage padding.
-- [ ] 1.2 Add CSS variables and rules in `App.vue` / `responsive.css` so `.layout-mobile .main-stage` reserves bottom padding for CommandBar + MobileNav + safe-area inset.
-- [ ] 1.3 Verify tablet (768–1023px) and mobile (<768px) layouts in browser dev tools; ensure no double command-area space.
+- [x] 1.1 Refactor `App.vue` to separate tablet and mobile CommandBar positioning models: tablet uses flex flow, mobile keeps fixed bottom with stage padding.
+- [x] 1.2 Add CSS variables and rules in `App.vue` / `responsive.css` so `.layout-mobile .main-stage` reserves bottom padding for CommandBar + MobileNav + safe-area inset.
+- [x] 1.3 Verify tablet (768–1023px) and mobile (<768px) layouts in browser dev tools; ensure no double command-area space.
 
 ## 2. Desktop Dock Width Governance
 
-- [ ] 2.1 Add explicit `width`, `min-width`, and `max-width` to `CronDockPanel.vue` and its container in `App.vue`.
-- [ ] 2.2 Define a right-dock-zone combined width cap (`max-width: min(45vw, 720px)`) in `App.vue` desktop layout.
-- [ ] 2.3 Extend `useLayout.ts` to compute `availableStageWidth` based on current dock widths and resizer widths.
-- [ ] 2.4 Implement auto-collapse behavior: when `availableStageWidth < 600px`, collapse Cron dock first, then Files dock, with a Toast explaining the action.
-- [ ] 2.5 Add logic to prevent reopening a dock when there is insufficient space.
-- [ ] 2.6 Verify at 1024px, 1280px, and 1920px widths with various dock open/close combinations.
+- [x] 2.1 Add explicit `width`, `min-width`, and `max-width` to `CronDockPanel.vue` and its container in `App.vue`.
+- [x] 2.2 Define a right-dock-zone combined width cap (`max-width: min(45vw, 720px)`) in `App.vue` desktop layout.
+- [x] 2.3 Extend `useLayout.ts` to compute `availableStageWidth` based on current dock widths and resizer widths.
+- [x] 2.4 Implement auto-collapse behavior: when `availableStageWidth < 600px`, collapse Cron dock first, then Files dock, with a Toast explaining the action.
+- [x] 2.5 Add logic to prevent reopening a dock when there is insufficient space.
+- [x] 2.6 Verify at 1024px, 1280px, and 1920px widths with various dock open/close combinations.
 
 ## 3. Flyout Positioning Safety
 

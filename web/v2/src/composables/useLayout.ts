@@ -1,4 +1,4 @@
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 /**
  * 响应式布局状态管理 Composable
@@ -7,6 +7,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
  * - 监听窗口宽度，给出 isMobile / isTablet / isDesktop 断点。
  * - 维护桌面端左右 Dock 的开合状态；移动端由 activeMobileTab 决定可见区域。
  * - 维护三栏宽度（左 Dock / 右 Files 栏），支持拖拽调整并写入 localStorage 持久化。
+ * - 治理右侧 Dock 区（Files + Cron）的总宽度与主舞台可用宽度：
+ *   当主舞台宽度不足时自动收起 Cron / Files，并阻止在不足空间下重新展开。
  * - 提供切换函数并在组件卸载时清理 resize 事件。
  *
  * 使用场景：
@@ -16,6 +18,13 @@ export function useLayout() {
   // 断点：与 Tailwind md/lg 对齐（md=768, lg=1024）
   const MOBILE_MAX = 767
   const TABLET_MAX = 1023
+
+  // 布局常量
+  const RESIZER_WIDTH = 6
+  const CRON_DOCK_WIDTH = 280
+  const RIGHT_ZONE_MAX_PERCENT = 0.45
+  const RIGHT_ZONE_MAX_ABS = 720
+  const STAGE_MIN_WIDTH = 600
 
   // SSR 安全：服务端默认按桌面布局渲染
   const windowWidth = ref<number>(
@@ -38,6 +47,9 @@ export function useLayout() {
 
   /** 桌面端右侧 Files 面板是否展开 */
   const rightFilesOpen = ref(true)
+
+  /** 桌面/平板端右侧 Cron 面板是否展开 */
+  const rightCronOpen = ref(false)
 
   /** 移动端当前 tab：stage / sessions / files / manage / cron */
   const activeMobileTab = ref<'stage' | 'sessions' | 'files' | 'manage' | 'cron'>('stage')
@@ -82,6 +94,44 @@ export function useLayout() {
   const leftDockWidth = ref<number>(initial.left)
   /** 右 Files 栏宽度（px）。 */
   const rightFilesWidth = ref<number>(initial.right)
+
+  /** 右侧 Dock 区（Files + Cron）总宽度上限（px）。 */
+  const rightZoneMax = computed(() =>
+    Math.min(Math.floor(windowWidth.value * RIGHT_ZONE_MAX_PERCENT), RIGHT_ZONE_MAX_ABS),
+  )
+
+  /** 当前右侧区域实际因展开状态占用的宽度（不含 resizer）。 */
+  const rightDockOccupied = computed(() => {
+    let w = 0
+    if (rightFilesOpen.value) w += rightFilesWidth.value
+    if (rightCronOpen.value) w += CRON_DOCK_WIDTH
+    return w
+  })
+
+  /** 主舞台可用宽度 = 视口宽 - 左 dock + resizer - 右侧占用 - 右侧 resizer */
+  const availableStageWidth = computed(() => {
+    let used = 0
+    if (leftDockOpen.value) used += leftDockWidth.value + RESIZER_WIDTH
+    if (rightFilesOpen.value) used += rightFilesWidth.value + RESIZER_WIDTH
+    if (rightCronOpen.value) used += CRON_DOCK_WIDTH
+    return Math.max(0, windowWidth.value - used)
+  })
+
+  /** 是否有足够空间展开 Cron dock（在保持主舞台至少 STAGE_MIN_WIDTH 的前提下）。 */
+  const canOpenCron = computed(() => {
+    let used = 0
+    if (leftDockOpen.value) used += leftDockWidth.value + RESIZER_WIDTH
+    if (rightFilesOpen.value) used += rightFilesWidth.value + RESIZER_WIDTH
+    return windowWidth.value - used - CRON_DOCK_WIDTH >= STAGE_MIN_WIDTH
+  })
+
+  /** 是否有足够空间展开 Files dock。 */
+  const canOpenFiles = computed(() => {
+    let used = 0
+    if (leftDockOpen.value) used += leftDockWidth.value + RESIZER_WIDTH
+    if (rightCronOpen.value) used += CRON_DOCK_WIDTH + RESIZER_WIDTH
+    return windowWidth.value - used - rightFilesWidth.value >= STAGE_MIN_WIDTH
+  })
 
   function persistWidths(): void {
     if (typeof window === 'undefined') return
@@ -169,8 +219,13 @@ export function useLayout() {
     if (typeof window !== 'undefined') {
       windowWidth.value = window.innerWidth
       capCommandHeightOnResize()
+      autoCollapseRightIfNeeded()
     }
   }
+
+  // 用户展开右侧 dock 时同步检测空间，必要时自动折叠另一侧。
+  watch(rightCronOpen, () => autoCollapseRightIfNeeded())
+  watch(rightFilesOpen, () => autoCollapseRightIfNeeded())
 
   function toggleLeftDock() {
     leftDockOpen.value = !leftDockOpen.value
@@ -178,6 +233,45 @@ export function useLayout() {
 
   function toggleRightFiles() {
     rightFilesOpen.value = !rightFilesOpen.value
+  }
+
+  /** 切换 Cron dock；若当前空间不足则保持关闭并返回 false。 */
+  function toggleRightCron(): boolean {
+    const desired = !rightCronOpen.value
+    if (!desired) {
+      rightCronOpen.value = false
+      return true
+    }
+    if (!canOpenCron.value) return false
+    rightCronOpen.value = true
+    return true
+  }
+
+  /** 设置 Cron dock 显式状态；空间不足时强制设为 false 并返回 false。 */
+  function setRightCronOpen(open: boolean): boolean {
+    if (!open) {
+      rightCronOpen.value = false
+      return true
+    }
+    if (!canOpenCron.value) {
+      rightCronOpen.value = false
+      return false
+    }
+    rightCronOpen.value = true
+    return true
+  }
+
+  /** 窗口变化时自动收起右侧 dock，保证主舞台始终有可用宽度。 */
+  function autoCollapseRightIfNeeded() {
+    if (!isDesktop.value && !isTablet.value) return
+    // 主舞台不足时，先折叠 Cron，再折叠 Files（优先级：Cron 辅助面板优先于文件列表）。
+    if (availableStageWidth.value < STAGE_MIN_WIDTH) {
+      if (rightCronOpen.value) {
+        rightCronOpen.value = false
+      } else if (rightFilesOpen.value) {
+        rightFilesOpen.value = false
+      }
+    }
   }
 
   function setActiveMobileTab(tab: 'stage' | 'sessions' | 'files' | 'manage' | 'cron') {
@@ -214,14 +308,21 @@ export function useLayout() {
     isDesktop,
     leftDockOpen,
     rightFilesOpen,
+    rightCronOpen,
     activeMobileTab,
     mobileMoreOpen,
     isCommandBarVisible,
-    // 宽度与拖拽
+    // 宽度与空间治理
     leftDockWidth,
     rightFilesWidth,
+    rightZoneMax,
+    rightDockOccupied,
+    availableStageWidth,
+    canOpenCron,
+    canOpenFiles,
     setLeftDockWidth,
     setRightFilesWidth,
+    setRightCronOpen,
     commitWidths,
     resetWidths,
     // 输入区高度
@@ -232,6 +333,7 @@ export function useLayout() {
     // 开合切换
     toggleLeftDock,
     toggleRightFiles,
+    toggleRightCron,
     setActiveMobileTab,
     setMobileMoreOpen,
     toggleMobileMore,

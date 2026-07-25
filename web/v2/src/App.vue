@@ -40,6 +40,9 @@ import { useTheme } from './composables/useTheme'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
 
+/** Cron 面板固定宽度（与 useLayout 中常量保持一致，仅用于 CSS 变量注入）。 */
+const CRON_DOCK_WIDTH = 280
+
 /**
  * App.vue — v2 Observable Control Room 根布局
  *
@@ -59,11 +62,14 @@ const {
   isDesktop,
   leftDockOpen,
   rightFilesOpen,
+  rightCronOpen,
   activeMobileTab,
   mobileMoreOpen,
   isCommandBarVisible,
   leftDockWidth,
   rightFilesWidth,
+  rightZoneMax,
+  canOpenCron,
   commandAreaHeight,
   setLeftDockWidth,
   setRightFilesWidth,
@@ -73,6 +79,8 @@ const {
   resetWidths,
   toggleLeftDock,
   toggleRightFiles,
+  toggleRightCron,
+  setRightCronOpen,
 } = useLayout()
 
 const {
@@ -170,8 +178,7 @@ const inspectorInitialTab = ref<string>('memory')
 // Context 与 Manage 浮窗开关状态
 const contextFlyoutOpen = ref(false)
 const manageFlyoutOpen = ref(false)
-// 右侧 Cron 侧边面板（可折叠），桌面/平板均可用。
-const rightCronOpen = ref(false)
+// 右侧 Cron 侧边面板（可折叠），桌面/平板均可用（状态已迁移到 useLayout）。
 const commandBarRef = ref<InstanceType<typeof CommandBar> | null>(null)
 const contextAnchorRect = ref<DOMRect | null>(null)
 
@@ -212,6 +219,13 @@ function openCronManage(cronId?: string) {
   inspectorInitialTab.value = 'cron'
   inspectorFocusCronId.value = cronId || ''
   inspectorDialogOpen.value = true
+}
+
+function handleToggleCron() {
+  const opened = toggleRightCron()
+  if (!opened && !rightCronOpen.value) {
+    showInfo('主舞台空间不足，无法展开 Cron 面板')
+  }
 }
 
 // === 当前任务/会话派生状态 ===
@@ -950,11 +964,12 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       @toggle-mcp="mcpServerDialogVisible = true"
       @toggle-keyboard-tips="showTips = true"
       @toggle-manage="manageFlyoutOpen = !manageFlyoutOpen"
-      @toggle-cron="rightCronOpen = !rightCronOpen"
+      @toggle-cron="handleToggleCron"
     />
 
-    <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽 -->
-    <div v-if="isDesktop" class="layout-desktop" :style="{ '--left-w': leftDockWidth + 'px', '--right-w': rightFilesWidth + 'px' }">
+    <!-- 桌面三栏布局：左 Sessions | 主舞台 | 右 Files，宽度可拖拽；右侧 Cron 作为额外 dock 依附。
+         用 right-dock-zone 包裹 Files + Cron，限制整体最大宽度，避免过宽挤压主舞台。 -->
+    <div v-if="isDesktop" class="layout-desktop" :style="{ '--left-w': leftDockWidth + 'px', '--right-w': rightFilesWidth + 'px', '--cron-w': CRON_DOCK_WIDTH + 'px', '--right-zone-max': rightZoneMax + 'px' }">
       <DockPanel side="left" title="Sessions" :open="leftDockOpen" @close="toggleLeftDock" @reopen="toggleLeftDock">
         <SessionDock
           :projects="projects"
@@ -1042,21 +1057,23 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         @resize-end="commitWidths"
       />
 
-      <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles" @reopen="toggleRightFiles">
-        <SessionFiles :session-id="activeSessionId || ''" />
-      </DockPanel>
+      <div class="right-dock-zone">
+        <DockPanel side="right" title="Files" :open="rightFilesOpen" @close="toggleRightFiles" @reopen="toggleRightFiles">
+          <SessionFiles :session-id="activeSessionId || ''" />
+        </DockPanel>
 
-      <!-- 右侧 Cron 侧边面板：只读相关定时器 + 实时触发流，可一键跳转管理 tab -->
-      <CronDockPanel
-        :open="rightCronOpen"
-        :session-id="activeSessionId || ''"
-        @update:open="rightCronOpen = $event"
-        @open-manage="openCronManage"
-      />
+        <!-- 右侧 Cron 侧边面板：只读相关定时器 + 实时触发流，可一键跳转管理 tab -->
+        <CronDockPanel
+          :open="rightCronOpen"
+          :session-id="activeSessionId || ''"
+          @update:open="setRightCronOpen($event) || showInfo('主舞台空间不足，已自动收起 Cron 面板')"
+          @open-manage="openCronManage"
+        />
+      </div>
     </div>
 
     <!-- 平板双栏布局 -->
-    <div v-else-if="isTablet" class="layout-tablet" :style="{ '--cmd-h': commandAreaHeight + 'px' }">
+    <div v-else-if="isTablet" class="layout-tablet" :style="{ '--cmd-h': commandAreaHeight + 'px', '--cron-w': CRON_DOCK_WIDTH + 'px', '--right-zone-max': rightZoneMax + 'px' }">
       <DockPanel
         v-if="leftDockOpen"
         side="left"
@@ -1132,23 +1149,25 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         </div>
       </section>
 
-      <DockPanel
-        v-if="rightFilesOpen"
-        side="right"
-        title="Files"
-        :open="true"
-        @close="toggleRightFiles"
-      >
-        <SessionFiles :session-id="activeSessionId || ''" />
-      </DockPanel>
+      <div class="right-dock-zone">
+        <DockPanel
+          v-if="rightFilesOpen"
+          side="right"
+          title="Files"
+          :open="true"
+          @close="toggleRightFiles"
+        >
+          <SessionFiles :session-id="activeSessionId || ''" />
+        </DockPanel>
 
-      <!-- 平板端同样提供 Cron 侧边面板 -->
-      <CronDockPanel
-        :open="rightCronOpen"
-        :session-id="activeSessionId || ''"
-        @update:open="rightCronOpen = $event"
-        @open-manage="openCronManage"
-      />
+        <!-- 平板端同样提供 Cron 侧边面板 -->
+        <CronDockPanel
+          :open="rightCronOpen"
+          :session-id="activeSessionId || ''"
+          @update:open="setRightCronOpen($event) || showInfo('主舞台空间不足，已自动收起 Cron 面板')"
+          @open-manage="openCronManage"
+        />
+      </div>
     </div>
     <div v-else class="layout-mobile">
       <main v-if="activeMobileTab === 'stage'" class="main-stage mobile-tab-view" @scroll="handleMainScroll">
@@ -1393,6 +1412,20 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
   display: flex;
   min-height: 0;
   margin-top: var(--topbar-height, 48px);
+}
+
+/* 右侧 dock 区：Files + Cron 合并容器，限制整体最大宽度，避免过宽挤压主舞台。 */
+.right-dock-zone {
+  display: flex;
+  flex-shrink: 0;
+  max-width: var(--right-zone-max, min(45vw, 720px));
+  overflow: hidden;
+}
+
+.right-dock-zone > .dock-panel,
+.right-dock-zone > .dock-rail,
+.right-dock-zone > .cron-dock {
+  flex-shrink: 0;
 }
 
 .layout-mobile {
