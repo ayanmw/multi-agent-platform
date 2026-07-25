@@ -422,6 +422,12 @@ type EngineConfig struct {
 	// 从而避免 import cycle。
 	// Phase 7 TODO 子系统引入。
 	ActiveTodos string
+
+	// MaxCostUSD 是 Agent/任务级别的单次运行 USD 成本上限。若 >0，Engine
+	// 在每次 think 选择模型前会用累计 runningCostUSD 做预算拦截；累计成本
+	// 达到或超过上限时发出 cost_budget_exceeded 事件并终止任务。
+	// 0 表示未设置成本上限。
+	MaxCostUSD float64
 }
 
 // OnLLMUsage 是每次成功 LLM 调用后被调用的回调类型。
@@ -496,6 +502,9 @@ type Engine struct {
 	lastError         string                           // 最近一次回喂给 LLM 的可恢复错误的归一化指纹
 	consecutiveErrors int                              // 同一个可恢复错误连续出现的次数
 	rootTraceCtx      *observability.TraceContext      // 该 task 的 root span context
+	// runningCostUSD 是本次任务已产生的累计 USD 成本（仅由 think 的 usage 累计，不抹平 sub-cent）。
+	// 用于在模型选择前做 Agent 级 MaxCostUSD 预算拦截，与 CostBudgetRule（contract 级预算）独立。
+	runningCostUSD float64
 
 	// Pause/Resume 控件（Phase 7-A）：让前端可以在不取消 context 的情况下暂停 agent。
 	// paused 是一个 atomic.Bool，Run loop 每轮检查一次；resumeCh 用来唤醒阻塞中的 loop。
@@ -1017,6 +1026,9 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					OutputPrice: 0,
 				}
 			}
+			// 同步更新 Engine 的累计成本，用于 Agent 级 MaxCostUSD 预算拦截。
+			// 计算方式与 cost.CostTracker.CalculateCost 保持一致。
+			e.runningCostUSD += calculateCallCost(profile, usage)
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -1025,6 +1037,14 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, usage)
 			}()
+		} else {
+			// 即使未配置 OnLLMUsage（测试或纯本地路径），也按当前 profile 累计成本，
+			// 使 MaxCostUSD 预算拦截在没有 cost tracker 时依然生效。
+			var profile *llm.ModelProfile
+			if e.cfg.Registry != nil {
+				profile = e.cfg.Registry.Get(reportModel)
+			}
+			e.runningCostUSD += calculateCallCost(profile, usage)
 		}
 
 		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
@@ -1607,6 +1627,27 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 		var errRoute error
 		routeDecision, errRoute = e.cfg.Router.Select(ctx, routeReq)
+
+		// Router 选择后增加 Agent 级成本预算的最前锋拦截：
+		// 若已累计成本 + 本次调用最小输入成本预估 > MaxCostUSD，直接失败并广播
+		// cost_budget_exceeded 事件，避免把请求发出去才发现超预算。
+		// MaxCostUSD=0 表示未设置预算限制。
+		if errRoute == nil && routeDecision != nil && routeDecision.Primary != nil {
+			if e.cfg.MaxCostUSD > 0 {
+				profile := routeDecision.Primary
+				// 用输入报价和已有对话长度做保守预估（不含输出），作为上界拦截。
+				minEstimate := float64(contextLen) * profile.InputPrice / 1_000_000
+				if e.runningCostUSD+minEstimate > e.cfg.MaxCostUSD {
+					e.bus.SendEvent(event.NewEventWithSubTask("cost_budget_exceeded", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+						"current_cost_usd": e.runningCostUSD,
+						"max_cost_usd":     e.cfg.MaxCostUSD,
+						"reason":           fmt.Sprintf("routing blocked: current $%.6f + min $%.6f > budget $%.6f", e.runningCostUSD, minEstimate, e.cfg.MaxCostUSD),
+					}))
+					return "", llm.Usage{}, nil, fmt.Errorf("cost budget exceeded (routing): $%.6f/$%.6f USD", e.runningCostUSD, e.cfg.MaxCostUSD)
+				}
+			}
+		}
+
 		if errRoute != nil {
 			log.Printf("[Engine] Router selection failed: %v, falling back to default model", errRoute)
 		} else if routeDecision != nil && routeDecision.Primary != nil {
@@ -1632,7 +1673,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 			// model_routed 事件包含 fallback 信息，让前端可以预先展示
 			// fallback 目标模型（白盒透明）。
-			e.bus.SendEvent(event.NewEventWithSubTask("model_routed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRouted, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":    selectedModel,
 				"intent":   routeDecision.Intent,
 				"tier":     routeDecision.Tier.String(),
@@ -1708,7 +1749,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 		}
 		return nil
 	})
-
+	primaryErr := err // 保留主模型失败原因，fallback 失败后合并诊断
 	// Fallback 重试：若主模型失败且配置了 fallback，则重试。
 	if err != nil && routeDecision != nil && routeDecision.Fallback != nil {
 		log.Printf("[Engine] Primary model %s failed (%v), trying fallback %s",
@@ -1722,8 +1763,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 		req.Model = routeDecision.Fallback.Name
 		e.selectedModel = routeDecision.Fallback.Name // fallback 成功后 cost 按实际模型上报
-		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-			"type":     "model_fallback",
+		e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelFallbackUsed, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"primary":  selectedModel,
 			"fallback": routeDecision.Fallback.Name,
 			"reason":   err.Error(),
@@ -1752,6 +1792,10 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			log.Printf("[Engine] Fallback model %s succeeded", routeDecision.Fallback.Name)
 		} else {
 			log.Printf("[Engine] Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
+			// fallback 也失败：保留主模型失败原因，并把 fallback 失败原因合并，
+			// 让上层错误处理拿到完整诊断信息。
+			err = fmt.Errorf("primary %s failed: %v; fallback %s failed: %w",
+				selectedModel, primaryErr, routeDecision.Fallback.Name, err)
 		}
 	}
 
@@ -2519,6 +2563,18 @@ func sanitizeToolCallArguments(tc llm.ToolCall) llm.ToolCall {
 func isValidToolArgumentsJSON(s string) bool {
 	var dummy map[string]any
 	return json.Unmarshal([]byte(s), &dummy) == nil
+}
+
+// calculateCallCost 根据 model profile 与 api usage 计算一次 LLM 调用的 USD 成本。
+// 价格单位为 "USD per 1M tokens"，因此除以 1_000_000 换算为单 token 成本。
+// profile 为 nil 或 usage 为零时返回 0。
+func calculateCallCost(profile *llm.ModelProfile, usage llm.Usage) float64 {
+	if profile == nil || usage.TotalTokens == 0 {
+		return 0
+	}
+	inputCost := float64(usage.PromptTokens) * profile.InputPrice / 1_000_000
+	outputCost := float64(usage.CompletionTokens) * profile.OutputPrice / 1_000_000
+	return inputCost + outputCost
 }
 
 // saveCheckpoint 把当前 engine 状态作为 checkpoint 持久化以支持崩溃恢复。

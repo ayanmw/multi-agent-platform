@@ -54,6 +54,15 @@ const (
 	EventWorktreeExitBlocked   = "worktree_exit_blocked"  // exit{remove} 因未提交变更被护栏阻塞
 	EventWorktreeOrphanRemoved = "worktree_orphan_removed" // 启动孤儿扫描清理 crash 残留
 
+	// 多模型分层路由事件常量。由 Router / Engine 在执行过程中广播，
+	// 前端 Inspector Routing 面板据此展示 intent 分类、模型命中、
+	// fallback 触发与限流/预算命中状态。
+	EventModelRouted          = "model_routed"           // Router 选择主模型
+	EventModelFallbackUsed    = "model_fallback_used"    // 主模型失败，已切换 fallback
+	EventModelRateLimited     = "model_rate_limited"     // 某模型触发 RPM 限流被过滤
+	EventIntentClassified     = "intent_classified"      // intent 分类完成
+	EventCostBudgetExceeded   = "cost_budget_exceeded"   // Agent/任务 USD 预算被耗尽
+
 	// web_research 工具事件常量。当 web_research 内部调用 LLM 做摘要时,
 	// 通过事件总线广播开始与完成状态,保持白盒可观测。
 	EventWebResearchSummarizeStarted  = "web_research_summarize_started"
