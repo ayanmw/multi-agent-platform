@@ -843,15 +843,19 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 
 // agentRequest 是 agent create/update 的 JSON body
 type agentRequest struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	SystemPrompt string   `json:"system_prompt"`
-	Model        string   `json:"model"`
-	Endpoint     string   `json:"api_endpoint"`
-	APIKey       string   `json:"api_key"`
-	Temperature  float64  `json:"temperature"`
-	MaxTokens    int      `json:"max_tokens"`
-	Tools        []string `json:"tools"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	SystemPrompt   string   `json:"system_prompt"`
+	Model          string   `json:"model"`
+	PreferredModel string   `json:"preferred_model"`
+	PreferredTier  string   `json:"preferred_tier"`
+	AllowAutoRoute bool     `json:"allow_auto_route"`
+	MaxCostUSD     float64  `json:"max_cost_usd"`
+	Endpoint       string   `json:"api_endpoint"`
+	APIKey         string   `json:"api_key"`
+	Temperature    float64  `json:"temperature"`
+	MaxTokens      int      `json:"max_tokens"`
+	Tools          []string `json:"tools"`
 }
 
 // handleAgents 处理 GET/POST /api/agents
@@ -882,7 +886,9 @@ func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 		id := uuid.New().String()
 		if err := db.InsertAgent(db.InsertAgentOptions{
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
-			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
+			Model: req.Model, PreferredModel: req.PreferredModel, PreferredTier: req.PreferredTier,
+			AllowAutoRoute: req.AllowAutoRoute, MaxCostUSD: req.MaxCostUSD,
+			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -929,7 +935,9 @@ func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := db.UpdateAgent(db.UpdateAgentOptions{
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
-			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
+			Model: req.Model, PreferredModel: req.PreferredModel, PreferredTier: req.PreferredTier,
+			AllowAutoRoute: req.AllowAutoRoute, MaxCostUSD: req.MaxCostUSD,
+			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -399,6 +399,16 @@ ALTER TABLE tasks ADD COLUMN is_root BOOLEAN DEFAULT 0`,
 			SQL: `CREATE INDEX IF NOT EXISTS idx_todos_parent_todo_id ON todos(parent_todo_id);
 CREATE INDEX IF NOT EXISTS idx_todos_priority_sort_order_created_at ON todos(priority DESC, sort_order ASC, created_at ASC);`,
 		},
+
+		// v26：为 agents 表新增模型绑定字段，支撑 Agent 级别的多模型路由偏好。
+		{
+			Version:     26,
+			Description: "Add preferred_model, preferred_tier, allow_auto_route, max_cost_usd to agents table",
+			SQL: `ALTER TABLE agents ADD COLUMN preferred_model TEXT;
+ALTER TABLE agents ADD COLUMN preferred_tier TEXT;
+ALTER TABLE agents ADD COLUMN allow_auto_route BOOLEAN DEFAULT 1;
+ALTER TABLE agents ADD COLUMN max_cost_usd REAL DEFAULT 0;`,
+		},
 	})
 
 // deduplicateMigrations 按 version 去重，保留第一次出现的条目。

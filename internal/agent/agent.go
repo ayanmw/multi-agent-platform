@@ -34,8 +34,25 @@ type Agent struct {
 	MaxTokens    int
 	Tools        []string // 允许使用的 tool 名称
 	Role         AgentRole
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+
+	// PreferredModel 是 Agent 显式指定的 model 名称。
+	// 若设置且存在于 ModelRegistry，则路由直接命中该模型，跳过自动选择。
+	PreferredModel string
+
+	// PreferredTier 是 Agent 偏好的 model 层级（如 "standard"）。
+	// 当未指定 PreferredModel 时，Router 在该 tier 内选择模型。
+	PreferredTier string
+
+	// AllowAutoRoute 表示当 PreferredModel/PreferredTier 未命中或不可用时，
+	// 是否允许 Router 自动重选其他模型。
+	AllowAutoRoute bool
+
+	// MaxCostUSD 是单次 task 的成本预算上限（USD）。
+	// 0 表示未设置预算限制。
+	MaxCostUSD float64
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // StepType 表示 agent 循环中一个 step 的类型

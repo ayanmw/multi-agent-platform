@@ -60,20 +60,24 @@ type StepRecord struct {
 
 // AgentRecord 对应 agents 表
 type AgentRecord struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	Description  string         `json:"description"`
-	SystemPrompt string         `json:"system_prompt"`
-	Model        string         `json:"model"`
-	Temperature  float64        `json:"temperature"`
-	MaxTokens    int            `json:"max_tokens"`
-	APIEndpoint  string         `json:"api_endpoint"`
-	APIKey       string         `json:"api_key"`
-	Tools        []string       `json:"tools"`
-	Config       map[string]any `json:"config"`
-	IsDefault    bool           `json:"is_default"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description"`
+	SystemPrompt   string         `json:"system_prompt"`
+	Model          string         `json:"model"`
+	PreferredModel string         `json:"preferred_model"`
+	PreferredTier  string         `json:"preferred_tier"`
+	AllowAutoRoute bool           `json:"allow_auto_route"`
+	MaxCostUSD     float64        `json:"max_cost_usd"`
+	Temperature    float64        `json:"temperature"`
+	MaxTokens      int            `json:"max_tokens"`
+	APIEndpoint    string         `json:"api_endpoint"`
+	APIKey         string         `json:"api_key"`
+	Tools          []string       `json:"tools"`
+	Config         map[string]any `json:"config"`
+	IsDefault      bool           `json:"is_default"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 // InsertTask 持久化一条 task 记录。如果相同 ID 的 task 已存在，
@@ -496,32 +500,40 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 // Phase 8-A 把 InsertAgent 的长参数列表收敛为 options struct，便于扩展
 // （未来新增字段只改 struct，不动调用点签名）并提高调用处可读性。
 type InsertAgentOptions struct {
-	ID           string
-	Name         string
-	Description  string
-	SystemPrompt string
-	Model        string
-	Endpoint     string
-	APIKey       string
-	Temperature  float64
-	MaxTokens    int
-	Tools        []string
-	IsDefault    bool
+	ID             string
+	Name           string
+	Description    string
+	SystemPrompt   string
+	Model          string
+	PreferredModel string
+	PreferredTier  string
+	AllowAutoRoute bool
+	MaxCostUSD     float64
+	Endpoint       string
+	APIKey         string
+	Temperature    float64
+	MaxTokens      int
+	Tools          []string
+	IsDefault      bool
 }
 
 // UpdateAgentOptions 是更新 agent 记录的可变字段集合。
 // ID 为定位主键，其余字段覆盖写入。
 type UpdateAgentOptions struct {
-	ID           string
-	Name         string
-	Description  string
-	SystemPrompt string
-	Model        string
-	Endpoint     string
-	APIKey       string
-	Temperature  float64
-	MaxTokens    int
-	Tools        []string
+	ID             string
+	Name           string
+	Description    string
+	SystemPrompt   string
+	Model          string
+	PreferredModel string
+	PreferredTier  string
+	AllowAutoRoute bool
+	MaxCostUSD     float64
+	Endpoint       string
+	APIKey         string
+	Temperature    float64
+	MaxTokens      int
+	Tools          []string
 }
 
 // InsertAgent 按 options 创建一条新的 agent 记录。
@@ -532,9 +544,10 @@ func InsertAgent(opts InsertAgentOptions) error {
 	}
 	toolsJSON, _ := json.Marshal(opts.Tools)
 	_, err := DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, allow_auto_route, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		opts.ID, opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
+		opts.PreferredModel, opts.PreferredTier, opts.AllowAutoRoute, opts.MaxCostUSD,
 		opts.Temperature, opts.MaxTokens, opts.Endpoint, opts.APIKey,
 		string(toolsJSON), opts.IsDefault,
 	)
@@ -559,6 +572,7 @@ func QueryAgents() ([]AgentRecord, error) {
 	}
 	rows, err := DB.Query(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
+		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(allow_auto_route,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
 		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
 		 FROM agents ORDER BY is_default DESC, created_at ASC`,
@@ -573,6 +587,7 @@ func QueryAgents() ([]AgentRecord, error) {
 		var a AgentRecord
 		var toolsJSON, configJSON string
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
+			&a.PreferredModel, &a.PreferredTier, &a.AllowAutoRoute, &a.MaxCostUSD,
 			&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
 			&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
@@ -593,10 +608,12 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	var toolsJSON, configJSON string
 	err := DB.QueryRow(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
+		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(allow_auto_route,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
 		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
 		 FROM agents WHERE id=?`, id,
 	).Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
+		&a.PreferredModel, &a.PreferredTier, &a.AllowAutoRoute, &a.MaxCostUSD,
 		&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
 		&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
@@ -615,10 +632,11 @@ func UpdateAgent(opts UpdateAgentOptions) error {
 	}
 	toolsJSON, _ := json.Marshal(opts.Tools)
 	_, err := DB.Exec(
-		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, temperature=?,
+		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, preferred_model=?, preferred_tier=?, allow_auto_route=?, max_cost_usd=?, temperature=?,
 		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
-		opts.Name, opts.Description, opts.SystemPrompt, opts.Model, opts.Temperature,
+		opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
+		opts.PreferredModel, opts.PreferredTier, opts.AllowAutoRoute, opts.MaxCostUSD, opts.Temperature,
 		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), opts.ID,
 	)
 	return err
@@ -666,11 +684,11 @@ func SeedDefaultAgent() error {
 	// 这样新增工具后无需再手动编辑 default agent。
 	var toolsJSON = `[]`
 	_, err = DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, allow_auto_route, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"agent_default", "Default Agent", "The default agent for general-purpose tasks",
 		"You are a helpful AI assistant with access to tools. When you need to run commands, read files, or write files, use the available tools. Always explain your reasoning before using tools.",
-		"deepseek-v4-flash", 0.7, 4096, "", "", toolsJSON, true,
+		"deepseek-v4-flash", "", "", true, 0, 0.7, 4096, "", "", toolsJSON, true,
 	)
 	if err != nil {
 		return fmt.Errorf("create default agent: %w", err)
