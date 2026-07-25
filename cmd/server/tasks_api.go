@@ -1,7 +1,7 @@
 // tasks_api.go — /api/tasks 根路由与 chat task 启动逻辑。
 //
 // Phase 8-B: 把原来 main.go 中的 handleTasksRoot 与 startChatTask 闭包迁移到本文件，
-// 并改为 appServer 方法，彻底消除包级闭包变量。/api/tasks 仍用 switch action 分发。
+// 并改为 appServer 方法，彻底消除包级闭包变量。/api/tasks 改用 taskActionRegistry 注册表分发。
 package main
 
 import (
@@ -36,8 +36,21 @@ type taskRequest struct {
 	CostBudgetUSD  float64                  `json:"cost_budget_usd"`
 }
 
+// taskAction 是 /api/tasks POST action 的处理函数签名。
+// 统一接收 (s *appServer, w, r, req, caseID)，由 taskActionRegistry 查找分发。
+type taskAction func(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, caseID string)
+
+// taskActionRegistry 是 /api/tasks 的 action 分发注册表。
+// Phase 8-B 用注册表替代原来的 switch req.Action，使新增 action 只需注册即可扩展。
+var taskActionRegistry = map[string]taskAction{
+	"chat":         actionChat,
+	"multi-agent":  actionMultiAgent,
+	"stream-demo":  actionStreamDemo,
+}
+
 // handleTasksRoot 是 /api/tasks 的 POST 入口（chat / multi-agent / stream-demo
-// action）。Phase 8-B 改为 appServer 方法，所有依赖从 s 获取。
+// action）。Phase 8-B 改为 appServer 方法，所有依赖从 s 获取，并通过
+// taskActionRegistry 分发具体 action。
 func (s *appServer) handleTasksRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -102,20 +115,16 @@ func (s *appServer) handleTasksRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch req.Action {
-	case "multi-agent":
-		s.handleTasksMultiAgent(w, r, req)
-	case "stream-demo":
-		s.handleTasksStreamDemo(w, r, req)
-	case "chat":
-		s.handleTasksChat(w, r, req, caseID)
-	default:
-		http.Error(w, "unknown action (use 'stream-demo' or 'chat')", http.StatusBadRequest)
+	action, ok := taskActionRegistry[req.Action]
+	if !ok {
+		http.Error(w, "unknown action (use 'chat', 'multi-agent' or 'stream-demo')", http.StatusBadRequest)
+		return
 	}
+	action(s, w, r, req, caseID)
 }
 
-// handleTasksMultiAgent 处理 action=multi-agent：启动一个 leader-driven multi-agent 任务。
-func (s *appServer) handleTasksMultiAgent(w http.ResponseWriter, r *http.Request, req taskRequest) {
+// actionMultiAgent 处理 action=multi-agent：启动一个 leader-driven multi-agent 任务。
+func actionMultiAgent(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
 	if len(req.Agents) > s.cfg.ContractLimits.MaxSubAgents {
 		http.Error(w, fmt.Sprintf("agents count exceeds maximum of %d", s.cfg.ContractLimits.MaxSubAgents), http.StatusBadRequest)
 		return
@@ -206,8 +215,8 @@ func (s *appServer) handleTasksMultiAgent(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleTasksStreamDemo 处理 action=stream-demo：发射一组演示事件。
-func (s *appServer) handleTasksStreamDemo(w http.ResponseWriter, r *http.Request, req taskRequest) {
+// actionStreamDemo 处理 action=stream-demo：发射一组演示事件。
+func actionStreamDemo(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, _ string) {
 	sessionID, taskID, err := resolveSession(req.SessionID, "", s.persist)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -221,8 +230,8 @@ func (s *appServer) handleTasksStreamDemo(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleTasksChat 处理 action=chat：调用 startChatTask 并返回任务信息。
-func (s *appServer) handleTasksChat(w http.ResponseWriter, r *http.Request, req taskRequest, caseID string) {
+// actionChat 处理 action=chat：调用 startChatTask 并返回任务信息。
+func actionChat(s *appServer, w http.ResponseWriter, r *http.Request, req taskRequest, caseID string) {
 	if caseID != "" {
 		lookupCase := func(caseID string) *cases.Case {
 			if caseID == "" {
