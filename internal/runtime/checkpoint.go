@@ -154,14 +154,14 @@ func (cm *CheckpointManager) Save(taskID, agentID string, stepIdx, totalTokens i
 }
 
 // Load 从磁盘读取指定 task ID 的 checkpoint。
-// 成功时返回 checkpoint 和 nil 错误；若 checkpoint 文件不存在或无法解析，
-// 返回 nil 和一个错误。
+// 成功时返回 checkpoint 和 nil 错误；若 checkpoint 文件不存在，返回 nil 和 os.IsNotExist 错误；
+// 若无法解析，返回 nil 和对应错误。
 func (cm *CheckpointManager) Load(taskID string) (*Checkpoint, error) {
 	path := filepath.Join(cm.CheckpointDir, taskID+".checkpoint.json")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read checkpoint: %w", err)
+		return nil, err
 	}
 
 	var cp Checkpoint

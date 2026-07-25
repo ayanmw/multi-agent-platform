@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,6 +150,9 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	}
 	cp, err := cm.Load(spec.TaskID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("checkpoint not found")
+		}
 		return "", fmt.Errorf("load checkpoint: %w", err)
 	}
 
@@ -368,44 +372,6 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	return cp.AgentID, nil
 }
 
-// makeRunnerDeps 把 chat / cron / multi-agent / session-chat / run-case 等入口
-// 共用的那组"非全局"依赖，连同包级全局（globalSkillRegistry / globalOrchestrator /
-// tracer）一起组装成 AgentDeps。
-//
-// 为什么仍需要这个 helper：Phase 8-A 之前所有入口都调一个 20+ 参数的
-// runAgentLoopWithTurn 包级函数；现在该函数已删除，入口改为
-// `NewAgentRunner(hub, makeRunnerDeps(...)).Run(ctx, AgentRunSpec{...})`。
-// 这 15 个依赖是各 handler 的参数（或 main() 闭包捕获的局部变量），无法再压缩——
-// 但 AgentDeps 把它们与"运行期可变状态"（spec）分离，让 runner 可独立测试，
-// 且 spec 不再混入依赖参数，是本阶段收敛的核心收益。
-//
-// hub 不在此处：它属于 AgentRunner 而非 AgentDeps，由 NewAgentRunner 单独接收。
-func makeRunnerDeps(cfg *config.Config, tools *tool.Registry, persist runtime.Persistence, approvalHandler harness.ApprovalHandler, memRecall *harness.MemoryRecall, agentBus runtime.AgentBus, checkpointMgr *runtime.CheckpointManager, memDB harness.CompressorDB, costRepo cost.CostRepository, modelRegistry *llm.ModelRegistry, modelRouter *llm.Router, routerProviders map[string]llm.Provider, caseService *cases.Service, todoSvc *todo.Service) AgentDeps {
-	return AgentDeps{
-		Cfg:             cfg,
-		Tools:           tools,
-		Persist:         persist,
-		ApprovalHandler: approvalHandler,
-		AgentBus:        agentBus,
-		CheckpointMgr:   checkpointMgr,
-		CostRepo:        costRepo,
-		ModelRegistry:   modelRegistry,
-		ModelRouter:     modelRouter,
-		RouterProviders: routerProviders,
-		CaseService:     caseService,
-		TodoSvc:         todoSvc,
-		// 以下四项是进程级单例：server 只有一个 orchestrator / skill registry /
-		// tracer / workspace manager，Engine 构建期也直接引用这些包级全局。这里
-		// 同步引用，保持单一事实源，避免 appServer 字段与全局出现两份不一致的引用。
-		SkillRegistry: globalSkillRegistry,
-		Orchestrator:  globalOrchestrator,
-		Tracer:        tracer,
-		WorkspaceMgr:  globalWorkspaceMgr,
-		MemDB:         memDB,
-		MemRecall:     memRecall,
-	}
-}
-
 // orchestratorDispatcher 是 SubAgentDispatcher 在 cmd/server 层的实现。
 // 它把 dispatch_sub_agent 工具的调用转发给 orchestrator.RunBlocking。
 type orchestratorDispatcher struct {
@@ -514,12 +480,7 @@ func isAllowedScope(scope string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	for _, s := range allowed {
-		if s == scope {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, scope)
 }
 
 // enrichAgentSpecAllowedTools 从 DB 加载每个 spec 对应的 agent，

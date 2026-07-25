@@ -6,7 +6,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 )
 
 // recoverRequest 是 POST /api/checkpoints/recover 的请求体。
@@ -52,6 +54,10 @@ func (s *appServer) handleRecoverCheckpoint(w http.ResponseWriter, r *http.Reque
 
 	agentID, err := s.newRunner().Recover(r.Context(), RecoverSpec{TaskID: req.TaskID})
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "checkpoint not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

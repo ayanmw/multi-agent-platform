@@ -124,8 +124,9 @@ func (s *appServer) handleRegisterTool(w http.ResponseWriter, r *http.Request) {
 		Enabled:         true,
 		ExecutionConfig: execConfig,
 	}); err != nil {
-		// 持久化失败时回滚注册
-		toolRegistry.Unregister(req.Name)
+		// 持久化失败时回滚注册。DynamicTool 的 registry key 是 CanonicalName
+		//（name@version），必须与注册时的 key 一致才能正确反注册。
+		toolRegistry.Unregister(dt.CanonicalName())
 		http.Error(w, fmt.Sprintf("failed to persist tool: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -246,18 +247,29 @@ func (s *appServer) handleDeleteTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 从全局 tool registry 中注销
-	if err := toolRegistry.Unregister(name); err != nil {
-		http.Error(w, fmt.Sprintf("tool not found: %s", name), http.StatusNotFound)
-		return
-	}
-
 	// 从 SQLite v27 tools 表中删除（按 namespace/name/version 删除，未提供则使用空 namespace 与默认版本）
 	namespace := r.URL.Query().Get("namespace")
 	version := r.URL.Query().Get("version")
 	if version == "" {
 		version = "1.0.0"
 	}
+
+	// 从全局 tool registry 中注销。
+	// DynamicTool 的 registry key 是 CanonicalName（name@version）。
+	// API 调用方通常只传 name，这里优先使用 name 反注册；若失败再尝试
+	// 加上默认 version 的 CanonicalName，保证与注册时一致。
+	if err := toolRegistry.Unregister(name); err != nil {
+		canonicalName := name
+		if version != "" {
+			canonicalName = fmt.Sprintf("%s@%s", name, version)
+		}
+		if err := toolRegistry.Unregister(canonicalName); err != nil {
+			http.Error(w, fmt.Sprintf("tool not found: %s", name), http.StatusNotFound)
+			return
+		}
+	}
+
+	// 从 SQLite v27 tools 表中删除（按 namespace/name/version 删除，未提供则使用空 namespace 与默认版本）
 	if err := db.DeleteToolV2(namespace, name, version); err != nil {
 		http.Error(w, fmt.Sprintf("failed to delete tool from database: %v", err), http.StatusInternalServerError)
 		return

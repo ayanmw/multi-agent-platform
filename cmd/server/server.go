@@ -98,6 +98,10 @@ type appServer struct {
 
 	// Runner 入口（供 task / checkpoint / cron 等入口复用）
 	runner *AgentRunner
+
+	// taskActions 是 /api/tasks POST action 的注册表（chat / multi-agent / stream-demo）。
+	// 由 initTaskActions 在 registerRoutes 中填充，保持 handler 方法化。
+	taskActions map[string]taskAction
 }
 
 // deps 构造 appServer 当前的 AgentDeps 快照。所有运行入口（chat / cron /
