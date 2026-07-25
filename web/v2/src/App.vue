@@ -1416,6 +1416,15 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
   max-width: 100vw;
 }
 
+/* 移动端主舞台底部预留 CommandBar + MobileNav + safe-area 空间，避免最后一条内容被遮挡 */
+.layout-mobile .main-stage {
+  padding-bottom: calc(var(--cmd-h, 64px) + var(--mobile-nav-height, 56px) + env(safe-area-inset-bottom, 0px) + var(--space-sm));
+}
+
+.layout-mobile .main-stage.mobile-tab-view {
+  padding-bottom: calc(var(--mobile-nav-height, 56px) + env(safe-area-inset-bottom, 0px) + var(--space-sm));
+}
+
 .center-column {
   flex: 1;
   min-width: 0;
@@ -1478,6 +1487,17 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
   max-height: 100%;
   align-self: stretch;
   box-sizing: border-box;
+}
+
+/* 平板端将 command-area 保留在 flex 流内，避免 fixed 定位导致的高度塌陷/重复渲染 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .layout-tablet .command-area {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+  }
 }
 
 .mobile-tab-view {
@@ -1657,7 +1677,8 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
 }
 
 @media (max-width: 1023px) {
-  .command-area {
+  /* 仅对纯移动端使用 fixed 定位；平板端由 .layout-tablet .command-area 覆盖为 relative */
+  .layout-mobile .command-area {
     position: fixed;
     left: 0;
     right: 0;

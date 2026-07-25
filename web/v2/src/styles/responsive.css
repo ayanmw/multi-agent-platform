@@ -115,6 +115,15 @@
   .layout-tablet .main-stage {
     padding: var(--space-md);
   }
+
+  /* 平板端 command-area 已回归文档流，无需 fixed 定位的 bottom padding 补偿 */
+  .layout-tablet .command-area {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+  }
 }
 
 /* ---------- Safe-area insets ---------- */
