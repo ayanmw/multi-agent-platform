@@ -4,6 +4,7 @@ import { useTraceStore } from './useTraceStore'
 import { useSessionStore } from './useSessionStore'
 import { useToast } from './useToast'
 import { useRecentMods } from './useRecentMods'
+import { shouldAutoApprove, getAutoApprovalTagSet } from './useAutoApproval'
 import type { SessionStatus } from './useSessionStore'
 import type { AgentEvent, TaskState, TaskStatus, AgentState, Step, StepType, StepStatus, ToolCallData, AgentBusEventData, ContextWindowSnapshotData, ToolVisibilityData } from '@/types/events'
 import type { EvaluationResult } from '@/types/case'
@@ -83,24 +84,12 @@ export interface PendingApproval {
 }
 const pendingApproval = ref<PendingApproval | null>(null)
 
-const LOW_RISK_TAGS = new Set(['network', 'mcp'])
-const HIGH_RISK_TAGS = new Set([
-  'exec', 'exec:dangerous', 'shell', 'shell:dangerous',
-  'filesystem:destructive', 'filesystem:delete', 'filesystem:write',
-])
-
 /**
  * Determine whether a pending approval request qualifies for automatic approval.
- * Only TagPolicyRule requests with exclusively low-risk tags are auto-approved.
+ * Delegates to useAutoApproval.shouldAutoApprove with the user-configured tag set.
  */
-function shouldAutoApprove(approval: PendingApproval): boolean {
-  if (approval.rule !== 'TagPolicyRule') return false
-  const tags = approval.tags || []
-  if (tags.length === 0) return false
-  // Any explicitly high-risk tag forces manual confirmation.
-  if (tags.some(tag => HIGH_RISK_TAGS.has(tag))) return false
-  // All tags must be recognized low-risk tags.
-  return tags.every(tag => LOW_RISK_TAGS.has(tag))
+function shouldAutoApproveFromStore(approval: PendingApproval): boolean {
+  return shouldAutoApprove(approval.rule, approval.tags, getAutoApprovalTagSet())
 }
 
 /**
@@ -622,7 +611,7 @@ export function useTaskStore() {
             reason: (evt.data.reason as string) || 'Policy block',
             input: (evt.data.input as Record<string, any>) || {},
           }
-          if (shouldAutoApprove(approval)) {
+          if (shouldAutoApproveFromStore(approval)) {
             // Auto-approve low-risk policy requests immediately.
             if (sendControlFn) {
               sendControlFn({

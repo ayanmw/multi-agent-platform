@@ -33,10 +33,11 @@ type Client struct {
 
 // ClientControlMsg 表示从客户端发来的 control message
 type ClientControlMsg struct {
-	Action     string `json:"action"`      // pause、resume、cancel、approve、deny
-	TaskID     string `json:"task_id"`
-	AgentID    string `json:"agent_id"`
-	ApprovalID string `json:"approval_id"` // Phase 5: 审批请求 ID
+	Action     string   `json:"action"`      // pause、resume、cancel、approve、deny、set_auto_approval_tags
+	TaskID     string   `json:"task_id"`
+	AgentID    string   `json:"agent_id"`
+	ApprovalID string   `json:"approval_id"` // Phase 5: 审批请求 ID
+	Tags       []string `json:"tags,omitempty"` // 自动审批标签列表（action=set_auto_approval_tags 时使用）
 }
 
 // ControlHandler 在客户端发来 control message 时被调用

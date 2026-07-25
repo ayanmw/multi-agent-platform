@@ -542,8 +542,8 @@ onUnmounted(() => {
 })
 
 // === 全局滚轮：在标题/空白处滚动时驱动主舞台滚动，
-// 左右 Dock 与底部输入区保持自身滚动独立。
-const SCROLLABLE_SELECTORS = ['.dock-body', '.command-area', '.context-flyout-body', '.context-flyout', '.mobile-sheet-body']
+// 左右 Dock、底部输入区、Context 浮窗、prompt 弹窗等保持自身滚动独立。
+const SCROLLABLE_SELECTORS = ['.dock-body', '.command-area', '.context-flyout-body', '.context-flyout', '.mobile-sheet-body', '.prompt-dialog-overlay']
 function findScrollableAncestor(el: EventTarget | null): HTMLElement | null {
   let node: Node | null = el as Node
   while (node && node instanceof HTMLElement) {
@@ -562,7 +562,7 @@ function findScrollableAncestor(el: EventTarget | null): HTMLElement | null {
 function handleGlobalWheel(e: WheelEvent) {
   if (e.deltaY === 0) return
   const target = e.target as HTMLElement
-  if (target.closest('.inspector-dialog-overlay, .modal, .dialog, .manage-flyout, .context-flyout, .mobile-sheet-overlay')) return
+  if (target.closest('.inspector-dialog-overlay, .modal, .dialog, .manage-flyout, .context-flyout, .mobile-sheet-overlay, .prompt-dialog-overlay')) return
 
   const scrollable = findScrollableAncestor(target)
   if (scrollable) {

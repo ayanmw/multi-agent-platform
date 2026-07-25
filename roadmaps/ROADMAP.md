@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-25
-> **当前版本**: v0.13.6 Alpha（agent-config-permissions: Agent `config.permissions` OR 合并到 TaskContract、worker 审批委托回退用户审批、v2 AgentConfig 权限面板、v2 低风险 policy 自动审批）
+> **当前版本**: v0.13.7 Alpha（configurable-auto-approval: v2 Options 浮窗可配置自动审批标签、前后端一致判定、后端 5s 未响应自动批准兜底）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → agent-config-permissions ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → agent-config-permissions ✅ → configurable-auto-approval ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (Agent 默认权限)       (可配置自动审批)
 ```
 
 ---
@@ -510,6 +510,7 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.4 Alpha | 2026-07-25 | Phase 8-B cleanup-2 收尾: `handleTasksRoot` 的 `switch req.Action` 改为 `appServer.taskActions` 注册表分发，`actionChat/actionMultiAgent/actionStreamDemo` 保持 `(s *appServer)` 方法化；`go build ./...` + `go test ./...` 全绿；分支 `phase-8b-cleanup-2` 已合并到 `main` 并删除 worktree |
 | v0.13.5 Alpha | 2026-07-25 | UI-v2 UI/UX 优化（OpenSpec `web-v2-ui-ux-optimization`）: 响应式布局/Dock 宽度治理/Flyout 边界定位/触控目标/Hover-点击混合/Dialog 焦点捕获与 ARIA/状态标签可访问性/emoji 按钮 `aria-label`/Toast `aria-atomic`/减少动画偏好/主题 token 统一（overlay/glass）；`npm run test` 128 通过、`npm run build` 通过 |
 | v0.13.6 Alpha | 2026-07-25 | Agent 默认权限 + v2 自动审批（OpenSpec `agent-config-permissions-and-v2-auto-approval`）: `agents.config.permissions` 持久化并 OR 合并到 `TaskContract.Permissions`；worker 审批委托缺失/超时时回退到用户审批；v2 `AgentConfig.vue` 增加权限勾选面板与风险标签；`useTaskStore` 对 `TagPolicyRule` + 仅 `network`/`mcp` tag 的审批请求自动发送 `approve` 控制消息；`go test ./...` 全绿、`npm run build` 通过 |
+| v0.13.7 Alpha | 2026-07-25 | 可配置自动审批（OpenSpec `add-configurable-auto-approval`）: v2 `CommandBar` Options 浮窗新增「自动审批」区，列出 `network`/`mcp`/`exec`/`shell`/`filesystem:*` 等候选标签，支持一键全选/清空，至少选一个才开启；配置持久化 LocalStorage 并同步到后端；`internal/harness` 新增 `AutoApprovalPolicy` 与 `WebSocketApprovalHandler` 5s 恩典窗口自动批准；空集/非 `TagPolicyRule`/未全匹配 tags 仍走手动审批；前后端单元测试覆盖；`go test ./...` 全绿、`npm run build` 通过 |
 
 ---
 
@@ -552,3 +553,41 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 - **定型阶段**: 完成核心能力矩阵，进入 v0.14.0 Beta 准备: token 治理、context 压缩、RBAC、部署文档。
 - **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
 - **规划中**: 多模型分层路由增强方案，详见 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` —— 含完整模型 tier 映射、Agent 粒度模型绑定、成本预算治理与可观测性设计，待排期实施。
+
+---
+
+## Phase configurable-auto-approval: v2 Options 可配置自动审批 ✅ 已完成
+
+**目标**: 把 v2 前端硬编码的低风险自动审批白名单，改成用户在 CommandBar Options 浮窗中可配置的标签集合；同时让后端在未收到前端决定的 5 秒窗口内，按同样策略自动批准匹配请求。
+
+**完成日期**: 2026-07-25
+
+### 交付物
+- [x] `web/v2/src/composables/useAutoApproval.ts`：共享判定逻辑 + LocalStorage 持久化 + 候选标签定义。
+- [x] `web/v2/src/composables/useAutoApproval.spec.ts`：覆盖判定规则、LocalStorage 序列化。
+- [x] `web/v2/src/components/OptionsFlyout.vue`：新增「自动审批」区，含状态指示、一键全选/清空、高风险警告、标签网格。
+- [x] `web/v2/src/components/CommandBar.vue`：接入 `useAutoApproval` 并把标签列表传给 OptionsFlyout。
+- [x] `web/v2/src/composables/useTaskStore.ts`：改用 `useAutoApproval.shouldAutoApprove` 和 `getAutoApprovalTagSet()`，移除硬编码白名单。
+- [x] `web/v2/src/composables/useTaskStore.autoapprove.spec.ts`：迁移到共享判定函数并覆盖用户自定义标签。
+- [x] `internal/harness/auto_approval.go`：后端 `AutoApprovalPolicy` + `ShouldAutoApprove(rule, tags)`。
+- [x] `internal/harness/auto_approval_test.go`：覆盖前后端一致判定规则。
+- [x] `internal/harness/approval.go`：`WebSocketApprovalHandler` 支持注入策略，并在 5s 恩典窗口后自动批准匹配请求；不匹配的继续等待完整 30s 超时。
+- [x] `internal/harness/approval_grace_test.go`：覆盖 5s 自动批准、不匹配 fallthrough、空策略禁用、前端决定优先。
+- [x] `internal/ws/hub.go`：`ClientControlMsg` 新增 `set_auto_approval_tags` action 与 `Tags` 字段。
+- [x] `cmd/server/main.go`：处理 `set_auto_approval_tags` 控制消息，更新 `approvalHandler` 策略。
+- [x] `web/v2/src/composables/useAutoApproval.ts`：标签变化时通过 WebSocket `set_auto_approval_tags` 同步到后端。
+- [x] `web/v2/tsconfig.json`：排除 `*.test.ts` / `*.spec.ts`，避免 `vue-tsc` 包含 node-only 测试文件。
+
+### 验证结果
+- `go test ./...` 全绿
+- `cd web/v2 && npm run build` 通过
+- `npx vitest run src/composables/useAutoApproval.spec.ts src/composables/useTaskStore.autoapprove.spec.ts` 17/17 通过
+- `go test ./internal/harness -run 'TestAutoApprovalPolicy|TestWebSocketApprovalHandler_WaitForDecision' -count=1 -v` 10/10 通过
+
+### OpenSpec
+- 变更目录: `openspec/changes/add-configurable-auto-approval/`
+- 规格文档:
+  - `specs/configurable-auto-approval/spec.md`
+  - `specs/backend-auto-approval/spec.md`
+  - `specs/v2-auto-approval/spec.md`
+  - `specs/agent-config-permissions/spec.md`

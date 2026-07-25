@@ -4,6 +4,7 @@ import { useLayout } from '../composables/useLayout'
 import OptionsFlyout from './OptionsFlyout.vue'
 import { useTodoStore } from '@/composables/useTodoStore'
 import { useSessionStore } from '@/composables/useSessionStore'
+import { useAutoApproval } from '@/composables/useAutoApproval'
 
 /**
  * 底部命令输入条（TaskInput 的 v2 升级版）。
@@ -95,6 +96,8 @@ const optionsBtnRef = ref<HTMLElement | null>(null)
 const contextBtnRef = ref<HTMLElement | null>(null)
 const optionsAnchorRect = ref<DOMRect | null>(null)
 const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 0
+
+const { selectedTags: autoApprovalTags } = useAutoApproval()
 
 // 父组件可通过 ref 调用 getContextAnchor 获取 Context 按钮位置。
 defineExpose({
@@ -305,10 +308,12 @@ watch(
       :agents="agents"
       :available-tools="availableTools"
       :anchor-rect="optionsAnchorRect"
+      :auto-approval-tags="autoApprovalTags"
       @update:open="optionsOpen = $event"
       @update:maxSteps="maxSteps = $event"
       @update:timeoutSeconds="timeoutSeconds = $event"
       @update:multiAgent="multiAgent = $event"
+      @update:autoApprovalTags="autoApprovalTags.splice(0, autoApprovalTags.length, ...$event)"
       @open-agents="emit('openAgents')"
     />
   </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { useFlyoutResize } from '@/composables/useFlyoutResize'
+import { AUTO_APPROVAL_TAG_OPTIONS, HIGH_RISK_AUTO_APPROVAL_TAGS } from '@/composables/useAutoApproval'
 
 /**
  * OptionsFlyout — CommandBar 的 Options 按钮弹出的浮窗面板
@@ -19,12 +20,14 @@ import { useFlyoutResize } from '@/composables/useFlyoutResize'
  *   - agents: 可选 agent 列表
  *   - availableTools: 可选工具列表
  *   - anchorRect: 触发按钮的 DOMRect，用于桌面端定位
+ *   - autoApprovalTags: 当前自动审批选中的标签集合
  *
  * Emits:
  *   - update:open
  *   - update:maxSteps
  *   - update:timeoutSeconds
  *   - update:multiAgent
+ *   - update:autoApprovalTags
  *   - openAgents: 请求打开 Agents 管理面板
  */
 const props = defineProps<{
@@ -35,6 +38,7 @@ const props = defineProps<{
   agents?: { id: string; name: string; model: string; tools: string[] }[]
   availableTools?: { name: string; description: string }[]
   anchorRect?: DOMRect | null
+  autoApprovalTags?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +46,7 @@ const emit = defineEmits<{
   (e: 'update:maxSteps', value: number): void
   (e: 'update:timeoutSeconds', value: number): void
   (e: 'update:multiAgent', value: boolean): void
+  (e: 'update:autoApprovalTags', value: string[]): void
   (e: 'openAgents'): void
 }>()
 
@@ -51,6 +56,36 @@ const maxStepsValue = ref(props.maxSteps)
 const timeoutSecondsValue = ref(props.timeoutSeconds)
 const multiAgentValue = ref(props.multiAgent)
 const selectedAgentId = ref<string>(props.agents?.[0]?.id ?? '')
+const autoApprovalTagsValue = ref<string[]>(props.autoApprovalTags ?? [])
+
+const autoApprovalEnabled = computed(() => autoApprovalTagsValue.value.length > 0)
+const allAutoApprovalSelected = computed(() =>
+  autoApprovalTagsValue.value.length === AUTO_APPROVAL_TAG_OPTIONS.length,
+)
+const hasHighRiskAutoApproval = computed(() =>
+  autoApprovalTagsValue.value.some(tag => HIGH_RISK_AUTO_APPROVAL_TAGS.has(tag)),
+)
+
+function isAutoApprovalTagSelected(tag: string) {
+  return autoApprovalTagsValue.value.includes(tag)
+}
+
+function toggleAutoApprovalTag(tag: string) {
+  const idx = autoApprovalTagsValue.value.indexOf(tag)
+  if (idx >= 0) {
+    autoApprovalTagsValue.value.splice(idx, 1)
+  } else {
+    autoApprovalTagsValue.value.push(tag)
+  }
+}
+
+function selectAllAutoApprovalTags() {
+  autoApprovalTagsValue.value = AUTO_APPROVAL_TAG_OPTIONS.map(o => o.tag)
+}
+
+function clearAllAutoApprovalTags() {
+  autoApprovalTagsValue.value = []
+}
 
 // === 可调节尺寸 ===
 // 浮窗锚定在底部向上展开：顶部手柄上拖调高度，右手柄右拖调宽度。
@@ -120,6 +155,7 @@ watch(() => props.open, (open) => {
     maxStepsValue.value = props.maxSteps
     timeoutSecondsValue.value = props.timeoutSeconds
     multiAgentValue.value = props.multiAgent
+    autoApprovalTagsValue.value = props.autoApprovalTags ?? []
     nextTick(() => {
       if (!selectedAgentId.value && props.agents && props.agents.length > 0) {
         selectedAgentId.value = props.agents[0].id
@@ -141,6 +177,7 @@ watch(() => size.value.width, () => {
 watch(maxStepsValue, (v) => emit('update:maxSteps', v))
 watch(timeoutSecondsValue, (v) => emit('update:timeoutSeconds', v))
 watch(multiAgentValue, (v) => emit('update:multiAgent', v))
+watch(autoApprovalTagsValue, (v) => emit('update:autoApprovalTags', v), { deep: true })
 
 const stepPresets = [10, 30, 50, 100]
 const timeoutPresets = [0, 60, 300, 600]
@@ -258,6 +295,69 @@ onUnmounted(() => {
             <input v-model="multiAgentValue" type="checkbox" />
             <span>Multi-Agent</span>
           </label>
+        </div>
+
+        <div class="option-divider" />
+
+        <!-- 自动审批配置区 -->
+        <div class="option-section">
+          <div class="auto-approval-header">
+            <div class="auto-approval-title-group">
+              <span class="option-section-title">🛡 Auto-Approval</span>
+              <span
+                class="auto-approval-status"
+                :class="{ enabled: autoApprovalEnabled, disabled: !autoApprovalEnabled }"
+              >
+                {{ autoApprovalEnabled ? 'ON' : 'OFF' }}
+              </span>
+            </div>
+            <div class="auto-approval-actions">
+              <button
+                class="auto-approval-action"
+                :class="{ active: allAutoApprovalSelected }"
+                @click="selectAllAutoApprovalTags"
+              >
+                全选
+              </button>
+              <button
+                class="auto-approval-action"
+                :disabled="autoApprovalTagsValue.length === 0"
+                @click="clearAllAutoApprovalTags"
+              >
+                清空
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-if="hasHighRiskAutoApproval"
+            class="auto-approval-warning"
+          >
+            ⚠️ 已选择高风险标签，高危操作将被自动批准
+          </div>
+
+          <div class="auto-approval-list">
+            <label
+              v-for="opt in AUTO_APPROVAL_TAG_OPTIONS"
+              :key="opt.tag"
+              class="auto-approval-item"
+              :class="{ 'high-risk': HIGH_RISK_AUTO_APPROVAL_TAGS.has(opt.tag) }"
+            >
+              <input
+                :checked="isAutoApprovalTagSelected(opt.tag)"
+                type="checkbox"
+                @change="toggleAutoApprovalTag(opt.tag)"
+              />
+              <div class="auto-approval-item-body">
+                <span class="auto-approval-item-label">{{ opt.label }}</span>
+                <span class="auto-approval-item-desc">{{ opt.description }}</span>
+              </div>
+            </label>
+          </div>
+
+          <div v-if="!autoApprovalEnabled" class="auto-approval-hint">
+            未选择任何标签：自动审批已关闭，所有审批请求都需要手动确认。
+          </div>
         </div>
 
         <div class="option-divider" />
@@ -667,6 +767,151 @@ onUnmounted(() => {
   .flyout-resize-handle {
     display: none;
   }
+}
+
+.option-section-title {
+  font-family: var(--font-display, 'Chakra Petch', sans-serif);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-primary, #e8ebf0);
+}
+
+.auto-approval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.auto-approval-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auto-approval-status {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.auto-approval-status.enabled {
+  color: #4caf50;
+  border-color: rgba(76, 175, 80, 0.4);
+  background: rgba(76, 175, 80, 0.12);
+}
+
+.auto-approval-status.disabled {
+  color: var(--text-muted, #5c6675);
+  border-color: var(--border-default, rgba(255, 255, 255, 0.1));
+  background: var(--bg-panel, #11141a);
+}
+
+.auto-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.auto-approval-action {
+  background: var(--bg-panel, #11141a);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  color: var(--text-secondary, #9aa3b2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.auto-approval-action:hover:not(:disabled),
+.auto-approval-action.active {
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--accent-running, #00e5ff);
+  border-color: var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.auto-approval-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.auto-approval-warning {
+  font-size: 0.72rem;
+  color: #ff5252;
+  background: rgba(255, 82, 82, 0.1);
+  border: 1px solid rgba(255, 82, 82, 0.25);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.auto-approval-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+}
+
+.auto-approval-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.08));
+  background: var(--bg-panel, #11141a);
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.auto-approval-item:hover {
+  border-color: var(--border-active, rgba(0, 229, 255, 0.3));
+}
+
+.auto-approval-item.high-risk {
+  border-color: rgba(255, 82, 82, 0.18);
+}
+
+.auto-approval-item.high-risk:hover {
+  border-color: rgba(255, 82, 82, 0.4);
+}
+
+.auto-approval-item input[type='checkbox'] {
+  margin-top: 2px;
+  accent-color: var(--accent-running, #00e5ff);
+  flex-shrink: 0;
+}
+
+.auto-approval-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.auto-approval-item-label {
+  font-weight: 600;
+  color: var(--text-primary, #e8ebf0);
+}
+
+.auto-approval-item-desc {
+  font-size: 0.65rem;
+  color: var(--text-muted, #5c6675);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-approval-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted, #5c6675);
+  padding: 4px 0;
 }
 
 .options-flyout-enter-active,

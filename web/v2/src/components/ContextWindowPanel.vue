@@ -15,7 +15,7 @@
     activeTaskId: the task currently selected in the main UI.
 -->
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
 import type { ContextSnapshotMessage } from '../types/events'
 
@@ -115,6 +115,11 @@ function openPromptDialog(msg: ContextSnapshotMessage, idx: number) {
     content: msg.content || '(empty content)',
     reasoning: msg.reasoning,
   }
+  // 弹窗打开后聚焦到面板，确保键盘事件（如 Esc）不意外落到主舞台。
+  nextTick(() => {
+    const panel = document.querySelector('.prompt-dialog-panel') as HTMLElement | null
+    panel?.focus()
+  })
 }
 function closePromptDialog() {
   promptDialog.value.open = false
@@ -358,9 +363,9 @@ const ringDash = computed(() => {
           class="prompt-dialog-overlay"
           @click.self="closePromptDialog"
         >
-          <div class="prompt-dialog-panel">
+          <div class="prompt-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="prompt-dialog-title" tabindex="-1">
             <div class="prompt-dialog-header">
-              <div class="prompt-dialog-title">
+              <div id="prompt-dialog-title" class="prompt-dialog-title">
                 <span
                   class="prompt-dialog-dot"
                   :style="{ background: roleColor(promptDialog.role), boxShadow: roleGlow(promptDialog.role) }"
@@ -398,6 +403,7 @@ const ringDash = computed(() => {
   gap: 1.125rem;
   padding: 1.375rem 1.625rem 1.625rem;
   overflow: hidden;
+  overscroll-behavior-y: contain;
   background: radial-gradient(circle at 20% 0%, var(--panel-gradient-top), transparent 35%),
     radial-gradient(circle at 80% 100%, var(--panel-gradient-bottom), transparent 30%),
     var(--bg-canvas);
@@ -775,6 +781,7 @@ const ringDash = computed(() => {
 .timeline {
   flex:1;
   overflow-y:auto;
+  overscroll-behavior-y:contain;
   padding-right:0.375rem;
 }
 
@@ -883,6 +890,7 @@ const ringDash = computed(() => {
   flex-direction:column;
   overflow:hidden;
   box-shadow:0 30px 90px var(--overlay-bg);
+  outline:none;
 }
 
 .prompt-dialog-header {
@@ -952,6 +960,7 @@ const ringDash = computed(() => {
   flex:1;
   min-height:0;
   overflow-y:auto;
+  overscroll-behavior-y:contain;
   padding:18px;
   display:flex;
   flex-direction:column;
@@ -961,6 +970,9 @@ const ringDash = computed(() => {
 .prompt-block {
   border-radius: var(--radius-lg);
   overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
 }
 
 .prompt-dialog-enter-active,
@@ -992,6 +1004,7 @@ const ringDash = computed(() => {
   padding:0.438rem 0.625rem;
   background:var(--overlay-bg);
   border-bottom:1px solid var(--border-subtle);
+  flex-shrink:0;
 }
 
 .block-content {
@@ -1004,6 +1017,8 @@ const ringDash = computed(() => {
   white-space:pre-wrap;
   word-break:break-word;
   overflow-y:auto;
+  overscroll-behavior-y:contain;
+  max-height:min(520px, 55vh);
 }
 
 .reasoning-text {

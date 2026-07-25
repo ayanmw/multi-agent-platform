@@ -114,8 +114,16 @@ type EventSender interface {
 // 并发安全：使用 sync.Mutex 保护 pending map 的读写。
 type WebSocketApprovalHandler struct {
 	bus     EventSender          // 事件总线，用于发送审批事件到前端
-	pending map[string]chan bool // 待审批的 channel，key 为 approvalID
+	pending map[string]*pendingApproval // 待审批的 channel，key 为 approvalID
 	mu      sync.Mutex           // 保护 pending map 的并发访问
+	policy  *AutoApprovalPolicy  // 可选的自动审批策略
+}
+
+// pendingApproval 保存一个正在等待的审批请求及其元数据，用于后端自动审批兜底。
+type pendingApproval struct {
+	ch       chan bool
+	ruleName string
+	tags     []string
 }
 
 // NewWebSocketApprovalHandler 创建一个新的 WebSocket 审批处理器。
@@ -123,8 +131,15 @@ type WebSocketApprovalHandler struct {
 func NewWebSocketApprovalHandler(bus EventSender) *WebSocketApprovalHandler {
 	return &WebSocketApprovalHandler{
 		bus:     bus,
-		pending: make(map[string]chan bool),
+		pending: make(map[string]*pendingApproval),
 	}
+}
+
+// SetAutoApprovalPolicy 设置或更新后端自动审批策略。
+func (h *WebSocketApprovalHandler) SetAutoApprovalPolicy(policy *AutoApprovalPolicy) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.policy = policy
 }
 
 // RequestApproval 向前端发送审批请求事件，并创建等待 channel。
@@ -132,7 +147,11 @@ func NewWebSocketApprovalHandler(bus EventSender) *WebSocketApprovalHandler {
 func (h *WebSocketApprovalHandler) RequestApproval(approvalID string, toolName string, reason string, input map[string]any, ruleName string, namespace string, tags []string) error {
 	// 创建 buffered channel（容量 1，避免发送方阻塞）
 	h.mu.Lock()
-	h.pending[approvalID] = make(chan bool, 1)
+	h.pending[approvalID] = &pendingApproval{
+		ch:       make(chan bool, 1),
+		ruleName: ruleName,
+		tags:     tags,
+	}
 	h.mu.Unlock()
 
 	// 发射审批请求事件到前端
@@ -152,33 +171,66 @@ func (h *WebSocketApprovalHandler) RequestApproval(approvalID string, toolName s
 
 // WaitForDecision 阻塞等待前端审批决定。
 // 超时时间默认为 30 秒。返回 true 表示批准，false 表示拒绝或超时。
+// 若配置了自动审批策略，在前 5 秒未收到前端决定且请求匹配策略时，会自动批准并返回。
 func (h *WebSocketApprovalHandler) WaitForDecision(approvalID string, timeout time.Duration) (bool, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 
+	const autoApproveGracePeriod = 5 * time.Second
+	gracePeriod := autoApproveGracePeriod
+	if timeout < gracePeriod {
+		gracePeriod = timeout
+	}
+
 	h.mu.Lock()
-	ch, ok := h.pending[approvalID]
+	p, ok := h.pending[approvalID]
+	if !ok {
+		h.mu.Unlock()
+		return false, fmt.Errorf("approval %s: 审批请求未找到", approvalID)
+	}
+	ch := p.ch
 	h.mu.Unlock()
 
-	if !ok {
-		return false, fmt.Errorf("approval %s: 审批请求未找到", approvalID)
+	// 第一段：等待前端决定或 5 秒自动审批窗口。
+	select {
+	case approved := <-ch:
+		// 审批决定已收到，清理 pending 记录
+		h.finishPending(approvalID)
+		return approved, nil
+	case <-time.After(gracePeriod):
+		// 前端未在 5 秒内响应：若匹配自动审批策略则自动批准。
+		h.mu.Lock()
+		policy := h.policy
+		h.mu.Unlock()
+		if policy != nil && policy.ShouldAutoApprove(p.ruleName, p.tags) {
+			h.finishPending(approvalID)
+			return true, nil
+		}
+	}
+
+	// 第二段：继续等待剩余超时时间。
+	remaining := timeout - gracePeriod
+	if remaining <= 0 {
+		h.finishPending(approvalID)
+		return false, fmt.Errorf("approval %s: 审批超时（%v）", approvalID, timeout)
 	}
 
 	select {
 	case approved := <-ch:
-		// 审批决定已收到，清理 pending 记录
-		h.mu.Lock()
-		delete(h.pending, approvalID)
-		h.mu.Unlock()
+		h.finishPending(approvalID)
 		return approved, nil
-	case <-time.After(timeout):
-		// 超时：自动拒绝，清理 pending 记录
-		h.mu.Lock()
-		delete(h.pending, approvalID)
-		h.mu.Unlock()
+	case <-time.After(remaining):
+		h.finishPending(approvalID)
 		return false, fmt.Errorf("approval %s: 审批超时（%v）", approvalID, timeout)
 	}
+}
+
+// finishPending 安全地清理 pending 记录。若 approvalID 不存在则无副作用。
+func (h *WebSocketApprovalHandler) finishPending(approvalID string) {
+	h.mu.Lock()
+	delete(h.pending, approvalID)
+	h.mu.Unlock()
 }
 
 // HandleDecision 处理前端发送的审批决定。
@@ -186,13 +238,13 @@ func (h *WebSocketApprovalHandler) WaitForDecision(approvalID string, timeout ti
 // approved 为 true 表示用户批准，false 表示拒绝。
 func (h *WebSocketApprovalHandler) HandleDecision(approvalID string, approved bool) {
 	h.mu.Lock()
-	ch, ok := h.pending[approvalID]
+	p, ok := h.pending[approvalID]
 	h.mu.Unlock()
 
 	if ok {
 		// 非阻塞发送：channel 容量为 1，不会阻塞
 		select {
-		case ch <- approved:
+		case p.ch <- approved:
 		default:
 			// 如果 channel 已满（已收到决定），忽略重复消息
 		}

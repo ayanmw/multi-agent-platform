@@ -571,10 +571,14 @@ const durationText = computed(() => formatDurationMs(props.sessionTotalDuration 
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .context-flyout-body :deep(.context-panel) {
   border-radius: 0;
+  /* 防止浮窗内部滚动到边界后继续驱动底层主舞台滚动 */
+  overscroll-behavior-y: contain;
 }
 
 /* 移动端 Context 底部抽屉内容区 */

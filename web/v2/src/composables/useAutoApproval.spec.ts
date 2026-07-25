@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { shouldAutoApprove, LOW_RISK_AUTO_APPROVAL_TAGS } from './useAutoApproval'
+import { describe, it, expect, vi } from 'vitest'
+import { shouldAutoApprove, LOW_RISK_AUTO_APPROVAL_TAGS, persistTags, AUTO_APPROVAL_TAG_OPTIONS } from './useAutoApproval'
+
+const storage: Record<string, string> = {}
+const mockStorage = {
+  getItem: (key: string) => storage[key] ?? null,
+  setItem: (key: string, value: string) => { storage[key] = value },
+  removeItem: (key: string) => { delete storage[key] },
+}
+Object.defineProperty(globalThis, 'localStorage', { value: mockStorage })
 
 describe('shouldAutoApprove', () => {
   it('approves TagPolicyRule with only network tag', () => {
@@ -31,5 +39,26 @@ describe('shouldAutoApprove', () => {
     const configured = new Set(['network', 'exec'])
     expect(shouldAutoApprove('TagPolicyRule', ['exec'], configured)).toBe(true)
     expect(shouldAutoApprove('TagPolicyRule', ['exec:dangerous'], configured)).toBe(false)
+  })
+})
+
+describe('persistTags', () => {
+  it('serializes tag list to localStorage', () => {
+    persistTags(['network', 'mcp'])
+    expect(localStorage.getItem('map_v2_auto_approval_tags')).toBe(JSON.stringify(['network', 'mcp']))
+  })
+})
+
+describe('AUTO_APPROVAL_TAG_OPTIONS', () => {
+  it('contains network and mcp as low risk', () => {
+    const low = AUTO_APPROVAL_TAG_OPTIONS.filter(o => o.risk === 'low').map(o => o.tag)
+    expect(low).toContain('network')
+    expect(low).toContain('mcp')
+  })
+
+  it('contains destructive tags as high risk', () => {
+    const tags = AUTO_APPROVAL_TAG_OPTIONS.map(o => o.tag)
+    expect(tags).toContain('filesystem:destructive')
+    expect(tags).toContain('exec:dangerous')
   })
 })

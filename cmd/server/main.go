@@ -334,6 +334,14 @@ func main() {
 					"status_code": 404,
 				}))
 			}
+		case "set_auto_approval_tags":
+			if approvalHandler != nil {
+				policy := harness.NewAutoApprovalPolicy(msg.Tags)
+				approvalHandler.SetAutoApprovalPolicy(policy)
+				observability.DefaultLogger.Info("control", "updated auto-approval policy", map[string]any{
+					"tags": msg.Tags,
+				})
+			}
 		default:
 			observability.DefaultLogger.Warn("control", "unknown control action", map[string]any{"action": msg.Action})
 		}

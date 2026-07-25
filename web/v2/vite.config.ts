@@ -36,4 +36,8 @@ export default defineConfig({
     // Chunk size warning threshold (500 kB)
     chunkSizeWarningLimit: 500,
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+  },
 })
