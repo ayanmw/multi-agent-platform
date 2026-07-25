@@ -924,7 +924,26 @@ export function useTaskStore() {
     }
   }
 
-  /** Clear the active task reference without deleting data */
+  /**
+   * 清除与指定 session 无关的 task 缓存条目，防止跨 session 污染当前时间线。
+   * 保留属于当前 session 的任务以及正在运行的根任务（避免误删运行中任务）。
+   */
+  function clearCacheForSession(sessionId: string) {
+    for (const tid of Object.keys(taskCache.value)) {
+      const t = taskCache.value[tid]
+      if (!t) continue
+      if (t.sessionId && t.sessionId !== sessionId && t.status !== 'running') {
+        delete taskCache.value[tid]
+      }
+    }
+    for (const tid of Object.keys(taskCache.value)) {
+      const t = taskCache.value[tid]
+      if (!t) continue
+      if (!t.sessionId) {
+        delete taskCache.value[tid]
+      }
+    }
+  }
   function clearActiveTask() {
     activeTaskId.value = null
   }
@@ -1259,6 +1278,7 @@ export function useTaskStore() {
     loadTask,
     loadSessionTurns,
     pruneOrphanTasks,
+    clearCacheForSession,
     pauseTask,
     resumeTask,
     cancelTask,

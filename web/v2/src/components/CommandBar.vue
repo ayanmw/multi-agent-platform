@@ -40,6 +40,12 @@ const props = withDefaults(
     contextAnchorRect?: DOMRect | null
     agents?: { id: string; name: string; model: string; tools: string[] }[]
     availableTools?: { name: string; description: string }[]
+    /** 当前激活任务，用于计算真实进度；不传则使用旧的 38% 占位回退。 */
+    activeTask?: {
+      status?: string
+      maxSteps?: number
+      agents?: Record<string, { currentStep?: number; maxSteps?: number; steps?: Array<{ status?: string }> }>
+    } | null
   }>(),
   {
     disabled: false,
@@ -50,6 +56,7 @@ const props = withDefaults(
     contextAnchorRect: null,
     agents: () => [],
     availableTools: () => [],
+    activeTask: null,
   },
 )
 
@@ -99,9 +106,38 @@ const stepPresets = [10, 30, 50, 100]
 const timeoutPresets = [0, 60, 300, 600]
 
 const progress = computed(() => {
-  // TODO: Phase wire — 接入当前 task 真实 progress，目前作为占位
+  const task = props.activeTask
+  if (!task) return props.isRunning || props.isPending ? 38 : 0
+
+  // 先尝试从 agent_status 聚合的 currentStep / maxSteps 计算整体进度。
+  const agents = Object.values(task.agents || {})
+  let totalStepsDone = 0
+  let totalStepsMax = 0
+  for (const a of agents) {
+    const max = a.maxSteps ?? task.maxSteps ?? a.steps?.length ?? 0
+    const current = a.currentStep ?? a.steps?.length ?? 0
+    if (max > 0) {
+      totalStepsDone += Math.min(current, max)
+      totalStepsMax += max
+    }
+  }
+  if (totalStepsMax > 0) {
+    return Math.min(100, Math.round((totalStepsDone / totalStepsMax) * 100))
+  }
+
+  // 无步数数据时回退到占位百分比，让用户仍能感知“运行中”。
   if (props.isRunning || props.isPending) return 38
   return 0
+})
+
+/** 是否有可靠进度数据：决定进度条是否显示确定性动画还是 indeterminate 脉冲。 */
+const hasReliableProgress = computed(() => {
+  const task = props.activeTask
+  if (!task) return false
+  return Object.values(task.agents || {}).some(a =>
+    (a.maxSteps && a.maxSteps > 0) ||
+    (task.maxSteps && task.maxSteps > 0)
+  )
 })
 
 function toggleOptions() {
@@ -179,7 +215,7 @@ watch(
 
 <template>
   <div class="command-bar" :class="{ running: isRunning || isPending, 'command-bar--mobile': isMobile }">
-    <div v-if="isRunning || isPending" class="progress-strip">
+    <div v-if="isRunning || isPending" class="progress-strip" :class="{ indeterminate: !hasReliableProgress }">
       <div class="progress-fill" :style="{ width: progress + '%' }" />
     </div>
 
@@ -350,6 +386,17 @@ watch(
   background: var(--accent-running, #00e5ff);
   transition: width 0.3s ease;
   box-shadow: 0 0 8px var(--border-active, rgba(0, 229, 255, 0.4));
+}
+
+.progress-strip.indeterminate .progress-fill {
+  width: 35% !important;
+  animation: indeterminate-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(calc(200%)); }
+  100% { transform: translateX(-100%); }
 }
 
 .command-main {

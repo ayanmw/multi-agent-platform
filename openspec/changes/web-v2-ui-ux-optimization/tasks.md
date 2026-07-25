@@ -66,11 +66,11 @@
 
 ## 9. State & Progress Cleanup
 
-- [ ] 9.1 Add `clearCacheForSession(sessionId)` method to the task store (`useTaskStore.ts` or equivalent).
-- [ ] 9.2 Replace direct `taskCache.value` mutation in `App.vue` lines 691–703 with a call to the new store method.
-- [ ] 9.3 Update `CommandBar.vue` progress logic to use real `currentStepIndex / maxSteps` when available.
-- [ ] 9.4 Implement indeterminate animation progress bar for running/pending states without reliable progress data.
-- [ ] 9.5 Remove fixed `38%` placeholder progress value entirely.
+- [x] 9.1 Add `clearCacheForSession(sessionId)` method to the task store (`useTaskStore.ts` or equivalent).
+- [x] 9.2 Replace direct `taskCache.value` mutation in `App.vue` lines 691–703 with a call to the new store method.
+- [x] 9.3 Update `CommandBar.vue` progress logic to use real `currentStepIndex / maxSteps` when available.
+- [x] 9.4 Implement indeterminate animation progress bar for running/pending states without reliable progress data.
+- [x] 9.5 Remove fixed `38%` placeholder progress value entirely.
 
 ## 10. Verification & Documentation
 

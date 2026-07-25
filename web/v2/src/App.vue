@@ -100,6 +100,7 @@ const {
   setActiveTaskId,
   loadSessionTurns,
   pruneOrphanTasks,
+  clearCacheForSession,
   pauseTask,
   resumeTask,
   cancelTask,
@@ -702,21 +703,10 @@ async function handleSessionSelect(session: Session) {
   clearContextWindow()
 
   // 清理其他会话的缓存任务，避免污染当前时间线
-  const sid = session.id
-  for (const tid of Object.keys(taskCache.value)) {
-    const t = taskCache.value[tid]
-    if (t.sessionId && t.sessionId !== sid) {
-      delete taskCache.value[tid]
-    }
-  }
-  for (const tid of Object.keys(taskCache.value)) {
-    const t = taskCache.value[tid]
-    if (!t.sessionId) {
-      delete taskCache.value[tid]
-    }
-  }
+  clearCacheForSession(session.id)
 
   if (session.rootTaskId) {
+    const sid = session.id
     try {
       await loadSessionTurns(sid)
       const ordered = Object.values(taskCache.value)
@@ -1036,6 +1026,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :context-anchor-rect="contextAnchorRect"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
+            :active-task="currentTask"
             @send="handleSend"
             @pause="pauseTask"
             @resume="resumeTask"
@@ -1136,6 +1127,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :context-anchor-rect="contextAnchorRect"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
+            :active-task="currentTask"
             @send="handleSend"
             @pause="pauseTask"
             @resume="resumeTask"
