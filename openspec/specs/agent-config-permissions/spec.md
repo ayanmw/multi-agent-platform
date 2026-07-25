@@ -37,15 +37,15 @@ The system SHALL NOT terminate a worker task with "worker 未配置 supervisor" 
 - **THEN** the Engine falls back to user approval instead of returning the timeout as a fatal error
 
 ### Requirement: v2 front-end can auto-approve low-risk policy requests
-The v2 front-end SHALL support automatic approval of `approval_required` events that originate from `TagPolicyRule` and only involve non-destructive tags (currently `network` and `mcp`). Destructive tags (`exec`, `exec:dangerous`, `filesystem:destructive`, `filesystem:delete`, `filesystem:write`, `shell`) SHALL always require manual confirmation.
+The v2 front-end SHALL support automatic approval of `approval_required` events that originate from `TagPolicyRule` and only involve tags in the user-configured auto-approval set. Destructive tags (`exec`, `exec:dangerous`, `filesystem:destructive`, `filesystem:delete`, `filesystem:write`, `shell`) SHALL require explicit user action before they can be added to the auto-approval set.
 
 #### Scenario: Network tool request is auto-approved in v2
-- **WHEN** the front-end receives `system_info` with `type=approval_required`, `rule=TagPolicyRule`, and a tag list containing only `network`
+- **WHEN** the front-end receives `system_info` with `type=approval_required`, `rule=TagPolicyRule`, configured auto-approval tags include `network`, and the tag list contains only `network`
 - **THEN** the front-end automatically sends a `approve` control message for that `approval_id` without opening the dialog
 
 #### Scenario: Dangerous command request still requires manual confirmation
-- **WHEN** the front-end receives `system_info` with `type=approval_required` and tag `exec:dangerous`
-- **THEN** the `ApprovalDialog` is shown and the user must manually approve or deny
+- **WHEN** the front-end receives `system_info` with `type=approval_required`, `rule=TagPolicyRule`, and tag `exec:dangerous` while `exec:dangerous` is NOT in the configured auto-approval set
+- **THEN** the ApprovalDialog is shown and the user must manually approve or deny
 
 ### Requirement: v2 AgentConfig UI exposes default permission toggles
 The v2 Agent configuration panel SHALL display toggle controls for the five permission bits: `allow_network`, `allow_file_write`, `allow_file_delete`, `allow_shell`, and `allow_shell_dangerous`. Changes SHALL be persisted as part of the Agent's `config` object.
