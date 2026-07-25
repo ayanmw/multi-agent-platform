@@ -104,7 +104,7 @@ watch(
       <div class="dialog-panel">
         <div class="dialog-header">
           <h3 class="dialog-title">New Session</h3>
-          <button class="dialog-close" @click="handleClose" title="Close">×</button>
+          <button class="dialog-close" @click="handleClose" title="Close" aria-label="Close">×</button>
         </div>
 
         <div class="dialog-body">

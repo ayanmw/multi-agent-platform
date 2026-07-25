@@ -231,7 +231,7 @@ function truncate(s: string, maxLen: number): string {
           {{ s === '' ? 'All Statuses' : s }}
         </option>
       </select>
-      <button @click="loadMemories" class="btn-refresh" title="Refresh">🔄</button>
+      <button @click="loadMemories" class="btn-refresh" title="Refresh" aria-label="Refresh">🔄</button>
       <button class="btn-create" @click="showCreateDialog = true">+ Create</button>
     </div>
 

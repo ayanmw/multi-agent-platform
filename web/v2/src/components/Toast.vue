@@ -40,7 +40,7 @@ function dismiss(id: number) {
 
 <template>
   <Teleport to="body">
-    <div class="toast-container" aria-live="polite">
+    <div class="toast-container" aria-live="polite" aria-atomic="true">
       <TransitionGroup name="toast">
         <div
           v-for="toast in toasts"

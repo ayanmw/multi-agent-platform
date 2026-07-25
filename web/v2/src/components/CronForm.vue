@@ -392,7 +392,7 @@ function appendScriptExample() {
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title">{{ modalTitle }}</h2>
-            <button class="modal-close-btn" @click="handleClose" title="关闭">✕</button>
+            <button class="modal-close-btn" @click="handleClose" title="关闭" aria-label="关闭">✕</button>
           </div>
 
           <div class="modal-body">

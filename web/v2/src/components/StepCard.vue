@@ -99,8 +99,11 @@ function formatDuration(ms: number): string {
         <span class="step-type-icon" title="Think — LLM 推理/思考步骤">💡</span>
         <span class="step-type-label">THINK</span>
         <span class="step-meta">
-          <span class="step-tokens">{{ step.tokens }}t</span>
-          <span class="step-duration">{{ formatDuration(step.durationMs) }}</span>
+          <span class="step-tokens" :aria-label="`${step.tokens} tokens`">{{ step.tokens }}t</span>
+          <span class="step-duration" :aria-label="`duration ${formatDuration(step.durationMs)}`">{{ formatDuration(step.durationMs) }}</span>
+          <span class="step-status" :class="statusClassMap[step.status]">
+            <span class="visually-hidden">Step status: </span>{{ step.status }}
+          </span>
         </span>
       </div>
       <p class="think-body">{{ truncatedThinking }}</p>
@@ -122,7 +125,10 @@ function formatDuration(ms: number): string {
               class="tool-tag"
             >{{ tag }}</span>
           </span>
-          <span class="step-duration">{{ formatDuration(step.toolCall.duration) }}</span>
+          <span class="step-duration" :aria-label="`duration ${formatDuration(step.toolCall.duration)}`">{{ formatDuration(step.toolCall.duration) }}</span>
+          <span class="step-status" :class="statusClassMap[step.status]">
+            <span class="visually-hidden">Step status: </span>{{ step.status }}
+          </span>
         </span>
       </div>
 
@@ -167,6 +173,9 @@ function formatDuration(ms: number): string {
       <div class="step-header">
         <span class="step-type-icon" title="Observation — 工具返回结果/观察">👁</span>
         <span class="step-type-label">OBSERVATION</span>
+        <span class="step-status" :class="statusClassMap[step.status]">
+          <span class="visually-hidden">Step status: </span>{{ step.status }}
+        </span>
       </div>
       <div class="observation-body">{{ step.thinking }}</div>
     </template>
@@ -421,6 +430,34 @@ function formatDuration(ms: number): string {
 
 .status--completed .step-type-icon {
   color: var(--accent-success);
+}
+
+.step-status {
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.status--running {
+  color: var(--accent-running);
+  background: color-mix(in srgb, var(--accent-running) 12%, transparent);
+}
+
+.status--completed {
+  color: var(--accent-success);
+  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
+}
+
+.status--failed {
+  color: var(--accent-danger);
+  background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+}
+
+.status--paused {
+  color: var(--accent-warning);
+  background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
 }
 
 /* Expand transition used for code blocks */

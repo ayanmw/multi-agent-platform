@@ -78,7 +78,7 @@ void fileUrl
   <div class="session-files">
     <!-- 面包屑路径栏：快速跳转到某层目录作为视图根 -->
     <div class="files-breadcrumbs">
-      <button class="crumb-up" :disabled="!currentPath" title="Up" @click="goUp">↑</button>
+      <button class="crumb-up" :disabled="!currentPath" title="Up" aria-label="Up" @click="goUp">↑</button>
       <template v-for="(c, i) in breadcrumbs" :key="c.path">
         <span v-if="i > 0" class="crumb-sep">/</span>
         <button class="crumb" :class="{ active: i === breadcrumbs.length - 1 }" @click="enterDir(c.path)">

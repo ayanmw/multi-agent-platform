@@ -545,7 +545,7 @@ function handleClose() {
               <div class="tags-input" @click="tagInputEl?.focus()">
                 <span v-for="tag in tags" :key="tag" class="tag-chip">
                   {{ tag }}
-                  <button type="button" class="tag-remove" @click.stop="removeTag(tag)" title="删除标签">✕</button>
+                  <button type="button" class="tag-remove" @click.stop="removeTag(tag)" title="删除标签" aria-label="删除标签">✕</button>
                 </span>
                 <input
                   id="case-tags"

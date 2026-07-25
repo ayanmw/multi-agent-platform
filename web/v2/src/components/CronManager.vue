@@ -211,7 +211,7 @@ function statusActions(c: Cron): Array<{ label: string; status: CronStatus }> {
           <span class="stat-chip stat--disabled">禁用 {{ stats.disabled }}</span>
         </span>
       </div>
-      <button class="cron-new-btn" title="新建定时器" @click="openCreate">+ 新建</button>
+      <button class="cron-new-btn" title="新建定时器" aria-label="新建定时器" @click="openCreate">+ 新建</button>
     </div>
 
     <div class="cron-filter">
@@ -271,17 +271,19 @@ function statusActions(c: Cron): Array<{ label: string; status: CronStatus }> {
             :key="a.label"
             class="op-btn"
             :title="a.label"
+            :aria-label="a.label"
             @click="handleSetStatus(c, a.status)"
           >{{ a.label }}</button>
-          <button class="op-btn op-trigger" title="手动触发" @click="handleTrigger(c)">触发</button>
+          <button class="op-btn op-trigger" title="手动触发" aria-label="手动触发" @click="handleTrigger(c)">触发</button>
           <button
             class="op-btn"
             :class="{ 'op-btn--active': selectedCronId === c.id && executionsVisible }"
             title="执行历史"
+            aria-label="执行历史"
             @click="toggleHistory(c)"
           >历史</button>
-          <button class="op-btn" title="编辑" @click="openEdit(c)">编辑</button>
-          <button class="op-btn op-delete" title="删除" @click="handleDelete(c)">删除</button>
+          <button class="op-btn" title="编辑" aria-label="编辑" @click="openEdit(c)">编辑</button>
+          <button class="op-btn op-delete" title="删除" aria-label="删除" @click="handleDelete(c)">删除</button>
         </span>
       </div>
     </div>
@@ -290,7 +292,7 @@ function statusActions(c: Cron): Array<{ label: string; status: CronStatus }> {
     <div v-if="executionsVisible && selectedCron" class="cron-history-drawer">
       <div class="drawer-header">
         <span class="drawer-title">执行历史 — {{ selectedCron.name }}</span>
-        <button class="drawer-close" @click="executionsVisible = false; selectedCronId = ''">✕</button>
+        <button class="drawer-close" @click="executionsVisible = false; selectedCronId = ''" aria-label="关闭">✕</button>
       </div>
       <CronExecutions :cron-id="selectedCron.id" :visible="executionsVisible" />
     </div>

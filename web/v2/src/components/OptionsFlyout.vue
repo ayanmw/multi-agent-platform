@@ -217,9 +217,10 @@ onUnmounted(() => {
             class="options-reset"
             :class="{ hidden: size.width == null && size.height == null }"
             title="恢复自适应大小"
+            aria-label="恢复自适应大小"
             @click="resetSize"
           >⤢</button>
-          <button class="options-close" title="关闭" @click="close">×</button>
+          <button class="options-close" title="关闭" aria-label="关闭" @click="close">×</button>
         </div>
       </div>
 

@@ -92,7 +92,7 @@ const AVAILABLE_TOOLS = ['run_shell', 'write_file', 'read_file']
     <div class="workflow-editor">
       <div class="editor-header">
         <h3>Multi-Agent Workflow</h3>
-        <button class="close-btn" @click="emit('cancel')">×</button>
+        <button class="close-btn" @click="emit('cancel')" title="关闭" aria-label="关闭">×</button>
       </div>
 
       <div class="editor-body">

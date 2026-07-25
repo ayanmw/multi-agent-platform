@@ -260,11 +260,12 @@ function formatDate(iso: string): string {
             </td>
             <td class="cell-date">{{ formatDate(agent.created_at) }}</td>
             <td class="cell-actions">
-              <button class="btn-action btn-edit" @click="openEdit(agent)" title="Edit">✏</button>
+              <button class="btn-action btn-edit" @click="openEdit(agent)" title="Edit" aria-label="Edit">✏</button>
               <button
                 class="btn-action btn-delete"
                 @click="confirmDelete(agent)"
                 :title="agent.is_default ? 'Default agent cannot be deleted' : 'Delete'"
+                :aria-label="agent.is_default ? 'Default agent cannot be deleted' : 'Delete'"
                 :disabled="agent.is_default"
                 :style="agent.is_default ? { opacity: '0.3', cursor: 'not-allowed' } : {}"
               >🗑</button>

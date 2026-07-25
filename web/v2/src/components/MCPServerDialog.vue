@@ -21,7 +21,7 @@
           <div class="mcp-header">
             <h3>🔌 MCP Server 管理</h3>
             <span class="mcp-count">{{ countLabel }}</span>
-            <button class="mcp-close" @click="close" title="关闭">✕</button>
+            <button class="mcp-close" @click="close" title="关闭" aria-label="关闭">✕</button>
           </div>
 
           <div v-if="error" class="mcp-error">
@@ -30,7 +30,7 @@
           </div>
 
           <div class="mcp-toolbar">
-            <button class="btn-refresh" @click="loadServers" title="刷新列表">🔄</button>
+            <button class="btn-refresh" @click="loadServers" title="刷新列表" aria-label="刷新列表">🔄</button>
             <button class="btn-market" @click="openMarket">🏪 市场安装</button>
             <button class="btn-create" @click="openCreate">+ 添加 Server</button>
           </div>
@@ -145,7 +145,7 @@
           <div class="mcp-create-dialog">
             <div class="mcp-header">
               <h3>🏪 从市场安装</h3>
-              <button class="mcp-close" @click="closeMarket" title="关闭">✕</button>
+              <button class="mcp-close" @click="closeMarket" title="关闭" aria-label="关闭">✕</button>
             </div>
 
             <div v-if="marketError" class="mcp-error">{{ marketError }}</div>
@@ -204,7 +204,7 @@
           <div class="mcp-create-dialog">
             <div class="mcp-header">
               <h3>+ 添加 MCP Server</h3>
-              <button class="mcp-close" @click="closeCreate" title="关闭">✕</button>
+              <button class="mcp-close" @click="closeCreate" title="关闭" aria-label="关闭">✕</button>
             </div>
 
             <div class="mcp-form">

@@ -249,11 +249,12 @@ watch(showForm, (open) => { if (!open) formError.value = null })
             </td>
             <td class="cell-date">{{ formatDate(p.updated_at) }}</td>
             <td class="cell-actions" @click.stop>
-              <button class="btn-action btn-edit" @click="openEdit(p)" title="Edit">✏</button>
+              <button class="btn-action btn-edit" @click="openEdit(p)" title="Edit" aria-label="Edit">✏</button>
               <button
                 class="btn-action btn-delete"
                 @click="confirmDelete(p)"
                 :title="p.id === 'default' ? 'Default project cannot be deleted' : 'Delete'"
+                :aria-label="p.id === 'default' ? 'Default project cannot be deleted' : 'Delete'"
                 :disabled="p.id === 'default'"
               >🗑</button>
             </td>

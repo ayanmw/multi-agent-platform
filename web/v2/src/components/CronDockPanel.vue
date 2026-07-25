@@ -105,7 +105,7 @@ function eventClass(type: string): string {
         <span class="dock-title">⏰ Cron</span>
         <div class="dock-actions">
           <button class="dock-btn" title="管理全部定时器" @click="openManage()">管理</button>
-          <button class="dock-close" @click="close" title="收起">✕</button>
+          <button class="dock-close" @click="close" title="收起" aria-label="收起">✕</button>
         </div>
       </div>
 

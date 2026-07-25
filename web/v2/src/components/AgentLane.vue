@@ -96,9 +96,11 @@ function onCancel() {
       </div>
 
       <div class="agent-header-meta">
-        <span class="agent-tokens">{{ totalTokens }}t</span>
-        <span class="agent-duration">{{ formatDuration(durationMs) }}</span>
-        <span class="agent-status badge" :class="statusClass">{{ status }}</span>
+        <span class="agent-tokens" :aria-label="`${totalTokens} tokens`">{{ totalTokens }}t</span>
+        <span class="agent-duration" :aria-label="`duration ${formatDuration(durationMs)}`">{{ formatDuration(durationMs) }}</span>
+        <span class="agent-status badge" :class="statusClass">
+          <span class="visually-hidden">Status: </span>{{ status }}
+        </span>
         <button
           type="button"
           class="expand-toggle focus-glow"

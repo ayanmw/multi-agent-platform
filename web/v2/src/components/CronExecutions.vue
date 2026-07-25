@@ -122,7 +122,7 @@ function formatDuration(ms: number): string {
       <button class="exec-refresh-btn" :disabled="loading" @click="reload">
         {{ loading ? '加载中…' : '刷新' }}
       </button>
-      <button class="exec-clean-btn" @click="handleClean" title="按当前过滤条件清理">清理</button>
+      <button class="exec-clean-btn" @click="handleClean" title="按当前过滤条件清理" aria-label="按当前过滤条件清理">清理</button>
       <span class="exec-count">共 {{ total }} 条</span>
     </div>
 

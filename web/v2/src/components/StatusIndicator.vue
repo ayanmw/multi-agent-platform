@@ -19,8 +19,10 @@ withDefaults(
 
 <template>
   <span class="status-indicator" :class="status">
-    <span class="status-dot"></span>
-    <span v-if="label" class="status-label">{{ label }}</span>
+    <span class="status-dot" aria-hidden="true"></span>
+    <span class="status-label">
+      <span class="visually-hidden">Status: </span>{{ label }}
+    </span>
   </span>
 </template>
 

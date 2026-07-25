@@ -368,7 +368,7 @@ const ringDash = computed(() => {
                 <span>{{ roleMeta[promptDialog.role]?.label || promptDialog.role }} Prompt</span>
                 <span class="prompt-dialog-ordinal">#{{ promptDialog.ordinal }}</span>
               </div>
-              <button class="prompt-dialog-close" title="关闭" @click="closePromptDialog">×</button>
+              <button class="prompt-dialog-close" title="关闭" aria-label="关闭" @click="closePromptDialog">×</button>
             </div>
             <div class="prompt-dialog-body">
               <div v-if="promptDialog.reasoning" class="prompt-block reasoning-block">

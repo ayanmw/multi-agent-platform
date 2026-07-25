@@ -6,7 +6,7 @@
           <div class="recent-mods-header">
             <h3>🕐 最近修改</h3>
             <span class="recent-mods-count">{{ countLabel }}</span>
-            <button class="recent-mods-close" @click="close" title="关闭">✕</button>
+            <button class="recent-mods-close" @click="close" title="关闭" aria-label="关闭">✕</button>
           </div>
 
           <div v-if="sortedItems.length === 0" class="recent-mods-empty">

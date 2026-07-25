@@ -25,7 +25,7 @@
           <div class="mp-header">
             <h3>💲 模型价格管理</h3>
             <span class="mp-count">{{ countLabel }}</span>
-            <button class="mp-close" @click="close" title="关闭">✕</button>
+            <button class="mp-close" @click="close" title="关闭" aria-label="关闭">✕</button>
           </div>
 
           <!-- Persistence warning from the backend (runtime-only edits). -->

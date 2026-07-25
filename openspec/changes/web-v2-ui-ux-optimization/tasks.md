@@ -48,10 +48,10 @@
 
 ## 7. Status & Accessibility Improvements
 
-- [ ] 7.1 Refactor status chips and role badges to include either visible text labels or visually hidden text conveying state.
-- [ ] 7.2 Add `aria-atomic="true"` to `Toast.vue` live region.
-- [ ] 7.3 Audit and ensure all emoji-only buttons have `aria-label` and ideally visible tooltips.
-- [ ] 7.4 Verify reduced-motion media queries still disable non-essential animations after changes.
+- [x] 7.1 Refactor status chips and role badges to include either visible text labels or visually hidden text conveying state.
+- [x] 7.2 Add `aria-atomic="true"` to `Toast.vue` live region.
+- [x] 7.3 Audit and ensure all emoji-only buttons have `aria-label` and ideally visible tooltips.
+- [x] 7.4 Verify reduced-motion media queries still disable non-essential animations after changes.
 
 ## 8. Theme Cleanup
 

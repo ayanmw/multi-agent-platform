@@ -26,7 +26,7 @@ defineEmits<{
         <div class="tips-panel">
           <div class="tips-header">
             <h2>⌨ Keyboard Shortcuts</h2>
-            <button class="tips-close-btn" @click="$emit('close')" title="Close">✕</button>
+            <button class="tips-close-btn" @click="$emit('close')" title="Close" aria-label="Close">✕</button>
           </div>
 
           <div class="tips-body">
