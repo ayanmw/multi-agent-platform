@@ -53,11 +53,13 @@ type Worktree struct {
 // Blocked=true 时 worktree 仍保留，调用方应把 Uncommitted / Unmerged 展示给
 // LLM 或前端，由其决定是否带 discardChanges=true 重试。
 type RemoveReport struct {
-	Blocked     bool     `json:"blocked"`      // 是否因未提交/未合并被护栏阻塞
-	Uncommitted []string `json:"uncommitted"`  // 未提交文件相对路径列表
-	Unmerged    bool     `json:"unmerged"`     // 分支是否尚未合并到默认分支
-	Removed     bool     `json:"removed"`      // 是否已实际删除
-	ID          string    `json:"id"`
+	Blocked       bool     `json:"blocked"`        // 是否因未提交/未合并被护栏阻塞
+	Uncommitted   []string `json:"uncommitted"`    // 未提交文件相对路径列表
+	Unmerged      bool     `json:"unmerged"`       // 分支是否尚未合并到默认分支
+	Removed       bool     `json:"removed"`        // 是否已实际删除
+	BranchRemoved bool     `json:"branch_removed"` // 绑定分支是否已被删除
+	Warnings      []string `json:"warnings"`       // 非致命警告（如分支删除失败）
+	ID            string   `json:"id"`
 }
 
 // Manager 封装 git worktree 原语。所有操作经 git CLI 完成（不引入 go-git 依赖），
@@ -117,13 +119,28 @@ func (m *Manager) Create(sessionID, baseRef string) (*Worktree, string, error) {
 	shortID := randomShortID()
 	id := shortID // 直接用短 ID 作目录名与引用
 
-	wtPath := filepath.Join(m.rootDir, id)
-	wtPath = normPath(wtPath)
+	wtPath := normPath(filepath.Join(m.rootDir, id))
 	branch := fmt.Sprintf("wt/%s/%s", sanitizeForBranch(sessionID), shortID)
 
 	startRef, warning, err := m.resolveStartRef(baseRef)
 	if err != nil {
 		return nil, warning, err
+	}
+
+	// 路径已存在时重试几次，避免极低概率随机冲突。这同时覆盖磁盘残留目录导致
+	// git worktree add 失败的情况。
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if _, statErr := os.Stat(wtPath); os.IsNotExist(statErr) {
+			break
+		}
+		if attempt == maxAttempts {
+			return nil, warning, fmt.Errorf("worktree path %s already exists after %d attempts", wtPath, maxAttempts)
+		}
+		shortID = randomShortID()
+		id = shortID
+		wtPath = normPath(filepath.Join(m.rootDir, id))
+		branch = fmt.Sprintf("wt/%s/%s", sanitizeForBranch(sessionID), shortID)
 	}
 
 	// git worktree add <path> -b <branch> <startRef>
@@ -244,20 +261,23 @@ func (m *Manager) Remove(id string, discardChanges bool) (*RemoveReport, error) 
 	}
 
 	// 实际删除 worktree 目录
+	report := &RemoveReport{
+		ID:      id,
+		Blocked: false,
+	}
 	if out, err := m.gitInRepo("worktree", "remove", "--force", wt.Path); err != nil {
 		return nil, fmt.Errorf("git worktree remove: %w\n%s", err, out)
 	}
+	report.Removed = true
 	// 删除分支（-D 允许删除未合并分支）
 	if out, err := m.gitInRepo("branch", "-D", wt.Branch); err != nil {
-		// worktree 已删，分支删失败不回滚（分支残留可手动清理），仅记日志
-		_ = out
+		// worktree 已删，分支删失败不回滚（分支残留可手动清理），记录警告
+		report.Warnings = append(report.Warnings, fmt.Sprintf("branch %s deletion failed: %s", wt.Branch, strings.TrimSpace(out)))
+	} else {
+		report.BranchRemoved = true
 	}
 
-	return &RemoveReport{
-		Blocked: false,
-		Removed: true,
-		ID:      id,
-	}, nil
+	return report, nil
 }
 
 // RemoveOrphan 强制删除孤儿 worktree（启动扫描用），不做护栏检查。
@@ -275,7 +295,7 @@ func (m *Manager) RemoveOrphan(id string) error {
 		return fmt.Errorf("git worktree remove: %w\n%s", err, out)
 	}
 	if out, err := m.gitInRepo("branch", "-D", wt.Branch); err != nil {
-		_ = out
+		return fmt.Errorf("git branch delete for orphan %s: %w\n%s", wt.Branch, err, out)
 	}
 	return nil
 }

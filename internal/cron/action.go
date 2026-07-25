@@ -63,24 +63,28 @@ type ActionResult struct {
 
 // ActionRunner 执行四种 action。
 type ActionRunner struct {
-	tools          *tool.Registry
-	allowedTools   map[string]bool
-	webhookTimeout time.Duration
-	maxResultChars int
-	bus            EventBus
-	startTask      TaskStarter
-	msgWriter      SessionMessageWriter
+	tools               *tool.Registry
+	allowedTools        map[string]bool
+	webhookTimeout      time.Duration
+	scriptActionTimeout time.Duration
+	maxResultChars      int
+	bus                 EventBus
+	startTask           TaskStarter
+	msgWriter           SessionMessageWriter
+	urlValidator        *URLValidator
 }
 
 // ActionRunnerConfig 是 ActionRunner 的构造参数。
 type ActionRunnerConfig struct {
-	Tools           *tool.Registry
-	AllowedTools    []string
-	WebhookTimeout  time.Duration
-	MaxResultChars  int
-	Bus             EventBus
-	StartTask       TaskStarter
-	MessageWriter   SessionMessageWriter
+	Tools               *tool.Registry
+	AllowedTools        []string
+	WebhookTimeout      time.Duration
+	ScriptActionTimeout time.Duration // script action 单条 tool 调用超时，默认 30s
+	MaxResultChars      int
+	Bus                 EventBus
+	StartTask           TaskStarter
+	MessageWriter       SessionMessageWriter
+	WebhookAllowPrivate bool // true 时允许 webhook 访问 loopback/私有地址
 }
 
 // NewActionRunner 创建 ActionRunner。
@@ -93,18 +97,24 @@ func NewActionRunner(cfg ActionRunnerConfig) *ActionRunner {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	scriptTimeout := cfg.ScriptActionTimeout
+	if scriptTimeout <= 0 {
+		scriptTimeout = 30 * time.Second
+	}
 	maxChars := cfg.MaxResultChars
 	if maxChars <= 0 {
 		maxChars = 2000
 	}
 	return &ActionRunner{
-		tools:          cfg.Tools,
-		allowedTools:   allowed,
-		webhookTimeout: timeout,
-		maxResultChars: maxChars,
-		bus:            cfg.Bus,
-		startTask:      cfg.StartTask,
-		msgWriter:      cfg.MessageWriter,
+		tools:               cfg.Tools,
+		allowedTools:        allowed,
+		webhookTimeout:      timeout,
+		scriptActionTimeout: scriptTimeout,
+		maxResultChars:      maxChars,
+		bus:                 cfg.Bus,
+		startTask:           cfg.StartTask,
+		msgWriter:           cfg.MessageWriter,
+		urlValidator:        &URLValidator{AllowPrivate: cfg.WebhookAllowPrivate},
 	}
 }
 
@@ -241,7 +251,9 @@ func (r *ActionRunner) runScript(ctx context.Context, c Cron, payload map[string
 		if !r.allowedTools[tc.Tool] {
 			return ActionResult{}, fmt.Errorf("script: tool %q not allowed", tc.Tool)
 		}
-		res, err := r.tools.Execute(tc.Tool, tc.Input)
+		toolCtx, cancel := context.WithTimeout(ctx, r.scriptActionTimeout)
+		res, err := r.tools.ExecuteWithCtx(tc.Tool, tool.ExecuteContext{Workdir: "", Ctx: toolCtx}, tc.Input)
+		cancel()
 		if err != nil {
 			return ActionResult{}, fmt.Errorf("script: tool %q failed: %w", tc.Tool, err)
 		}
@@ -268,6 +280,9 @@ func (r *ActionRunner) runWebhook(ctx context.Context, c Cron, payload map[strin
 	}
 	if wp.URL == "" {
 		return ActionResult{}, fmt.Errorf("webhook: url is required")
+	}
+	if err := r.urlValidator.ValidateWebhookURL(wp.URL); err != nil {
+		return ActionResult{}, fmt.Errorf("webhook: %w", err)
 	}
 	if wp.Method == "" {
 		wp.Method = "POST"

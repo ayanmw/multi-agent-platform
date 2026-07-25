@@ -251,12 +251,19 @@ func executeWorktreeExit(deps WorktoolDeps, input map[string]any) (any, error) {
 				"worktree_id": wtID,
 			}))
 		}
-		return map[string]any{
+		obs := map[string]any{
 			"exited":      true,
 			"removed":     true,
 			"worktree_id": wtID,
 			"message":     fmt.Sprintf("Removed worktree %s; working directory restored to session workspace", wtID),
-		}, nil
+		}
+		if rep.BranchRemoved {
+			obs["branch_removed"] = true
+		}
+		if len(rep.Warnings) > 0 {
+			obs["warnings"] = rep.Warnings
+		}
+		return obs, nil
 	}
 
 	// action == keep：保留目录，仅清绑定 + 恢复 holder。

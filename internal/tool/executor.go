@@ -18,6 +18,10 @@ import (
 type ExecuteContext struct {
 	Workdir string
 
+	// Ctx 允许外部调用方传入带超时的 context，工具执行体应检查 ctx.Done()。
+	// 可能为 nil，调用方应先判断再使用。
+	Ctx context.Context
+
 	// 当前 tool 调用所属的任务/Agent/Step 身份,用于事件与日志。
 	TaskID    string
 	AgentID   string
@@ -90,15 +94,33 @@ func (e *DynamicExecutor) Execute(ctx ExecuteContext, input map[string]any) (any
 	}
 }
 
-// executeShell 运行 ExecutionConfig["command"] 模板,替换 {param} 占位符。
+// executeShell 运行 ExecutionConfig["command"] 模板, 先解析为 program + args,
+// 再替换 {param} 占位符, 最后通过 exec.CommandContext 直接执行, 不经过 shell
+// 解释器。若命令字符串含有 shell metacharacter 且未显式开启 shell 模式, 则返回
+// 错误, 防止命令注入。
 func (e *DynamicExecutor) executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
 	template, _ := e.desc.ExecutionConfig["command"].(string)
-	cmdStr := sanitizeInput(template, input)
+	if template == "" {
+		return nil, fmt.Errorf("shell tool: command is empty")
+	}
+
+	// 未来若 descriptor 支持 shell:true, 可在此放行并走 sh -c。
+	if HasShellMetacharacters(template) {
+		return nil, fmt.Errorf("shell tool: complex shell syntax is not supported (contains metacharacters)")
+	}
+
+	program, args, err := ParseShellCommand(template)
+	if err != nil {
+		return nil, fmt.Errorf("shell tool: parse command: %w", err)
+	}
+
+	// 替换 {param} 占位符。
+	args = ReplaceCommandPlaceholders(args, input)
 
 	execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
+	cmd := exec.CommandContext(execCtx, program, args...)
 	if ctx.Workdir != "" {
 		cmd.Dir = ctx.Workdir
 	}

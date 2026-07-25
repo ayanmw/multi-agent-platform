@@ -270,7 +270,6 @@ func TestNormalizeInterval(t *testing.T) {
 	}
 }
 
-// fakeEventBus 用于 scheduler 测试记录事件。
 type fakeEventBus struct {
 	mu     sync.Mutex
 	events []event.Event

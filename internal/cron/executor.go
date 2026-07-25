@@ -13,7 +13,9 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -129,17 +131,8 @@ func (e *Executor) doExecute(ctx context.Context, cronID, overrideInput string, 
 		return nil, fmt.Errorf("insert execution: %w", err)
 	}
 	// 发触发事件。
-	if e.bus != nil {
-		e.bus.SendEvent(newCronEvent(event.EventCronTriggered, c.ID, agentIDFor(c, rendered), map[string]any{
-			"execution_id":   exec.ID,
-			"triggered_at":   exec.TriggeredAt.UnixMilli(),
-			"count":          ctx2.Count,
-			"rendered_input": truncate(renderedInput, 500),
-		}))
-		e.bus.SendEvent(newCronEvent(event.EventCronExecutionStarted, c.ID, agentIDFor(c, rendered), map[string]any{
-			"execution_id": exec.ID,
-		}))
-	}
+	e.sendTriggerEvent(c, exec, ctx2.Count, rendered)
+	e.sendStartEvent(c, exec, rendered)
 
 	// 执行 action。
 	start := time.Now()
@@ -158,26 +151,38 @@ func (e *Executor) doExecute(ctx context.Context, cronID, overrideInput string, 
 		exec.TaskID = res.TaskID
 		exec.SessionID = res.SessionID
 	}
-	_ = e.store.UpdateExecution(exec)
-
-	// 发终态事件 + 更新 cron 调度元数据。
-	if e.bus != nil {
-		evtType := event.EventCronExecutionCompleted
-		data := map[string]any{
-			"execution_id": exec.ID,
-			"duration_ms":  exec.DurationMS,
-			"task_id":      exec.TaskID,
-			"session_id":   exec.SessionID,
-		}
-		if runErr != nil {
-			evtType = event.EventCronExecutionFailed
-			data["error"] = exec.Error
+	if persistErr := e.store.UpdateExecution(exec); persistErr != nil {
+		// 持久化失败不是执行失败，但要在事件里标注，让可观测性完整。
+		persistMsg := fmt.Sprintf("execution completed but persistence failed: %v", persistErr)
+		if e.bus != nil {
+			if runErr != nil {
+				e.sendEndEvent(c, exec, rendered, runErr)
+				e.sendFailedEvent(c, exec, rendered, fmt.Errorf("%s; original error: %w", persistMsg, runErr))
+				_ = e.store.UpdateExecution(exec)
+			} else {
+				e.sendEndEvent(c, exec, rendered, errors.New(persistMsg))
+			}
+			e.sendPersistFailedEvent(c, exec, persistErr)
 		} else {
-			data["result_summary"] = exec.ResultSummary
+			if runErr != nil {
+				e.sendFailedEvent(c, exec, rendered, runErr)
+			} else {
+				e.sendEndEvent(c, exec, rendered, errors.New(persistMsg))
+			}
 		}
-		e.bus.SendEvent(newCronEvent(evtType, c.ID, agentIDFor(c, rendered), data))
+	} else {
+		if runErr != nil {
+			e.sendFailedEvent(c, exec, rendered, runErr)
+		} else {
+			e.sendEndEvent(c, exec, rendered, nil)
+		}
 	}
-	e.updateCronMeta(c, exec.ID)
+
+	if metaErr := e.updateCronMeta(c, exec.ID); metaErr != nil {
+		if e.bus != nil {
+			e.sendPersistFailedEvent(c, exec, metaErr)
+		}
+	}
 
 	if runErr != nil {
 		return &exec, runErr
@@ -216,14 +221,83 @@ func (e *Executor) lastExecution(cronID string) Execution {
 }
 
 // updateCronMeta 更新 cron 的 last_triggered_at / trigger_count / last_execution_id。
-// 不改 status，使用 UpdateCronScheduleMeta。
-func (e *Executor) updateCronMeta(c Cron, execID string) {
+// 不改 status，使用 UpdateCronScheduleMeta。返回持久化错误供调用方观测。
+func (e *Executor) updateCronMeta(c Cron, execID string) error {
 	now := time.Now()
 	c.LastTriggeredAt = &now
 	c.LastExecutionID = execID
 	c.TriggerCount = c.TriggerCount + 1
 	// next_trigger_at 由 scheduler 侧维护，这里不更新，保持 nil/旧值。
-	_ = e.store.UpdateCronScheduleMeta(c)
+	return e.store.UpdateCronScheduleMeta(c)
+}
+
+// sendTriggerEvent 广播 cron_triggered 事件。
+func (e *Executor) sendTriggerEvent(c Cron, exec Execution, count int, rendered map[string]any) {
+	if e.bus == nil {
+		return
+	}
+	e.bus.SendEvent(newCronEvent(event.EventCronTriggered, c.ID, agentIDFor(c, rendered), map[string]any{
+		"execution_id":   exec.ID,
+		"triggered_at":   exec.TriggeredAt.UnixMilli(),
+		"count":          count,
+		"rendered_input": truncate(exec.RenderedInput, 500),
+	}))
+}
+
+// sendStartEvent 广播 cron_execution_started 事件。
+func (e *Executor) sendStartEvent(c Cron, exec Execution, rendered map[string]any) {
+	if e.bus == nil {
+		return
+	}
+	e.bus.SendEvent(newCronEvent(event.EventCronExecutionStarted, c.ID, agentIDFor(c, rendered), map[string]any{
+		"execution_id": exec.ID,
+	}))
+}
+
+// sendEndEvent 广播 cron_execution_completed 事件。err 非 nil 时代表持久化失败。
+func (e *Executor) sendEndEvent(c Cron, exec Execution, rendered map[string]any, err error) {
+	if e.bus == nil {
+		return
+	}
+	data := map[string]any{
+		"execution_id": exec.ID,
+		"duration_ms":  exec.DurationMS,
+		"task_id":      exec.TaskID,
+		"session_id":   exec.SessionID,
+		"result_summary": exec.ResultSummary,
+	}
+	if err != nil {
+		data["persist_error"] = truncate(err.Error(), 500)
+		data["persisted"] = false
+	} else {
+		data["persisted"] = true
+	}
+	e.bus.SendEvent(newCronEvent(event.EventCronExecutionCompleted, c.ID, agentIDFor(c, rendered), data))
+}
+
+// sendFailedEvent 广播 cron_execution_failed 事件。
+func (e *Executor) sendFailedEvent(c Cron, exec Execution, rendered map[string]any, _ error) {
+	if e.bus == nil {
+		return
+	}
+	e.bus.SendEvent(newCronEvent(event.EventCronExecutionFailed, c.ID, agentIDFor(c, rendered), map[string]any{
+		"execution_id": exec.ID,
+		"duration_ms":  exec.DurationMS,
+		"task_id":      exec.TaskID,
+		"session_id":   exec.SessionID,
+		"error":        exec.Error,
+	}))
+}
+
+// sendPersistFailedEvent 广播 cron_persist_failed 事件（持久化层出错）。
+func (e *Executor) sendPersistFailedEvent(c Cron, exec Execution, err error) {
+	if e.bus == nil {
+		return
+	}
+	e.bus.SendEvent(newCronEvent("cron_persist_failed", c.ID, agentIDFor(c, nil), map[string]any{
+		"execution_id": exec.ID,
+		"error":        truncate(err.Error(), 500),
+	}))
 }
 
 // agentIDFor 从渲染后的 start_task payload 取 agent_id，用作事件的 AgentID 字段。
@@ -264,8 +338,6 @@ func describeRenderedInput(c Cron, rendered map[string]any) string {
 // copyMap 浅拷贝 map，避免渲染覆盖原始 payload。
 func copyMap(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }

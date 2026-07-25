@@ -10,10 +10,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/auth"
@@ -96,6 +98,9 @@ func spanRecordToMap(rec observability.SpanRecord) map[string]any {
 		"attributes":     attrs,
 	}
 }
+
+// serverShutdown 用于接收进程终止信号，驱动主服务优雅关闭（如停止 Hub）。
+var serverShutdown = make(chan os.Signal, 1)
 
 // globalSkillRegistry 是 Skill 子系统的全局注册表引用。
 //
@@ -241,6 +246,15 @@ func main() {
 	hub := ws.NewHub()
 	hubInstance = hub
 	go hub.Run()
+	// 捕获终止信号，驱动优雅关闭。
+	signal.Notify(serverShutdown, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-serverShutdown
+		observability.DefaultLogger.Info("server", "shutting down WebSocket hub", nil)
+		if err := hub.Shutdown(context.Background()); err != nil {
+			observability.DefaultLogger.Warn("server", "hub shutdown error", map[string]any{"error": err.Error()})
+		}
+	}()
 
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
 
@@ -871,13 +885,15 @@ func main() {
 		// appServer 在下方构造；这里先创建 starter，后续把 server 注入。
 		cronStarter = &appCronStarter{}
 		runner := cron.NewActionRunner(cron.ActionRunnerConfig{
-			Tools:          toolRegistry,
-			AllowedTools:   cfg.CronAllowedTools,
-			WebhookTimeout: time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
-			MaxResultChars: cfg.CronMaxResultChars,
-			Bus:            bus,
-			StartTask:      cronStarter.Start,
-			MessageWriter:  &cronSessionMsgWriter{},
+			Tools:               toolRegistry,
+			AllowedTools:        cfg.CronAllowedTools,
+			WebhookTimeout:      time.Duration(cfg.CronWebhookTimeoutSeconds) * time.Second,
+			ScriptActionTimeout: time.Duration(cfg.CronScriptActionTimeoutSeconds) * time.Second,
+			MaxResultChars:      cfg.CronMaxResultChars,
+			Bus:                 bus,
+			StartTask:           cronStarter.Start,
+			MessageWriter:       &cronSessionMsgWriter{},
+			WebhookAllowPrivate: cfg.CronWebhookAllowPrivate,
 		})
 		executor := cron.NewExecutor(cronStore, runner, bus, cfg.CronMaxResultChars)
 		// Service 通过 ExecutorPort2(无 ctx 版本) 调用 ExecuteOnce；

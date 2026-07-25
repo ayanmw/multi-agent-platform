@@ -1,7 +1,9 @@
 package ws
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
@@ -121,3 +123,46 @@ func TestHubReplay(t *testing.T) {
 		t.Fatalf("expected [z], got %+v", evts)
 	}
 }
+
+// TestHubShutdown 验证 Shutdown 可让 Run 的 goroutine 退出。
+func TestHubShutdown(t *testing.T) {
+	h := NewHub()
+	go h.Run()
+
+	client := h.RegisterTestClient("client-1")
+	// 等待 client 注册完成
+	time.Sleep(10 * time.Millisecond)
+
+	// 在关闭前发一个事件验证广播仍在工作
+	h.SendEvent(newTestEvent("e1", "task_started"))
+	select {
+	case evt := <-client.Send:
+		if evt.EventID != "e1" {
+			t.Fatalf("unexpected event: %v", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive broadcast event before shutdown")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	// Shutdown 后向 broadcast 发事件不应再被处理（Run 已退出）。
+	// 由于 broadcast 是无缓冲 channel，SendEvent 会阻塞；这里用 select 验证。
+	deadline := time.After(50 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		h.SendEvent(newTestEvent("e2", "step_started"))
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("SendEvent should block after shutdown")
+	case <-deadline:
+		// expected: Run 已退出， broadcast channel 无人接收。
+	}
+}
+

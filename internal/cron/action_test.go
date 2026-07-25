@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -126,6 +128,58 @@ func TestRunScriptDisallowedTool(t *testing.T) {
 	}
 }
 
+// TestRunScriptTimeout 验证 script action 单条 tool 调用受 ScriptActionTimeout 控制。
+func TestRunScriptTimeout(t *testing.T) {
+	reg := tool.NewRegistry()
+	reg.Register(tool.NewBuiltinTool("slow_tool", "", "slow tool", map[string]any{"type": "object"},
+		func(ctx tool.ExecuteContext, input map[string]any) (any, error) {
+			if ctx.Ctx == nil {
+				time.Sleep(200 * time.Millisecond)
+				return "too late", nil
+			}
+			select {
+			case <-time.After(200 * time.Millisecond):
+				return "too late", nil
+			case <-ctx.Ctx.Done():
+				return nil, ctx.Ctx.Err()
+			}
+		}))
+	reg.Register(tool.NewBuiltinTool("fast_tool", "", "fast tool", map[string]any{"type": "object"},
+		func(_ tool.ExecuteContext, input map[string]any) (any, error) {
+			return "ok", nil
+		}))
+	cfg := ActionRunnerConfig{
+		Tools:               reg,
+		AllowedTools:        []string{"slow_tool", "fast_tool"},
+		ScriptActionTimeout: 50 * time.Millisecond,
+	}
+	r := newRunner(t, cfg)
+	_, err := r.Run(context.Background(), Cron{ActionType: ActionScript}, map[string]any{
+		"tool_calls": []any{
+			map[string]any{"tool": "slow_tool", "input": map[string]any{}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected context deadline error, got %v", err)
+	}
+
+	// fast tool 在 50ms 内完成，不应超时。
+	res, err := r.Run(context.Background(), Cron{ActionType: ActionScript}, map[string]any{
+		"tool_calls": []any{
+			map[string]any{"tool": "fast_tool", "input": map[string]any{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("fast tool should not timeout: %v", err)
+	}
+	if res.Summary == "" {
+		t.Fatal("expected non-empty summary")
+	}
+}
+
 // TestRunScriptEmpty 验证空 tool_calls 报错。
 func TestRunScriptEmpty(t *testing.T) {
 	r := newRunner(t, ActionRunnerConfig{Tools: tool.NewRegistry(), AllowedTools: []string{"run_shell"}})
@@ -145,7 +199,7 @@ func TestRunWebhookSuccess(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
-	r := newRunner(t, ActionRunnerConfig{WebhookTimeout: 5e9})
+	r := newRunner(t, ActionRunnerConfig{WebhookAllowPrivate: true, WebhookTimeout: 5e9})
 	res, err := r.Run(context.Background(), Cron{ID: "cron_1", ActionType: ActionWebhook}, map[string]any{
 		"method":  "POST",
 		"url":     srv.URL,
@@ -166,7 +220,7 @@ func TestRunWebhookNon2xx(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	r := newRunner(t, ActionRunnerConfig{})
+	r := newRunner(t, ActionRunnerConfig{WebhookAllowPrivate: true})
 	_, err := r.Run(context.Background(), Cron{ActionType: ActionWebhook}, map[string]any{"url": srv.URL})
 	if err == nil {
 		t.Fatal("expected error for 500")
