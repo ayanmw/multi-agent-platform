@@ -5,11 +5,11 @@
 > 方法论：OpenSpec + superpowers，单个小任务完成后提交 Git。
 
 - [x] **Task P3-0**: 创建 OpenSpec change（proposal / design / tasks）
-- [ ] **Task P3-1**: 启动时预注册所有 tier 模型的 RouterProviders
-  - [ ] 1-1 读取 `cfg.Models` + `DefaultProfiles()` 构建 `routerProviders` map
-  - [ ] 1-2 为 deepseek/openai/anthropic/gemini model 创建对应 provider
-  - [ ] 1-3 注入 `AgentDeps.RouterProviders` 并验证 `resolveProvider` 路径
-  - [ ] 1-4 `go test ./cmd/server/...` + `go build ./...` + 提交
+- [x] **Task P3-1**: 启动时预注册所有 tier 模型的 RouterProviders
+  - [x] 1-1 读取 `cfg.Models` + `DefaultProfiles()` 构建 `routerProviders` map
+  - [x] 1-2 为 deepseek/openai/anthropic/gemini model 创建对应 provider
+  - [x] 1-3 注入 `AgentDeps.RouterProviders` 并验证 `resolveProvider` 路径
+  - [x] 1-4 `go test ./cmd/server/...` + `go build ./...` + 提交
 - [ ] **Task P3-2**: Agent 配置绑定到 RouteRequest
   - [ ] 2-1 扩展 `AgentRunSpec` 携带 `PreferredModel` / `PreferredTier` / `AllowAutoRoute` / `MaxCostUSD` / `AgentRole`
   - [ ] 2-2 在 `runner.go` 中通过 Agent DB 记录或 spec 字段填充 `EngineConfig.MaxCostUSD`
