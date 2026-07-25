@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
 > **最近更新**: 2026-07-25
-> **当前版本**: v0.14.0 Alpha（multi-model layered routing P1-P2: Provider 工厂/多协议支持、per-model RPM 限流、Engine 成本预算治理与 fallback 重试、路由事件可观测性、web/v2 Inspector Routing 面板）
+> **当前版本**: v0.14.1 Alpha（multi-model layered routing P3: 启动时全 tier Provider 预注册、Agent 绑定 RouteRequest、Router intent_classified 去重、RateLimiter 接入真实 LLM 调用、Engine 路由事件测试、前端 RoutingPanel fallback/budget 徽章与事件时间线）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -509,15 +509,16 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 | v0.13.3 Alpha | 2026-07-25 | 冒烟测试失败修复: `internal/tool/registry.go` 的 `Unregister` 增加 `FullName` fallback，修复 `DELETE /api/tools?name=echo_smoke` 404；`scripts/smoke-test.sh` 前置清理同名动态工具、接受 checkpoint recover 500；`scripts/policy-smoke.sh` 修复 `parse_detail` stdin JSON 解析、ApprovalRule 期望路径从硬编码 `./etc/` 改为按 `session_id` 动态取 `workspace_dir` 下的 `etc/policy_approval_test.txt`；`smoke-test.sh` PASS=63/FAIL=0，`policy-smoke.sh` PASS=8/FAIL=0 |
 | v0.13.4 Alpha | 2026-07-25 | Phase 8-B cleanup-2 收尾: `handleTasksRoot` 的 `switch req.Action` 改为 `appServer.taskActions` 注册表分发，`actionChat/actionMultiAgent/actionStreamDemo` 保持 `(s *appServer)` 方法化；`go build ./...` + `go test ./...` 全绿；分支 `phase-8b-cleanup-2` 已合并到 `main` 并删除 worktree |
 | v0.13.5 Alpha | 2026-07-25 | UI-v2 UI/UX 优化（OpenSpec `web-v2-ui-ux-optimization`）: 响应式布局/Dock 宽度治理/Flyout 边界定位/触控目标/Hover-点击混合/Dialog 焦点捕获与 ARIA/状态标签可访问性/emoji 按钮 `aria-label`/Toast `aria-atomic`/减少动画偏好/主题 token 统一（overlay/glass）；`npm run test` 128 通过、`npm run build` 通过 |
+| v0.14.1 Alpha | 2026-07-25 | multi-model-routing P3: 启动时预注册所有 tier RouterProviders / Agent 配置绑定 RouteRequest / Router intent_classified 事件去重 / RateLimiter 接入真实 LLM 调用并 RecordCall / Engine 路由事件测试（model_routed / model_fallback_used / cost_budget_exceeded）并修复预算拦截重复事件 / web/v2 RoutingPanel 增加 fallback / budget 状态徽章与事件时间线；`go test ./...` 全绿、`web/v2` `npm run build` 与 `npm run test`（128 例）全绿 |
 
 ---
 
-## Phase multi-model-routing: 多模型分层路由 P1-P2 ✅ 已完成
+## Phase multi-model-routing: 多模型分层路由 P1-P3 ✅ 已完成
 
 **目标**: 实现按 intent/tier/cost 的模型分层路由，补充限流、预算治理、fallback 与前端可观测性
 
-**完成日期**: 2026-07-25
-**Git commit**: `7a35e15` 批次
+**完成日期**: 2026-07-25（P1-P2） / 2026-07-25（P3）
+**Git commit**: `7a35e15` 批次（P1-P2） / `490d780` / `2f33a94` 批次（P3）
 
 ### 交付物
 - [x] 5-tier 模型分层（`TierFree` / `TierEfficient` / `TierLightweight` / `TierStandard` / `TierPremium`）扩展 `ModelProfile`
