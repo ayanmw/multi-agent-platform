@@ -81,25 +81,49 @@ const { size, isResizing, startResize, resetSize } = useFlyoutResize(
   panelRef,
 )
 
+// 安全边距与约束常量。
+const SAFE_MARGIN = 12
+const MIN_WIDTH = 320
+const CSS_MAX_WIDTH = 860
+
 function computePosition() {
   const rect = props.anchorRect
   const el = panelRef.value
   if (!rect || !el) return
+
   const w = size.value.width
-  const width = w ?? Math.min(420, window.innerWidth - 24)
+  let actualWidth = w ?? Math.min(CSS_MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - SAFE_MARGIN * 2))
+  actualWidth = Math.min(actualWidth, window.innerWidth - SAFE_MARGIN * 2)
+
+  const viewportRight = window.innerWidth - SAFE_MARGIN
+  const viewportLeft = SAFE_MARGIN
+
+  // 默认左边缘对齐触发按钮；若溢出右边界则尝试 flip（右边缘对齐），
+  // flip 后仍贴左则贴右安全边距。
   let left = rect.left
-  if (left + width > window.innerWidth - 12) {
-    left = window.innerWidth - width - 12
+  if (left + actualWidth > viewportRight) {
+    const flippedLeft = rect.right - actualWidth
+    if (flippedLeft >= viewportLeft) {
+      left = flippedLeft
+    } else {
+      left = viewportRight - actualWidth
+    }
   }
-  if (left < 12) left = 12
+  if (left < viewportLeft) left = viewportLeft
+
   const bottom = window.innerHeight - rect.top + 8
 
   flyoutStyle.value = {
     left: `${left}px`,
     bottom: `${bottom}px`,
+    maxWidth: `${Math.min(CSS_MAX_WIDTH, window.innerWidth - SAFE_MARGIN * 2)}px`,
     maxHeight: `${Math.floor(window.innerHeight * 0.88)}px`,
   }
-  if (w != null) flyoutStyle.value.width = `${w}px`
+  if (w != null) {
+    flyoutStyle.value.width = `${w}px`
+  } else {
+    flyoutStyle.value['--flyout-actual-width'] = `${actualWidth}px`
+  }
 }
 
 import { ref } from 'vue'
@@ -311,6 +335,7 @@ const durationText = computed(() => formatDurationMs(props.sessionTotalDuration 
   position: fixed;
   display: flex;
   flex-direction: column;
+  width: max-content;
   max-width: 860px;
   min-width: 320px;
   background: var(--bg-elevated, #181c24);
@@ -326,8 +351,15 @@ const durationText = computed(() => formatDurationMs(props.sessionTotalDuration 
   transition: none !important;
 }
 
-.context-flyout.is-resizing * {
+/* 拖拽期间仅手柄与手柄内部元素显示对应光标，避免全局覆盖触发按钮等外部控件。 */
+.context-flyout.is-resizing .flyout-resize-h,
+.context-flyout.is-resizing .flyout-resize-h * {
   cursor: ns-resize !important;
+}
+
+.context-flyout.is-resizing .flyout-resize-w,
+.context-flyout.is-resizing .flyout-resize-w * {
+  cursor: ew-resize !important;
 }
 
 .flyout-resize-handle {

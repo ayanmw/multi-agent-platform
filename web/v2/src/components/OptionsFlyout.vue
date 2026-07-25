@@ -9,6 +9,7 @@ import { useFlyoutResize } from '@/composables/useFlyoutResize'
  *   - 聚合运行参数（max steps / timeout / multi-agent）
  *   - 展示当前可用 agent 选择、该 agent 可用工具与 model
  *   - 提供一键跳转到 Agents 管理页面
+ *   - 桌面端锚定触发按钮向上展开，并监听视口边界自动 flip / clamp，避免飞出屏幕。
  *
  * Props:
  *   - open: 浮窗显隐
@@ -17,6 +18,7 @@ import { useFlyoutResize } from '@/composables/useFlyoutResize'
  *   - multiAgent: 是否启用多 agent
  *   - agents: 可选 agent 列表
  *   - availableTools: 可选工具列表
+ *   - anchorRect: 触发按钮的 DOMRect，用于桌面端定位
  *
  * Emits:
  *   - update:open
@@ -59,26 +61,58 @@ const { size, isResizing, startResize, resetSize } = useFlyoutResize(
   panelRef,
 )
 
+// 安全边距，优先大于触发按钮，至少保证不贴边。
+const SAFE_MARGIN = 12
+
+// CSS 定义的 min/max-width；当 width 为 null 时则用自适应宽度。
+const MIN_WIDTH = 280
+const CSS_MAX_WIDTH = 720
+
 function computePosition() {
   const rect = props.anchorRect
   const el = panelRef.value
   if (!rect || !el) return
+
+  // 拖拽状态下优先使用当前拖拽尺寸；否则自适应时按 CSS max-width 与视口
+  // 余量双重约束，避免首次打开就溢出。
   const w = size.value.width
-  // 自适应时给一个内容驱动的上限，避免横向溢出视口。
-  const width = w ?? Math.min(320, window.innerWidth - 24)
+  let actualWidth = w ?? Math.min(CSS_MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - SAFE_MARGIN * 2))
+  actualWidth = Math.min(actualWidth, window.innerWidth - SAFE_MARGIN * 2)
+
+  const viewportRight = window.innerWidth - SAFE_MARGIN
+  const viewportLeft = SAFE_MARGIN
+
+  // 默认让浮窗左边缘对齐触发按钮左边缘；若会溢出右边界，则改为右边缘对齐。
   let left = rect.left
-  if (left + width > window.innerWidth - 12) {
-    left = window.innerWidth - width - 12
+  let alignRight = false
+  if (left + actualWidth > viewportRight) {
+    // 先尝试向右 flip：以触发按钮右边缘为基准向左展开。
+    const flippedLeft = rect.right - actualWidth
+    if (flippedLeft >= viewportLeft) {
+      left = flippedLeft
+      alignRight = true
+    } else {
+      // 仍然装不下，贴右侧安全边距。
+      left = viewportRight - actualWidth
+    }
   }
-  if (left < 12) left = 12
+  if (left < viewportLeft) left = viewportLeft
+
   const bottom = window.innerHeight - rect.top + 8
 
   flyoutStyle.value = {
     left: `${left}px`,
     bottom: `${bottom}px`,
+    // 即使 width=null，仍设一个与视口相关的 maxWidth，保证不会超出边界。
+    maxWidth: `${Math.min(CSS_MAX_WIDTH, window.innerWidth - SAFE_MARGIN * 2)}px`,
     maxHeight: `${Math.floor(window.innerHeight * 0.86)}px`,
   }
-  if (w != null) flyoutStyle.value.width = `${w}px`
+  if (w != null) {
+    flyoutStyle.value.width = `${w}px`
+  } else {
+    // 自适应时在 style 中不指定 width，但留一后路给翻转逻辑记录实际宽度。
+    flyoutStyle.value['--flyout-actual-width'] = `${actualWidth}px`
+  }
 }
 
 watch(() => props.open, (open) => {
@@ -274,6 +308,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   /* 默认内容自适应：宽度按内容收缩但有 max 兜底，高度由内容增长。 */
+  width: max-content;
   max-width: 720px;
   min-width: 280px;
   background: var(--bg-elevated, #181c24);
@@ -290,8 +325,15 @@ onUnmounted(() => {
   transition: none !important;
 }
 
-.options-flyout.is-resizing * {
+/* 拖拽期间仅手柄与手柄内部元素显示对应光标，避免全局覆盖触发按钮等外部控件。 */
+.options-flyout.is-resizing .flyout-resize-h,
+.options-flyout.is-resizing .flyout-resize-h * {
   cursor: ns-resize !important;
+}
+
+.options-flyout.is-resizing .flyout-resize-w,
+.options-flyout.is-resizing .flyout-resize-w * {
+  cursor: ew-resize !important;
 }
 
 /* 调节手柄：极简的隐形热区，hover 才显形，避免打扰默认外观。 */
@@ -616,6 +658,7 @@ onUnmounted(() => {
     right: 12px !important;
     left: 12px !important;
     width: auto !important;
+    max-width: none !important;
     bottom: calc(var(--commandbar-height, 64px) + var(--mobile-nav-height, 56px) + 10px) !important;
   }
 

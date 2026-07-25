@@ -17,9 +17,9 @@
 
 ## 3. Flyout Positioning Safety
 
-- [ ] 3.1 Update `OptionsFlyout.vue` positioning logic: compute `actualWidth` from available viewport space before clamping `left`.
-- [ ] 3.2 Handle right-edge overflow by flipping flyout to the left side of the trigger when needed.
-- [ ] 3.3 Apply equivalent edge-safe positioning to `ContextFlyout.vue` if it shares the same pattern.
+- [x] 3.1 Update `OptionsFlyout.vue` positioning logic: compute `actualWidth` from available viewport space before clamping `left`.
+- [x] 3.2 Handle right-edge overflow by flipping flyout to the left side of the trigger when needed.
+- [x] 3.3 Apply equivalent edge-safe positioning to `ContextFlyout.vue` if it shares the same pattern.
 
 ## 4. Touch Target Expansion
 
