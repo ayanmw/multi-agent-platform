@@ -15,9 +15,17 @@ The system SHALL expose `GET /api/models/prices` and `PUT /api/models/prices/{pr
 - **WHEN** an authenticated admin calls `PUT /api/models/prices/default/deepseek-v4-flash` with `{"capabilities":["tool_calling","streaming","reasoning"]}`
 - **THEN** the capabilities are persisted and reflected in `ModelRegistry`
 
+#### Scenario: Update context window and max output tokens
+- **WHEN** an authenticated admin calls `PUT /api/models/prices/default/deepseek-v4-flash` with `{"max_context_window":65536,"max_output_tokens":8192}`
+- **THEN** the corresponding fields in `llm_models` are updated and used by router and engine
+
 #### Scenario: Update disallowed identifier fields is rejected
 - **WHEN** an authenticated admin calls `PUT /api/models/prices/default/deepseek-v4-flash` with `{"provider":"other","model_id":"other-name"}`
 - **THEN** the system returns `400 Bad Request` and does not modify the row
+
+#### Scenario: Update fallback model
+- **WHEN** an authenticated admin calls `PUT /api/models/prices/default/deepseek-v4-flash` with `{"fallback_model":"deepseek-v3"}`
+- **THEN** the fallback model is persisted and used when the primary model is unavailable
 
 ## REMOVED Requirements
 

@@ -12,8 +12,12 @@ The system SHALL parse `LLM_PROVIDERS` (JSON array) from `.env` / environment va
 - **THEN** the system synthesizes a provider named `default` with type `openai` using those legacy values
 
 #### Scenario: Unsupported provider type falls back to openai-compatible
-- **WHEN** a provider entry declares a `type` that is not one of `openai`, `deepseek`, `anthropic`, or `self-hosted`
+- **WHEN** a provider entry declares a `type` that is not one of `openai`, `deepseek`, `anthropic`, `gemini`, or `self-hosted`
 - **THEN** the system treats it as `openai-compatible` for discovery and chat, and logs a warning
+
+#### Scenario: Model tier wildcard mapping
+- **WHEN** `.env` contains `MODEL_TIER_claude-opus-*=premium` and a provider returns `claude-opus-4`
+- **THEN** the persisted model has `tier=premium`
 
 ### Requirement: Provider list can be queried via REST API
 The system SHALL expose `GET /api/providers` returning all configured providers with their `name`, `type`, `endpoint`, `healthy` flag (discovery success status), `last_sync_at` timestamp, and `last_sync_error` if any. API keys SHALL NOT be returned.

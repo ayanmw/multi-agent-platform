@@ -41,3 +41,10 @@ The system SHALL parse both `LLM_MODELS` JSON array and legacy single-model fiel
 #### Scenario: LLM_MODELS lists two models
 - **WHEN** `.env` declares `LLM_MODELS=[{"name":"a","provider":"x"},{"name":"b","provider":"y"}]`
 - **THEN** the system persists models `x/a` and `y/b` with `missing=false`
+
+### Requirement: Model tier resolved via wildcard mapping
+The system SHALL apply `.env` `MODEL_TIER_*` wildcard mappings when resolving the tier of a discovered or static model.
+
+#### Scenario: Tier mapping matches wildcard
+- **WHEN** `MODEL_TIER_deepseek-*=efficient` is set and a model `deepseek-v4-flash` is discovered
+- **THEN** the persisted model has `tier=efficient`
