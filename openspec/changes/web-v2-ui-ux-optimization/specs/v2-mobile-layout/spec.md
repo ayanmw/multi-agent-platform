@@ -84,7 +84,7 @@ When the CommandBar uses fixed positioning on mobile, the main stage scroll cont
 
 ### Requirement: Mobile stage can coexist with side panels via bottom sheet overlays
 
-On mobile viewports the system SHOULD provide a way to view Sessions or Files without leaving the Stage tab, via a bottom sheet or landscape split view.
+On mobile viewports the system SHALL provide a way to view Sessions or Files without leaving the Stage tab, via a bottom sheet or landscape split view.
 
 #### Scenario: Quick peek at files while on stage
 
