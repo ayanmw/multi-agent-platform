@@ -31,11 +31,11 @@
 
 ## 5. Hover-to-Click Adaptation
 
-- [ ] 5.1 Convert `ThemePalette.vue` to toggle on click/tap while preserving desktop `mouseenter` preview enhancement.
-- [ ] 5.2 Implement click-outside and explicit close control for `ThemePalette.vue`.
-- [ ] 5.3 Make `FileTreeNode.vue` open-in-new-tab button visible on coarse-pointer / mobile devices (`@media (pointer: coarse)` or `isMobile` check).
-- [ ] 5.4 Restructure `MobileBottomSheet.vue` so the close button lives in a sticky header above the scrollable body.
-- [ ] 5.5 Verify ThemePalette and FileTreeNode on iOS Simulator / Android Emulator touch targets.
+- [x] 5.1 Convert `ThemePalette.vue` to toggle on click/tap while preserving desktop `mouseenter` preview enhancement.
+- [x] 5.2 Implement click-outside and explicit close control for `ThemePalette.vue`.
+- [x] 5.3 Make `FileTreeNode.vue` open-in-new-tab button visible on coarse-pointer / mobile devices (`@media (pointer: coarse)` or `isMobile` check).
+- [x] 5.4 Restructure `MobileBottomSheet.vue` so the close button lives in a sticky header above the scrollable body.
+- [x] 5.5 Verify ThemePalette and FileTreeNode on iOS Simulator / Android Emulator touch targets.
 
 ## 6. Dialog Focus Management & ARIA
 

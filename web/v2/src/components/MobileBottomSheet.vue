@@ -92,23 +92,11 @@ onUnmounted(() => {
           class="mobile-bottom-sheet"
           :class="{ 'mobile-bottom-sheet--fullscreen': fullScreen }"
         >
-          <div class="mobile-sheet-handle">
-            <button
-              v-if="title"
-              class="mobile-sheet-close"
-              aria-label="关闭"
-              @click="close"
-            >
-              ×
-            </button>
-          </div>
-
-          <div v-if="title || $slots.header" class="mobile-sheet-header">
+          <div class="mobile-sheet-header-sticky">
             <slot name="header">
               <span class="mobile-sheet-title">{{ title }}</span>
             </slot>
             <button
-              v-if="!title"
               class="mobile-sheet-close"
               aria-label="关闭"
               @click="close"
@@ -158,22 +146,20 @@ onUnmounted(() => {
   border-radius: 0;
 }
 
-.mobile-sheet-handle {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 12px 0;
-}
-
-.mobile-sheet-header {
+.mobile-sheet-header-sticky {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   background: var(--bg-panel, #11141a);
+}
+
+/* 当调用方提供 header slot 时，内部元素由 slot 控制；仅保证整体容器布局。 */
+.mobile-sheet-header-sticky :slotted(*) {
+  min-width: 0;
 }
 
 .mobile-sheet-title {
@@ -187,8 +173,8 @@ onUnmounted(() => {
 
 .mobile-sheet-close {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -196,7 +182,7 @@ onUnmounted(() => {
   border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
   border-radius: 8px;
   color: var(--text-secondary, #9aa3b2);
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;

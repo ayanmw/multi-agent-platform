@@ -3,11 +3,11 @@
  * ThemePalette — 悬浮主题切换面板（列表形式，每项带名字与风格基调）。
  *
  * 交互：
- * - 鼠标移入触发按钮展开面板
- * - 点击列表项切换主题并关闭面板
- * - 当前 effectiveTheme 高亮显示
+ * - 桌面端：鼠标移入触发按钮展开面板，移出短暂延迟后关闭；点击亦可切换/关闭。
+ * - 触屏端：点击触发按钮切换面板，点击外部、按 Esc 或选择主题后关闭。
+ * - 当前 effectiveTheme 高亮显示。
  */
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useTheme, type ThemeId } from '../composables/useTheme'
 
 interface ThemeMeta {
@@ -29,9 +29,26 @@ const themes: ThemeMeta[] = [
 
 const { theme, effectiveTheme, setTheme } = useTheme()
 const expanded = ref(false)
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
 
 function select(id: ThemeId) {
   setTheme(id)
+  expanded.value = false
+}
+
+function open() {
+  expanded.value = true
+  if (hoverTimer) clearTimeout(hoverTimer)
+}
+
+function startClose() {
+  hoverTimer = setTimeout(() => {
+    expanded.value = false
+  }, 180)
+}
+
+function cancelClose() {
+  if (hoverTimer) clearTimeout(hoverTimer)
 }
 
 function previewColors(preview: string): string[] {
@@ -42,25 +59,57 @@ function itemTitle(t: ThemeMeta): string {
   const suffix = t.id === 'auto' ? `（当前：${effectiveTheme.value}）` : ''
   return `${t.label} — ${t.tone}${suffix}`
 }
+
+// 点击外部或按 Esc 关闭面板。
+const rootRef = ref<HTMLElement | null>(null)
+function handleDocClick(e: MouseEvent) {
+  if (!expanded.value) return
+  const target = e.target as Node
+  if (rootRef.value && !rootRef.value.contains(target)) {
+    expanded.value = false
+  }
+}
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') expanded.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocClick, true)
+  document.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocClick, true)
+  document.removeEventListener('keydown', handleKeydown)
+  if (hoverTimer) clearTimeout(hoverTimer)
+})
 </script>
 
 <template>
   <div
+    ref="rootRef"
     class="theme-palette"
-    @mouseenter="expanded = true"
-    @mouseleave="expanded = false"
   >
     <button
       class="palette-trigger icon-btn"
       :class="{ active: expanded }"
       :style="{ background: 'var(--accent-running)', color: 'var(--text-on-accent)', borderColor: 'var(--accent-running)' }"
       :title="`当前主题：${theme}（生效：${effectiveTheme}）`"
+      aria-haspopup="true"
+      :aria-expanded="expanded"
+      @mouseenter="open"
+      @mouseleave="startClose"
+      @click="expanded = !expanded"
     >
       🎨
     </button>
 
     <transition name="palette">
-      <div v-if="expanded" class="palette-panel">
+      <div
+        v-if="expanded"
+        class="palette-panel"
+        @mouseenter="cancelClose"
+        @mouseleave="startClose"
+      >
         <button
           v-for="t in themes"
           :key="t.id"
