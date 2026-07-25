@@ -178,8 +178,12 @@ func eventWithSubTask(eventType, taskID, subTaskID, agentID string, stepIndex in
 // handleApprovalDelegation 处理 worker 的 leader 委托审批逻辑。
 // 返回 "approved=true" 时调用者继续执行原工具；返回错误时调用者应把错误当作 observation 反馈给 LLM。
 func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *ApprovalError, args map[string]any, duration int64) (string, error) {
-	// 没有审批委托处理器或没有 supervisor，直接返回错误让上层走默认审批/失败流程。
+	// 没有审批委托处理器或没有 supervisor，回退到用户审批路径；
+	// 没有用户审批处理器时才返回错误，避免任务在无通道时继续挂起。
 	if e.cfg.SupervisorDecisionHandler == nil || e.cfg.SupervisorSubTaskID == "" {
+		if e.approvalHandler != nil {
+			return e.handleApprovalRequired(tc, approvalErr.toHarness(), args, duration)
+		}
 		return "", fmt.Errorf("worker 未配置 supervisor，无法委托审批")
 	}
 

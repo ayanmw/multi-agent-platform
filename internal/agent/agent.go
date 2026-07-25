@@ -34,8 +34,26 @@ type Agent struct {
 	MaxTokens    int
 	Tools        []string // 允许使用的 tool 名称
 	Role         AgentRole
+	Config       AgentConfig // Agent 级运行时默认配置
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// AgentConfig 是 Agent 级的运行时默认配置。
+// 持久化在 agents.config JSON 列中，可在启动任务时合并到 TaskContract。
+type AgentConfig struct {
+	// Permissions 是默认权限位，按 OR 语义合并到 TaskContract.Permissions。
+	Permissions TaskPermissions `json:"permissions,omitempty"`
+}
+
+// TaskPermissions 镜像 harness.TaskPermissions，用于从 agents.config 中
+// 反序列化默认权限位。
+type TaskPermissions struct {
+	AllowNetwork        bool `json:"allow_network"`
+	AllowFileDelete     bool `json:"allow_file_delete"`
+	AllowFileWrite      bool `json:"allow_file_write"`
+	AllowShell          bool `json:"allow_shell"`
+	AllowShellDangerous bool `json:"allow_shell_dangerous"`
 }
 
 // StepType 表示 agent 循环中一个 step 的类型

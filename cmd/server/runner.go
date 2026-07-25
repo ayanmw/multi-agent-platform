@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/agent"
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
@@ -481,6 +483,44 @@ func isAllowedScope(scope string, allowed []string) bool {
 		return true
 	}
 	return slices.Contains(allowed, scope)
+}
+
+// applyAgentPermissions 把 Agent 配置中的默认权限按 OR 语义合并到 TaskContract。
+// Agent 配置只启用权限、不关闭权限，避免 case/request 级权限被意外撤销。
+func applyAgentPermissions(contract *harness.TaskContract, cfg map[string]any) {
+	if cfg == nil {
+		return
+	}
+	permsRaw, ok := cfg["permissions"]
+	if !ok {
+		return
+	}
+	// 统一序列化后反序列化，避免 map[string]any 类型断言的繁琐。
+	data, err := json.Marshal(permsRaw)
+	if err != nil {
+		log.Printf("[applyAgentPermissions] marshal permissions failed: %v", err)
+		return
+	}
+	var perms agent.TaskPermissions
+	if err := json.Unmarshal(data, &perms); err != nil {
+		log.Printf("[applyAgentPermissions] unmarshal permissions failed: %v", err)
+		return
+	}
+	if perms.AllowNetwork {
+		contract.Permissions.AllowNetwork = true
+	}
+	if perms.AllowFileDelete {
+		contract.Permissions.AllowFileDelete = true
+	}
+	if perms.AllowFileWrite {
+		contract.Permissions.AllowFileWrite = true
+	}
+	if perms.AllowShell {
+		contract.Permissions.AllowShell = true
+	}
+	if perms.AllowShellDangerous {
+		contract.Permissions.AllowShellDangerous = true
+	}
 }
 
 // enrichAgentSpecAllowedTools 从 DB 加载每个 spec 对应的 agent，

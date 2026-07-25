@@ -496,9 +496,9 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 // Phase 8-A 把 InsertAgent 的长参数列表收敛为 options struct，便于扩展
 // （未来新增字段只改 struct，不动调用点签名）并提高调用处可读性。
 type InsertAgentOptions struct {
-	ID           string
-	Name         string
-	Description  string
+	ID          string
+	Name        string
+	Description string
 	SystemPrompt string
 	Model        string
 	Endpoint     string
@@ -507,6 +507,7 @@ type InsertAgentOptions struct {
 	MaxTokens    int
 	Tools        []string
 	IsDefault    bool
+	Config       map[string]any
 }
 
 // UpdateAgentOptions 是更新 agent 记录的可变字段集合。
@@ -522,21 +523,26 @@ type UpdateAgentOptions struct {
 	Temperature  float64
 	MaxTokens    int
 	Tools        []string
+	Config       map[string]any
 }
 
-// InsertAgent 按 options 创建一条新的 agent 记录。
-// 这是 Phase 8-A 引入的主入口；旧长签名调用方请改用 InsertAgentLegacy。
+// InsertAgent 按 options 创建一条新的 agent 记录。配置对象序列化后写入
+// agents.config 列，使 Agent 级默认权限等运行时覆盖可以持久化。
 func InsertAgent(opts InsertAgentOptions) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	toolsJSON, _ := json.Marshal(opts.Tools)
+	configJSON, _ := json.Marshal(opts.Config)
+	if len(configJSON) == 0 || string(configJSON) == "null" {
+		configJSON = []byte("{}")
+	}
 	_, err := DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, temperature, max_tokens, api_endpoint, api_key, tools, is_default, config)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		opts.ID, opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
 		opts.Temperature, opts.MaxTokens, opts.Endpoint, opts.APIKey,
-		string(toolsJSON), opts.IsDefault,
+		string(toolsJSON), opts.IsDefault, string(configJSON),
 	)
 	return err
 }
@@ -607,19 +613,23 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	return &a, nil
 }
 
-// UpdateAgent 按 options 更新一条已有 agent 记录。
-// Phase 8-A 引入的主入口；旧长签名调用方请改用 UpdateAgentLegacy。
+// UpdateAgent 按 options 更新一条已有 agent 记录。config 字段整体覆盖写入，
+// 调用方应保证传入完整的期望配置对象。
 func UpdateAgent(opts UpdateAgentOptions) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	toolsJSON, _ := json.Marshal(opts.Tools)
+	configJSON, _ := json.Marshal(opts.Config)
+	if len(configJSON) == 0 || string(configJSON) == "null" {
+		configJSON = []byte("{}")
+	}
 	_, err := DB.Exec(
 		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, temperature=?,
-		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, updated_at=CURRENT_TIMESTAMP
+		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, config=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
 		opts.Name, opts.Description, opts.SystemPrompt, opts.Model, opts.Temperature,
-		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), opts.ID,
+		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), string(configJSON), opts.ID,
 	)
 	return err
 }

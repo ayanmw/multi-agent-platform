@@ -385,6 +385,13 @@ func (s *appServer) startChatTask(opts startChatTaskOpts) (sessionID, taskID str
 		contract.CostBudgetUSD = opts.CostBudgetUSD
 	}
 
+	// 合并 Agent 级默认权限（OR 语义）。
+	if agentID != "" {
+		if ag, err := db.QueryAgentByID(agentID); err == nil && ag != nil {
+			applyAgentPermissions(&contract, ag.Config)
+		}
+	}
+
 	sid, tid, err := resolveSession(opts.SessionID, opts.Input, s.persist)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve session: %w", err)

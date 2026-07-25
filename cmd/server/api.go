@@ -843,15 +843,16 @@ func resolveWorkspaceDir(specifiedPath, projectID, sessionID string) (workspaceD
 
 // agentRequest 是 agent create/update 的 JSON body
 type agentRequest struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	SystemPrompt string   `json:"system_prompt"`
-	Model        string   `json:"model"`
-	Endpoint     string   `json:"api_endpoint"`
-	APIKey       string   `json:"api_key"`
-	Temperature  float64  `json:"temperature"`
-	MaxTokens    int      `json:"max_tokens"`
-	Tools        []string `json:"tools"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	SystemPrompt string         `json:"system_prompt"`
+	Model        string         `json:"model"`
+	Endpoint     string         `json:"api_endpoint"`
+	APIKey       string         `json:"api_key"`
+	Temperature  float64        `json:"temperature"`
+	MaxTokens    int            `json:"max_tokens"`
+	Tools        []string       `json:"tools"`
+	Config       map[string]any `json:"config"`
 }
 
 // handleAgents 处理 GET/POST /api/agents
@@ -884,6 +885,7 @@ func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
 			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
+			Config: req.Config,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -931,6 +933,7 @@ func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
 			Model: req.Model, Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
+			Config: req.Config,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2234,6 +2237,11 @@ func (s *appServer) handleRunCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TimeoutSeconds > 0 {
 		contract.TimeoutSeconds = req.TimeoutSeconds
+	}
+
+	// 合并 Agent 级默认权限（OR 语义）。
+	if ag, err := db.QueryAgentByID(agentID); err == nil && ag != nil {
+		applyAgentPermissions(&contract, ag.Config)
 	}
 
 	workingMemory := ""
