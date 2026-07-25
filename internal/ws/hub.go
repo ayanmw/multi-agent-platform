@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -116,6 +117,7 @@ func (b *eventBuffer) eventsAfter(sinceEventID string, limit int) ([]event.Event
 // （断连时间过长或服务器重启）。
 var ErrEventIDNotFound = errors.New("event_id not found in replay buffer")
 
+// Hub 是 WebSocket 广播与客户端管理器。
 type Hub struct {
 	clients        map[*Client]bool
 	register       chan *Client
@@ -123,23 +125,53 @@ type Hub struct {
 	broadcast      chan event.Event
 	controlHandler ControlHandler
 	mu             sync.RWMutex
-	//eventBuf 缓存最近广播的事件，用于断连重连后的 replay。
+	// eventBuf 缓存最近广播的事件，用于断连重连后的 replay。
 	eventBuf *eventBuffer
+	// done 关闭后 Run 的 goroutine 会退出，用于优雅关闭。
+	done chan struct{}
+	// runLoopDone 在 Run 退出时关闭；Shutdown 用它等待 Run 结束。
+	runLoopDone chan struct{}
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan event.Event),
-		eventBuf:   newEventBuffer(defaultEventBufferSize),
+		clients:       make(map[*Client]bool),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		broadcast:     make(chan event.Event),
+		eventBuf:      newEventBuffer(defaultEventBufferSize),
+		done:          make(chan struct{}),
+		runLoopDone:   make(chan struct{}),
 	}
 }
 
+// Shutdown 优雅关闭 Hub：先关闭 done 信号让 Run 退出，再等待 ctx 指定时间让
+// Run goroutine 处理完已入队事件后返回。
+// 注意：Shutdown 不会主动关闭底层 websocket 连接；Server 关闭时连接会自行断开。
+func (h *Hub) Shutdown(ctx context.Context) error {
+	select {
+	case <-h.done:
+		// 已经关闭
+		return nil
+	default:
+	}
+	close(h.done)
+	select {
+	case <-h.runLoopDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Run 启动 Hub 事件循环；当 Shutdown 关闭 done 时退出，同时关闭 runLoopDone。
 func (h *Hub) Run() {
+	defer close(h.runLoopDone)
 	for {
 		select {
+		case <-h.done:
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
