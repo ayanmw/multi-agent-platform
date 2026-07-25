@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -555,8 +556,181 @@ func TestEngine_AllowedToolsFiltersToolDefinitions(t *testing.T) {
 	}
 }
 
-// fakeMCPTransport 是一个最小化的 mcp.Transport 实现，用于测试场景：
-// proxy tool 只需暴露元数据，永远不会真正发起远程调用。
+// panicProvider 是一个在 ChatStream 中触发 panic 的测试 provider，用于
+// 验证 Engine.Run 的 panic recovery 路径。
+type panicProvider struct {
+	fakeJudgeProvider
+}
+
+func (p *panicProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.StreamChunk) error) (string, llm.Usage, []llm.ToolCall, error) {
+	panic("intentional panic in ChatStream")
+}
+
+func TestEngine_Run_Panic_ReturnsError(t *testing.T) {
+	bus := &recordingBus{}
+	cfg := EngineConfig{
+		AgentID:      "panic-test",
+		SystemPrompt: "You are a test agent.",
+		Model:        "fake-model",
+		Provider:     &panicProvider{},
+		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task-panic-test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, _, err := engine.Run(ctx, "trigger panic")
+	if err == nil {
+		t.Fatalf("expected panic to be returned as error, got nil")
+	}
+	if !strings.Contains(err.Error(), "intentional panic") {
+		t.Fatalf("expected error to contain panic message, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "engine panic:") {
+		t.Fatalf("expected error to contain 'engine panic:' prefix, got %v", err)
+	}
+
+	var found bool
+	for _, evt := range bus.events {
+		if evt.Type == "task_failed" {
+			if reason, ok := evt.Data["reason"].(string); ok && reason == "panic" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected task_failed(reason=panic) event")
+	}
+}
+
+// trackingAgentBus 记录注册/注销操作，并允许测试控制 handler。
+type trackingAgentBus struct {
+	mu             sync.Mutex
+	handler        func(AgentMessage)
+	registered     bool
+	unregistered   bool
+	unregisterCh   chan struct{}
+}
+
+func (b *trackingAgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.handler = handler
+	b.registered = true
+}
+func (b *trackingAgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.handler = handler
+	b.registered = true
+}
+func (b *trackingAgentBus) UnregisterHandler(agentID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.unregistered = true
+	if b.unregisterCh != nil {
+		close(b.unregisterCh)
+	}
+}
+func (b *trackingAgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.unregistered = true
+	if b.unregisterCh != nil {
+		close(b.unregisterCh)
+	}
+}
+func (b *trackingAgentBus) SendMessage(msg AgentMessage) {}
+
+func TestEngine_Run_ReturnsAfterListenerDone(t *testing.T) {
+	bus := &recordingBus{}
+	agentBus := &trackingAgentBus{unregisterCh: make(chan struct{})}
+
+	cfg := EngineConfig{
+		AgentID:      "listener-test",
+		SystemPrompt: "You are a test agent.",
+		Model:        "fake-model",
+		Provider:     &fakeJudgeProvider{resp: "done"},
+		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
+		AgentBus:     agentBus,
+		SubTaskID:    "task-listener-test",
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task-listener-test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, _, err := engine.Run(ctx, "go")
+	if err != nil {
+		t.Fatalf("engine.Run returned unexpected error: %v", err)
+	}
+
+	select {
+	case <-agentBus.unregisterCh:
+		// listener 在 Run 返回前已经注销。
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("listener did not unregister before test timeout")
+	}
+	if !agentBus.unregistered {
+		t.Fatalf("expected handler to be unregistered after Run")
+	}
+}
+
+// concurrentWriteProvider 在 ChatStream 中短暂阻塞，让测试有机会并发注入
+// AgentBus 消息，从而触发 listener 与主 loop 同时写入 messages 的场景。
+type concurrentWriteProvider struct {
+	fakeJudgeProvider
+}
+
+func (p *concurrentWriteProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.StreamChunk) error) (string, llm.Usage, []llm.ToolCall, error) {
+	time.Sleep(30 * time.Millisecond)
+	return "final answer", llm.Usage{TotalTokens: 7}, nil, nil
+}
+
+func TestEngine_AgentBusConcurrentMessageNoRace(t *testing.T) {
+	bus := &recordingBus{}
+	agentBus := &trackingAgentBus{}
+
+	cfg := EngineConfig{
+		AgentID:      "race-test",
+		SystemPrompt: "You are a test agent.",
+		Model:        "fake-model",
+		Provider:     &concurrentWriteProvider{},
+		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
+		AgentBus:     agentBus,
+		SubTaskID:    "task-race-test",
+	}
+	tools := tool.NewRegistry()
+	engine := NewEngine(cfg, tools, bus, "task-race-test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if agentBus.handler != nil {
+				agentBus.handler(AgentMessage{FromAgentID: "peer", Content: "hello"})
+				return
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	_, _, err := engine.Run(ctx, "go")
+	if err != nil {
+		t.Fatalf("engine.Run returned unexpected error: %v", err)
+	}
+	wg.Wait()
+}
+
 type fakeMCPTransport struct{}
 
 func (fakeMCPTransport) Start(ctx context.Context) error { return nil }

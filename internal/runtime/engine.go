@@ -86,6 +86,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -503,6 +504,11 @@ type Engine struct {
 	paused   atomic.Bool
 	resumeCh chan struct{}
 	resumeMu sync.Mutex
+
+	// msgMu 保护 Engine.messages 的并发写入。
+	// 主 ReAct loop、AgentBus listener 和审批路径都可能在不同 goroutine 中
+	// 追加消息；所有写操作都必须经过 appendMessage 持有 msgMu。
+	msgMu sync.Mutex
 }
 
 // NewEngine 根据给定配置、tool 注册表、event bus 和 task ID 创建一个
@@ -626,6 +632,15 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	}
 }
 
+// appendMessage 以线程安全方式追加一条消息到 Engine.messages。
+// 所有对 messages 的写入（主 loop、AgentBus listener、审批路径等）都必须
+// 通过本方法，避免跨 goroutine 的 slice append 竞态。
+func (e *Engine) appendMessage(m llm.Message) {
+	e.msgMu.Lock()
+	defer e.msgMu.Unlock()
+	e.messages = append(e.messages, m)
+}
+
 // Run 对给定 user input 执行 ReAct loop，返回最终答案、总 token 消耗和
 // 错误。
 //
@@ -644,9 +659,9 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 //
 // engine 在 Run() 顶部通过 defer recover() 捕获来自任意层（LLM client、
 // tool 执行、event bus、持久化）的 panic。捕获到 panic 时，engine 发出
-// 带 panic 详情的 task_failed 事件，让前端能展示错误，然后重新 panic 以
-// 保留堆栈供调试。这确保了单个有 bug 的 tool 或 nil 指针不会静默杀掉
-// agent——前端总是知道发生了什么。
+// 带 panic 详情与堆栈摘要的 task_failed 事件，让前端能展示错误，然后
+// 以错误形式返回给调用方。这样单个有 bug 的 tool 或 nil 指针不会导致
+// 整个 server 进程崩溃；调用方（HTTP handler）task_failed 发出。
 //
 // # 返回值
 //
@@ -655,40 +670,62 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 //   - error：成功时为 nil，失败时为描述性错误
 func (e *Engine) Run(ctx context.Context, userInput string) (content string, totalTokens int, err error) {
 	// engineRunDone 通知 AgentBus listener Run 函数生命周期结束，使其能
-	// 在 Run 返回后安全退出，避免继续处理可能已关闭的状态或通道。
+	// 在 Run 返回前安全退出，避免继续处理可能已关闭的状态或通道。
 	engineRunDone := make(chan struct{})
 
+	// agentBusDone 用于等待 AgentBus listener goroutine完全退出。
+	// 无论成功、失败、取消还是 panic，Run 都应在返回前等待它关闭。
+	var agentBusDone chan struct{}
+
+	// runCleanupOnce 保证 engineRunDone 只关闭一次，并在关闭后等待
+	// AgentBus listener 退出。panic 路径与普通返回路径共享同一次清理。
+	var runCleanupOnce sync.Once
+	cleanup := func() {
+		runCleanupOnce.Do(func() {
+			// 给 AgentBus listener 一个短暂窗口处理已入队消息后再退出；
+			// 这比直接关闭 channel 更稳定，避免 Run 返回前 listener 丢失消息。
+			time.Sleep(20 * time.Millisecond)
+			close(engineRunDone)
+			if e.agentBus != nil {
+				<-agentBusDone
+			}
+		})
+	}
+
 	// Panic recovery：捕获来自 LLM client、tool 执行、event bus 或持久化层
-	// 的任何 panic。发出 task_failed 事件让前端知道 agent 崩溃，然后重新
-	// panic 以保留堆栈。
+	// 的任何 panic。发出 task_failed 事件让前端知道 agent 崩溃，然后以错误
+	// 形式返回，而不是重新 panic。
 	defer func() {
 		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			panicErr := fmt.Errorf("engine panic: %v\n%s", r, stack)
 			// 发出带 panic 详情的 task_failed 事件，让 UI 能展示错误。
 			// 该事件以 best-effort 方式发送——若 event bus 自身 panic 了，
 			// 这次发送也可能失败，但我们仍然尝试。
 			e.bus.SendEvent(event.NewEventWithSubTask("task_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"reason": "panic",
-				"error":  fmt.Sprintf("%v", r),
+				"error":  panicErr.Error(),
 			}))
 			// 持久化失败状态，使任务历史显示为 failed。
 			e.updateTask("failed", "", e.totalTokens)
 			// 任务失败后清理内存中的上下文窗口快照，避免内存无限累积。
 			DeleteTaskContextSnapshot(e.cfg.SubTaskID)
-			// 重新 panic 以保留原始堆栈供服务端日志记录。
-			// 该 panic 会被 HTTP server 的 recovery 中间件或调用方的
-			// deferred recovery 捕获。
-			panic(r)
+			// 确保 AgentBus listener 在返回前退出，不泄漏 goroutine。
+			cleanup()
+			// 通过命名返回值返回错误；不再重新 panic，避免拖垮整个服务。
+			content = ""
+			totalTokens = e.totalTokens
+			err = panicErr
 		}
 	}()
 
-	// 无论成功、失败还是 context 取消，Run 返回前都关闭 engineRunDone，
-	// 让 AgentBus listener 能立即感知并退出，避免 listener 在 Run 结束后继续
-	// 处理消息或访问已关闭的通道/状态。
-	defer close(engineRunDone)
+	// 最后防线：无论成功、失败、context 取消还是 panic（已通过 defer recover
+	// 处理），都执行 cleanup 关闭 engineRunDone 并等待 listener 退出。
+	defer cleanup()
 
 	// 把用户输入追加到对话历史。这是 ReAct loop 的起点——LLM 会看到
 	// system prompt 后跟这条 user message。
-	e.messages = append(e.messages, llm.Message{Role: "user", Content: userInput})
+	e.appendMessage(llm.Message{Role: "user", Content: userInput})
 
 	// 持久化 user message 以便审计链路和对话回放。
 	e.saveConversation("user", userInput)
@@ -723,8 +760,8 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	// 该 goroutine 监听来自其他 agent 的到达消息，并把它作为 user message
 	// 追加到对话中。它与 ReAct loop 并发运行，在 context 取消或 Run 返回时停止。
 	agentMsgCh := make(chan AgentMessage, 10)
-	agentBusDone := make(chan struct{})
 	if e.agentBus != nil {
+		agentBusDone = make(chan struct{})
 		agentBusHandler := func(msg AgentMessage) {
 			select {
 			case agentMsgCh <- msg:
@@ -777,7 +814,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					// 把到达消息作为 user message 追加到对话。LLM 会把它视为
 					// 来自其他 agent 的新输入。
 					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
-					e.messages = append(e.messages, llm.Message{Role: "user", Content: formatted})
+					e.appendMessage(llm.Message{Role: "user", Content: formatted})
 					e.saveConversation("user", formatted)
 					e.writeSessionMessage("user", formatted, "", "", 0)
 
@@ -800,6 +837,13 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 						Type: "agent_message_input", Status: "completed", Content: formatted,
 					})
 				case <-engineRunDone:
+					// Run 已退出——注销 handler 并立即返回，不继续读取 agentMsgCh。
+					if e.cfg.SubTaskID != "" {
+						e.agentBus.UnregisterHandlerBySubTask(e.cfg.AgentID, e.cfg.SubTaskID)
+					} else {
+						e.agentBus.UnregisterHandler(e.cfg.AgentID)
+					}
+					return
 				}
 			}
 		}()
@@ -908,7 +952,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 
 			// 把错误回填到对话，使下一个 think step 能据此反应。作为
 			// user message 持久化以便审计。
-			e.messages = append(e.messages, llm.Message{Role: "user", Content: obsContent})
+			e.appendMessage(llm.Message{Role: "user", Content: obsContent})
 			e.saveConversation("user", obsContent)
 			e.writeSessionMessage("user", obsContent, "", "", 0)
 
@@ -1113,12 +1157,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 				// JSON。我们在追加到对话历史前对每个 tool_call 做清洗；
 				// 真正的错误仍保留在 tool result observation 中。
 				sanitizedTC := sanitizeToolCallArguments(tc)
-				e.messages = append(e.messages, llm.Message{
+				e.appendMessage(llm.Message{
 					Role:      "assistant",
 					Content:   content,
 					ToolCalls: []llm.ToolCall{sanitizedTC},
 				})
-				e.messages = append(e.messages, llm.Message{
+				e.appendMessage(llm.Message{
 					Role:       "tool",
 					ToolCallID: tc.ID,
 					Content:    obsContent,
@@ -1146,12 +1190,12 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			// arguments（例如 LLM 产出了无效 JSON 但 executeTool 在本地修复
 			// 了）。在追加到对话历史前务必清洗 arguments，避免下一次 think
 			// step 出现 400 错误。
-			e.messages = append(e.messages, llm.Message{
+			e.appendMessage(llm.Message{
 				Role:      "assistant",
 				Content:   content,
 				ToolCalls: []llm.ToolCall{sanitizeToolCallArguments(tc)},
 			})
-			e.messages = append(e.messages, llm.Message{
+			e.appendMessage(llm.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Content:    result,
