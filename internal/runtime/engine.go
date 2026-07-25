@@ -1638,7 +1638,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				// 用输入报价和已有对话长度做保守预估（不含输出），作为上界拦截。
 				minEstimate := float64(contextLen) * profile.InputPrice / 1_000_000
 				if e.runningCostUSD+minEstimate > e.cfg.MaxCostUSD {
-					e.bus.SendEvent(event.NewEventWithSubTask("cost_budget_exceeded", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					e.bus.SendEvent(event.NewEventWithSubTask(event.EventCostBudgetExceeded, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"current_cost_usd": e.runningCostUSD,
 						"max_cost_usd":     e.cfg.MaxCostUSD,
 						"reason":           fmt.Sprintf("routing blocked: current $%.6f + min $%.6f > budget $%.6f", e.runningCostUSD, minEstimate, e.cfg.MaxCostUSD),
