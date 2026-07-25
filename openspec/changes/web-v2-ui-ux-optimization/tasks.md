@@ -23,11 +23,11 @@
 
 ## 4. Touch Target Expansion
 
-- [ ] 4.1 Extend `responsive.css` touch-target rules to cover `.session-action`, `.collapse-btn`, `.project-new-session-btn` and similar SessionDock action classes.
-- [ ] 4.2 Ensure `SessionDock.vue` action buttons render with at least 44×44px hit area without breaking header layout (add wrapper / flex-shrink controls).
-- [ ] 4.3 Set `.tree-row` in `FileTreeNode.vue` to `min-height: 44px` and vertically center contents.
-- [ ] 4.4 Ensure `FileTreeNode.vue` open-in-new-tab button has a 44×44px hit area on mobile.
-- [ ] 4.5 Run existing Vitest tests and add/adjust any tests for SessionDock / FileTreeNode rendering sizes if feasible.
+- [x] 4.1 Extend `responsive.css` touch-target rules to cover `.session-action`, `.collapse-btn`, `.project-new-session-btn` and similar SessionDock action classes.
+- [x] 4.2 Ensure `SessionDock.vue` action buttons render with at least 44×44px hit area without breaking header layout (add wrapper / flex-shrink controls).
+- [x] 4.3 Set `.tree-row` in `FileTreeNode.vue` to `min-height: 44px` and vertically center contents.
+- [x] 4.4 Ensure `FileTreeNode.vue` open-in-new-tab button has a 44×44px hit area on mobile.
+- [x] 4.5 Run existing Vitest tests and add/adjust any tests for SessionDock / FileTreeNode rendering sizes if feasible.
 
 ## 5. Hover-to-Click Adaptation
 

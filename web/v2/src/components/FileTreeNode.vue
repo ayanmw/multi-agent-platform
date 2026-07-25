@@ -84,7 +84,11 @@ function fileIcon(node: SessionFileNode): string {
       :class="{ 'is-dir': node.is_dir, 'is-file': !node.is_dir }"
       :style="{ paddingLeft: depth * 14 + 6 + 'px' }"
       :title="node.relative_path"
+      tabindex="0"
+      role="treeitem"
+      :aria-expanded="node.is_dir ? expanded : undefined"
       @click="onClick"
+      @keydown.enter.space.prevent="onClick"
     >
       <span class="tree-chevron" :class="{ expanded }">
         {{ node.is_dir ? '▸' : '·' }}
@@ -127,6 +131,7 @@ function fileIcon(node: SessionFileNode): string {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 44px;
   padding-top: 3px;
   padding-bottom: 3px;
   padding-right: 6px;
@@ -134,6 +139,13 @@ function fileIcon(node: SessionFileNode): string {
   cursor: pointer;
   transition: background 0.12s;
 }
+
+.tree-row:focus-visible {
+  outline: 2px solid var(--accent-running, #00e5ff);
+  outline-offset: -2px;
+  background: rgba(0, 229, 255, 0.08);
+}
+
 .tree-row:hover {
   background: var(--bg-hover, #202632);
 }
@@ -181,17 +193,30 @@ function fileIcon(node: SessionFileNode): string {
   border: none;
   color: var(--text-muted, #5c6675);
   font-size: 0.85rem;
-  padding: 2px 6px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
   opacity: 0;
   transition: opacity 0.12s, color 0.12s;
 }
+
+@media (max-width: 767px) {
+  .tree-open {
+    opacity: 1;
+  }
+}
+
 .tree-row:hover .tree-open {
   opacity: 1;
 }
+
 .tree-open:hover {
   color: var(--accent-running, #00e5ff);
+  background: var(--bg-panel);
 }
 
 .tree-children {

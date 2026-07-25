@@ -306,6 +306,9 @@ function formatTime(ts: number): string {
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--transition-fast);
+
+  /* 保证 header 整体不低于 44px，给整个可点击区域更大热区 */
+  min-height: 44px;
 }
 
 .project-header:hover {
@@ -327,8 +330,13 @@ function formatTime(ts: number): string {
   font-size: 10px;
   cursor: pointer;
   padding: 0;
-  width: 14px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .project-name {
@@ -353,19 +361,27 @@ function formatTime(ts: number): string {
 }
 
 .project-new-session-btn {
-  width: 18px;
-  height: 18px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 18px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .project-new-session-btn {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .project-new-session-btn:hover {
@@ -468,10 +484,10 @@ function formatTime(ts: number): string {
 
 .session-actions {
   position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
+  top: 4px;
+  right: 4px;
   display: flex;
-  gap: 4px;
+  gap: 2px;
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
@@ -480,11 +496,27 @@ function formatTime(ts: number): string {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
-  padding: 2px 4px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius-sm);
   transition: color var(--transition-fast);
+}
+
+@media (min-width: 1024px) {
+  .session-actions {
+    top: var(--space-sm);
+    right: var(--space-sm);
+  }
+
+  .session-action {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .session-action.edit:hover {

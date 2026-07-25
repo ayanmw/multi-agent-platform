@@ -153,7 +153,10 @@
   .dock-toggle,
   .options-toggle,
   .send-btn,
-  .control-btn {
+  .control-btn,
+  .session-action,
+  .collapse-btn,
+  .project-new-session-btn {
     min-height: 44px;
     min-width: 44px;
   }
