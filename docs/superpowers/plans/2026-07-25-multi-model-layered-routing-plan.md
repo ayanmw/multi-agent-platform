@@ -34,7 +34,130 @@ deepseek-v4-pro   → TierStandard
 
 ---
 
-## 2. 设计目标
+## 2. 当前系统 vs 新方案
+
+### 2.1 核心差异对照
+
+| 维度 | 当前系统（v0.13.4） | 新方案 | 当前问题 |
+|---|---|---|---|
+| **模型池** | 只有 `deepseek-v4-flash` 和 `deepseek-v4-pro` | 引入 Claude/GPT/Gemini/Qwen/GLM/Kimi 等 20+ 模型，按 5 个 tier 分配 | `TierLightweight`、`TierPremium` 等 tier 空置 |
+| **Intent 分类** | 4 类：simple_chat / code_generation / complex_reasoning / multi_step | 扩展到 8 类：新增 `code_execution`、`rag_retrieval`、`web_search`、`safety_sensitive` | 无法区分“写代码”和“运行代码”，也无法识别 RAG/搜索 |
+| **分类器输出** | 单字符串 | JSON：primary_intent + secondary_intents + confidence + needs_tools + estimated_steps | 信息太少，无法做精准过滤 |
+| **Agent 模型绑定** | 无，所有 Agent 走全局 Router | Agent 可配置 `PreferredModel`、`PreferredTier`、`AllowAutoRoute`、`MaxCostUSD` | 无法指定某个 Agent 固定用 Sonnet |
+| **Provider 支持** | 仅 OpenAI-compatible + Mock | 新增 Anthropic、Gemini、Azure OpenAI 等 | 无法直接接入 Claude/GPT-5/Gemini |
+| **Fallback** | 只有 profile.FallbackModel 静态配置 | 主模型失败后 Engine 自动重试 fallback，并广播事件 | 主模型 403/429 时会死循环 |
+| **成本治理** | 仅记录成本，无限制 | Task-level 预算上限、Tier-level RPM 限流、预算超限中断 | 大任务可能无节制烧钱 |
+| **可观测性** | 只有 `model_routed` | 新增 `model_fallback_used`、`model_rate_limited`、`intent_classified`、`cost_budget_exceeded` 等 | 用户看不到为什么选这个模型 |
+
+### 2.2 旧流程（当前）
+
+```
+User Request
+    │
+    ▼
+AgentRunner.Run
+    │
+    ▼
+Engine.NewEngine (使用 cfg.LLMModel)
+    │
+    ▼
+Engine.callLLM ──Router 启用?──┐
+    │                          │
+    │                        Router.Select
+    │                        (4 类 intent)
+    │                            │
+    │                            ▼
+    │                        模型分层: flash/pro
+    │                            │
+    ▼                            │
+OpenAIProvider (deepseek endpoint)
+    │
+    ▼
+ReAct Loop
+    │
+    ▼
+CostTracker 记录
+    │
+    ▼
+model_routed 事件
+```
+
+### 2.3 新流程
+
+```
+User Request
+    │
+    ▼
+Agent 配置解析
+(PreferredModel / PreferredTier / MaxCostUSD)
+    │
+    ▼
+Agent 是否指定模型?
+    │
+    ├── 是 ──→ 命中指定模型
+    │
+    └── 否 ──→ Router.Select
+                │
+                ▼
+        Intent Classifier
+        (8 类 + JSON 输出
+         confidence / needs_tools)
+                │
+                ▼
+        模型分层过滤
+        (5 tier + 能力 + 上下文
+         + 预算 + RPM)
+                │
+                ▼
+        选择 Primary + Fallback
+                │
+                ▼
+        Provider 工厂
+        (openai / anthropic / gemini / azure)
+                │
+                ▼
+        Engine.callLLM
+                │
+                ▼
+        预算 / 限流检查
+                │
+        ┌────────┴────────┐
+        │                 │
+        ▼                 ▼
+     通过            超限/失败
+        │                 │
+        ▼                 ▼
+   LLM 调用      cost_budget_exceeded
+        │        / model_fallback_used
+        │                 │
+        ▼                 │
+   调用失败?              │
+        │                 │
+    ┌───┴───┐             │
+    │       │             │
+   否      是(429/500)    │
+    │       │             │
+    ▼       ▼             │
+ ReAct   重试 fallback   │
+  Loop      │             │
+    │       │             │
+    └───────┴─────────────┘
+                │
+                ▼
+        CostTracker 累计
+                │
+                ▼
+        多事件广播
+        (model_routed / intent_classified
+         / model_fallback_used / model_rate_limited)
+                │
+                ▼
+        前端 Inspector 展示
+```
+
+---
+
+## 3. 设计目标
 
 | 目标 | 说明 |
 |---|---|
