@@ -1,38 +1,38 @@
 ## 1. Schema & Backend Foundation
 
-- [ ] 1.1 Add migration v32: rename `agents.allow_auto_route` boolean to `model_mode` text, add `allow_fallback` boolean default true; convert existing rows (`true -> auto_route`, `false -> single_model`).
-- [ ] 1.2 Update `internal/agent/agent.go` (`AgentConfig`) and `internal/runtime/engine.go` (`EngineConfig` / `AgentRunSpec`) with `ModelMode`, `PreferredTier`, `MaxCostUSD`, `AllowFallback` fields.
-- [ ] 1.3 Update `pkg/db/agent.go` CRUD to read/write new fields.
-- [ ] 1.4 Add new event constants in `pkg/event/event.go`: `llm/model_selected`, `llm/router_fallback_default`, `provider_sync_started`, `provider_sync_completed`, `provider_sync_failed`.
+- [x] 1.1 Add migration v32: rename `agents.allow_auto_route` boolean to `model_mode` text, add `allow_fallback` boolean default true; convert existing rows (`true -> auto_route`, `false -> single_model`).
+- [x] 1.2 Update `internal/agent/agent.go` (`AgentConfig`) and `internal/runtime/engine.go` (`EngineConfig` / `AgentRunSpec`) with `ModelMode`, `PreferredTier`, `MaxCostUSD`, `AllowFallback` fields.
+- [x] 1.3 Update `pkg/db/agent.go` CRUD to read/write new fields.
+- [x] 1.4 Add new event constants in `pkg/event/event.go`: `llm/model_selected`, `llm/router_fallback_default`, `provider_sync_started`, `provider_sync_completed`, `provider_sync_failed`.
 
 ## 2. Model Registry Availability
 
-- [ ] 2.1 Modify `internal/llm/model_service.go` to track whether a profile comes from an actually configured provider or from static `DefaultProfiles()`/`LLM_MODELS`.
-- [ ] 2.2 Update `ModelRegistry` lookups / list methods to expose `AvailableProfiles()` that filters by `missing=false` and provider configured.
-- [ ] 2.3 Ensure `ModelRegistry` returns full `provider/model_id` as primary identity and continues to expose short-name aliases for backward compatibility.
+- [x] 2.1 Modify `internal/llm/model_service.go` to track whether a profile comes from an actually configured provider or from static `DefaultProfiles()`/`LLM_MODELS`.
+- [x] 2.2 Update `ModelRegistry` lookups / list methods to expose `AvailableProfiles()` that filters by `missing=false` and provider configured.
+- [x] 2.3 Ensure `ModelRegistry` returns full `provider/model_id` as primary identity and continues to expose short-name aliases for backward compatibility.
 - [ ] 2.4 Add unit tests for `AvailableProfiles()` filtering behavior.
 
 ## 3. Router Actual-Data Rewrite
 
-- [ ] 3.1 Refactor `internal/llm/router.go` `Select` to build candidates from `ModelRegistry.AvailableProfiles()` instead of `DefaultProfiles()`.
-- [ ] 3.2 Implement empty-pool fallback: return spec/default model, emit `llm/router_fallback_default` event.
-- [ ] 3.3 Implement `allow_fallback=false` behavior: when no candidate matches the requested tier, do not descend tier.
-- [ ] 3.4 Emit `llm/model_selected` event after every selection decision.
-- [ ] 3.5 Add router unit tests around configured-provider filtering, missing exclusion, fallback, and `allow_fallback=false`.
+- [x] 3.1 Refactor `internal/llm/router.go` `Select` to build candidates from `ModelRegistry.AvailableProfiles()` instead of `DefaultProfiles()`.
+- [x] 3.2 Implement empty-pool fallback: return spec/default model, emit `llm/router_fallback_default` event.
+- [x] 3.3 Implement `allow_fallback=false` behavior: when no candidate matches the requested tier, do not descend tier.
+- [x] 3.4 Emit `llm/model_selected` event after every selection decision.
+- [x] 3.5 Add router unit tests around configured-provider filtering, missing exclusion, fallback, and `allow_fallback=false`.
 
 ## 4. Engine Mode Integration
 
-- [ ] 4.1 Update `internal/runtime/engine.go` to read `AgentRunSpec.ModelMode`; only call `Router.Select` when `model_mode=auto_route`.
-- [ ] 4.2 Ensure cost/budget checks use the actually selected model's profile; in `single_model` mode this is the fixed `spec.Model` profile.
-- [ ] 4.3 Emit `model_selected` / `router_fallback_default` events from `Engine` when appropriate.
-- [ ] 4.4 Update mock provider tests and any engine tests that assume router always runs.
+- [x] 4.1 Update `internal/runtime/engine.go` to read `AgentRunSpec.ModelMode`; only call `Router.Select` when `model_mode=auto_route`.
+- [x] 4.2 Ensure cost/budget checks use the actually selected model's profile; in `single_model` mode this is the fixed `spec.Model` profile.
+- [x] 4.3 Emit `model_selected` / `router_fallback_default` events from `Engine` when appropriate.
+- [x] 4.4 Update mock provider tests and any engine tests that assume router always runs.
 
 ## 5. Backend API Enhancements
 
-- [ ] 5.1 Update `GET /api/models/prices` to return only models from configured providers (or explicit static declarations) and include `provider` / `model_id` identity.
-- [ ] 5.2 Verify `PUT /api/models/prices/{provider}/{model}` correctly handles full identity and disallows changing identifier fields.
-- [ ] 5.3 Ensure `POST /api/providers/{name}/sync` emits `provider_sync_started/completed/failed` events.
-- [ ] 5.4 Update agent REST handlers in `cmd/server/agent_api.go` (or equivalent) to accept and persist `model_mode`, `preferred_tier`, `max_cost_usd`, `allow_fallback`.
+- [x] 5.1 Update `GET /api/models/prices` to return only models from configured providers (or explicit static declarations) and include `provider` / `model_id` identity.
+- [x] 5.2 Verify `PUT /api/models/prices/{provider}/{model}` correctly handles full identity and disallows changing identifier fields.
+- [x] 5.3 Ensure `POST /api/providers/{name}/sync` emits `provider_sync_started/completed/failed` events.
+- [x] 5.4 Update agent REST handlers in `cmd/server/agent_api.go` (or equivalent) to accept and persist `model_mode`, `preferred_tier`, `max_cost_usd`, `allow_fallback`.
 
 ## 6. Frontend Types & Composables
 

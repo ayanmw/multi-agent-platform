@@ -139,6 +139,10 @@ type ModelProfile struct {
 	// Provider 标识 API provider（例如 "openai"、"anthropic"、"deepseek"）。
 	Provider string
 
+	// DisplayName 是人类可读的模型显示名称，可能包含中文或空格。
+	// 主键 Name 保持为 provider/model_id 形式，DisplayName 用于前端展示。
+	DisplayName string
+
 	// Tier 是 model 的能力/成本层级。
 	Tier ModelTier
 

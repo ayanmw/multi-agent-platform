@@ -384,7 +384,7 @@ func (s *appServer) registerRoutes() {
 
 	// Phase LLM Provider Model Management: Provider / Model 管理 API。
 	// 旧的 RegisterModelPriceRoutes 已被 RegisterModelAPIRoutes 替代。
-	RegisterModelAPIRoutes(http.DefaultServeMux, s.providerManager, s.modelRegistry)
+	RegisterModelAPIRoutes(http.DefaultServeMux, s.providerManager, s.modelRegistry, s.hub)
 
 	// Version API：从 version.txt 返回当前版本号
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {

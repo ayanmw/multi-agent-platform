@@ -229,6 +229,7 @@ func mergeDefaultIntoExisting(existing *db.LLMModelRecord, p *ModelProfile) db.L
 func dbRecordToProfile(rec db.LLMModelRecord) *ModelProfile {
 	return &ModelProfile{
 		Name:             fmt.Sprintf("%s/%s", rec.ProviderName, rec.ModelID),
+		DisplayName:      rec.DisplayName,
 		Provider:         rec.ProviderName,
 		Tier:             ParseTier(rec.Tier),
 		Capabilities:     parseCapabilities(rec.Capabilities),

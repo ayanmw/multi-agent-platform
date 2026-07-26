@@ -31,7 +31,9 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
 // ProviderItem 是 GET /api/providers 返回的 Provider 表示。
@@ -59,11 +61,12 @@ type ModelProfileItem struct {
 	RateLimitRPM     int      `json:"rate_limit_rpm"`
 	AvgLatencyMs     int      `json:"avg_latency_ms"`
 	Missing          bool     `json:"missing"`
+	Source           string   `json:"source"`
 	UpdatedAt        int64    `json:"updated_at_ms"`
 }
 
 // RegisterModelAPIRoutes 注册 LLM Provider / Model 管理路由。
-func RegisterModelAPIRoutes(mux *http.ServeMux, providerManager *llm.ProviderManager, modelRegistry *llm.ModelRegistry) {
+func RegisterModelAPIRoutes(mux *http.ServeMux, providerManager *llm.ProviderManager, modelRegistry *llm.ModelRegistry, hub *ws.Hub) {
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -84,7 +87,7 @@ func RegisterModelAPIRoutes(mux *http.ServeMux, providerManager *llm.ProviderMan
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		handleSyncProvider(w, r, providerManager, name)
+		handleSyncProvider(w, r, providerManager, name, hub)
 	})
 
 	mux.HandleFunc("/api/models/prices", func(w http.ResponseWriter, r *http.Request) {
@@ -138,22 +141,30 @@ func handleListProviders(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleSyncProvider 手动触发指定 Provider 的模型发现。
-func handleSyncProvider(w http.ResponseWriter, r *http.Request, providerManager *llm.ProviderManager, name string) {
+func handleSyncProvider(w http.ResponseWriter, r *http.Request, providerManager *llm.ProviderManager, name string, hub *ws.Hub) {
 	if providerManager == nil {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "provider manager not available"})
 		return
 	}
 
+	// 广播 provider_sync_started 事件，让前端 Inspector 看到手动同步动作。
+	emitProviderSyncEvent(hub, event.EventProviderSyncStarted, name, nil)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 
 	if err := providerManager.SyncProvider(ctx, name); err != nil {
+		// 失败时广播并返回错误详情。
+		emitProviderSyncEvent(hub, event.EventProviderSyncFailed, name, map[string]any{"error": err.Error()})
 		respondJSON(w, http.StatusInternalServerError, map[string]any{
 			"error":  err.Error(),
 			"status": "failed",
 		})
 		return
 	}
+
+	// 成功后广播 completed 事件。
+	emitProviderSyncEvent(hub, event.EventProviderSyncCompleted, name, nil)
 
 	models, err := db.ListModelsByProvider(name)
 	if err != nil {
@@ -181,9 +192,12 @@ func handleSyncProvider(w http.ResponseWriter, r *http.Request, providerManager 
 	})
 }
 
-// handleListModelProfiles 返回 ModelRegistry 中的所有模型画像（来自 DB）。
+// handleListModelProfiles 返回实际可用的模型画像。
+// 只包含已配置 provider 或显式静态声明的模型；missing=true 与纯 DefaultProfiles
+// 默认模型（SourceDefaultProfile 且 provider 未配置）被过滤掉，避免前端看到
+// 无法调用的模型。
 func handleListModelProfiles(w http.ResponseWriter, _ *http.Request, registry *llm.ModelRegistry) {
-	profiles := registry.List()
+	profiles := registry.AvailableProfiles(nil, true)
 	items := make([]ModelProfileItem, 0, len(profiles))
 	for _, p := range profiles {
 		items = append(items, profileToItem(p))
@@ -308,7 +322,7 @@ func profileToItem(p *llm.ModelProfile) ModelProfileItem {
 	return ModelProfileItem{
 		Provider:         providerName,
 		ModelID:          modelID,
-		DisplayName:      p.Name,
+		DisplayName:      p.DisplayName,
 		Tier:             p.Tier.String(),
 		Capabilities:     caps,
 		InputPrice:       p.InputPrice,
@@ -318,7 +332,8 @@ func profileToItem(p *llm.ModelProfile) ModelProfileItem {
 		FallbackModel:    p.FallbackModel,
 		RateLimitRPM:     p.RateLimitRPM,
 		AvgLatencyMs:     p.AvgLatencyMs,
-		Missing:          false,
+		Missing:          p.Missing,
+		Source:           string(p.Source),
 		UpdatedAt:        time.Now().UnixMilli(),
 	}
 }
@@ -341,5 +356,20 @@ func profileFromRecord(rec db.LLMModelRecord) *llm.ModelProfile {
 		FallbackModel:    rec.FallbackModel,
 		RateLimitRPM:     rec.RateLimitRPM,
 		AvgLatencyMs:     rec.AvgLatencyMs,
+		Missing:          rec.Missing,
+		Source:           llm.SourceConfiguredProvider,
 	}
+}
+
+// emitProviderSyncEvent 辅助函数：在 hub 存在时广播 provider_sync_* 事件。
+// task_id 固定为 provider 名，agent_id 固定为 "provider_manager"，便于前端过滤。
+func emitProviderSyncEvent(hub *ws.Hub, eventType, providerName string, data map[string]any) {
+	if hub == nil {
+		return
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["provider"] = providerName
+	hub.SendEvent(event.NewEvent(eventType, providerName, "provider_manager", 0, data))
 }
