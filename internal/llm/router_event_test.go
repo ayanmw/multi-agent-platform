@@ -42,6 +42,10 @@ func (p *fakeProviderForRouterEvents) ChatStream(req ChatRequest, onChunk func(S
 	return "", Usage{}, nil, errors.New("not implemented")
 }
 
+func (p *fakeProviderForRouterEvents) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	return []ModelInfo{}, nil
+}
+
 func (p *fakeProviderForRouterEvents) Name() string { return "fake-router-classifier" }
 
 // TestRouter_EmitIntentClassified 验证 Select 成功时会广播 intent_classified 事件。

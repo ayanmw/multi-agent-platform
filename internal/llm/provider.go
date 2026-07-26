@@ -34,6 +34,19 @@
 // 多 model 路由策略参见 doc/chapters/10-multi-model-layered-design.html。
 package llm
 
+import "context"
+
+// ModelInfo 描述一个由 provider 发现的可用模型。
+// ListModels 返回的结构与 ModelProfile 解耦：前者是 provider 上报的
+// 原始身份，后者是本地补充的成本、能力与路由元数据。
+type ModelInfo struct {
+	// ID 是 provider 侧 model 标识（例如 "deepseek-v4-flash"）。
+	ID string
+
+	// Provider 是上报此模型的 provider 名。
+	Provider string
+}
+
 // Provider 对 LLM API 协议做抽象，让 Engine 能在不动代码的前提下
 // 与不同 LLM provider 协同。
 //
@@ -65,4 +78,11 @@ type Provider interface {
 	// 唯一携带 usage 数据的 chunk）。返回的 ToolCalls 是所有 delta
 	// 累积完成后完整组装的 tool call。
 	ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error)
+
+	// ListModels 查询 provider 端可使用的 model 列表。
+	//
+	// 对支持模型发现端点（如 OpenAI-compatible /models）的 provider，
+	// 返回 provider 报告的可用模型；对不支持的 provider，返回空列表。
+	// 该接口为 ProviderManager 的自动发现提供统一入口。
+	ListModels(ctx context.Context) ([]ModelInfo, error)
 }

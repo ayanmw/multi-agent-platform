@@ -34,6 +34,11 @@ func (f *fakeJudgeProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.Str
 	return "", llm.Usage{}, nil, errors.New("not implemented")
 }
 
+func (f *fakeJudgeProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
+	_ = ctx
+	return []llm.ModelInfo{}, nil
+}
+
 // extractJudgeRequest 从 chat message prompt 中提取 JudgeRequest 字段，便于测试验证
 // context 传递。
 func extractJudgeRequest(req llm.ChatRequest) JudgeRequest {

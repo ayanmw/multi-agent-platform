@@ -54,6 +54,11 @@ func (p *fakeJudgeProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.Str
 	return p.resp, llm.Usage{TotalTokens: 10}, nil, nil
 }
 
+func (p *fakeJudgeProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
+	_ = ctx
+	return []llm.ModelInfo{}, nil
+}
+
 // memoryEvalRepository 记录已保存的评估。
 type memoryEvalRepository struct {
 	evals []cases.CaseEvaluation
@@ -475,6 +480,10 @@ func (p *capturingProvider) Chat(req llm.ChatRequest) (*llm.ChatResponse, error)
 func (p *capturingProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.StreamChunk) error) (string, llm.Usage, []llm.ToolCall, error) {
 	p.captured = &req
 	return "final answer", llm.Usage{TotalTokens: 7}, nil, nil
+}
+
+func (p *capturingProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
+	return []llm.ModelInfo{}, nil
 }
 
 // TestEngine_AllowedToolsFiltersToolDefinitions 验证：当设置了

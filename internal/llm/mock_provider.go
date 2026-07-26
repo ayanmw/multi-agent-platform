@@ -68,6 +68,39 @@ func (p *MockProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) err
 	return p.chatStream(ctx, req, onChunk)
 }
 
+// ListModels 返回 mock provider 支持的所有模型。
+//
+// 模型来自 store 中的动态脚本与内置脚本；ID 取脚本的 CaseID，
+// Provider 固定为 "mock"，便于后续与 DefaultProfiles 合并。
+func (p *MockProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	scripts, err := p.store.List()
+	if err != nil {
+		return nil, fmt.Errorf("list mock scripts: %w", err)
+	}
+	// 内置脚本追加在后作为回退；map 去重。
+	scripts = append(scripts, p.builtinScripts...)
+	seen := make(map[string]struct{})
+	models := make([]ModelInfo, 0, len(scripts))
+	for _, s := range scripts {
+		id := s.CaseID
+		if id == "" {
+			id = s.ID
+		}
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		models = append(models, ModelInfo{
+			ID:       id,
+			Provider: "mock",
+		})
+	}
+	return models, nil
+}
+
 func (p *MockProvider) chatStream(ctx context.Context, req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
 	scripts, err := p.store.List()
 	if err != nil {
@@ -150,9 +183,20 @@ func (p *MockProvider) selectScript(userInput, model, caseID string, scripts []M
 		// 是常见英文词，会匹配到含 "research" 的其它 case 输入）只给 +500，
 		// 低于精确匹配，避免子串误命中抢走正确的 case 脚本（见
 		// multi-agent-sequential 被 research 脚本劫持的回归案例）。
+		//
+		// model 名可能以 "mock/code-gen" 全名传入；此时取最后一段作为 caseID
+		// 候选，给 +950，保证全名选择时仍能命中内置脚本。
+		modelSuffix := ""
+		if model != "" {
+			if idx := strings.LastIndex(model, "/"); idx >= 0 {
+				modelSuffix = model[idx+1:]
+			}
+		}
 		if script.CaseID != "" {
 			if strings.EqualFold(script.CaseID, caseID) {
 				score += 1000
+			} else if modelSuffix != "" && strings.EqualFold(script.CaseID, modelSuffix) {
+				score += 950
 			} else if strings.Contains(lowerInput, strings.ToLower(script.CaseID)) {
 				score += 500
 			}

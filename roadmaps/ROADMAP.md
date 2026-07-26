@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-25
-> **当前版本**: v0.14.1 Alpha（multi-model layered routing P3: 启动时全 tier Provider 预注册、Agent 绑定 RouteRequest、Router intent_classified 去重、RateLimiter 接入真实 LLM 调用、Engine 路由事件测试、前端 RoutingPanel fallback/budget 徽章与事件时间线）
+> **最近更新**: 2026-07-26
+> **当前版本**: v0.15.0 Alpha（LLM Provider & Model Management：多 Provider 配置、模型发现持久化、ProfileResolver 统一解析、Router mock 模式回归修复，mock 回归 21/21 全绿）
 > **更新规则**: 每个 Phase 任务完成后，必须更新本文件并提交 Git。
 
 ---
@@ -9,8 +9,8 @@
 ## 路线图总览
 
 ```
-Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅ → multi-model-routing ✅
-  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)   (多模型分层路由P1-P2)
+Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → Phase 5 ✅ → Phase 6 ✅ → Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅ → Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅ → multi-model-routing ✅ → llm-provider-model-management ✅
+  (骨架)      (Agent)     (UI)       (Cases)    (并发)      (注册)      (高级)       (Skill 系统)     (TODO)        (定时器)        (控制室)        (编排闭环)     (架构演进)   (架构收尾)    (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)   (多模型分层路由P1-P2)  (LLM Provider 与模型持久化)
 ```
 
 ---
@@ -521,7 +521,39 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 
 - **定型阶段**: 完成核心能力矩阵，进入 v0.15.0 Beta 准备: token 治理、context 压缩、RBAC、真实多 Provider 接入、部署文档。
 - **已知遗留**: L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，已记录为 real-LLM 不可控项；Baidu 移动搜索反爬需后续单独处理（API / headless / cookie 池）。
-- **已落地**: 多模型分层路由 P1-P2 已按 `docs/superpowers/plans/2026-07-25-multi-model-layered-routing-plan.md` 实施，后续 P3 为精细化调度与生产化治理。
+- **已落地**: LLM Provider & Model Management 已合并进 v0.15.0 Alpha；真实多 Provider 接入、热加载与 tokenizer 校准仍为后续优化项。
+
+---
+
+## Phase llm-provider-model-management: LLM Provider 与模型持久化管理 ✅ 已完成
+
+**目标**: 将模型画像从硬编码/内存迁移到数据库持久化 + `.env` 种子，支持多 Provider 配置、自动发现与运行时编辑。
+
+**完成日期**: 2026-07-26
+**Git commit**: `43b2165`（mock 回归修复） / `dc1eacb`（`.env.example`） / 本批次
+
+### 交付物
+- [x] Provider 接口扩展 `ListModels(ctx)`；OpenAI/DeepSeek 复用 OpenAI-compatible `/v1/models` 解析；Anthropic/Gemini stub 返回空列表并警告；MockProvider 返回内置脚本模型列表。
+- [x] `.env` 新增 `LLM_PROVIDERS` JSON 数组、`MODEL_TIER_*` 通配符映射；未配置时从 legacy `LLM_ENDPOINT/API_KEY/MODEL` 合成 `default` Provider。
+- [x] migration v29 `llm_providers` 表（不含 api_key）与 v30 `llm_models` 表；`pkg/db/llm.go` 完整 CRUD。
+- [x] `internal/llm/provider_manager.go` 并发发现同步 + `model_service.go` 启动合并与可编辑字段保护。
+- [x] `ProfileResolver` 统一解析 tier、provider/model 全名/短名、回退 legacy 字段。
+- [x] `cmd/server/model_api.go`：GET `/api/providers`、POST `/api/providers/{name}/sync`、GET/PUT `/api/models/prices`；删除旧 `model_price_api.go`。`cmd/server/main.go` 启动流接入 ProviderManager 与 ModelService。
+- [x] `internal/runtime/engine.go` 路由后按实际 `ModelProfile` price + usage 计算成本，`cost_unknown` 显式标记。
+- [x] 前端：`useLLMModels.ts`、`LLMModelManager.vue` 替代旧 ModelPrices；`AgentConfig.vue` 改为 searchable 模型选择；`TopBar.vue`/`App.vue` 入口改名。
+- [x] MockProvider `selectScript` 支持 `provider/caseID` 与裸 `caseID` 两档匹配；修正 mock 模式下 Router 预注册 `DefaultProfiles()` 误用真实 Provider 导致 403 的回归问题。
+
+### 验证标准
+- [x] `go build ./...` 通过
+- [x] `go test ./...` 全绿
+- [x] `scripts/cases-regression.sh` 21/21 PASS
+- [x] `web/v2` `npm run build` 通过
+
+### 已知待优化
+- [ ] Anthropic/Gemini Provider 真实 `ListModels` 接入（当前 stub）。
+- [ ] 动态模型配置热加载（当前依赖 `.env` + 重启）。
+- [ ] 跨模型 tokenizer 成本校准（当前按 `InputPrice`/`OutputPrice` 与 usage 直接计算）。
+- [ ] 后端全量真实 Provider 接入与 E2E 验证。
 
 ---
 

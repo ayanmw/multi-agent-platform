@@ -78,11 +78,12 @@ type appServer struct {
 	orch            *orchestrator.Orchestrator
 
 	// Cost & routing
-	costRepo        cost.CostRepository
-	modelRegistry   *llm.ModelRegistry
-	modelRouter     *llm.Router
-	rateLimiter     *llm.RateLimiter
-	routerProviders map[string]llm.Provider
+	costRepo         cost.CostRepository
+	modelRegistry    *llm.ModelRegistry
+	modelRouter      *llm.Router
+	rateLimiter      *llm.RateLimiter
+	routerProviders  map[string]llm.Provider
+	providerManager  *llm.ProviderManager
 
 	// Subsystems
 	caseService   *cases.Service
@@ -381,8 +382,9 @@ func (s *appServer) registerRoutes() {
 	// Mock 脚本管理 API（Phase 6 mock provider）。
 	RegisterMockRoutes(http.DefaultServeMux, s.mockStore, llm.BuiltinMockScripts())
 
-	// 模型价格管理 API —— 查看/更新 ModelRegistry 价格。
-	RegisterModelPriceRoutes(http.DefaultServeMux, s.modelRegistry)
+	// Phase LLM Provider Model Management: Provider / Model 管理 API。
+	// 旧的 RegisterModelPriceRoutes 已被 RegisterModelAPIRoutes 替代。
+	RegisterModelAPIRoutes(http.DefaultServeMux, s.providerManager, s.modelRegistry)
 
 	// Version API：从 version.txt 返回当前版本号
 	http.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {

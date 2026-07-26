@@ -413,6 +413,49 @@ ALTER TABLE agents ADD COLUMN preferred_tier TEXT;
 ALTER TABLE agents ADD COLUMN allow_auto_route BOOLEAN DEFAULT 1;
 ALTER TABLE agents ADD COLUMN max_cost_usd REAL DEFAULT 0;`,
 		},
+
+		// v30：创建 llm_providers 表，用于记录 .env 中声明的 Provider 快照。
+		// 注意：本表不存储 api_key，仅存储 name/type/endpoint 与同步健康状态。
+		{
+			Version:     30,
+			Description: "Create llm_providers table for LLM provider snapshots",
+			SQL: `CREATE TABLE IF NOT EXISTS llm_providers (
+				name TEXT PRIMARY KEY,
+				type TEXT NOT NULL,
+				endpoint TEXT NOT NULL,
+				healthy BOOLEAN DEFAULT 0,
+				last_sync_at DATETIME,
+				last_sync_error TEXT
+			);
+			CREATE INDEX IF NOT EXISTS idx_llm_providers_healthy ON llm_providers(healthy);`,
+		},
+
+		// v31：创建 llm_models 表，用于持久化模型画像。
+		// 复合主键 (provider_name, model_id) 允许不同 Provider 拥有同名模型。
+		{
+			Version:     31,
+			Description: "Create llm_models table for persistent model profiles",
+			SQL: `CREATE TABLE IF NOT EXISTS llm_models (
+				provider_name TEXT NOT NULL,
+				model_id TEXT NOT NULL,
+				display_name TEXT,
+				tier TEXT,
+				capabilities TEXT,
+				input_price REAL DEFAULT 0,
+				output_price REAL DEFAULT 0,
+				max_context_window INTEGER DEFAULT 0,
+				max_output_tokens INTEGER DEFAULT 0,
+				fallback_model TEXT,
+				rate_limit_rpm INTEGER DEFAULT 0,
+				avg_latency_ms INTEGER DEFAULT 0,
+				missing BOOLEAN DEFAULT 0,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (provider_name, model_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_llm_models_provider ON llm_models(provider_name);
+			CREATE INDEX IF NOT EXISTS idx_llm_models_missing ON llm_models(missing);`,
+		},
 	})
 
 // deduplicateMigrations 按 version 去重，保留第一次出现的条目。

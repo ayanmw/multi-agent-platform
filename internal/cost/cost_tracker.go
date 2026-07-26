@@ -31,6 +31,7 @@ package cost
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +86,10 @@ type CostRecord struct {
 	// 兼容而保留。它并非 source of truth——单次调用的 cost 小于 1 cent，若用整数
 	// 算术计算会被截断为 0。
 	CostCents int64
+
+	// CostUnknown 表示本次调用的价格未知（profile 价格为 0 且非 mock 调用）。
+	// 此时 CostUSD 仍为 0，调用方可通过该字段区分“真实零成本”与“未配置价格”。
+	CostUnknown bool
 
 	// CreatedAt 是此记录创建时的时间戳。
 	CreatedAt time.Time
@@ -336,6 +341,14 @@ func (ct *CostTracker) BuildRecordFromProfile(
 
 	costUSD := ct.CalculateCost(profile, usage)
 
+	// price 为 0 且 caller 未显式说明价格已知时，标记 cost_unknown。
+	// mock 调用（provider 以 mock/ 开头或名称为 mock）价格通常也为 0，
+	// 但那是确定性脚本，不标记 unknown。
+	costUnknown := false
+	if profile != nil && usage.TotalTokens > 0 && costUSD == 0 {
+		costUnknown = profile.InputPrice == 0 && profile.OutputPrice == 0 && !isMockProfile(profile)
+	}
+
 	return CostRecord{
 		ID:           fmt.Sprintf("cr_%d_%d", time.Now().UnixNano(), stepIndex),
 		TaskID:       taskID,
@@ -351,8 +364,17 @@ func (ct *CostTracker) BuildRecordFromProfile(
 		TotalTokens:  usage.TotalTokens,
 		CostUSD:      costUSD,                        // 主字段，全精度
 		CostCents:    int64(math.Round(costUSD * 100)), // 派生字段，兼容 legacy
+		CostUnknown:  costUnknown,
 		CreatedAt:    time.Now(),
 	}
+}
+
+// isMockProfile 判断 profile 是否属于 mock provider。
+func isMockProfile(profile *llm.ModelProfile) bool {
+	if profile == nil {
+		return false
+	}
+	return profile.Provider == "mock" || strings.HasPrefix(profile.Name, "mock/")
 }
 
 // add 是内部辅助方法，将单条记录的数据累加到报告聚合中。
