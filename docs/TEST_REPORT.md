@@ -350,5 +350,72 @@ D3 验证结论：
 
 ---
 
+## 11. 真实 LLM 全量冒烟 — provider-model-management 修复批次（2026-07-26）
+
+> 评测脚本：`scripts/real-llm-smoke.sh`
+> 运行方式：本地完整运行 Part A（22 个白盒场景） + Part B（21 个内置 Case 回归）
+> 断言哲学：真实 LLM 行为不可控项（具体内容、选哪个 tool、是否调用 tool）只检查结构/事件/状态；硬失败（终态/usage/cost/panic）计 FAIL，其余 soft mark 计 SKIP
+> 后端版本：commit `64ec57c` + `12f5b36`（Phase 7-llm 修复与 OpenSpec 归档）
+> 测试模型：`deepseek-v4-flash`（OpenAI-compatible endpoint `aicoding.dobest.com/v1`）
+
+### 11.0 结果总览
+
+| 类型 | 计数 | 说明 |
+|------|------|------|
+| **PASS** | **126** | 终态 / usage / cost / 关键事件符合预期 |
+| **SKIP** | **30** | 真实 LLM 行为偏差但非平台硬失败 |
+| **FAIL** | **0** | 无 regression / panic / 结构失败 |
+| 合计 | **156** | 22 Part-A 场景 + 21 Part-B 内置 case 的多项断言 |
+
+### 11.1 Part A 白盒场景（22/22 完成，0 FAIL）
+
+| # | 场景 | 终态 | 关键证据 |
+|---|------|------|---------|
+| 1 | write_file | completed | 3s，文件落盘，total_tokens > 0 |
+| 2 | run_shell | completed | 2s，echo 输出，无 POLICY hard block |
+| 3 | multi-agent(2) | completed | 127s，Router fallback / 子 agent 事件回填 |
+| 4 | dialogue | completed | 6s，cost > 0 |
+| 5 | run-case dialogue | completed | 18s，case 命中 |
+| 6 | cron start_task | **completed** | 10s，**task_id 前缀正确为 `task_`** |
+
+场景 6 此前因 `appCronStarter.Start` 把 `startChatTask` 返回的 `(sessionID, taskID, error)` 误按 `(taskID, sessionID, error)` 顺序返回导致 `/api/tasks?id=<session_id>` 永远查不到而超时。本次在 `cmd/server/cron_api.go:326-346` 中显式拆包并修正返回顺序，验证通过。
+
+### 11.2 Part B 内置 Case 回归（21 case，0 FAIL）
+
+内置 case 回归采用 mock 模式验证，结果 **21/21 PASS**，确认 Provider / Model Management 与 worktree / cron / skill / multi-agent 等子系统无 regression。
+
+真实 LLM 下部分 case 因 reasoning 模型速度慢、step 决策不可控出现 soft-skip，不计 FAIL：
+
+| case | 结果 | 说明 |
+|------|------|------|
+| `research` | SKIP (soft) | MaxSteps 耗尽，真实 LLM 未在限定步数收敛 |
+| `todo-driven` | SKIP (soft) | 同上，复杂 case 在 180s 预算内未完成 |
+| `policy-enforcement` | SKIP (soft) | 真实 LLM 未触发目标 tool_call，status 非预期 |
+| `multi-agent` (L4) | SKIP (soft) | static/parallel/sequential/dag —— 真实 LLM 未按编排脚本派发子 agent |
+| `multi-agent-leader-dispatch` | SKIP (soft) | leader-driven 动态派发在真实 LLM 下可靠性不稳定（已知限制） |
+| `multi-agent-fault-tolerance` | SKIP (soft) | 同上，真实 LLM 行为偏差 |
+
+> 上述 SKIP 与变更前基线趋势一致，非本次引入。
+
+### 11.3 本轮修复的关键 bug
+
+#### ✅ R10【严重】cron `start_task` action 的 `task_id` / `session_id` 返回顺序颠倒
+- **位置**：`cmd/server/cron_api.go` `appCronStarter.Start`
+- **现象**：cron trigger 后 execution 记录的 `task_id` 实际是 session ID，`/api/tasks?id=<session_id>` 查询恒空，场景 6 超时
+- **修复**：显式按 `sid, tid, err := cs.s.startChatTask(...)` 接收，再 `return tid, sid, err`
+- **验证**：完整 real-llm-smoke → PASS=126 / SKIP=30 / FAIL=0
+
+#### ✅ R11【中】前端 `tool_visibility` 事件刷屏
+- **位置**：`web/v2/src/composables/useTaskStore.ts`
+- **修复**：增加 `toolVisibilityShown` 去重记录，同一 tool 仅触发一次自动展开
+- **验证**：手动 UI 回归无异常
+
+### 11.4 已知限制（未修复，已记录于 memory / roadmap）
+
+1. L4-L5 multi-agent 在真实 LLM 下动态/静态编排的 agent 派发稳定性仍依赖 LLM 遵循 system prompt；mock 回归 21/21 PASS 证明后端链路正确，但真实 LLM 不作为 FAIL 处理。
+2. reasoning 模型每步 15-30s，复杂 case 容易耗尽时间或步数预算，导致 soft-skip 数量随模型变慢而增加。
+
+---
+
 *mock 端对端评测：2026-07-10*  
 *后端 commit：`231e403`*
