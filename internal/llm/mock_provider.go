@@ -183,9 +183,20 @@ func (p *MockProvider) selectScript(userInput, model, caseID string, scripts []M
 		// 是常见英文词，会匹配到含 "research" 的其它 case 输入）只给 +500，
 		// 低于精确匹配，避免子串误命中抢走正确的 case 脚本（见
 		// multi-agent-sequential 被 research 脚本劫持的回归案例）。
+		//
+		// model 名可能以 "mock/code-gen" 全名传入；此时取最后一段作为 caseID
+		// 候选，给 +950，保证全名选择时仍能命中内置脚本。
+		modelSuffix := ""
+		if model != "" {
+			if idx := strings.LastIndex(model, "/"); idx >= 0 {
+				modelSuffix = model[idx+1:]
+			}
+		}
 		if script.CaseID != "" {
 			if strings.EqualFold(script.CaseID, caseID) {
 				score += 1000
+			} else if modelSuffix != "" && strings.EqualFold(script.CaseID, modelSuffix) {
+				score += 950
 			} else if strings.Contains(lowerInput, strings.ToLower(script.CaseID)) {
 				score += 500
 			}
