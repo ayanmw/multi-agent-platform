@@ -664,9 +664,26 @@ func main() {
 			"models":        len(llm.DefaultProfiles()),
 		})
 
-		// 在 mock 模式下注册 classifier mock 脚本，使 classifyIntent
-		// 确定性地返回一个合法的 intent token。真实模式下该脚本不会被用到
-		// （真实 provider 不读 store）。
+		// 为 Router 构建已配置 provider 集合：显式 Models + 默认模型 + cfg.LLMProviders。
+		// 这样 Router 只从这些实际配置的 provider 模型里选择，避免未配置的
+		// DefaultProfiles 模型进入候选池导致选到无法调用的模型。
+		configuredProviders := make(map[string]bool)
+		for _, pc := range cfg.LLMProviders {
+			if pc.Name != "" {
+				configuredProviders[pc.Name] = true
+			}
+		}
+		for _, mc := range cfg.Models {
+			provider := mc.Provider
+			if provider == "" {
+				provider = "openai"
+			}
+			configuredProviders[provider] = true
+		}
+		if p, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, ""); err == nil {
+			configuredProviders[p.Name()] = true
+		}
+
 		if cfg.LLMUseMock {
 			clsScript := llm.MockScript{
 				ID:         "builtin:router-classifier",
@@ -679,7 +696,7 @@ func main() {
 			}
 			_, _ = llm.DefaultMockStore.Save(clsScript)
 		}
-		modelRouter = llm.NewRouter(modelRegistry, routerClassifier, rateLimiter)
+		modelRouter = llm.NewRouter(modelRegistry, routerClassifier, rateLimiter, configuredProviders)
 		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
 	} else {
 		log.Printf("[Router] disabled (no classifier provider)")

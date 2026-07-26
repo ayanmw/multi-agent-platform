@@ -107,13 +107,14 @@ func TestEngine_Routing_ModelRoutedEvent(t *testing.T) {
 		},
 	})
 
-	router := llm.NewRouter(registry, classifier, nil)
+	router := llm.NewRouter(registry, classifier, nil, map[string]bool{"fake-primary": true})
 	router.SetBroadcaster(&engineRoutingEventBroadcaster{bus}, "task-routed", "test-agent")
 
 	cfg := EngineConfig{
 		AgentID:      "test-agent",
 		SystemPrompt: "You are a router test agent.",
 		Model:        "primary-model",
+		ModelMode:    "auto_route",
 		Provider:     primaryProvider,
 		Router:       router,
 		Registry:     registry,
@@ -178,13 +179,14 @@ func TestEngine_Routing_ModelFallbackUsedEvent(t *testing.T) {
 		},
 	})
 
-	router := llm.NewRouter(registry, classifier, nil)
+	router := llm.NewRouter(registry, classifier, nil, map[string]bool{"fake-primary": true})
 	router.SetBroadcaster(&engineRoutingEventBroadcaster{bus}, "task-fallback", "test-agent")
 
 	cfg := EngineConfig{
 		AgentID:      "test-agent",
 		SystemPrompt: "You are a fallback test agent.",
 		Model:        "primary-model",
+		ModelMode:    "auto_route",
 		Provider:     primaryProvider,
 		Router:       router,
 		Registry:     registry,
@@ -251,7 +253,7 @@ func TestEngine_Routing_CostBudgetExceeded(t *testing.T) {
 		},
 	})
 
-	router := llm.NewRouter(registry, classifier, nil)
+	router := llm.NewRouter(registry, classifier, nil, map[string]bool{"fake-primary": true})
 	router.SetBroadcaster(&engineRoutingEventBroadcaster{bus}, "task-budget", "test-agent")
 
 	longContent := make([]byte, 100000)
@@ -259,6 +261,7 @@ func TestEngine_Routing_CostBudgetExceeded(t *testing.T) {
 		AgentID:      "test-agent",
 		SystemPrompt: "You are a budget test agent.",
 		Model:        "expensive-model",
+		ModelMode:    "auto_route",
 		Provider:     provider,
 		Router:       router,
 		Registry:     registry,

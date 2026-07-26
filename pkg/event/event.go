@@ -63,6 +63,17 @@ const (
 	EventIntentClassified     = "intent_classified"      // intent 分类完成
 	EventCostBudgetExceeded   = "cost_budget_exceeded"   // Agent/任务 USD 预算被耗尽
 
+	// Provider 同步事件常量。Provider 手动/自动发现前后通过事件总线广播，
+	// 前端模型管理页面据此刷新 provider 健康状态与模型列表。
+	EventProviderSyncStarted  = "provider_sync_started"
+	EventProviderSyncCompleted = "provider_sync_completed"
+	EventProviderSyncFailed   = "provider_sync_failed"
+
+	// 多模型分层路由精细化事件。补充 model_routed，说明当前运行采用的
+	// model_mode（single_model / auto_route）以及 Router 实际数据选择结果/兜底。
+	EventModelSelected          = "llm/model_selected"
+	EventRouterFallbackDefault  = "llm/router_fallback_default"
+
 	// web_research 工具事件常量。当 web_research 内部调用 LLM 做摘要时,
 	// 通过事件总线广播开始与完成状态,保持白盒可观测。
 	EventWebResearchSummarizeStarted  = "web_research_summarize_started"

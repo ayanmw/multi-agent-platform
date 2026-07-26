@@ -166,24 +166,29 @@ type RouteDecision struct {
 //
 // Router 用一个便宜的分类 model（通常是 Haiku 或 DeepSeek Flash）
 // 对用户请求分类，再选择合适的 model 层级。
-// 先做基于规则的过滤，剔除不满足硬性要求的 model。
+// 先做基于规则的过滤，剔除不满足硬性要求（上下文长度、能力、RPM限流、
+// 实际 provider 可用性）的 model，再返回决策。
+//
+// 候选池：Router 只从 ModelRegistry.AvailableProfiles() 返回的实际可用模型中
+// 做选择；未配置 provider 的默认模型（DefaultProfiles）不会进入候选池。
 //
 // # 线程安全
 //
 // Router 可安全并发使用 —— registry 是 goroutine 安全的，
 // 每次 Select 调用相互独立。
 type Router struct {
-	registry    *ModelRegistry
-	classifier  Provider       // 用于 intent 分类的便宜 model
-	rateLimiter *RateLimiter   // 可选；非 nil 时按模型 RPM 过滤候选
-	broadcaster EventBroadcaster // 可选；路由事件广播器
-	taskID      string           // 事件 task_id
-	agentID     string           // 事件 agent_id
+	registry             *ModelRegistry
+	classifier           Provider         // 用于 intent 分类的便宜 model
+	rateLimiter          *RateLimiter     // 可选；非 nil 时按模型 RPM 过滤候选
+	configuredProviders  map[string]bool  // 实际已配置的 provider 集合
+	broadcaster          EventBroadcaster // 可选；路由事件广播器
+	taskID               string           // 事件 task_id
+	agentID              string           // 事件 agent_id
 
 	// emitted 记录每个事件类型已经广播过的 key，用于 deduplication。
 	// 当前仅对 intent_classified 去重，model_rate_limited 仍每次都广播。
-	emitted    map[string]bool
-	emittedMu  sync.Mutex
+	emitted   map[string]bool
+	emittedMu sync.Mutex
 }
 
 // EventBroadcaster 是 Router 用来广播路由相关事件的最小接口。
@@ -197,14 +202,23 @@ type EventBroadcaster interface {
 // 因为每个请求都会调用它。单次分类成本应 < $0.001，
 // 以保持路由开销可忽略。
 //
-// rateLimiter 为可选；nil 时禁用按模型 RPM 限流过滤。
-func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLimiter) *Router {
+// configuredProviders 为当前实际已配置/已发现的 provider 名集合；
+// Router 只从这些 provider 对应的模型中进行选择，避免 DefaultProfiles()
+// 中硬编码的未配置模型进入候选池。
+func NewRouter(registry *ModelRegistry, classifier Provider, rateLimiter *RateLimiter, configuredProviders map[string]bool) *Router {
 	return &Router{
-		registry:    registry,
-		classifier:  classifier,
-		rateLimiter: rateLimiter,
-		emitted:     make(map[string]bool),
+		registry:            registry,
+		classifier:          classifier,
+		rateLimiter:         rateLimiter,
+		configuredProviders: configuredProviders,
+		emitted:             make(map[string]bool),
 	}
+}
+
+// SetConfiguredProviders 允许外部在运行时更新 Router 的可用 provider 集合。
+// 例如 provider 发现同步完成后，通过此方法刷新候选池，无需重建 Router。
+func (r *Router) SetConfiguredProviders(providers map[string]bool) {
+	r.configuredProviders = providers
 }
 
 // SetBroadcaster 配置 Router 的事件广播器与身份标识，供外部注入。
@@ -268,16 +282,16 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 	// Step 2：把 intent 映射到目标层级，并考虑角色 override 与 PreferredTier
 	targetTier := r.resolveTargetTier(req, intentClass)
 
-	// Step 3：按硬性要求过滤候选
+	// Step 3：按硬性要求过滤候选（只从实际已配置的 provider 模型中选择）。
 	candidates := r.filterCandidates(req, targetTier)
 
-	// Step 4：选择最佳候选
+	// Step 4：选择最佳候选；无候选时尝试任何可用层级。
 	var primary *ModelProfile
 	if len(candidates) > 0 {
 		primary = candidates[0]
 	} else {
-		// 目标层级无候选 —— 任意层级都试一遍
-		allModels := r.registry.List()
+		// 目标层级无候选 —— 任意层级都试一遍（遵循原回退语义）。
+		allModels := r.availableModels()
 		for _, m := range allModels {
 			if r.meetsRequirements(m, req) {
 				primary = m
@@ -303,6 +317,17 @@ func (r *Router) Select(ctx context.Context, req *RouteRequest) (*RouteDecision,
 			cheapFirst = true
 		}
 	}
+
+	// 广播模型被选中事件，把 Router 的实际决策对外透明。
+	r.emit("llm/model_selected", map[string]any{
+		"model":       primary.Name,
+		"provider":    primary.Provider,
+		"tier":        primary.Tier.String(),
+		"intent":      intentClass.PrimaryIntent,
+		"reason":      r.buildReason(intentClass, primary, targetTier, cheapFirst),
+		"fallback":    false,
+		"cheap_first": cheapFirst,
+	})
 
 	return &RouteDecision{
 		Primary:           primary,
@@ -478,7 +503,7 @@ func (r *Router) intentToTier(intent string) ModelTier {
 }
 
 // filterCandidates 返回满足所有硬性要求的 model，按偏好排序
-//（目标层级在前，层级内按成本）。
+//（目标层级在前，层级内按成本）。只考虑实际已配置 provider 的模型。
 func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*ModelProfile {
 	// 先取目标层级的 model，再回退到相邻层级
 	tiers := []ModelTier{targetTier}
@@ -493,8 +518,14 @@ func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*Mo
 	var candidates []*ModelProfile
 	seen := make(map[string]bool)
 
+	available := r.availableModels()
+	byTier := make(map[ModelTier][]*ModelProfile)
+	for _, m := range available {
+		byTier[m.Tier] = append(byTier[m.Tier], m)
+	}
+
 	for _, tier := range tiers {
-		for _, m := range r.registry.GetByTier(tier) {
+		for _, m := range byTier[tier] {
 			if seen[m.Name] {
 				continue
 			}
@@ -507,6 +538,12 @@ func (r *Router) filterCandidates(req *RouteRequest, targetTier ModelTier) []*Mo
 	}
 
 	return candidates
+}
+
+// availableModels 返回 Router 可实际选择的模型集合：
+// 排除 missing=true 与未配置 provider 的默认模型。
+func (r *Router) availableModels() []*ModelProfile {
+	return r.registry.AvailableProfiles(r.configuredProviders, false)
 }
 
 // meetsRequirements 检查 model 是否满足所有硬性要求。
@@ -560,7 +597,7 @@ func (r *Router) resolveTargetTier(req *RouteRequest, intent IntentClassificatio
 // pickCheaperModel 在指定层级（及以下）选择一个满足硬性要求且比 primary 便宜的 model。
 func (r *Router) pickCheaperModel(primary *ModelProfile, req *RouteRequest, maxTier ModelTier) *ModelProfile {
 	for t := maxTier; t >= TierFree; t-- {
-		for _, m := range r.registry.GetByTier(t) {
+		for _, m := range r.availableByTier(t) {
 			if m.Name == primary.Name {
 				continue
 			}
@@ -570,6 +607,17 @@ func (r *Router) pickCheaperModel(primary *ModelProfile, req *RouteRequest, maxT
 		}
 	}
 	return nil
+}
+
+// availableByTier 按层级返回实际可用模型。
+func (r *Router) availableByTier(tier ModelTier) []*ModelProfile {
+	var result []*ModelProfile
+	for _, m := range r.availableModels() {
+		if m.Tier == tier {
+			result = append(result, m)
+		}
+	}
+	return result
 }
 
 // isRateLimited 检查模型是否触发 RPM 限流。未配置限流器时返回 false。

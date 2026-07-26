@@ -76,9 +76,10 @@ type AgentRunSpec struct {
 
 	// Phase multi-model-routing P3-2: Agent 级模型路由偏好，
 	// 将传给 EngineConfig 与 Router RouteRequest。
+	ModelMode      string  // 模型选择模式：single_model / auto_route
 	PreferredModel string  // 显式指定模型名，空字符串表示自动路由
 	PreferredTier  string  // 偏好层级，如 "standard" / "premium"，空字符串表示不指定
-	AllowAutoRoute bool    // 是否允许在 PreferredModel 未命中时自动重选
+	AllowFallback  bool    // auto_route 下是否允许 tier 降级选择
 	MaxCostUSD     float64 // 单次 task 成本预算上限，0 表示无限制
 }
 
@@ -801,7 +802,8 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// 自动选择。这些值将注入 EngineConfig 与 Router RouteRequest。
 	preferredModel := spec.PreferredModel
 	preferredTier := spec.PreferredTier
-	allowAutoRoute := spec.AllowAutoRoute
+	modelMode := spec.ModelMode
+	allowFallback := spec.AllowFallback
 	maxCostUSD := spec.MaxCostUSD
 	if db.DB != nil && agentID != "" {
 		if agent, err := db.QueryAgentByID(agentID); err == nil && agent != nil {
@@ -811,8 +813,10 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 			if agent.PreferredTier != "" {
 				preferredTier = agent.PreferredTier
 			}
-			// AllowAutoRoute 是 bool，DB 值显式覆盖 spec（因为 agent 配置是持久化偏好）。
-			allowAutoRoute = agent.AllowAutoRoute
+			if agent.ModelMode != "" {
+				modelMode = agent.ModelMode
+			}
+			allowFallback = agent.AllowFallback
 			if agent.MaxCostUSD > 0 {
 				maxCostUSD = agent.MaxCostUSD
 			}
@@ -825,6 +829,9 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 				})
 			}
 		}
+	}
+	if modelMode == "" {
+		modelMode = "single_model"
 	}
 
 	holder := workspace.NewWorkdirHolder(workspaceDir)
@@ -953,9 +960,10 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		// 能根据 RPM 限流状态过滤已被限流的模型。
 		RateLimiter: r.Deps.RateLimiter,
 		// Phase multi-model-routing P3-2: Agent 级路由偏好注入 EngineConfig。
+		ModelMode:              modelMode,
 		PreferredModel:         preferredModel,
 		PreferredTier:          preferredTier,
-		AllowAutoRoute:         allowAutoRoute,
+		AllowFallback:          allowFallback,
 		MaxCostUSD:             maxCostUSD,
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
 

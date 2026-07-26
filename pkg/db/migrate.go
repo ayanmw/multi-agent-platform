@@ -456,6 +456,17 @@ ALTER TABLE agents ADD COLUMN max_cost_usd REAL DEFAULT 0;`,
 			CREATE INDEX IF NOT EXISTS idx_llm_models_provider ON llm_models(provider_name);
 			CREATE INDEX IF NOT EXISTS idx_llm_models_missing ON llm_models(missing);`,
 		},
+		// v32：将 agents.allow_auto_route 布尔标志升级为 model_mode 文本字段，
+		// 并新增 allow_fallback 列控制 auto_route 模式下是否允许 tier 降级。
+		// 旧数据自动迁移：allow_auto_route=true -> model_mode='auto_route'；
+		//                 allow_auto_route=false -> model_mode='single_model'。
+		{
+			Version:     32,
+			Description: "Convert agents.allow_auto_route to model_mode text and add allow_fallback",
+			SQL: `ALTER TABLE agents ADD COLUMN model_mode TEXT DEFAULT 'single_model';
+	UPDATE agents SET model_mode = CASE WHEN COALESCE(allow_auto_route,1) = 1 THEN 'auto_route' ELSE 'single_model' END;
+	ALTER TABLE agents ADD COLUMN allow_fallback BOOLEAN DEFAULT 1;`,
+		},
 	})
 
 // deduplicateMigrations 按 version 去重，保留第一次出现的条目。

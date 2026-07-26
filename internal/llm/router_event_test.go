@@ -56,7 +56,7 @@ func TestRouter_EmitIntentClassified(t *testing.T) {
 	}
 
 	classifier := &fakeProviderForRouterEvents{}
-	router := NewRouter(reg, classifier, nil)
+	router := NewRouter(reg, classifier, nil, map[string]bool{})
 	bus := &fakeBroadcaster{}
 	router.SetBroadcaster(bus, "task-1", "agent-1")
 
@@ -111,7 +111,7 @@ func TestRouter_EmitModelRateLimited(t *testing.T) {
 		}
 	}
 
-	router := NewRouter(reg, classifier, lim)
+	router := NewRouter(reg, classifier, lim, map[string]bool{})
 	bus := &fakeBroadcaster{}
 	router.SetBroadcaster(bus, "task-2", "agent-2")
 

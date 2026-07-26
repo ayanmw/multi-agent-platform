@@ -116,12 +116,24 @@ const (
 	CapJSONMode ModelCapability = "json_mode"
 )
 
+// Source 表示 model profile 的来源，用于 Router 区分实际可用模型与默认候选。
+// 当前仅在 ModelRegistry 内部元数据使用，不暴露给 API。
+type ModelSource string
+
+const (
+	// SourceConfiguredProvider 表示该模型来自实际已配置的 provider（DB 发现或 .env 静态声明）。
+	SourceConfiguredProvider ModelSource = "configured_provider"
+	// SourceDefaultProfile 表示该模型来自内置 DefaultProfiles()，仅作为默认值补充。
+	SourceDefaultProfile ModelSource = "default_profile"
+)
+
 // ModelProfile 描述一个 model 的完整画像，用于路由决策。
 //
 // 每个 profile 记录 model 的身份、能力、成本结构、技术限制
 // 与 fallback 路径。Router 用这些信息为给定任务选择最合适的 model。
 type ModelProfile struct {
 	// Name 是 model 标识（例如 "deepseek-v4-flash"、"claude-sonnet-4-6"）。
+	// 在 ModelRegistry 中，全名形式为 "provider/model_id"。
 	Name string
 
 	// Provider 标识 API provider（例如 "openai"、"anthropic"、"deepseek"）。
@@ -154,6 +166,13 @@ type ModelProfile struct {
 
 	// AvgLatencyMs 是平均响应延迟（毫秒）。
 	AvgLatencyMs int
+
+	// Missing 表示 provider 发现时该 model 已不再返回。
+	// Router 应将 missing=true 的模型排除在候选池之外。
+	Missing bool
+
+	// Source 记录 profile 来源，辅助 Router/调试识别模型是实际配置的还是默认补充。
+	Source ModelSource
 }
 
 // HasCapability 检查 model 是否支持某个具体能力。
@@ -178,13 +197,16 @@ type ModelRegistry struct {
 	mu       sync.RWMutex
 	profiles map[string]*ModelProfile // name → profile
 	byTier   map[ModelTier][]string   // tier → model names
+	// byProvider 按 provider 聚合 model name，用于 AvailableProfiles 过滤。
+	byProvider map[string][]string
 }
 
 // NewModelRegistry 创建一个空的 model registry。
 func NewModelRegistry() *ModelRegistry {
 	return &ModelRegistry{
-		profiles: make(map[string]*ModelProfile),
-		byTier:   make(map[ModelTier][]string),
+		profiles:   make(map[string]*ModelProfile),
+		byTier:     make(map[ModelTier][]string),
+		byProvider: make(map[string][]string),
 	}
 }
 
@@ -196,6 +218,7 @@ func (r *ModelRegistry) Register(profile *ModelProfile) {
 
 	r.profiles[profile.Name] = profile
 	r.byTier[profile.Tier] = append(r.byTier[profile.Tier], profile.Name)
+	r.byProvider[profile.Provider] = append(r.byProvider[profile.Provider], profile.Name)
 }
 
 // Get 按名返回 model profile，未找到则返回 nil。
@@ -269,6 +292,53 @@ func (r *ModelRegistry) GetFallback(name string) *ModelProfile {
 	return r.profiles[p.FallbackModel]
 }
 
+// AvailableProfiles 返回可用于 Router 选择的实际模型集合。
+// 过滤条件：
+//   - configuredProviders 出现的 provider，或被强制声明为 available 的模型；
+//   - profile.Missing == false；
+//   - profile.Source 不为 default_profile，除非该 provider 在 configuredProviders 中。
+//
+// 若 configuredProviders 为空，只要模型源是 configured_provider 或 .env 静态模型
+//（即非纯 DefaultProfiles）即视为可用。
+func (r *ModelRegistry) AvailableProfiles(configuredProviders map[string]bool, allowDefault bool) []*ModelProfile {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var result []*ModelProfile
+	seen := make(map[string]bool)
+	for _, p := range r.profiles {
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		if p.Missing {
+			continue
+		}
+		providerConfigured := configuredProviders[p.Provider]
+		isDefault := p.Source == SourceDefaultProfile
+		if !providerConfigured && isDefault && !allowDefault {
+			continue
+		}
+		result = append(result, p)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Tier < result[j].Tier
+	})
+	return result
+}
+
+// Providers 返回 registry 中所有已知的 provider 名集合。
+func (r *ModelRegistry) Providers() map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	providers := make(map[string]bool)
+	for _, p := range r.profiles {
+		providers[p.Provider] = true
+	}
+	return providers
+}
+
 // List 返回所有已注册的 model profile，按层级排序。
 func (r *ModelRegistry) List() []*ModelProfile {
 	r.mu.RLock()
@@ -286,6 +356,11 @@ func (r *ModelRegistry) List() []*ModelProfile {
 
 // DefaultProfiles 返回一组合理的默认 model profile。
 // 在未提供配置时使用，保证系统对常见可用 model 开箱即用。
+//
+// 历史说明：DefaultProfiles 仅作为新部署的默认值补充源（ModelService seed），
+// 不再是 Router 候选池。Router 只从 ModelRegistry 中实际已加载的模型里选择，
+// 因此未配置对应 provider 的默认模型不会进入候选池。这解决了"配置了 1 个 provider
+// 却因 DefaultProfiles 硬编码了数十个模型导致路由失败"的问题。
 //
 // 价格来源（USD per 1M tokens）：
 //   - DeepSeek 官方定价

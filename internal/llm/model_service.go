@@ -152,8 +152,9 @@ func (s *ModelService) seedDefaultProfiles(now time.Time) error {
 			continue
 		}
 
-		// 新行：用 DefaultProfile 完整填充。
-		rec := profileToDBRecord(providerName, p, now)
+		// 新行：用 DefaultProfile 完整填充，并标记 Source 为 default_profile。
+		// 只有对应 provider 实际配置后，Router 才会把它们纳入候选池。
+		rec := defaultProfileToDBRecord(providerName, p, now)
 		if err := db.InsertOrReplaceModel(rec); err != nil {
 			log.Printf("[ModelService] failed to seed default profile %s/%s: %v", providerName, p.Name, err)
 		}
@@ -224,8 +225,28 @@ func mergeDefaultIntoExisting(existing *db.LLMModelRecord, p *ModelProfile) db.L
 	return merged
 }
 
-// profileToDBRecord 把 llm.ModelProfile 转换为 db.LLMModelRecord。
-func profileToDBRecord(providerName string, p *ModelProfile, now time.Time) db.LLMModelRecord {
+// dbRecordToProfile 把 db.LLMModelRecord 转换为 llm.ModelProfile。
+func dbRecordToProfile(rec db.LLMModelRecord) *ModelProfile {
+	return &ModelProfile{
+		Name:             fmt.Sprintf("%s/%s", rec.ProviderName, rec.ModelID),
+		Provider:         rec.ProviderName,
+		Tier:             ParseTier(rec.Tier),
+		Capabilities:     parseCapabilities(rec.Capabilities),
+		InputPrice:       rec.InputPrice,
+		OutputPrice:      rec.OutputPrice,
+		MaxContextWindow: rec.MaxContextWindow,
+		MaxOutputTokens:  rec.MaxOutputTokens,
+		FallbackModel:    rec.FallbackModel,
+		RateLimitRPM:     rec.RateLimitRPM,
+		AvgLatencyMs:     rec.AvgLatencyMs,
+		Missing:          rec.Missing,
+		Source:           SourceConfiguredProvider,
+	}
+}
+
+// defaultProfileToDBRecord 把内置 DefaultProfile 转换为 db.LLMModelRecord，
+// 并标记 Source 为 default_profile，以便 Router 区分实际可用模型。
+func defaultProfileToDBRecord(providerName string, p *ModelProfile, now time.Time) db.LLMModelRecord {
 	return db.LLMModelRecord{
 		ProviderName:     providerName,
 		ModelID:          p.Name,
@@ -242,23 +263,6 @@ func profileToDBRecord(providerName string, p *ModelProfile, now time.Time) db.L
 		Missing:          false,
 		CreatedAt:        now,
 		UpdatedAt:        now,
-	}
-}
-
-// dbRecordToProfile 把 db.LLMModelRecord 转换为 llm.ModelProfile。
-func dbRecordToProfile(rec db.LLMModelRecord) *ModelProfile {
-	return &ModelProfile{
-		Name:             fmt.Sprintf("%s/%s", rec.ProviderName, rec.ModelID),
-		Provider:         rec.ProviderName,
-		Tier:             ParseTier(rec.Tier),
-		Capabilities:     parseCapabilities(rec.Capabilities),
-		InputPrice:       rec.InputPrice,
-		OutputPrice:      rec.OutputPrice,
-		MaxContextWindow: rec.MaxContextWindow,
-		MaxOutputTokens:  rec.MaxOutputTokens,
-		FallbackModel:    rec.FallbackModel,
-		RateLimitRPM:     rec.RateLimitRPM,
-		AvgLatencyMs:     rec.AvgLatencyMs,
 	}
 }
 

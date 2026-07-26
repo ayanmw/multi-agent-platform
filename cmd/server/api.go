@@ -849,7 +849,8 @@ type agentRequest struct {
 	Model          string         `json:"model"`
 	PreferredModel string         `json:"preferred_model"`
 	PreferredTier  string         `json:"preferred_tier"`
-	AllowAutoRoute bool           `json:"allow_auto_route"`
+	ModelMode      string         `json:"model_mode"`
+	AllowFallback  bool           `json:"allow_fallback"`
 	MaxCostUSD     float64        `json:"max_cost_usd"`
 	Endpoint       string         `json:"api_endpoint"`
 	APIKey         string         `json:"api_key"`
@@ -888,7 +889,7 @@ func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 		if err := db.InsertAgent(db.InsertAgentOptions{
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
 			Model: req.Model, PreferredModel: req.PreferredModel, PreferredTier: req.PreferredTier,
-			AllowAutoRoute: req.AllowAutoRoute, MaxCostUSD: req.MaxCostUSD,
+			ModelMode: req.ModelMode, AllowFallback: req.AllowFallback, MaxCostUSD: req.MaxCostUSD,
 			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 			Config: req.Config,
@@ -938,7 +939,7 @@ func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		if err := db.UpdateAgent(db.UpdateAgentOptions{
 			ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
 			Model: req.Model, PreferredModel: req.PreferredModel, PreferredTier: req.PreferredTier,
-			AllowAutoRoute: req.AllowAutoRoute, MaxCostUSD: req.MaxCostUSD,
+			ModelMode: req.ModelMode, AllowFallback: req.AllowFallback, MaxCostUSD: req.MaxCostUSD,
 			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 			Config: req.Config,

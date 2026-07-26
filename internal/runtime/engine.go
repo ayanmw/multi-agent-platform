@@ -436,9 +436,10 @@ type EngineConfig struct {
 
 	// Phase multi-model-routing P3-2: Agent 级路由偏好字段。
 	// 这些字段从 AgentRunSpec / DB agent 配置传递而来，直接注入 RouteRequest。
-	PreferredModel string // 显式指定模型名，空字符串表示自动路由
-	PreferredTier  string // 偏好层级字符串，如 "standard" / "premium"
-	AllowAutoRoute bool   // 是否允许在未命中优先模型时先用更便宜 tier 试跑
+	ModelMode      string  // 模型选择模式：single_model / auto_route
+	PreferredModel string  // 显式指定模型名
+	PreferredTier  string  // 偏好层级字符串，如 "standard" / "premium"
+	AllowFallback  bool    // auto_route 下是否允许 tier 降级
 }
 
 // OnLLMUsage 是每次成功 LLM 调用后被调用的回调类型。
@@ -1642,12 +1643,13 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// 避免失败后重试的 step 残留上次的选择。
 	e.selectedModel = selectedModel
 
-	if e.cfg.Router != nil && e.cfg.Registry != nil {
-		// 从对话历史估算上下文长度。
-		contextLen := 0
-		for _, msg := range e.messages {
-			contextLen += len(msg.Content) / 4 // 粗略：4 字符 ~ 1 token
-		}
+	// 从对话历史估算上下文长度，用于 Router 和预算拦截。
+	contextLen := 0
+	for _, msg := range e.messages {
+		contextLen += len(msg.Content) / 4 // 粗略：4 字符 ~ 1 token
+	}
+
+	if e.cfg.Router != nil && e.cfg.Registry != nil && e.cfg.ModelMode == "auto_route" {
 		userInput := ""
 		if len(e.messages) > 0 {
 			userInput = e.messages[len(e.messages)-1].Content
@@ -1659,91 +1661,91 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			RequiredCaps:    []llm.ModelCapability{llm.CapToolCalling, llm.CapStreaming},
 			PreferredModel:  e.cfg.PreferredModel,
 			PreferredTier:   parsePreferredTier(e.cfg.PreferredTier),
-			AllowCheapFirst: e.cfg.AllowAutoRoute,
+			AllowCheapFirst: e.cfg.AllowFallback,
 			AgentRole:       string(e.cfg.Role),
 		}
 
 		var errRoute error
 		routeDecision, errRoute = e.cfg.Router.Select(ctx, routeReq)
 
-		// 在 Router 选择成功后、调用真实 LLM 前，增加 Agent 级成本预算的最前锋拦截：
-		// 若已累计成本 + 本次调用最小输入成本预估 >= MaxCostUSD，直接失败并广播
-		// cost_budget_exceeded 事件，避免把请求发出去才发现超预算。
-		// MaxCostUSD=0 表示未设置预算限制。
-		if errRoute == nil && routeDecision != nil && routeDecision.Primary != nil {
-			if e.cfg.MaxCostUSD > 0 {
-				profile := routeDecision.Primary
-				// 用输入报价和已有对话长度做保守预估（不含输出），作为上界拦截。
-				minEstimate := float64(contextLen) * profile.InputPrice / 1_000_000
-				if e.runningCostUSD+minEstimate >= e.cfg.MaxCostUSD {
-					e.bus.SendEvent(event.NewEventWithSubTask(event.EventCostBudgetExceeded, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-						"current_cost_usd": e.runningCostUSD,
-						"max_cost_usd":     e.cfg.MaxCostUSD,
-						"reason":           fmt.Sprintf("routing blocked: current $%.6f + min $%.6f > budget $%.6f", e.runningCostUSD, minEstimate, e.cfg.MaxCostUSD),
-					}))
-					return "", llm.Usage{}, nil, fmt.Errorf("cost budget exceeded (routing): $%.6f/$%.6f USD", e.runningCostUSD, e.cfg.MaxCostUSD)
-				}
-			}
+		if errRoute != nil {
+			// Router 失败（候选池为空或分类器异常）：回退到固定模型，不阻断任务。
+			log.Printf("[Engine] Router failed: %v; falling back to %s (single_model behavior)", errRoute, selectedModel)
+			e.bus.SendEvent(event.NewEventWithSubTask(event.EventRouterFallbackDefault, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"model":        selectedModel,
+				"model_mode":   e.cfg.ModelMode,
+				"reason":       "router_select_failed",
+				"router_error": errRoute.Error(),
+			}))
+		} else if routeDecision != nil && routeDecision.Primary != nil {
+			// selectedModel 默认就是 cfg.Model；只有 Router 成功选出模型时才覆盖。
+			selectedModel = routeDecision.Primary.Name
+			e.selectedModel = selectedModel
 
-			// 在路由成功且选定模型后，对 RateLimiter 做预检：
-			// 若该模型已被限流，直接发出 model_rate_limited 事件并尝试 fallback。
-			// 这不仅让 Router 过滤时可见，也让真实调用前多一道防线。
-			if e.cfg.RateLimiter != nil && e.cfg.RateLimiter.IsLimitExceeded(routeDecision.Primary.Name) {
-				e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRateLimited, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-					"model":  routeDecision.Primary.Name,
-					"tier":   routeDecision.Primary.Tier.String(),
-					"reason": "pre-call RPM limit exceeded in sliding window",
-				}))
-				if routeDecision.Fallback != nil {
-					log.Printf("[Engine] Primary model %s rate-limited, using fallback %s",
-						routeDecision.Primary.Name, routeDecision.Fallback.Name)
-					selectedModel = routeDecision.Fallback.Name
-					e.selectedModel = selectedModel
-					selectedProvider = resolveProvider(e.providers, routeDecision.Fallback.Provider, routeDecision.Fallback.Name)
-					if selectedProvider == nil {
-						selectedProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
-							e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
-					}
-				} else {
-					return "", llm.Usage{}, nil, fmt.Errorf("model %s rate-limited and no fallback configured", routeDecision.Primary.Name)
-				}
-			} else {
-				selectedModel = routeDecision.Primary.Name
-				e.selectedModel = selectedModel //供 OnLLMUsage 上报真实调用模型
-
-				// 从 providers map 解析所选模型对应的 provider。键可以是
-				// provider 名（如 "deepseek"）或模型名。
-				selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
-
-				if selectedProvider == nil {
-					// 最后兜底：从 engine 的默认 endpoint/key 构建一个全新的
-					// OpenAI-compatible provider，并以 router 选中模型名锚定。
-					// 即使调用方未在 Providers map 中为该模型预注册 provider，
-					// 仍能让被路由的模型生效。
-					selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
-						e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
-				}
-				// 注意：当上面找到预注册 provider 时，我们不会重新锚定其模型——
-				// ChatRequest.Model 字段（下方设为 selectedModel）在
-				// OpenAIProvider.ChatStream 中优先，因此无论 provider 的默认
-				// 模型是什么，被路由的模型都会被尊重。
-
-				// model_routed 事件包含 fallback 信息，让前端可以预先展示
-				// fallback 目标模型（白盒透明）。
-				e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRouted, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-					"model":    selectedModel,
-					"intent":   routeDecision.Intent,
-					"tier":     routeDecision.Tier.String(),
-					"reason":   routeDecision.Reason,
-					"provider": routeDecision.Primary.Provider,
-					"fallback": routeDecision.Fallback,
-				}))
-				log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
-					selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
+			selectedProvider = resolveProvider(e.providers, routeDecision.Primary.Provider, routeDecision.Primary.Name)
+			if selectedProvider == nil {
+				selectedProvider = llm.NewOpenAIProvider(routeDecision.Primary.Provider,
+					e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
 			}
 		}
 	}
 
+	// 在 Router 选择成功后、调用真实 LLM 前，增加 Agent 级成本预算的最前锋拦截：
+	// 若已累计成本 + 本次调用最小输入成本预估 >= MaxCostUSD，直接失败并广播
+	// cost_budget_exceeded 事件，避免把请求发出去才发现超预算。
+	// MaxCostUSD=0 表示未设置预算限制。
+	if routeDecision != nil && routeDecision.Primary != nil {
+		if e.cfg.MaxCostUSD > 0 {
+			profile := routeDecision.Primary
+			// 用输入报价和已有对话长度做保守预估（不含输出），作为上界拦截。
+			minEstimate := float64(contextLen) * profile.InputPrice / 1_000_000
+			if e.runningCostUSD+minEstimate >= e.cfg.MaxCostUSD {
+				e.bus.SendEvent(event.NewEventWithSubTask(event.EventCostBudgetExceeded, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"current_cost_usd": e.runningCostUSD,
+					"max_cost_usd":     e.cfg.MaxCostUSD,
+					"reason":           fmt.Sprintf("routing blocked: current $%.6f + min $%.6f > budget $%.6f", e.runningCostUSD, minEstimate, e.cfg.MaxCostUSD),
+				}))
+				return "", llm.Usage{}, nil, fmt.Errorf("cost budget exceeded (routing): $%.6f/$%.6f USD", e.runningCostUSD, e.cfg.MaxCostUSD)
+			}
+		}
+
+		// 在路由成功且选定模型后，对 RateLimiter 做预检：
+		// 若该模型已被限流，直接发出 model_rate_limited 事件并尝试 fallback。
+		// 这不仅让 Router 过滤时可见，也让真实调用前多一道防线。
+		if e.cfg.RateLimiter != nil && e.cfg.RateLimiter.IsLimitExceeded(routeDecision.Primary.Name) {
+			e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRateLimited, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+				"model":  routeDecision.Primary.Name,
+				"tier":   routeDecision.Primary.Tier.String(),
+				"reason": "pre-call RPM limit exceeded in sliding window",
+			}))
+			if routeDecision.Fallback != nil {
+				log.Printf("[Engine] Primary model %s rate-limited, using fallback %s",
+					routeDecision.Primary.Name, routeDecision.Fallback.Name)
+				selectedModel = routeDecision.Fallback.Name
+				e.selectedModel = selectedModel
+				selectedProvider = resolveProvider(e.providers, routeDecision.Fallback.Provider, routeDecision.Fallback.Name)
+				if selectedProvider == nil {
+					selectedProvider = llm.NewOpenAIProvider(routeDecision.Fallback.Provider,
+						e.cfg.Endpoint, e.cfg.APIKey, selectedModel)
+				}
+			} else {
+				return "", llm.Usage{}, nil, fmt.Errorf("model %s rate-limited and no fallback configured", routeDecision.Primary.Name)
+			}
+		}
+
+		// model_routed 事件包含 fallback 信息，让前端可以预先展示
+		// fallback 目标模型（白盒透明）。
+		e.bus.SendEvent(event.NewEventWithSubTask(event.EventModelRouted, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+			"model":    selectedModel,
+			"intent":   routeDecision.Intent,
+			"tier":     routeDecision.Tier.String(),
+			"reason":   routeDecision.Reason,
+			"provider": routeDecision.Primary.Provider,
+			"fallback": routeDecision.Fallback,
+		}))
+		log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
+			selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
+	}
 
 	// =====================================================================
 	// Context window snapshot（白盒可观测）

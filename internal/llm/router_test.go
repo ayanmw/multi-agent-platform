@@ -242,7 +242,7 @@ func TestClassifyIntentValidCategories(t *testing.T) {
 	} {
 		t.Run(intent, func(t *testing.T) {
 			jsonStr := makeIntentJSON(intent, nil, 0.9, nil, 1)
-			r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+			r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil, nil)
 			got, err := r.classifyIntent(context.Background(), "anything")
 			if err != nil {
 				t.Fatalf("classifyIntent: %v", err)
@@ -261,7 +261,7 @@ func TestClassifyIntentValidCategories(t *testing.T) {
 // secondary_intents、needs_tools、estimated_steps。
 func TestClassifyIntentExtractsFields(t *testing.T) {
 	jsonStr := makeIntentJSON("code_generation", []string{"multi_step"}, 0.92, []string{"run_shell", "write_file"}, 3)
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil, nil)
 	got, err := r.classifyIntent(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -284,7 +284,7 @@ func TestClassifyIntentExtractsFields(t *testing.T) {
 // 会把响应归一化为小写。
 func TestClassifyIntentCaseInsensitive(t *testing.T) {
 	jsonStr := `{"primary_intent":"Code_Generation","confidence":0.8}`
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil, nil)
 	got, err := r.classifyIntent(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -298,7 +298,7 @@ func TestClassifyIntentCaseInsensitive(t *testing.T) {
 // 会在匹配前被剥离。
 func TestClassifyIntentTrimsWhitespace(t *testing.T) {
 	jsonStr := `  {"primary_intent":"multi_step","confidence":0.8}  `
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil, nil)
 	got, err := r.classifyIntent(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -312,7 +312,7 @@ func TestClassifyIntentTrimsWhitespace(t *testing.T) {
 // 从而驱动 Select 回退到 keywordClassify。
 func TestClassifyIntentUnknownReturnsError(t *testing.T) {
 	jsonStr := `{"primary_intent":"totally-unknown-category"}`
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: jsonStr}, nil, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error for unknown intent")
@@ -321,7 +321,7 @@ func TestClassifyIntentUnknownReturnsError(t *testing.T) {
 
 // TestClassifyIntentInvalidJSONReturnsError 验证非 JSON 响应会返回 error。
 func TestClassifyIntentInvalidJSONReturnsError(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: "not-json"}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: "not-json"}, nil, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
@@ -332,7 +332,7 @@ func TestClassifyIntentInvalidJSONReturnsError(t *testing.T) {
 // 这驱动 Select 内部回退到 keywordClassify。
 func TestClassifyIntentError(t *testing.T) {
 	sentinel := errors.New("network down")
-	r := NewRouter(NewModelRegistry(), &stubClassifier{chatErr: sentinel}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{chatErr: sentinel}, nil, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -344,7 +344,7 @@ func TestClassifyIntentError(t *testing.T) {
 
 // TestClassifyIntentEmptyResponse 验证分类器返回空 Choices slice 时会得到 error。
 func TestClassifyIntentEmptyResponse(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &emptyChoiceClassifier{}, nil)
+	r := NewRouter(NewModelRegistry(), &emptyChoiceClassifier{}, nil, nil)
 	_, err := r.classifyIntent(context.Background(), "x")
 	if err == nil {
 		t.Fatal("expected error for empty choices")
@@ -402,7 +402,7 @@ func TestSelectByClassifierIntent(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.intent, func(t *testing.T) {
-			r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON(tc.intent, nil, 0.9, nil, 1)}, nil)
+			r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON(tc.intent, nil, 0.9, nil, 1)}, nil, nil)
 			dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 			if err != nil {
 				t.Fatalf("Select: %v", err)
@@ -434,7 +434,7 @@ func TestSelectFallsBackToKeywordOnClassifierError(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{chatErr: errors.New("classifier unavailable")}, nil)
+	r := NewRouter(reg, &stubClassifier{chatErr: errors.New("classifier unavailable")}, nil, nil)
 
 	// "implement a function" 命中 "implement" code 关键字 → code_generation → TierStandard。
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "implement a function"})
@@ -460,7 +460,7 @@ func TestSelectFallsBackToKeywordOnInvalidJSON(t *testing.T) {
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: "not-json"}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: "not-json"}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "write a unit test"})
 	if err != nil {
@@ -481,7 +481,7 @@ func TestSelectFallbackChainResolved(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, "efficient-m"),
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -501,7 +501,7 @@ func TestSelectNoFallbackWhenNotConfigured(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -520,7 +520,7 @@ func TestSelectFilterByCapability(t *testing.T) {
 		profileFor("standard-notool", TierStandard, nil, 8192, ""),
 		profileFor("standard-tool", TierStandard, []ModelCapability{CapToolCalling}, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -540,7 +540,7 @@ func TestSelectFilterByContextLen(t *testing.T) {
 		profileFor("small-ctx", TierStandard, nil, 4096, ""),
 		profileFor("big-ctx", TierStandard, nil, 32768, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:  "x",
@@ -561,7 +561,7 @@ func TestSelectNoSuitableModelReturnsError(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("no-vision", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	_, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -583,7 +583,7 @@ func TestSelectPreferredTierEscalates(t *testing.T) {
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
 	// simple_chat 本会选 TierEfficient，但 PreferredTier=Premium 升级。
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:     "x",
@@ -603,7 +603,7 @@ func TestSelectAgentRoleLeaderForcesPremium(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 		profileFor("premium-m", TierPremium, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x", AgentRole: "leader"})
 	if err != nil {
@@ -627,7 +627,7 @@ func TestSelectAgentRoleValidatorPrefersLowerTier(t *testing.T) {
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("complex_reasoning", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("complex_reasoning", nil, 0.9, nil, 1)}, nil, nil)
 	// validator 会把目标 tier 压到 min(TierPremium, TierLightweight) = TierLightweight，
 	// 但 lightweight 无 model；filterCandidates 会回退到相邻层级，efficient 抢先。
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x", AgentRole: "validator"})
@@ -645,7 +645,7 @@ func TestSelectAllowCheapFirst(t *testing.T) {
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:       "x",
@@ -671,7 +671,7 @@ func TestSelectReasonPopulated(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -694,7 +694,7 @@ func TestSelectModelShorthand(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	name, err := r.SelectModel(context.Background(), &RouteRequest{UserInput: "x"})
 	if err != nil {
@@ -709,7 +709,7 @@ func TestSelectModelShorthand(t *testing.T) {
 // SelectModel 会透出 Select 的 error。
 func TestSelectModelShorthandError(t *testing.T) {
 	reg := NewModelRegistry() // 空
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 	_, err := r.SelectModel(context.Background(), &RouteRequest{UserInput: "x"})
 	if err == nil {
 		t.Fatal("expected error from empty registry")
@@ -723,7 +723,7 @@ func TestSelectModelShorthandError(t *testing.T) {
 // TestSelectEmptyRegistryReturnsError 验证空 ModelRegistry 加任意请求
 // 会得到 "no suitable model" error。
 func TestSelectEmptyRegistryReturnsError(t *testing.T) {
-	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(NewModelRegistry(), &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 	_, err := r.Select(context.Background(), &RouteRequest{UserInput: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "no suitable model") {
 		t.Fatalf("err = %v, want 'no suitable model'", err)
@@ -736,7 +736,7 @@ func TestSelectIntentClassifiedEmittedOnce(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("efficient-m", TierEfficient, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 	bc := &fakeEventBroadcaster{}
 	r.SetBroadcaster(bc, "t1", "agent-1")
 
@@ -769,7 +769,7 @@ func TestSelectModelRateLimitedNotDeduplicated(t *testing.T) {
 	rl.SetLimit("exceeded-m", 1)
 	rl.RecordCall("exceeded-m") // 占用一次，使 exceeded-m 在 Select 时被限流
 
-	router := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, rl)
+	router := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, rl, nil)
 	bc := &fakeEventBroadcaster{}
 	router.SetBroadcaster(bc, "t1", "agent-1")
 
@@ -1001,7 +1001,7 @@ func TestNewRouterNilArgs(t *testing.T) {
 			t.Fatalf("NewRouter with nil args panicked: %v", r)
 		}
 	}()
-	r := NewRouter(nil, nil, nil)
+	r := NewRouter(nil, nil, nil, nil)
 	if r == nil {
 		t.Fatal("NewRouter returned nil")
 	}
@@ -1018,7 +1018,7 @@ func TestSelectFiltersByBudgetUSD(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("expensive-m", TierStandard, nil, 8192, ""), // InputPrice=1.0
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	_, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
@@ -1034,7 +1034,7 @@ func TestSelectPassesByBudgetUSD(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("cheap-m", TierEfficient, nil, 8192, ""), // InputPrice=1.0
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("simple_chat", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",
@@ -1070,7 +1070,7 @@ func TestSelectFiltersByLatencyReq(t *testing.T) {
 		}
 	}
 
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput:    "x",
@@ -1096,7 +1096,7 @@ func TestSelectBudgetUSDZeroDisablesFiltering(t *testing.T) {
 	reg := newRegistryWith(
 		profileFor("standard-m", TierStandard, nil, 8192, ""),
 	)
-	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil)
+	r := NewRouter(reg, &stubClassifier{intentJSON: makeIntentJSON("code_generation", nil, 0.9, nil, 1)}, nil, nil)
 
 	dec, err := r.Select(context.Background(), &RouteRequest{
 		UserInput: "x",

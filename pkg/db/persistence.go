@@ -67,7 +67,8 @@ type AgentRecord struct {
 	Model          string         `json:"model"`
 	PreferredModel string         `json:"preferred_model"`
 	PreferredTier  string         `json:"preferred_tier"`
-	AllowAutoRoute bool           `json:"allow_auto_route"`
+	ModelMode      string         `json:"model_mode"`
+	AllowFallback  bool           `json:"allow_fallback"`
 	MaxCostUSD     float64        `json:"max_cost_usd"`
 	Temperature    float64        `json:"temperature"`
 	MaxTokens      int            `json:"max_tokens"`
@@ -530,7 +531,9 @@ func QueryStepsByTask(taskID string) ([]StepRecord, error) {
 // Phase 8-A 把 InsertAgent 的长参数列表收敛为 options struct，便于扩展
 // （未来新增字段只改 struct，不动调用点签名）并提高调用处可读性。
 // Phase multi-model-routing P0 扩展：preferred_model / preferred_tier /
-// allow_auto_route / max_cost_usd。
+// model_mode / allow_fallback / max_cost_usd。
+// model_mode: single_model（默认，固定模型） or auto_route（自动路由）。
+// allow_fallback: auto_route 下是否允许 tier 降级选择。
 type InsertAgentOptions struct {
 	ID             string
 	Name           string
@@ -539,7 +542,8 @@ type InsertAgentOptions struct {
 	Model          string
 	PreferredModel string
 	PreferredTier  string
-	AllowAutoRoute bool
+	ModelMode      string
+	AllowFallback  bool
 	MaxCostUSD     float64
 	Endpoint       string
 	APIKey         string
@@ -560,7 +564,8 @@ type UpdateAgentOptions struct {
 	Model          string
 	PreferredModel string
 	PreferredTier  string
-	AllowAutoRoute bool
+	ModelMode      string
+	AllowFallback  bool
 	MaxCostUSD     float64
 	Endpoint       string
 	APIKey         string
@@ -581,11 +586,16 @@ func InsertAgent(opts InsertAgentOptions) error {
 	if len(configJSON) == 0 || string(configJSON) == "null" {
 		configJSON = []byte("{}")
 	}
+	// 向后兼容：未指定 model_mode 时默认 single_model。
+	modelMode := opts.ModelMode
+	if modelMode == "" {
+		modelMode = "single_model"
+	}
 	_, err := DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, allow_auto_route, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default, config)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, model_mode, allow_fallback, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default, config)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		opts.ID, opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
-		opts.PreferredModel, opts.PreferredTier, opts.AllowAutoRoute, opts.MaxCostUSD,
+		opts.PreferredModel, opts.PreferredTier, modelMode, opts.AllowFallback, opts.MaxCostUSD,
 		opts.Temperature, opts.MaxTokens, opts.Endpoint, opts.APIKey,
 		string(toolsJSON), opts.IsDefault, string(configJSON),
 	)
@@ -610,7 +620,7 @@ func QueryAgents() ([]AgentRecord, error) {
 	}
 	rows, err := DB.Query(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
-		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(allow_auto_route,1), COALESCE(max_cost_usd,0),
+		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(model_mode,'single_model'), COALESCE(allow_fallback,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
 		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
 		 FROM agents ORDER BY is_default DESC, created_at ASC`,
@@ -625,7 +635,7 @@ func QueryAgents() ([]AgentRecord, error) {
 		var a AgentRecord
 		var toolsJSON, configJSON string
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
-			&a.PreferredModel, &a.PreferredTier, &a.AllowAutoRoute, &a.MaxCostUSD,
+			&a.PreferredModel, &a.PreferredTier, &a.ModelMode, &a.AllowFallback, &a.MaxCostUSD,
 			&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
 			&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
@@ -646,12 +656,12 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 	var toolsJSON, configJSON string
 	err := DB.QueryRow(
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
-		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(allow_auto_route,1), COALESCE(max_cost_usd,0),
+		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(model_mode,'single_model'), COALESCE(allow_fallback,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
 		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
 		 FROM agents WHERE id=?`, id,
 	).Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
-		&a.PreferredModel, &a.PreferredTier, &a.AllowAutoRoute, &a.MaxCostUSD,
+		&a.PreferredModel, &a.PreferredTier, &a.ModelMode, &a.AllowFallback, &a.MaxCostUSD,
 		&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
 		&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
@@ -673,12 +683,16 @@ func UpdateAgent(opts UpdateAgentOptions) error {
 	if len(configJSON) == 0 || string(configJSON) == "null" {
 		configJSON = []byte("{}")
 	}
+	modelMode := opts.ModelMode
+	if modelMode == "" {
+		modelMode = "single_model"
+	}
 	_, err := DB.Exec(
-		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, preferred_model=?, preferred_tier=?, allow_auto_route=?, max_cost_usd=?, temperature=?,
+		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, preferred_model=?, preferred_tier=?, model_mode=?, allow_fallback=?, max_cost_usd=?, temperature=?,
 		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, config=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
 		opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
-		opts.PreferredModel, opts.PreferredTier, opts.AllowAutoRoute, opts.MaxCostUSD, opts.Temperature,
+		opts.PreferredModel, opts.PreferredTier, modelMode, opts.AllowFallback, opts.MaxCostUSD, opts.Temperature,
 		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), string(configJSON), opts.ID,
 	)
 	return err
@@ -726,11 +740,11 @@ func SeedDefaultAgent() error {
 	// 这样新增工具后无需再手动编辑 default agent。
 	var toolsJSON = `[]`
 	_, err = DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, allow_auto_route, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, model_mode, allow_fallback, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"agent_default", "Default Agent", "The default agent for general-purpose tasks",
 		"You are a helpful AI assistant with access to tools. When you need to run commands, read files, or write files, use the available tools. Always explain your reasoning before using tools.",
-		"deepseek-v4-flash", "", "", true, 0, 0.7, 4096, "", "", toolsJSON, true,
+		"deepseek-v4-flash", "", "", "single_model", true, 0, 0.7, 4096, "", "", toolsJSON, true,
 	)
 	if err != nil {
 		return fmt.Errorf("create default agent: %w", err)
