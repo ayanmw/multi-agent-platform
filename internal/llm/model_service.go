@@ -33,12 +33,13 @@ import (
 
 // ModelService 负责启动期模型种子写入与 DB→Registry 加载。
 type ModelService struct {
-	cfg *config.Config
+	cfg      *config.Config
+	resolver *ProfileResolver
 }
 
 // NewModelService 创建 ModelService。
 func NewModelService(cfg *config.Config) *ModelService {
-	return &ModelService{cfg: cfg}
+	return &ModelService{cfg: cfg, resolver: NewProfileResolver(cfg)}
 }
 
 // SeedModels 在启动时写入种子模型。
@@ -98,7 +99,7 @@ func (s *ModelService) seedStaticModels(now time.Time) error {
 
 	// legacy 单模型：provider 取 "default"（即未配置 LLM_PROVIDERS 时的合成 Provider）。
 	if cfg.LLMModel != "" {
-		providerName := s.resolveProviderNameForModel(cfg.LLMModel)
+		providerName := s.resolver.ResolveProviderNameForModel(cfg.LLMModel)
 		if err := s.upsertModel(providerName, cfg.LLMModel, true, now); err != nil {
 			log.Printf("[ModelService] failed to seed legacy model %s/%s: %v", providerName, cfg.LLMModel, err)
 		}
@@ -111,7 +112,10 @@ func (s *ModelService) seedStaticModels(now time.Time) error {
 		}
 		providerName := mc.Provider
 		if providerName == "" {
-			providerName = s.resolveProviderNameForModel(mc.Name)
+			providerName = s.resolver.ResolveProviderNameForModel(mc.Name)
+		}
+		if providerName == "" {
+			providerName = "default"
 		}
 		if err := s.upsertModel(providerName, mc.Name, true, now); err != nil {
 			log.Printf("[ModelService] failed to seed static model %s/%s: %v", providerName, mc.Name, err)
@@ -130,7 +134,7 @@ func (s *ModelService) seedDefaultProfiles(now time.Time) error {
 		}
 		providerName := p.Provider
 		if providerName == "" {
-			providerName = s.resolveProviderNameForModel(p.Name)
+			providerName = s.resolver.ResolveProviderNameForModel(p.Name)
 		}
 
 		existing, found, err := db.GetModel(providerName, p.Name)
@@ -176,38 +180,12 @@ func (s *ModelService) upsertModel(providerName, modelID string, missing bool, n
 		ProviderName:     providerName,
 		ModelID:          modelID,
 		DisplayName:      modelID,
-		Tier:             s.resolveTier(modelID),
+		Tier:             s.resolver.ResolveTier(modelID),
 		Missing:          missing,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	return db.InsertOrReplaceModel(rec)
-}
-
-// resolveProviderNameForModel 根据 cfg.LLMProviders / cfg.Models 决定模型归属 Provider。
-// 未命中时返回 "default"，与 legacy 单模型路径一致。
-func (s *ModelService) resolveProviderNameForModel(modelName string) string {
-	for _, mc := range s.cfg.Models {
-		if mc.Name == modelName && mc.Provider != "" {
-			return mc.Provider
-		}
-	}
-	for _, p := range s.cfg.LLMProviders {
-		if p.Name != "" {
-			return p.Name
-		}
-	}
-	return "default"
-}
-
-// resolveTier 使用 cfg.ModelTierMapping 通配符解析 tier。
-func (s *ModelService) resolveTier(modelID string) string {
-	for pattern, tier := range s.cfg.ModelTierMapping {
-		if matchWildcard(pattern, modelID) {
-			return tier
-		}
-	}
-	return "standard"
 }
 
 // mergeDefaultIntoExisting 把 DefaultProfile 中缺失的字段补进已有记录，不覆盖非空。

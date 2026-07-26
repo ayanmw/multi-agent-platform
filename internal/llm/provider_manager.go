@@ -35,8 +35,8 @@ type ProviderManager struct {
 	// configs 保存构造 provider 所用的 LLMProviderConfig（含 api_key）。
 	configs map[string]config.LLMProviderConfig
 
-	// tierMapping 是 model ID 通配符 → tier 的映射，来自 cfg.ModelTierMapping。
-	tierMapping map[string]string
+	// resolver 提供统一的 tier / provider-name 解析能力。
+	resolver *ProfileResolver
 
 	// syncTimeout 控制单次 ListModels 调用的最大等待时间。
 	syncTimeout time.Duration
@@ -52,9 +52,9 @@ type ProviderManager struct {
 // 快照中， healthy=false，便于前端看到配置错误。
 func NewProviderManager(cfg *config.Config) (*ProviderManager, error) {
 	pm := &ProviderManager{
-		providers:   make(map[string]Provider),
-		configs:     make(map[string]config.LLMProviderConfig),
-		tierMapping: cfg.ModelTierMapping,
+		providers: make(map[string]Provider),
+		configs:   make(map[string]config.LLMProviderConfig),
+		resolver:  NewProfileResolver(cfg),
 		syncTimeout: 30 * time.Second,
 	}
 
@@ -218,7 +218,7 @@ func (pm *ProviderManager) upsertDiscoveredModel(providerName, modelID string, n
 		ProviderName:     providerName,
 		ModelID:          modelID,
 		DisplayName:      modelID,
-		Tier:             pm.resolveTier(modelID),
+		Tier:             pm.resolver.ResolveTier(modelID),
 		Capabilities:     nil,
 		InputPrice:       0,
 		OutputPrice:      0,
@@ -231,17 +231,6 @@ func (pm *ProviderManager) upsertDiscoveredModel(providerName, modelID string, n
 	return db.InsertOrReplaceModel(rec)
 }
 
-// resolveTier 解析模型 tier，优先使用 ModelTierMapping 通配符匹配。
-func (pm *ProviderManager) resolveTier(modelID string) string {
-	for pattern, tier := range pm.tierMapping {
-		if matchWildcard(pattern, modelID) {
-			return tier
-		}
-	}
-	return "standard"
-}
-
-// matchWildcard 用 * 通配符匹配字符串。
 func matchWildcard(pattern, s string) bool {
 	if pattern == "" {
 		return s == ""

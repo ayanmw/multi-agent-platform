@@ -142,8 +142,8 @@ func TestCreateProviderFromConfig_FallbackToDefaultFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProviderFromConfig fallback failed: %v", err)
 	}
-	if p.Name() != "openai" {
-		t.Fatalf("expected openai fallback provider, got %q", p.Name())
+	if p.Name() != "default" {
+		t.Fatalf("expected default fallback provider, got %q", p.Name())
 	}
 }
 

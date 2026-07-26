@@ -109,8 +109,9 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 // 若选择 mock 模式，provider 名为 "mock"、Model 为
 // "mock/<caseID>"，以便成本/metrics 流水线识别 mock 调用。
 //
-// 对于真实 provider，它会在 cfg.Models 中查找 modelName。若未找到匹配的
-// model 配置，则回退到 cfg.LLMEndpoint 与 cfg.LLMModel，
+// 对于真实 provider，它先按全名 "provider/model" 或短名解析出 ProviderConfig。
+// 若 modelName 是 provider-scoped（含 "/"），优先用 LLMProviders 中对应 provider
+// 的 endpoint/key；否则从 cfg.Models 中匹配。若都未命中则回退到 legacy 字段，
 // 作为 OpenAI-compatible provider 使用。
 func CreateProviderFromConfig(cfg *config.Config, modelName string, caseID string) (Provider, error) {
 	if cfg.ShouldMock(caseID, "") {
@@ -122,32 +123,7 @@ func CreateProviderFromConfig(cfg *config.Config, modelName string, caseID strin
 		})
 	}
 
-	// 按名查找 model 配置；未找到则回退到默认字段。
-	var mc config.ModelConfig
-	found := false
-	for _, m := range cfg.Models {
-		if m.Name == modelName {
-			mc = m
-			found = true
-			break
-		}
-	}
-	if !found {
-		mc = config.ModelConfig{
-			Name:     cfg.LLMModel,
-			Provider: "openai",
-			Endpoint: cfg.LLMEndpoint,
-			APIKey:   cfg.LLMAPIKey,
-		}
-	}
-	if mc.Provider == "" {
-		mc.Provider = "openai"
-	}
-
-	return NewProvider(ProviderConfig{
-		Name:     mc.Provider,
-		Endpoint: mc.Endpoint,
-		APIKey:   mc.APIKey,
-		Model:    mc.Name,
-	})
+	resolver := NewProfileResolver(cfg)
+	pc := resolver.ResolveProviderForModel(modelName)
+	return NewProvider(pc)
 }
