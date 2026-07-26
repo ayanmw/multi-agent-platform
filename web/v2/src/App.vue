@@ -20,7 +20,7 @@ import Toast from './components/Toast.vue'
 import KeyboardTips from './components/KeyboardTips.vue'
 import ApprovalDialog from './components/ApprovalDialog.vue'
 import RecentModsDialog from './components/RecentModsDialog.vue'
-import ModelPricesDialog from './components/ModelPricesDialog.vue'
+import LLMModelManager from './components/LLMModelManager.vue'
 import MCPServerDialog from './components/MCPServerDialog.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
 import SessionEditDialog from './components/SessionEditDialog.vue'
@@ -144,7 +144,7 @@ const sessionEditDialogRef = ref<InstanceType<typeof SessionEditDialog> | null>(
 
 // === 弹窗可见性 ===
 const recentModsVisible = ref(false)
-const modelPricesVisible = ref(false)
+const llmModelManagerVisible = ref(false)
 const mcpServerDialogVisible = ref(false)
 const newSessionDialogVisible = ref(false)
 const newSessionProjectId = ref<string | undefined>(undefined)
@@ -950,7 +950,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       @open-mobile-more="mobileMoreOpen = true"
       @toggle-left-dock="toggleLeftDock"
       @toggle-recent-mods="showRecentMods"
-      @toggle-model-prices="modelPricesVisible = true"
+      @toggle-model-prices="llmModelManagerVisible = true"
       @toggle-mcp="mcpServerDialogVisible = true"
       @toggle-keyboard-tips="showTips = true"
       @toggle-manage="manageFlyoutOpen = !manageFlyoutOpen"
@@ -1266,11 +1266,11 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         </button>
         <button
           class="mobile-more-item"
-          aria-label="Model Prices"
-          @click="modelPricesVisible = true; mobileMoreOpen = false"
+          aria-label="LLM Models"
+          @click="llmModelManagerVisible = true; mobileMoreOpen = false"
         >
-          <span class="mobile-more-item-icon">💲</span>
-          <span class="mobile-more-item-label">Model Prices</span>
+          <span class="mobile-more-item-icon">🧠</span>
+          <span class="mobile-more-item-label">LLM Models</span>
         </button>
         <button
           class="mobile-more-item"
@@ -1375,9 +1375,9 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
       @clear="clearRecentMods"
     />
 
-    <ModelPricesDialog
-      :visible="modelPricesVisible"
-      @update:visible="modelPricesVisible = $event"
+    <LLMModelManager
+      :visible="llmModelManagerVisible"
+      @update:visible="llmModelManagerVisible = $event"
     />
 
     <MCPServerDialog

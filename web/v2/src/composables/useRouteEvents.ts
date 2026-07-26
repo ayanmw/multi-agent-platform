@@ -18,7 +18,21 @@ const ROUTING_EVENT_TYPES: EventType[] = [
   'model_fallback_used',
   'model_rate_limited',
   'cost_budget_exceeded',
+  'llm/model_selected',
+  'llm/router_fallback_default',
 ]
+
+function normalizeModelSelected(d: Record<string, unknown>): Record<string, unknown> {
+  return {
+    model: d.model ?? '',
+    provider: d.provider ?? '',
+    tier: d.tier ?? '',
+    intent: d.intent ?? '',
+    reason: d.reason ?? '',
+    fallback: d.fallback ?? false,
+    cheap_first: d.cheap_first ?? false,
+  }
+}
 
 function isRoutingEvent(event: AgentEvent): boolean {
   return ROUTING_EVENT_TYPES.includes(event.type)
@@ -73,14 +87,14 @@ const decisionsByTask = computed(() => {
     const entry = map[key]
     entry.events.push(ev)
 
-    if (ev.type === 'model_routed') {
-      const d = ev.data || {}
+    if (ev.type === 'model_routed' || ev.type === 'llm/model_selected') {
+      const d = ev.type === 'llm/model_selected' ? normalizeModelSelected(ev.data || {}) : (ev.data || {})
       entry.model = String(d.model || '')
       entry.intent = String(d.intent || '')
       entry.tier = String(d.tier || '')
       entry.reason = String(d.reason || '')
       entry.fallback = d.fallback ? String(d.fallback) : undefined
-      entry.cheapFirst = Boolean(d.cheap_first_attempt)
+      entry.cheapFirst = Boolean(d.cheap_first_attempt || d.cheap_first)
     }
     if (ev.type === 'intent_classified') {
       const d = ev.data || {}

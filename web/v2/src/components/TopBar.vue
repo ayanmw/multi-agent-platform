@@ -21,10 +21,11 @@ import { useLayout } from '@/composables/useLayout'
  *   - toggle-inspector: 请求切换右侧 Inspector
  *   - toggle-left-dock: 请求切换左侧 Session Dock（平板端/紧凑模式）
  *   - toggle-recent-mods: 请求打开最近修改弹窗
- *   - toggle-model-prices: 请求打开模型价格管理弹窗
+ *   - toggle-model-prices: 请求打开 LLM 模型管理弹窗
  *   - toggle-mcp: 请求打开 MCP Server 管理弹窗
  *   - toggle-keyboard-tips: 请求打开键盘快捷键提示
  *   - toggle-manage: 请求切换 Manage 下拉浮窗
+ *   - toggle-cron: 请求切换 Cron 侧边面板
  *   - open-mobile-more: 移动端展开 "More" 底部菜单
  */
 
@@ -76,7 +77,7 @@ const moreItems: { id: string; label: string; icon: string; emit: MoreActionId |
   { id: 'theme', label: 'Theme', icon: '🎨', emit: null },
   { id: 'mcp', label: 'MCP Server', icon: '🔌', emit: 'mcp' },
   { id: 'mods', label: 'Recent Mods', icon: '📝', emit: 'mods' },
-  { id: 'prices', label: 'Model Prices', icon: '💲', emit: 'prices' },
+  { id: 'prices', label: 'LLM Models', icon: '🧠', emit: 'prices' },
   { id: 'keyboard', label: 'Keyboard Tips', icon: '⌨', emit: 'keyboard' },
 ]
 
@@ -120,7 +121,7 @@ function emitMore(action: typeof moreItems[number]) {
       <ThemePalette />
       <button class="icon-btn" aria-label="MCP Server" title="MCP Server" @click="emit('toggle-mcp')">🔌</button>
       <button class="icon-btn" aria-label="Recent Mods (Ctrl+M)" title="Recent Mods (Ctrl+M)" @click="emit('toggle-recent-mods')">📝</button>
-      <button class="icon-btn" aria-label="Model Prices" title="Model Prices" @click="emit('toggle-model-prices')">💲</button>
+      <button class="icon-btn" aria-label="LLM Models" title="LLM Models" @click="emit('toggle-model-prices')">🧠</button>
       <button class="icon-btn" aria-label="Keyboard Tips" title="Keyboard Tips" @click="emit('toggle-keyboard-tips')">⌨</button>
       <button
         class="icon-btn"

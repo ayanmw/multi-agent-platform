@@ -287,8 +287,15 @@ func handleUpdateModelProfile(w http.ResponseWriter, r *http.Request, registry *
 	if req.AvgLatencyMs != nil {
 		existing.AvgLatencyMs = *req.AvgLatencyMs
 	}
+	// 处理 missing 字段：前端只能将 missing 从 true 改回 false（重新标记为可用），
+	// 不能通过 PUT 将 false 改为 true；missing 状态应由 ProviderManager 发现流程决定。
 	if req.Missing != nil {
-		existing.Missing = *req.Missing
+		if existing.Missing && !*req.Missing {
+			existing.Missing = false
+		} else if !existing.Missing && *req.Missing {
+			respondJSON(w, http.StatusBadRequest, map[string]any{"error": "marking a model as missing is only allowed via provider sync"})
+			return
+		}
 	}
 
 	if err := db.UpdateModel(*existing); err != nil {
