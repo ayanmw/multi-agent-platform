@@ -6,7 +6,7 @@
 
 **Architecture:** 保持 `internal/llm.EmbeddingProvider` 接口不变，新增 `OpenAIEmbeddingProvider` / `CohereEmbeddingProvider` 两个远程实现；`internal/config.Config` 增加 provider 与 key 配置；`cmd/server/main.go` 根据配置选择 provider。`memory.SqliteVectorStore` 已存在，只需在 memory 写入时增加行级 upsert hook（`PostInsertMemoryHook`），替换启动时的 `BuildVectorIndex` 全量重扫。新增 `HybridRanker` 将 keywordScore、向量 cosine、BM25 三组信号线性加权，替换 `harness.blendVectorScores` 中立即为每段内容调用 Embed 的低效实现。
 
-**Tech Stack:** Go 1.25, standard library, modernc.org/sqlite, existing Provider / Memory / Harness layers.
+**Status:** 已完成 ✅（实现已落地，仅计划文档未收尾）
 
 ---
 
@@ -35,7 +35,7 @@
 - Create: `internal/llm/openai_embedding_provider.go`
 - Test: `internal/llm/embedding_provider_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/llm/embedding_provider_test.go`:
 
@@ -93,13 +93,13 @@ func TestOpenAIEmbeddingProviderEmbed(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/llm -run TestOpenAIEmbeddingProviderEmbed -v`
 
 Expected: FAIL `undefined: NewOpenAIEmbeddingProvider`
 
-- [ ] **Step 3: Implement the provider**
+- [x] **Step 3: Implement the provider**
 
 Create `internal/llm/openai_embedding_provider.go`:
 
@@ -218,13 +218,13 @@ func (p *OpenAIEmbeddingProvider) EmbedBatch(texts []string) ([][]float32, error
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `go test ./internal/llm -run TestOpenAIEmbeddingProviderEmbed -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/llm/openai_embedding_provider.go internal/llm/embedding_provider_test.go
@@ -239,7 +239,7 @@ git commit -m "Phase 7-B: OpenAI-compatible remote embedding provider"
 - Create: `internal/llm/cohere_embedding_provider.go`
 - Test: `internal/llm/embedding_provider_test.go` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `internal/llm/embedding_provider_test.go`:
 
@@ -270,13 +270,13 @@ func TestCohereEmbeddingProviderEmbed(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/llm -run TestCohereEmbeddingProviderEmbed -v`
 
 Expected: FAIL `undefined: NewCohereEmbeddingProvider`
 
-- [ ] **Step 3: Implement the provider**
+- [x] **Step 3: Implement the provider**
 
 Create `internal/llm/cohere_embedding_provider.go`:
 
@@ -380,13 +380,13 @@ func (p *CohereEmbeddingProvider) EmbedBatch(texts []string) ([][]float32, error
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/llm -run 'TestOpenAIEmbeddingProviderEmbed|TestCohereEmbeddingProviderEmbed' -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/llm/cohere_embedding_provider.go internal/llm/embedding_provider_test.go
@@ -402,7 +402,7 @@ git commit -m "Phase 7-B: Cohere remote embedding provider"
 - Modify: `cmd/server/main.go`
 - Modify: `.env.example`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `internal/config/config_test.go` (create if not exists; otherwise add):
 
@@ -426,13 +426,13 @@ func TestLoadEmbeddingConfig(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/config -run TestLoadEmbeddingConfig -v`
 
 Expected: FAIL `cfg.EmbeddingProvider undefined`
 
-- [ ] **Step 3: Add config fields and loading**
+- [x] **Step 3: Add config fields and loading**
 
 Edit `internal/config/config.go` in the `Config` struct, after WebSearch fields:
 
@@ -472,7 +472,7 @@ In `Load()`, after web search loading block:
 
 Add `strconv` to imports.
 
-- [ ] **Step 4: Add provider factory helper**
+- [x] **Step 4: Add provider factory helper**
 
 Create a new function at the bottom of `internal/config/config.go`:
 
@@ -511,13 +511,13 @@ func (cfg *Config) BuildEmbeddingProvider() (llm.EmbeddingProvider, error) {
 
 Add `strconv` to imports (already added). Add `llm` import to `internal/config/config.go` (note: this creates a dependency from config to llm; ensure no cycle — config only imports `llm` types, and llm does not import config, so safe).
 
-- [ ] **Step 5: Run config test**
+- [x] **Step 5: Run config test**
 
 Run: `go test ./internal/config -run TestLoadEmbeddingConfig -v`
 
 Expected: PASS
 
-- [ ] **Step 6: Wire into server bootstrap**
+- [x] **Step 6: Wire into server bootstrap**
 
 Edit `cmd/server/main.go`, in the startup block where `embedProvider` is currently created.
 
@@ -543,7 +543,7 @@ if configuredProvider, err := cfg.BuildEmbeddingProvider(); err != nil {
 }
 ```
 
-- [ ] **Step 7: Update .env.example**
+- [x] **Step 7: Update .env.example**
 
 Append to `.env.example` after web search block:
 
@@ -558,13 +558,13 @@ Append to `.env.example` after web search block:
 # EMBEDDING_DIMENSIONS=1536
 ```
 
-- [ ] **Step 8: Build and test**
+- [x] **Step 8: Build and test**
 
 Run: `go build ./cmd/server && go test ./internal/config ./internal/llm`
 
 Expected: PASS
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add internal/config/config.go internal/config/config_test.go cmd/server/main.go .env.example
@@ -582,7 +582,7 @@ git commit -m "Phase 7-B: embedding provider config + server wiring"
 - Modify: `cmd/server/main.go`
 - Modify: `internal/harness/recall.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/memory/indexer_test.go`:
 
@@ -646,13 +646,13 @@ func TestIndexerUpsertAndDeduplicate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/memory -run TestIndexerUpsertAndDeduplicate -v`
 
 Expected: FAIL `undefined: NewMemoryIndexer`
 
-- [ ] **Step 3: Implement the indexer**
+- [x] **Step 3: Implement the indexer**
 
 Create `internal/memory/indexer.go`:
 
@@ -772,13 +772,13 @@ func truncate(s string, n int) string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `go test ./internal/memory -run TestIndexerUpsertAndDeduplicate -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Hook into memory insertion**
+- [x] **Step 5: Hook into memory insertion**
 
 Edit `pkg/db/memory.go`. Add package-level callback variable near the top (after imports):
 
@@ -797,7 +797,7 @@ At the end of `InsertMemory`, before `return err`:
 	return err
 ```
 
-- [ ] **Step 6: Wire indexer in server bootstrap**
+- [x] **Step 6: Wire indexer in server bootstrap**
 
 Edit `cmd/server/main.go`. After vectorStore creation and MemoryRecall setup:
 
@@ -821,13 +821,13 @@ if err := memRecall.BuildVectorIndex(); err != nil {
 }
 ```
 
-- [ ] **Step 7: Build and run memory tests**
+- [x] **Step 7: Build and run memory tests**
 
 Run: `go test ./internal/memory ./pkg/db`
 
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/memory/indexer.go internal/memory/indexer_test.go pkg/db/memory.go cmd/server/main.go
@@ -843,7 +843,7 @@ git commit -m "Phase 7-B: incremental memory indexing + semantic dedup"
 - Test: `internal/harness/hybrid_ranker_test.go`
 - Modify: `internal/harness/recall.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/harness/hybrid_ranker_test.go`:
 
@@ -890,13 +890,13 @@ func TestHybridRankerScore(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/harness -run TestHybridRankerScore -v`
 
 Expected: FAIL `undefined: NewHybridRanker`
 
-- [ ] **Step 3: Implement the ranker**
+- [x] **Step 3: Implement the ranker**
 
 Create `internal/harness/hybrid_ranker.go`:
 
@@ -1022,13 +1022,13 @@ func tokenize(s string) []string {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/harness -run TestHybridRankerScore -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Replace recall scoring**
+- [x] **Step 5: Replace recall scoring**
 
 Edit `internal/harness/recall.go`. At the `MemoryRecall` struct, add:
 
@@ -1060,13 +1060,13 @@ func (mr *MemoryRecall) blendVectorScores(content, query string) float64 {
 }
 ```
 
-- [ ] **Step 6: Build and run harness tests**
+- [x] **Step 6: Build and run harness tests**
 
 Run: `go test ./internal/harness`
 
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/harness/hybrid_ranker.go internal/harness/hybrid_ranker_test.go internal/harness/recall.go
@@ -1082,7 +1082,7 @@ git commit -m "Phase 7-B: hybrid ranker (BM25 + vector + keyword) for memory rec
 - Modify: `roadmaps/ROADMAP.md`
 - Create: `docs/superpowers/plans/2026-07-18-phase-7b-embedding-vector-integration.md` (already this file)
 
-- [ ] **Step 1: Add batch dimension validation test**
+- [x] **Step 1: Add batch dimension validation test**
 
 Append to `internal/llm/embedding_provider_test.go`:
 
@@ -1107,13 +1107,13 @@ func TestOpenAIEmbeddingProviderDimensionValidation(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run full LLM tests**
+- [x] **Step 2: Run full LLM tests**
 
 Run: `go test ./internal/llm`
 
 Expected: PASS
 
-- [ ] **Step 3: Update ROADMAP**
+- [x] **Step 3: Update ROADMAP**
 
 Edit `roadmaps/ROADMAP.md` Phase 7 section. Mark 7-B items as completed where applicable:
 
@@ -1126,13 +1126,13 @@ Edit `roadmaps/ROADMAP.md` Phase 7 section. Mark 7-B items as completed where ap
 - [x] 语义去重: 新 memory 与已有记忆相似度阈值合并，控制记忆膨胀
 ```
 
-- [ ] **Step 4: Full build + test**
+- [x] **Step 4: Full build + test**
 
 Run: `go build ./cmd/server && go test ./internal/... ./pkg/...`
 
 Expected: PASS
 
-- [ ] **Step 5: Final commit**
+- [x] **Step 5: Final commit**
 
 ```bash
 git add internal/llm/embedding_provider_test.go roadmaps/ROADMAP.md docs/superpowers/plans/2026-07-18-phase-7b-embedding-vector-integration.md

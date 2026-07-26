@@ -11,6 +11,8 @@
 - 事件回放通过 SQLite `steps` + `conversations` + 内存缓存重建 `AgentEvent` 序列；
 - 前端新增 `TraceTreePanel` 接收 `trace_span` 事件并渲染成树。
 
+**Status:** 已完成 ✅（实现已落地，仅计划文档未收尾）
+
 **Tech Stack:** Go 1.25, standard library, modernc.org/sqlite, existing event/log layers.
 
 ---
@@ -45,7 +47,7 @@
 - Test: `internal/observability/trace_test.go`
 - Modify: `pkg/event/event.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/observability/trace_test.go`:
 
@@ -91,13 +93,13 @@ func TestTraceContextPropagation(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/observability -run 'TestTracer|TestTraceContext' -v`
 
 Expected: FAIL `undefined: NewTracer`
 
-- [ ] **Step 3: Implement the tracer**
+- [x] **Step 3: Implement the tracer**
 
 Create `internal/observability/trace.go`:
 
@@ -296,13 +298,13 @@ func (t *Tracer) JSON() ([]byte, error) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/observability -run 'TestTracer|TestTraceContext' -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Add trace event type**
+- [x] **Step 5: Add trace event type**
 
 Edit `pkg/event/event.go`, add constant:
 
@@ -310,7 +312,7 @@ Edit `pkg/event/event.go`, add constant:
 	EventTraceSpan = "trace_span"
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/observability/trace.go internal/observability/trace_test.go pkg/event/event.go
@@ -327,7 +329,7 @@ git commit -m "Phase 7-C: dependency-free tracer with context propagation"
 - Test: `internal/observability/audit_test.go`
 - Modify: `pkg/db/migrate.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/observability/audit_test.go`:
 
@@ -355,13 +357,13 @@ func TestMemoryAuditor(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/observability -run TestMemoryAuditor -v`
 
 Expected: FAIL `undefined: NewMemoryAuditor`
 
-- [ ] **Step 3: Implement auditor interface and memory backend**
+- [x] **Step 3: Implement auditor interface and memory backend**
 
 Create `internal/observability/audit.go`:
 
@@ -448,7 +450,7 @@ func generateAuditID() string {
 }
 ```
 
-- [ ] **Step 4: Add SQLite persistence for audit records**
+- [x] **Step 4: Add SQLite persistence for audit records**
 
 Create `pkg/db/audit.go`:
 
@@ -518,7 +520,7 @@ func ListAuditRecords(limit int) ([]AuditRecord, error) {
 }
 ```
 
-- [ ] **Step 5: Add migration for audit_records table**
+- [x] **Step 5: Add migration for audit_records table**
 
 Edit `pkg/db/migrate.go`, append to `migrations`:
 
@@ -544,13 +546,13 @@ Edit `pkg/db/migrate.go`, append to `migrations`:
 	},
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `go test ./internal/observability -run TestMemoryAuditor -v && go test ./pkg/db`
 
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/observability/audit.go internal/observability/audit_test.go pkg/db/audit.go pkg/db/migrate.go
@@ -566,7 +568,7 @@ git commit -m "Phase 7-C: auditor interface + SQLite audit_records persistence"
 - Test: `internal/observability/histogram_test.go`
 - Modify: `internal/observability/obs.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/observability/histogram_test.go`:
 
@@ -594,13 +596,13 @@ func TestHistogramQuantiles(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/observability -run TestHistogramQuantiles -v`
 
 Expected: FAIL `undefined: NewHistogramCollector`
 
-- [ ] **Step 3: Implement histogram**
+- [x] **Step 3: Implement histogram**
 
 Create `internal/observability/histogram.go`:
 
@@ -704,13 +706,13 @@ func (h *HistogramCollector) Total() uint64 {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/observability -run TestHistogramQuantiles -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Wire histograms into MetricsCollector**
+- [x] **Step 5: Wire histograms into MetricsCollector**
 
 Edit `internal/observability/obs.go`:
 
@@ -758,7 +760,7 @@ Update `PrometheusText` to append histograms (before final return):
 	out += m.toolLatencyHist.PrometheusHistogram("tool_latency_ms", "Tool execution latency in milliseconds.")
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/observability/histogram.go internal/observability/histogram_test.go internal/observability/obs.go
@@ -773,7 +775,7 @@ git commit -m "Phase 7-C: latency histograms in Prometheus text format"
 - Modify: `internal/runtime/engine.go`
 - Modify: `cmd/server/main.go`
 
-- [ ] **Step 1: Add Tracer and latency hooks to EngineConfig**
+- [x] **Step 1: Add Tracer and latency hooks to EngineConfig**
 
 Edit `internal/runtime/engine.go` in the `EngineConfig` struct:
 
@@ -796,7 +798,7 @@ Edit `internal/runtime/engine.go` in the `EngineConfig` struct:
 
 Add imports for `time` and `github.com/anmingwei/multi-agent-platform/internal/observability`.
 
-- [ ] **Step 2: Wrap think(), tool execution, and LLM call with spans**
+- [x] **Step 2: Wrap think(), tool execution, and LLM call with spans**
 
 In `internal/runtime/engine.go`, locate the `think()` method. At the start:
 
@@ -844,7 +846,7 @@ if e.cfg.LLMLatencyRecorder != nil {
 }
 ```
 
-- [ ] **Step 3: Wire tracer and recorders in main.go**
+- [x] **Step 3: Wire tracer and recorders in main.go**
 
 Edit `cmd/server/main.go`. Create a process-level tracer:
 
@@ -885,13 +887,13 @@ Pass `RootTraceCtx: rootTraceCtx` in EngineConfig. Add field to `EngineConfig`:
 
 In `NewEngine`, set `e.rootTraceCtx = cfg.RootTraceCtx`.
 
-- [ ] **Step 4: Build and test**
+- [x] **Step 4: Build and test**
 
 Run: `go build ./cmd/server && go test ./internal/runtime`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/runtime/engine.go cmd/server/main.go
@@ -906,7 +908,7 @@ git commit -m "Phase 7-C: engine instrumentation with trace spans and latency hi
 - Modify: `cmd/server/main.go`
 - Modify: `internal/observability/obs.go`
 
-- [ ] **Step 1: Add auditor singleton**
+- [x] **Step 1: Add auditor singleton**
 
 Edit `internal/observability/obs.go`. Add:
 
@@ -915,7 +917,7 @@ Edit `internal/observability/obs.go`. Add:
 var DefaultAuditor Auditor = NewMemoryAuditor(10000)
 ```
 
-- [ ] **Step 2: Add SQLite-backed auditor decorator**
+- [x] **Step 2: Add SQLite-backed auditor decorator**
 
 Create `internal/observability/audit_sqlite.go`:
 
@@ -953,7 +955,7 @@ func (a *SQLiteAuditor) List(limit int) []AuditRecord {
 }
 ```
 
-- [ ] **Step 3: Wire auditor**
+- [x] **Step 3: Wire auditor**
 
 In `cmd/server/main.go`, after DB init:
 
@@ -961,7 +963,7 @@ In `cmd/server/main.go`, after DB init:
 observability.DefaultAuditor = observability.NewSQLiteAuditor(observability.NewMemoryAuditor(10000))
 ```
 
-- [ ] **Step 4: Add audit helper and hooks**
+- [x] **Step 4: Add audit helper and hooks**
 
 Add near top of `cmd/server/main.go`:
 
@@ -993,13 +995,13 @@ observability.DefaultAuditor.Record(observability.AuditRecord{
 })
 ```
 
-- [ ] **Step 5: Build and run tests**
+- [x] **Step 5: Build and run tests**
 
 Run: `go build ./cmd/server && go test ./internal/observability ./pkg/db`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/observability/audit_sqlite.go internal/observability/obs.go cmd/server/main.go
@@ -1014,7 +1016,7 @@ git commit -m "Phase 7-C: audit hooks for write operations + SQLite persistence"
 - Modify: `cmd/server/main.go`
 - Modify: `cmd/server/api.go`
 
-- [ ] **Step 1: Add endpoints**
+- [x] **Step 1: Add endpoints**
 
 Edit `cmd/server/main.go`. In the API route setup block, add:
 
@@ -1024,7 +1026,7 @@ Edit `cmd/server/main.go`. In the API route setup block, add:
 	http.HandleFunc("/api/replay/tasks/", handleReplay)
 ```
 
-- [ ] **Step 2: Implement handlers in api.go**
+- [x] **Step 2: Implement handlers in api.go**
 
 Edit `cmd/server/api.go`:
 
@@ -1059,7 +1061,7 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-- [ ] **Step 3: Build replay helper**
+- [x] **Step 3: Build replay helper**
 
 Add to `cmd/server/api.go`:
 
@@ -1093,13 +1095,13 @@ func buildReplayEvents(taskID string) []map[string]any {
 }
 ```
 
-- [ ] **Step 4: Build and test**
+- [x] **Step 4: Build and test**
 
 Run: `go build ./cmd/server`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/server/main.go cmd/server/api.go
@@ -1116,7 +1118,7 @@ git commit -m "Phase 7-C: REST endpoints for audit, traces, and replay"
 - Create: `web/src/components/TraceNode.vue`
 - Modify: `web/src/App.vue`
 
-- [ ] **Step 1: Create trace store**
+- [x] **Step 1: Create trace store**
 
 Create `web/src/composables/useTraceStore.ts`:
 
@@ -1166,7 +1168,7 @@ export function useTraceStore() {
 }
 ```
 
-- [ ] **Step 2: Create TraceNode.vue**
+- [x] **Step 2: Create TraceNode.vue**
 
 Create `web/src/components/TraceNode.vue`:
 
@@ -1188,7 +1190,7 @@ defineProps<{ node: SpanNode }>()
 </script>
 ```
 
-- [ ] **Step 3: Create TraceTreePanel.vue**
+- [x] **Step 3: Create TraceTreePanel.vue**
 
 Create `web/src/components/TraceTreePanel.vue`:
 
@@ -1210,7 +1212,7 @@ const { spans } = useTraceStore()
 </script>
 ```
 
-- [ ] **Step 4: Mount in App.vue**
+- [x] **Step 4: Mount in App.vue**
 
 Edit `web/src/App.vue`. Import and register trace store event handler:
 
@@ -1221,13 +1223,13 @@ const traceStore = useTraceStore()
 
 In the event router switch, call `traceStore.onEvent(evt)`.
 
-- [ ] **Step 5: Build frontend**
+- [x] **Step 5: Build frontend**
 
 Run: `cd web && npm run build`
 
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/components/TraceTreePanel.vue web/src/components/TraceNode.vue web/src/composables/useTraceStore.ts web/src/App.vue
@@ -1243,7 +1245,7 @@ git commit -m "Phase 7-C: frontend trace tree panel"
 - Modify: `.env.example`
 - This plan file
 
-- [ ] **Step 1: Mark 7-C items complete**
+- [x] **Step 1: Mark 7-C items complete**
 
 Edit `roadmaps/ROADMAP.md` Phase 7-C section:
 
@@ -1256,7 +1258,7 @@ Edit `roadmaps/ROADMAP.md` Phase 7-C section:
 - [x] 事件回放: `/api/replay/tasks/{task_id}` 从 steps + conversations 重建
 ```
 
-- [ ] **Step 2: Update .env.example**
+- [x] **Step 2: Update .env.example**
 
 Append:
 
@@ -1269,7 +1271,7 @@ Append:
 # TRACE_BUFFER_LIMIT=2000
 ```
 
-- [ ] **Step 3: Full verification**
+- [x] **Step 3: Full verification**
 
 Run:
 
@@ -1281,7 +1283,7 @@ cd web && npm run build
 
 Expected: PASS
 
-- [ ] **Step 4: Final commit**
+- [x] **Step 4: Final commit**
 
 ```bash
 git add roadmaps/ROADMAP.md .env.example docs/superpowers/plans/2026-07-18-phase-7c-observability.md
