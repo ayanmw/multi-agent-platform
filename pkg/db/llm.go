@@ -242,29 +242,40 @@ func UpdateModel(rec LLMModelRecord) error {
 	return nil
 }
 
-// MarkModelsMissingForProvider 标记指定 Provider 下的模型 missing 状态。
-// 只有在 seenModelIDs 集合中的模型会被设置为目标状态；其它模型保持现状。
+// MarkModelsMissingForProvider 标记指定 Provider 下、**不在** seenModelIDs 中的模型为 missing。
+// seenModelIDs 中的模型视为仍可用，其他模型被设置 missing=true。
 func MarkModelsMissingForProvider(providerName string, seenModelIDs []string, missing bool) error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
+
+	now := time.Now().UTC()
+	// 没有 seen IDs 时，将该 provider 下所有模型标记为 missing。
 	if len(seenModelIDs) == 0 {
+		_, err := DB.Exec(`
+			UPDATE llm_models
+			SET missing = ?, updated_at = ?
+			WHERE provider_name = ?`,
+			missing, now, providerName)
+		if err != nil {
+			return fmt.Errorf("mark all models missing for provider %q: %w", providerName, err)
+		}
 		return nil
 	}
+
 	placeholders := make([]string, len(seenModelIDs))
-	args := make([]any, len(seenModelIDs)+2)
-	args[0] = missing
-	args[1] = providerName
+	args := make([]any, 0, len(seenModelIDs)+3)
+	args = append(args, missing, now, providerName)
 	for i, id := range seenModelIDs {
 		placeholders[i] = "?"
-		args[i+2] = id
+		args = append(args, id)
 	}
 	query := fmt.Sprintf(`
 		UPDATE llm_models
 		SET missing = ?, updated_at = ?
-		WHERE provider_name = ? AND model_id IN (%s)`,
+		WHERE provider_name = ? AND model_id NOT IN (%s)`,
 		strings.Join(placeholders, ","))
-	_, err := DB.Exec(query, append([]any{missing, time.Now().UTC()}, args[1:]...)...)
+	_, err := DB.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("mark models missing for provider %q: %w", providerName, err)
 	}
