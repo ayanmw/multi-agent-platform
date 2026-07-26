@@ -627,6 +627,8 @@ print_section "场景 6: Cron start_task 端到端 (真实 LLM)"
 if [[ "$LLM_OK" != "yes" ]]; then
   record_result "6a cron start_task 达终态" "SKIP" "LLM 不可达（场景1 未通过），跳过场景6"
 else
+  # cron 启动的 task 在真实 reasoning 模型下可能每步 15-30s，给 200s 以上预算。
+  S6_TIMEOUT=200
   # 创建一个 start_task action 的 cron（agent_default 为启动时种入的默认 agent）。
   # schedule_type=interval + cron_expr=1h 保证不会自动到点触发，仅靠手动 trigger 跑一次。
   S6_CREATE=$(curl -s -X POST "${BASE}/api/crons" -H 'Content-Type: application/json' \
@@ -647,8 +649,8 @@ else
       FINDINGS+=("[场景6] cron trigger 响应未含 task_id：start_task action 未成功启动 task，查 server log 的 startChatTask 错误。")
     else
       record_result "6b execution 回填 task_id" "PASS" "task_id=${S6_TASK_FROM_EXEC}"
-      # 轮询该 task 到终态（真实 LLM）
-      S6_RESULT=$(poll_task "$S6_TASK_FROM_EXEC" 90)
+      # 轮询该 task 到终态（真实 LLM，reasoning 模型每步 15-30s，给 200s 预算）
+      S6_RESULT=$(poll_task "$S6_TASK_FROM_EXEC" "${S6_TIMEOUT:-200}")
       S6_STATUS=$(echo "$S6_RESULT" | awk '{print $1}')
       S6_ELAPSED=$(echo "$S6_RESULT" | awk '{print $2}')
       TIMINGS+=("场景6 cron start_task: ${S6_ELAPSED}s (status=${S6_STATUS})")
@@ -656,8 +658,8 @@ else
       if [[ "$S6_STATUS" == "completed" || "$S6_STATUS" == "failed" ]]; then
         record_result "6a cron start_task 达终态" "PASS" "status=${S6_STATUS}, elapsed=${S6_ELAPSED}s"
       else
-        record_result "6a cron start_task 达终态" "FAIL" "status=${S6_STATUS}（90s 超时）"
-        FINDINGS+=("[场景6] cron 启动的 task ${S6_TASK_FROM_EXEC} 90s 未达终态 (status=${S6_STATUS})。")
+        record_result "6a cron start_task 达终态" "FAIL" "status=${S6_STATUS}（${S6_TIMEOUT:-200}s 超时）"
+        FINDINGS+=("[场景6] cron 启动的 task ${S6_TASK_FROM_EXEC} ${S6_TIMEOUT:-200}s 未达终态 (status=${S6_STATUS})。")
       fi
 
       # execution 记录应反映该 task 的最终状态（completed/failed），且 result_summary 非空。

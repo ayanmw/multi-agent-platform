@@ -82,7 +82,10 @@ func (s *ModelService) LoadModelsToRegistry(registry *ModelRegistry) error {
 		if _, ok := shortNameRegistered[rec.ModelID]; !ok {
 			short := *profile
 			short.Name = rec.ModelID
-			// 注册短名，但不覆盖之前的短名条目。
+			// 注册短名，但不覆盖之前的短名条目；
+			// 同时标记为 alias 以便 AvailableProfiles 去重。
+			short.Source = SourceConfiguredProvider
+			short.AliasOf = profile.Name
 			registry.Register(&short)
 			shortNameRegistered[rec.ModelID] = rec.ProviderName
 		}

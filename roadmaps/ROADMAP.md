@@ -104,6 +104,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅
 - `2026-07-25-web-v2-ui-ux-optimization`
 - `2026-07-25-multi-model-routing`
 - `2026-07-26-llm-provider-model-management`
+- `provider-model-management-frontend-transparency`
 - `2026-07-26-backend-security-and-concurrency-hardening`
 - `2026-07-26-server-graceful-shutdown-and-main-refactor`
 

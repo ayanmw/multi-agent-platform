@@ -10,7 +10,7 @@
 - [x] 2.1 Modify `internal/llm/model_service.go` to track whether a profile comes from an actually configured provider or from static `DefaultProfiles()`/`LLM_MODELS`.
 - [x] 2.2 Update `ModelRegistry` lookups / list methods to expose `AvailableProfiles()` that filters by `missing=false` and provider configured.
 - [x] 2.3 Ensure `ModelRegistry` returns full `provider/model_id` as primary identity and continues to expose short-name aliases for backward compatibility.
-- [ ] 2.4 Add unit tests for `AvailableProfiles()` filtering behavior.
+- [x] 2.4 Add unit tests for `AvailableProfiles()` filtering behavior.
 
 ## 3. Router Actual-Data Rewrite
 
@@ -50,8 +50,8 @@
 
 ## 8. Verification & Documentation
 
-- [ ] 8.1 Run `go test ./...` and fix failures.
-- [ ] 8.2 Run `scripts/cases-regression.sh` and ensure 21/21 PASS (single_model default must not break mock scripts).
-- [ ] 8.3 Run `scripts/real-llm-smoke.sh` Part A (white-box scenarios) to verify auto_route path.
-- [ ] 8.4 Update `roadmaps/ROADMAP.md` to mark this change.
-- [ ] 8.5 Update `.env.example` with comments for `MODEL_TIER_*` and model mode defaults.
+- [x] 8.1 Run `go test ./...` and fix failures.
+- [x] 8.2 Run `scripts/cases-regression.sh` and ensure 21/21 PASS (single_model default must not break mock scripts).
+- [x] 8.3 Run `scripts/real-llm-smoke.sh` Part A (white-box scenarios) to verify auto_route path.
+- [x] 8.4 Update `roadmaps/ROADMAP.md` to mark this change.
+- [x] 8.5 Update `.env.example` with comments for `MODEL_TIER_*` and model mode defaults.

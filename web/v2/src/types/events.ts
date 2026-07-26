@@ -256,6 +256,8 @@ export interface TaskState {
   evaluation?: EvaluationResult
   /** AgentBus collaboration messages (Phase 7-E) */
   agentMessages?: AgentBusEventData[]
+  /** 标记本任务各 agent 是否已展示过 tool_visibility 提示，用于去重。 */
+  toolVisibilityShown?: Record<string, boolean>
 }
 
 /** Control message sent from client to server via WebSocket */

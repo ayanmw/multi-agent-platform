@@ -65,6 +65,9 @@ var (
 	traceRegistry sync.Map
 )
 
+// globalConfig 是启动期加载的配置全局引用，供 main 包内 handler 与子系统使用。
+var globalConfig *config.Config
+
 // init 在 main 之前注册 tracer 回调，使每个 span 完成时都能以 trace_span
 // WebSocket 事件广播到前端。回调必须是轻量非阻塞的：这里只组装事件并交给
 // hub，不执行 IO 或复杂序列化。
@@ -239,6 +242,7 @@ func main() {
 		observability.DefaultLogger.Error("server", "failed to load config", map[string]any{"error": err.Error()})
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	globalConfig = cfg
 	if *port != "8080" || cfg.ServerPort == "" {
 		cfg.ServerPort = *port
 	}

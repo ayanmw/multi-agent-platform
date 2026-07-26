@@ -193,11 +193,23 @@ func handleSyncProvider(w http.ResponseWriter, r *http.Request, providerManager 
 }
 
 // handleListModelProfiles 返回实际可用的模型画像。
-// 只包含已配置 provider 或显式静态声明的模型；missing=true 与纯 DefaultProfiles
+// 只包含已配置 provider、显式静态声明或 DB 编辑的模型；missing=true 与纯 DefaultProfiles
 // 默认模型（SourceDefaultProfile 且 provider 未配置）被过滤掉，避免前端看到
 // 无法调用的模型。
 func handleListModelProfiles(w http.ResponseWriter, _ *http.Request, registry *llm.ModelRegistry) {
-	profiles := registry.AvailableProfiles(nil, true)
+	configured := make(map[string]bool)
+	for _, pc := range globalConfig.LLMProviders {
+		configured[pc.Name] = true
+	}
+	for _, mc := range globalConfig.Models {
+		configured[mc.Provider] = true
+	}
+	if globalConfig.LLMModel != "" {
+		// 旧版单 model 配置未设 provider 时，由 ProfileResolver 推断归属。
+		resolver := llm.NewProfileResolver(globalConfig)
+		configured[resolver.ResolveProviderNameForModel(globalConfig.LLMModel)] = true
+	}
+	profiles := registry.AvailableProfiles(configured, true)
 	items := make([]ModelProfileItem, 0, len(profiles))
 	for _, p := range profiles {
 		items = append(items, profileToItem(p))

@@ -214,6 +214,7 @@ export function useTaskStore() {
         totalTokens: 0,
         agents: {},
         startedAt: Date.now(),
+        toolVisibilityShown: {},
       }
     }
     return taskCache.value[taskId]!
@@ -645,18 +646,23 @@ export function useTaskStore() {
             }
           }
           const hidden = Array.isArray(v.hidden) ? v.hidden : []
-          // 仅在白名单实际隐藏了工具时才展示提示，避免空态刷屏。
+          // 仅在白名单实际隐藏了工具，且本任务该 agent 尚未展示过时才入队，
+          // 避免每轮 think 都重复刷屏。
           if (hidden.length > 0) {
-            task.agents[agentId].steps.push({
-              index: task.agents[agentId].steps.length,
-              type: 'observation',
-              status: 'completed',
-              thinking: formatToolVisibilityMessage(v),
-              toolCall: null,
-              tokens: 0,
-              durationMs: 0,
-              startedAt: Date.now(),
-            })
+            if (!task.toolVisibilityShown) task.toolVisibilityShown = {}
+            if (!task.toolVisibilityShown[agentId]) {
+              task.toolVisibilityShown[agentId] = true
+              task.agents[agentId].steps.push({
+                index: task.agents[agentId].steps.length,
+                type: 'observation',
+                status: 'completed',
+                thinking: formatToolVisibilityMessage(v),
+                toolCall: null,
+                tokens: 0,
+                durationMs: 0,
+                startedAt: Date.now(),
+              })
+            }
           }
         }
         break

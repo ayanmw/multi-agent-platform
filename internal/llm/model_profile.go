@@ -177,6 +177,10 @@ type ModelProfile struct {
 
 	// Source 记录 profile 来源，辅助 Router/调试识别模型是实际配置的还是默认补充。
 	Source ModelSource
+
+	// AliasOf 记录短名别名对应的全名身份。
+	// 仅用于 ModelService 加载短名别名时标记，帮助 AvailableProfiles 去重。
+	AliasOf string
 }
 
 // HasCapability 检查 model 是否支持某个具体能力。
@@ -298,12 +302,13 @@ func (r *ModelRegistry) GetFallback(name string) *ModelProfile {
 
 // AvailableProfiles 返回可用于 Router 选择的实际模型集合。
 // 过滤条件：
-//   - configuredProviders 出现的 provider，或被强制声明为 available 的模型；
 //   - profile.Missing == false；
-//   - profile.Source 不为 default_profile，除非该 provider 在 configuredProviders 中。
+//   - 仅当 provider 在 configuredProviders 中，或该模型来自实际配置（SourceConfiguredProvider），
+//     或显式 allowDefault=true 时才放行;
+//   - profile.Source 为 default_profile 且 provider 未配置时默认被排除，除非 allowDefault=true。
 //
-// 若 configuredProviders 为空，只要模型源是 configured_provider 或 .env 静态模型
-//（即非纯 DefaultProfiles）即视为可用。
+// 这样保证 DefaultProfiles() 中硬编码的大量模型不会污染候选池，
+// 同时来自 .env、Provider 发现或 DB 编辑的模型即使 provider 集合为空也仍然可用。
 func (r *ModelRegistry) AvailableProfiles(configuredProviders map[string]bool, allowDefault bool) []*ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -311,6 +316,10 @@ func (r *ModelRegistry) AvailableProfiles(configuredProviders map[string]bool, a
 	var result []*ModelProfile
 	seen := make(map[string]bool)
 	for _, p := range r.profiles {
+		if p.AliasOf != "" {
+			// 短名别名不进入 Router 候选池，避免短名/全名重复。
+			continue
+		}
 		if seen[p.Name] {
 			continue
 		}
@@ -318,9 +327,18 @@ func (r *ModelRegistry) AvailableProfiles(configuredProviders map[string]bool, a
 		if p.Missing {
 			continue
 		}
-		providerConfigured := configuredProviders[p.Provider]
 		isDefault := p.Source == SourceDefaultProfile
-		if !providerConfigured && isDefault && !allowDefault {
+		providerConfigured := len(configuredProviders) > 0 && configuredProviders[p.Provider]
+		if isDefault {
+			// DefaultProfile 必须显式允许或其 provider 实际已配置。
+			if !allowDefault && !providerConfigured {
+				continue
+			}
+		} else if providerConfigured {
+			// 非 DefaultProfile 且 provider 明确已配置 → 放行。
+		} else if len(configuredProviders) > 0 {
+			// 非 DefaultProfile 但 provider 未配置，且 configuredProviders 非空 → 排除，
+			// 避免将未配置 provider 的模型混入实际可用集合。
 			continue
 		}
 		result = append(result, p)

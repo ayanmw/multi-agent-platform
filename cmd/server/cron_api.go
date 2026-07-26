@@ -328,7 +328,8 @@ func (cs *appCronStarter) Start(ctx context.Context, p cron.StartTaskParams) (ta
 	if cs.s == nil {
 		return "", "", fmt.Errorf("cron starter not initialized")
 	}
-	return cs.s.startChatTask(startChatTaskOpts{
+	// startChatTask 返回 (sessionID, taskID, error)，而 TaskStarter 要求 (taskID, sessionID, error)。
+	sid, tid, err := cs.s.startChatTask(startChatTaskOpts{
 		AgentID:        p.AgentID,
 		Input:          p.Input,
 		SystemPrompt:   p.SystemPrompt,
@@ -341,4 +342,5 @@ func (cs *appCronStarter) Start(ctx context.Context, p cron.StartTaskParams) (ta
 		CostBudgetUSD:  p.CostBudgetUSD,
 		CaseID:         p.CaseID,
 	})
+	return tid, sid, err
 }
