@@ -521,53 +521,46 @@ func main() {
 		"mock_endpoints": cfg.LLMMockEndpoints,
 	})
 
-	// Phase 6-D: 用默认 profile 初始化 model registry，用于成本追踪和未来的
-	// 多 provider 路由。CostTracker 在构建 CostRecord 时通过它解析 tier/价格信息。
+	// Phase LLM Provider Model Management: 初始化 ProviderManager 与 ModelService。
+	// 启动顺序：
+	//   1. 先 SeedModels()：把 cfg.LLMModel、cfg.Models、DefaultProfiles 写入 DB。
+	//   2. 再异步 SyncAll()：调用各 Provider ListModels 发现并合并入库。
+	//   3. 最后 LoadModelsToRegistry()：从 DB 加载完整画像到 ModelRegistry。
+	// 任何一步失败只记录日志，不阻塞 server 启动；DB 已有模型可作为缓存。
+	modelService := llm.NewModelService(cfg)
+	if err := modelService.SeedModels(); err != nil {
+		observability.DefaultLogger.Warn("llm-provider", "seed models failed", map[string]any{"error": err.Error()})
+	}
+	providerManager, err := llm.NewProviderManager(cfg)
+	if err != nil {
+		observability.DefaultLogger.Warn("llm-provider", "provider manager init failed", map[string]any{"error": err.Error()})
+	}
+
+	// 从 DB 加载模型画像，替换 startup 阶段仅用 DefaultProfiles 构建的旧 registry。
 	modelRegistry := llm.NewModelRegistry()
-	// R1 修复：先注册 cfg.LLMModel 对应的 profile，再注册 DefaultProfiles。
-	//
-	// 为什么顺序重要：Router.filterCandidates 在目标 tier 内按 registry 注册
-	// 顺序取第一个候选（GetByTier 返回 byTier[tier] 的注册顺序）。DefaultProfiles
-	// 注册的是 "deepseek-v4-flash"（TierEfficient），若先注册它，simple_chat 意图
-	// 会选中 "deepseek-v4-flash"，而实际部署 token 通常只能访问 cfg.LLMModel
-	// （如 "deepseek-v4-flash-local"）→ 403 → 死循环。
-	//
-	// 把 cfg.LLMModel 的克隆 profile 注册在最前，让它成为 TierEfficient 的首选
-	// 候选，Router 就会选中 token 实际可访问的模型名。仅在 cfg.LLMModel 未被
-	// DefaultProfiles 覆盖时补注（避免重复注册同名 profile）。DefaultProfiles 仍
-	// 照常注册，作为其它 tier（如 TierStandard 的 -pro）的成本/能力参考。
-	if cfg.LLMModel != "" {
-		defaults := llm.DefaultProfiles()
-		if modelRegistry.Get(cfg.LLMModel) == nil {
-			// 克隆第 0 个 DefaultProfile（TierEfficient、低价）改 Name。
-			base := defaults[0]
-			localProfile := *base
-			localProfile.Name = cfg.LLMModel
-			localProfile.FallbackModel = "" // -local 是兜底模型，不再指向自身
-			modelRegistry.Register(&localProfile)
-			log.Printf("ModelRegistry: registered cfg.LLMModel profile %q (tier=%s, cloned from %s)",
-				cfg.LLMModel, localProfile.Tier, base.Name)
-		}
+	if err := modelService.LoadModelsToRegistry(modelRegistry); err != nil {
+		observability.DefaultLogger.Warn("llm-provider", "load models to registry failed", map[string]any{"error": err.Error()})
 	}
-	for _, profile := range llm.DefaultProfiles() {
-		// D1 修复：把所有非 cfg.LLMModel 的 tier profile 的 FallbackModel 重定向
-		// 到 cfg.LLMModel（token 确定可访问的本地兜底模型），而非 DefaultProfiles
-		// 里的标准名。否则 multi-agent 路径 Router 选 deepseek-v4-pro（token 无权）
-		// → fallback 到标准名 deepseek-v4-flash（也无权）→ 403 死循环。指向
-		// cfg.LLMModel 保证任何 tier 失败都能回退到 token 可访问的模型。
-		//
-		// 必须克隆：DefaultProfiles 返回的是包级共享 *ModelProfile 指针，直接改
-		// 其 FallbackModel 会污染 llm.DefaultProfiles() 的全局返回值（其它调用方
-		// 如 cost tracker、单测会受影响）。克隆后只改副本。
-		if cfg.LLMModel != "" && profile.Name != cfg.LLMModel && profile.FallbackModel != "" {
-			cloned := *profile
-			cloned.FallbackModel = cfg.LLMModel
-			modelRegistry.Register(&cloned)
-			continue
-		}
-		modelRegistry.Register(profile)
+
+	// 若开启了真实 Provider（非 mock 或部分 real cases），异步做一轮发现。
+	if providerManager != nil && !cfg.LLMUseMock {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if err := providerManager.SyncAll(ctx); err != nil {
+				observability.DefaultLogger.Warn("llm-provider", "async discovery failed", map[string]any{"error": err.Error()})
+			} else {
+				fresh := llm.NewModelRegistry()
+				if err := modelService.LoadModelsToRegistry(fresh); err == nil {
+					replaceRegistryContents(modelRegistry, fresh)
+					observability.DefaultLogger.Info("llm-provider", "model registry refreshed after discovery", nil)
+				}
+			}
+		}()
 	}
-	log.Printf("ModelRegistry: loaded %d default profiles", len(llm.DefaultProfiles()))
+
+	log.Printf("ModelService: seeded and loaded models from persistent storage")
+
 
 	// Phase 6 Router: 构建 model router + provider 查找 map。
 	//
@@ -1099,6 +1092,7 @@ func main() {
 		vectorStore:      vectorStore,
 		embedProvider:    embedProvider,
 		routerClassifier: routerClassifier,
+		providerManager:  providerManager,
 	}
 	// 把 appServer 回注给 cron starter，让 cron start_task action 复用 chat 链路。
 	if server.cronService != nil && cronStarter != nil {
@@ -1169,6 +1163,16 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("Server exited")
+}
+
+// defaultEndpointAndKeyForProvider 返回指定 provider 在全局配置中的默认
+// endpoint 与 api key。用于把 cfg.Models 中缺省 endpoint/key 的条目补齐。
+// replaceRegistryContents 用 src 的全部条目覆盖 dest，保持 dest 实例引用不变。
+// 用于启动期异步发现完成后，不重建 appServer.modelRegistry 而只刷新内容。
+func replaceRegistryContents(dest, src *llm.ModelRegistry) {
+	for _, p := range src.List() {
+		dest.Register(p)
+	}
 }
 
 // defaultEndpointAndKeyForProvider 返回指定 provider 在全局配置中的默认
