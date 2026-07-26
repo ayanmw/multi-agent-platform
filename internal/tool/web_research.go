@@ -59,7 +59,7 @@ func NewWebResearchTool(cfg WebSearchConfig) *BuiltinTool {
 		func(ctx ExecuteContext, input map[string]any) (any, error) {
 			return webResearchExecutor(cfg, ctx, input)
 		},
-	).WithTags("network", "websearch", "llm")
+	).WithTags("network", "llm")
 }
 
 // webResearchResult 是 web_research 返回的固定结构。

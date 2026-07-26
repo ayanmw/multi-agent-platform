@@ -162,7 +162,7 @@ func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 			"required": []string{"query"},
 		},
 		func(_ ExecuteContext, input map[string]any) (any, error) { return webSearchExecutor(cfg, input) },
-	).WithTags("network", "websearch")
+	).WithTags("network")
 }
 
 // webSearchExecutor 分派到所选的 provider，返回 provider 名称与搜索结果文本。

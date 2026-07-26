@@ -17,7 +17,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
-import type { ContextSnapshotMessage } from '../types/events'
+
+type SnapshotMessage = { estimated_tokens: number }
 
 const props = defineProps<{
   activeTaskId: string
@@ -95,25 +96,32 @@ watch(
 // 当前点击 messages 列表中某条 prompt 时弹出的对话框状态。
 const promptDialog = ref<{
   open: boolean
-  role: string
-  ordinal: string
-  content: string
-  reasoning: string | undefined
+  systemPrompt: string
+  otherPrompt: string
 }>({
   open: false,
-  role: '',
-  ordinal: '',
-  content: '',
-  reasoning: undefined,
+  systemPrompt: '',
+  otherPrompt: '',
 })
 
-function openPromptDialog(msg: ContextSnapshotMessage, idx: number) {
+function openPromptDialog() {
+  if (!latest.value) return
+  const sysParts: string[] = []
+  const otherParts: string[] = []
+  for (const msg of latest.value.messages) {
+    const header = `[${msg.role.toUpperCase()}]`
+    const body = msg.content || '(empty content)'
+    const block = `${header}\n${body}`
+    if (msg.role === 'system') {
+      sysParts.push(block)
+    } else {
+      otherParts.push(block)
+    }
+  }
   promptDialog.value = {
     open: true,
-    role: msg.role,
-    ordinal: messageOrdinal(idx),
-    content: msg.content || '(empty content)',
-    reasoning: msg.reasoning,
+    systemPrompt: sysParts.join('\n\n---\n\n'),
+    otherPrompt: otherParts.join('\n\n---\n\n'),
   }
   // 弹窗打开后聚焦到面板，确保键盘事件（如 Esc）不意外落到主舞台。
   nextTick(() => {
@@ -213,7 +221,7 @@ const spectrumStyle = computed(() => {
   return { background: `linear-gradient(90deg, ${stops.join(', ')})` }
 })
 
-function messageRatio(msg: ContextSnapshotMessage): number {
+function messageRatio(msg: SnapshotMessage): number {
   if (!latest.value) return 0
   const total = latest.value.estimated_total_tokens || 1
   return msg.estimated_tokens / total
@@ -333,12 +341,16 @@ const ringDash = computed(() => {
           <span class="section-meta">{{ latest.messages.length }} total</span>
         </div>
         <div class="timeline">
+          <div class="view-combined-prompt" @click="openPromptDialog">
+            <span class="view-combined-icon">👁</span>
+            <span class="view-combined-text">查看完整 prompt（system + other）</span>
+          </div>
           <div
             v-for="(msg, idx) in latest.messages"
             :key="idx"
             class="message-item"
           >
-            <div class="message-row" @click="openPromptDialog(msg, idx)">
+            <div class="message-row">
               <span class="message-ordinal">{{ messageOrdinal(idx) }}</span>
               <span
                 class="message-dot"
@@ -348,7 +360,6 @@ const ringDash = computed(() => {
               <span class="message-preview" :title="msg.content">{{ truncate(msg.content, 58) }}</span>
               <span class="message-tokens">{{ formatTokens(msg.estimated_tokens) }} tok</span>
               <span class="message-ratio">{{ (messageRatio(msg) * 100).toFixed(0) }}%</span>
-              <span class="message-icon">🔍</span>
             </div>
           </div>
         </div>
@@ -366,23 +377,19 @@ const ringDash = computed(() => {
           <div class="prompt-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="prompt-dialog-title" tabindex="-1">
             <div class="prompt-dialog-header">
               <div id="prompt-dialog-title" class="prompt-dialog-title">
-                <span
-                  class="prompt-dialog-dot"
-                  :style="{ background: roleColor(promptDialog.role), boxShadow: roleGlow(promptDialog.role) }"
-                />
-                <span>{{ roleMeta[promptDialog.role]?.label || promptDialog.role }} Prompt</span>
-                <span class="prompt-dialog-ordinal">#{{ promptDialog.ordinal }}</span>
+                <span class="prompt-dialog-dot" :style="{ background: roleColor('system'), boxShadow: roleGlow('system') }" />
+                <span>Full Prompt</span>
               </div>
               <button class="prompt-dialog-close" title="关闭" aria-label="关闭" @click="closePromptDialog">×</button>
             </div>
-            <div class="prompt-dialog-body">
-              <div v-if="promptDialog.reasoning" class="prompt-block reasoning-block">
-                <div class="block-label">Reasoning</div>
-                <pre class="block-content reasoning-text">{{ promptDialog.reasoning }}</pre>
+            <div class="prompt-dialog-body two-column">
+              <div class="prompt-block system-block">
+                <div class="block-label">System Prompt</div>
+                <pre class="block-content system-text">{{ promptDialog.systemPrompt || '(empty)' }}</pre>
               </div>
-              <div class="prompt-block content-block">
-                <div class="block-label">Content</div>
-                <pre class="block-content content-text">{{ promptDialog.content }}</pre>
+              <div class="prompt-block other-block">
+                <div class="block-label">Other Prompt (user / tool / assistant)</div>
+                <pre class="block-content other-text">{{ promptDialog.otherPrompt || '(empty)' }}</pre>
               </div>
             </div>
           </div>
@@ -967,6 +974,51 @@ const ringDash = computed(() => {
   gap:14px;
 }
 
+.prompt-dialog-body.two-column {
+  flex-direction:row;
+  gap:18px;
+}
+
+@media (max-width: 767px) {
+  .prompt-dialog-body.two-column {
+    flex-direction:column;
+  }
+}
+
+.prompt-dialog-body.two-column .prompt-block {
+  flex:1;
+  min-width:0;
+}
+
+.view-combined-prompt {
+  display:flex;
+  align-items:center;
+  gap:0.5rem;
+  padding:0.625rem 0.875rem;
+  margin-bottom:0.625rem;
+  border-radius: var(--radius-lg);
+  background:var(--bg-elevated);
+  border:1px solid var(--border-default);
+  cursor:pointer;
+  user-select:none;
+  transition:background 0.15s ease, border-color 0.15s ease;
+}
+
+.view-combined-prompt:hover {
+  background:var(--border-subtle);
+  border-color:var(--border-active);
+}
+
+.view-combined-icon {
+  font-size:0.875rem;
+}
+
+.view-combined-text {
+  font-size:0.8125rem;
+  font-weight:500;
+  color:var(--text-primary);
+}
+
 .prompt-block {
   border-radius: var(--radius-lg);
   overflow:hidden;
@@ -985,14 +1037,33 @@ const ringDash = computed(() => {
   opacity:0;
 }
 
-.reasoning-block {
+.reasoning-block,
+.content-block,
+.system-block,
+.other-block {
+  border-radius: var(--radius-lg);
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+
+.system-block {
   background: var(--glass-bg);
   border: 1px solid var(--border-default);
 }
 
-.content-block {
+.other-block {
   background:var(--border-subtle);
   border:1px solid var(--border-default);
+}
+
+.system-text {
+  color:var(--accent-info);
+}
+
+.other-text {
+  color:var(--text-primary);
 }
 
 .block-label {
@@ -1021,7 +1092,10 @@ const ringDash = computed(() => {
   max-height:min(520px, 55vh);
 }
 
-.reasoning-text {
+.reasoning-text,
+.content-text,
+.system-text,
+.other-text {
   color:var(--accent-tool);
 }
 
