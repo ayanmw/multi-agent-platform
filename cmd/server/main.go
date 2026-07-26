@@ -1211,6 +1211,10 @@ func newRouterProvider(cfg *config.Config, pc llm.ProviderConfig) (llm.Provider,
 	}
 	return llm.NewProvider(pc)
 }
+
+// providerConfigForProfile 根据 model profile 的 provider 字段选择全局配置中
+// 的 endpoint/key，并构造创建 provider 所需的 ProviderConfig。
+// 未知 provider 回退到 OpenAI-compatible 全局默认值。
 func providerConfigForProfile(cfg *config.Config, profile *llm.ModelProfile) llm.ProviderConfig {
 	endpoint, apiKey := defaultEndpointAndKeyForProvider(cfg, profile.Provider)
 	return llm.ProviderConfig{
