@@ -56,5 +56,5 @@
 ## 7. Documentation & Git
 
 - [x] 7.1 更新 `.env.example`：新增 `LLM_PROVIDERS`、`MODEL_TIER_*` 示例，保留旧字段说明。
-- [ ] 7.2 更新 `roadmaps/ROADMAP.md`，标记 Phase LLM Provider Model Management 完成。
-- [ ] 7.3 提交所有变更：消息 `Phase LLM Provider Model Management: 实现 Provider 发现、Model 持久化与前端 Model 管理`。
+- [x] 7.2 更新 `roadmaps/ROADMAP.md`，标记 Phase LLM Provider Model Management 完成。
+- [x] 7.3 提交所有变更：消息 `Phase LLM Provider Model Management: 实现 Provider 发现、Model 持久化与前端 Model 管理`。
