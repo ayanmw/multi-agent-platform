@@ -612,7 +612,7 @@ func main() {
 					pc.APIKey = apiKey
 				}
 			}
-			p, err := llm.NewProvider(pc)
+			p, err := newRouterProvider(cfg, pc)
 			if err != nil {
 				observability.DefaultLogger.Warn("router", "failed to create provider for configured model", map[string]any{
 					"model":    mc.Name,
@@ -647,7 +647,7 @@ func main() {
 				continue
 			}
 			pc := providerConfigForProfile(cfg, profile)
-			p, err := llm.NewProvider(pc)
+			p, err := newRouterProvider(cfg, pc)
 			if err != nil {
 				observability.DefaultLogger.Warn("router", "failed to create provider for default profile", map[string]any{
 					"model":    profile.Name,
@@ -1198,9 +1198,19 @@ func defaultEndpointAndKeyForProvider(cfg *config.Config, provider string) (endp
 	return
 }
 
-// providerConfigForProfile 根据 model profile 的 provider 字段选择全局配置中
-// 的 endpoint/key，并构造创建 provider 所需的 ProviderConfig。
-// 未知 provider 回退到 OpenAI-compatible 全局默认值。
+// newRouterProvider 创建 router 预注册所需的 provider。
+// mock 模式下所有路由命中都应映射到 MockProvider，避免误用真实 provider。
+func newRouterProvider(cfg *config.Config, pc llm.ProviderConfig) (llm.Provider, error) {
+	if cfg.LLMUseMock {
+		return llm.NewProvider(llm.ProviderConfig{
+			Name:      "mock",
+			Model:     "mock/router",
+			CaseID:    "router-classifier",
+			MockStore: llm.DefaultMockStore,
+		})
+	}
+	return llm.NewProvider(pc)
+}
 func providerConfigForProfile(cfg *config.Config, profile *llm.ModelProfile) llm.ProviderConfig {
 	endpoint, apiKey := defaultEndpointAndKeyForProvider(cfg, profile.Provider)
 	return llm.ProviderConfig{
