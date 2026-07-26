@@ -23,3 +23,12 @@ export interface WorkflowConfig {
   /** Ordered list of agents in the workflow */
   agents: WorkflowAgentSpec[]
 }
+
+/** Agent 运行时权限设置 */
+export interface AgentPermissions {
+  allow_network: boolean
+  allow_file_write: boolean
+  allow_file_delete: boolean
+  allow_shell: boolean
+  allow_shell_dangerous: boolean
+}

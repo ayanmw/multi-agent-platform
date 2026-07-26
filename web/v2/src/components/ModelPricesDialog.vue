@@ -102,7 +102,8 @@
 
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
-import { useModelPrices } from '@/composables/useModelPrices'
+import { useModelPrices, fullModelId } from '@/composables/useModelPrices'
+import type { LLMModel } from '@/types/llm'
 
 /**
  * Props:
@@ -118,21 +119,28 @@ const emit = defineEmits<{
 }>()
 
 const {
-  prices,
+  models,
   loading,
   error,
-  persistenceNote,
-  loadModelPrices,
-  updateModelPrice,
+  loadModels,
+  updateModel,
 } = useModelPrices()
+
+const prices = computed(() => models.value.map(m => ({
+  name: fullModelId(m),
+  provider: m.provider,
+  tier: m.tier,
+  input_price: m.input_price,
+  output_price: m.output_price,
+})))
+
+const persistenceNote = ref('')
 
 const dialogVisible = ref(props.visible)
 watch(() => props.visible, v => {
   dialogVisible.value = v
-  // Refresh on every open so the dialog reflects current registry state
-  // (e.g., another operator may have edited a price via curl).
   if (v) {
-    loadModelPrices().catch(() => { /* error already in store */ })
+    loadModels().catch(() => { /* error already in store */ })
     drafts.value = {}
   }
 })
@@ -166,7 +174,7 @@ function draftOutput(name: string, serverValue: number): number {
 function isDirty(name: string): boolean {
   const d = drafts.value[name]
   if (!d) return false
-  const server = prices.value.find(p => p.name === name)
+  const server = models.value.find((p: LLMModel) => fullModelId(p) === name)
   if (!server) return false
   if (d.input !== undefined && d.input !== server.input_price) return true
   if (d.output !== undefined && d.output !== server.output_price) return true
@@ -185,16 +193,18 @@ function setDraft(name: string, field: 'input' | 'output', e: Event) {
   }
 }
 
-/** Persist the dirty fields for one model via PUT /api/models/prices/{model}. */
+/** Persist the dirty fields for one model via PUT /api/models/prices/{provider}/{model}. */
 async function save(name: string) {
   const d = drafts.value[name]
   if (!d) return
+  const m = models.value.find((p: LLMModel) => fullModelId(p) === name)
+  if (!m) return
   saving.value = name
   try {
     const req: { input_price?: number; output_price?: number } = {}
     if (d.input !== undefined) req.input_price = d.input
     if (d.output !== undefined) req.output_price = d.output
-    await updateModelPrice(name, req)
+    await updateModel(m.provider, m.model_id, req)
     // Clear the draft on success; the shared prices ref is updated optimistically
     // by the store, so the row now shows the new server-confirmed values.
     delete drafts.value[name]

@@ -10,6 +10,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest, type ToolInfo } from '../composables/useAgentStore'
+import { useModelPrices, fullModelId } from '../composables/useModelPrices'
+import type { LLMModel } from '../types/llm'
+
+const MODEL_TIERS = ['free', 'efficient', 'lightweight', 'standard', 'premium'] as const
 
 // Permission definitions for UI: key maps to backend field name, label + risk shown to user
 interface PermissionDef {
@@ -47,6 +51,23 @@ const {
   deleteAgent,
   testConnection,
 } = useAgentStore()
+
+const { models: availableModels, loadModels: loadAvailableModels } = useModelPrices()
+
+// Model selector filter
+const modelFilter = ref('')
+const filteredModels = computed(() => {
+  const q = modelFilter.value.trim().toLowerCase()
+  if (!q) return availableModels.value
+  return availableModels.value.filter(m =>
+    fullModelId(m).toLowerCase().includes(q) ||
+    (m.display_name || '').toLowerCase().includes(q)
+  )
+})
+
+// Whether the current form is in auto_route mode
+const isAutoRoute = computed(() => form.value.model_mode === 'auto_route')
+
 
 // Reactive ref for show/hide API key toggle
 const showApiKey = ref(false)
@@ -100,7 +121,16 @@ function toggleSelectAll() {
 onMounted(() => {
   loadAgents().catch(() => {})
   loadAvailableTools().catch(() => {})
+  loadAvailableModels().catch(() => {})
 })
+
+// Resolve display label for a model identity (provider/model_id)
+function modelDisplayLabel(identity: string): string {
+  if (!identity) return ''
+  const m = availableModels.value.find(x => fullModelId(x) === identity)
+  if (m) return `${fullModelId(m)}${m.display_name && m.display_name !== m.model_id ? ` (${m.display_name})` : ''}`
+  return identity
+}
 
 // ---- Form handlers ----
 
@@ -121,6 +151,11 @@ function openEdit(agent: AgentRecord) {
     description: agent.description || '',
     system_prompt: agent.system_prompt || '',
     model: agent.model || '',
+    preferred_model: agent.preferred_model || '',
+    preferred_tier: agent.preferred_tier || 'standard',
+    model_mode: agent.model_mode || 'single_model',
+    allow_fallback: agent.allow_fallback ?? true,
+    max_cost_usd: agent.max_cost_usd ?? 0,
     temperature: agent.temperature ?? 0.7,
     max_tokens: agent.max_tokens ?? 4096,
     api_endpoint: agent.api_endpoint || '',
@@ -354,17 +389,72 @@ function formatDate(iso: string): string {
             ></textarea>
           </div>
 
-          <!-- Model & Temperature (side by side) -->
-          <div class="form-row">
-            <div class="form-group form-group-half">
-              <label class="form-label">Model</label>
-              <input
-                v-model="form.model"
-                type="text"
-                class="form-input"
-                placeholder="deepseek-v4-flash"
-              />
+          <!-- Model Mode selector -->
+          <div class="form-group">
+            <label class="form-label">Model Mode</label>
+            <select v-model="form.model_mode" class="form-input form-select">
+              <option value="single_model">Single Model (fixed)</option>
+              <option value="auto_route">Auto Route (by intent/tier)</option>
+            </select>
+            <div class="mode-help">
+              <span v-if="isAutoRoute">Router selects the best model per request based on intent and budget.</span>
+              <span v-else>Always use the selected model.</span>
             </div>
+          </div>
+
+          <!-- Single Model selector -->
+          <div v-if="!isAutoRoute" class="form-group">
+            <label class="form-label">Model</label>
+            <div class="model-selector">
+              <input
+                v-model="modelFilter"
+                type="text"
+                class="form-input model-filter"
+                placeholder="Filter models (provider/model_id)..."
+              />
+              <select v-model="form.model" class="form-input form-select">
+                <option value="">— Select a model —</option>
+                <option v-for="m in filteredModels" :key="fullModelId(m)" :value="fullModelId(m)">
+                  {{ fullModelId(m) }}{{ m.display_name && m.display_name !== m.model_id ? ` (${m.display_name})` : '' }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Auto Route controls -->
+          <template v-else>
+            <div class="form-row">
+              <div class="form-group form-group-half">
+                <label class="form-label">Preferred Tier</label>
+                <select v-model="form.preferred_tier" class="form-input form-select">
+                  <option v-for="t in MODEL_TIERS" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </div>
+              <div class="form-group form-group-half">
+                <label class="form-label">Max Cost (USD)</label>
+                <input
+                  v-model.number="form.max_cost_usd"
+                  type="number"
+                  class="form-input"
+                  min="0"
+                  step="0.0001"
+                  placeholder="0 = unlimited"
+                />
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="permission-checkbox" title="Allow tier fallback when preferred tier has no candidate">
+                <input type="checkbox" v-model="form.allow_fallback" />
+                <div class="permission-meta">
+                  <span class="permission-label">Allow Fallback</span>
+                  <span class="permission-desc">If the preferred tier has no available model, allow Router to pick from other tiers.</span>
+                </div>
+              </label>
+            </div>
+          </template>
+
+          <!-- Temperature (always visible) -->
+          <div class="form-row">
             <div class="form-group form-group-half">
               <label class="form-label">Temperature</label>
               <input
@@ -374,6 +464,15 @@ function formatDate(iso: string): string {
                 min="0"
                 max="2"
                 step="0.1"
+              />
+            </div>
+            <div class="form-group form-group-half">
+              <label class="form-label">Preferred Model (optional)</label>
+              <input
+                v-model="form.preferred_model"
+                type="text"
+                class="form-input"
+                placeholder="provider/model_id"
               />
             </div>
           </div>

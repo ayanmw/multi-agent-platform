@@ -74,6 +74,12 @@ export type EventType =
   | 'model_fallback_used'
   | 'model_rate_limited'
   | 'cost_budget_exceeded'
+  | 'llm/model_selected'
+  | 'llm/router_fallback_default'
+  // Provider discovery sync events
+  | 'provider_sync_started'
+  | 'provider_sync_completed'
+  | 'provider_sync_failed'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {

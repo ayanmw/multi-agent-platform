@@ -11,6 +11,7 @@
 //   DELETE /api/agents/{id}  — delete agent by ID
 //   GET    /api/tools        — list available tools
 import { ref } from 'vue'
+import type { AgentPermissions } from '../types/agent'
 
 // AgentRecord matches the backend's pkg/db AgentRecord struct
 export interface AgentRecord {
@@ -19,6 +20,11 @@ export interface AgentRecord {
   description: string
   system_prompt: string
   model: string
+  preferred_model: string
+  preferred_tier: string
+  model_mode: 'single_model' | 'auto_route'
+  allow_fallback: boolean
+  max_cost_usd: number
   temperature: number
   max_tokens: number
   api_endpoint: string
@@ -36,6 +42,11 @@ export interface AgentRequest {
   description: string
   system_prompt: string
   model: string
+  preferred_model: string
+  preferred_tier: string
+  model_mode: 'single_model' | 'auto_route'
+  allow_fallback: boolean
+  max_cost_usd: number
   temperature: number
   max_tokens: number
   api_endpoint: string
@@ -43,16 +54,11 @@ export interface AgentRequest {
   tools: string[]
   config: {
     permissions: AgentPermissions
+    model_mode?: 'single_model' | 'auto_route'
+    preferred_tier?: string
+    allow_fallback?: boolean
+    max_cost_usd?: number
   }
-}
-
-// AgentPermissions mirrors backend TaskPermissions
-export interface AgentPermissions {
-  allow_network: boolean
-  allow_file_write: boolean
-  allow_file_delete: boolean
-  allow_shell: boolean
-  allow_shell_dangerous: boolean
 }
 
 // Default values for a new agent form
@@ -62,6 +68,11 @@ export function defaultAgentRequest(): AgentRequest {
     description: '',
     system_prompt: '',
     model: 'deepseek-v4-flash',
+    preferred_model: '',
+    preferred_tier: 'standard',
+    model_mode: 'single_model',
+    allow_fallback: true,
+    max_cost_usd: 0,
     temperature: 0.7,
     max_tokens: 4096,
     api_endpoint: '',
