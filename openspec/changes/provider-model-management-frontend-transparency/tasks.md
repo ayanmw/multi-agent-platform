@@ -36,17 +36,17 @@
 
 ## 6. Frontend Types & Composables
 
-- [ ] 6.1 Update `web/v2/src/types/llm.ts` to include `ModelSelectionMode`, `LLMProvider`, `LLMModel`, and updated `AgentConfig` shape.
-- [ ] 6.2 Create `web/v2/src/composables/useProviders.ts` for `GET /api/providers` and `POST /api/providers/{name}/sync`.
-- [ ] 6.3 Update `web/v2/src/composables/useModelPrices.ts` to group by provider and use full `provider/model_id` identity.
+- [x] 6.1 Update `web/v2/src/types/llm.ts` to include `ModelSelectionMode`, `LLMProvider`, `LLMModel`, and updated `AgentConfig` shape.
+- [x] 6.2 Create `web/v2/src/composables/useProviders.ts` for `GET /api/providers` and `POST /api/providers/{name}/sync`.
+- [x] 6.3 Update `web/v2/src/composables/useModelPrices.ts` to group by provider and use full `provider/model_id` identity.
 
 ## 7. Frontend UI
 
-- [ ] 7.1 Replace `ModelPricesDialog.vue` usage with new `LLMModelManager.vue` (or extend it) accessible from `TopBar.vue` / `ManageTabs`.
-- [ ] 7.2 Implement provider list with sync button, health badge, last sync timestamp, and error display in `LLMModelManager.vue`.
-- [ ] 7.3 Implement grouped model table in `LLMModelManager.vue` with inline editing for display_name, tier, capabilities, prices, context/output limits, fallback_model.
-- [ ] 7.4 Update `AgentConfig.vue` to add `model_mode` selector and conditional fields (`single_model` searchable model selector vs `auto_route` tier/budget/fallback controls).
-- [ ] 7.5 Wire `App.vue` to open `LLMModelManager` and update menu labels.
+- [x] 7.1 Replace `ModelPricesDialog.vue` usage with new `LLMModelManager.vue` (or extend it) accessible from `TopBar.vue` / `ManageTabs`.
+- [x] 7.2 Implement provider list with sync button, health badge, last sync timestamp, and error display in `LLMModelManager.vue`.
+- [x] 7.3 Implement grouped model table in `LLMModelManager.vue` with inline editing for display_name, tier, capabilities, prices, context/output limits, fallback_model.
+- [x] 7.4 Update `AgentConfig.vue` to add `model_mode` selector and conditional fields (`single_model` searchable model selector vs `auto_route` tier/budget/fallback controls).
+- [x] 7.5 Wire `App.vue` to open `LLMModelManager` and update menu labels.
 
 ## 8. Verification & Documentation
 
