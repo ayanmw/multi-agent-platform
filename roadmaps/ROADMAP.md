@@ -65,6 +65,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 | v0.15.0 Alpha | 2026-07-26 | LLM Provider & Model Management 多 Provider 配置与模型持久化 |
 | v0.15.1 Alpha | 2026-07-27 | Gemini 搜索 provider 接入 `core/web_search` |
 | v0.15.2 Alpha | 2026-07-27 | 提取 `.env` 层到独立 `internal/config/dotenv` 子包，引入 `godotenv` 解析 |
+| v0.15.3 Alpha | 2026-07-27 | 修复 real-LLM 长任务结束后 Pause/Cancel 失效、UI 状态滞留与"Server unknown"伪 lane 问题 |
 
 ---
 
