@@ -43,7 +43,24 @@ type ClientControlMsg struct {
 // ControlHandler 在客户端发来 control message 时被调用
 type ControlHandler func(msg ClientControlMsg)
 
-const defaultEventBufferSize = 1000
+const defaultEventBufferSize = 5000
+
+// criticalEventReserve 是缓冲区中保留给终态/同步事件的最低席位数。
+// 当满时尝试优先驱逐普通事件，避免 task_failed/task_completed/task_status_sync
+// 被大量 llm_delta 挤掉导致断线重连无法恢复真实任务状态。
+
+// isTerminalEvent 判断事件类型是否为任务终态或状态修正事件。
+// 这些事件在 eventBuffer 中应被优先保留，避免被大量 delta 挤掉。
+func isTerminalEvent(evt event.Event) bool {
+	switch evt.Type {
+	case "task_failed",
+		"task_completed",
+		event.EventTaskStatusSync:
+		return true
+	default:
+		return false
+	}
+}
 
 // eventBuffer 是一个固定容量的环形缓冲区，用于缓存最近广播的事件。
 // 它保留有界的内存历史，使短暂断连后重连的客户端可以请求自其上次已知
@@ -69,23 +86,52 @@ func newEventBuffer(capacity int) *eventBuffer {
 	}
 }
 
-// append 将一个事件添加到缓冲区，缓冲区满时驱逐最旧的事件。
+// append 将一个事件添加到缓冲区，缓冲区满时驱逐最旧的非关键事件；
+// 若全部被保留区覆盖的事件均为关键事件，则驱逐最旧的关键事件。
 func (b *eventBuffer) append(evt event.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if len(b.events) == b.capacity {
-		// 环形缓冲区满时移除最旧事件，避免 index 无限增长。
-		oldest := b.events[0]
-		delete(b.index, oldest.EventID)
-		b.events = b.events[1:]
-		// 剩余事件的下标整体前移一位。
-		for id, idx := range b.index {
-			b.index[id] = idx - 1
-		}
+		b.evictOne(evt)
 	}
 	b.index[evt.EventID] = len(b.events)
 	b.events = append(b.events, evt)
+}
+
+// evictOne 移除一条事件以腾出空间。新事件为关键事件时直接驱逐最旧事件；
+// 否则优先驱逐保留区之外的非关键事件，尽力保留 terminal/status_sync 事件。
+func (b *eventBuffer) evictOne(incoming event.Event) {
+	if isTerminalEvent(incoming) {
+		// 关键事件进来时：直接驱逐最旧事件（可能是普通或关键），保证实时性。
+		b.removeAt(0)
+		return
+	}
+	// 普通事件进来时：优先找保留区之外的非关键事件驱逐。
+	reserve := defaultEventBufferSize / 25 // 5000 -> 200
+	if reserve < 10 {
+		reserve = 10
+	}
+	for i := 0; i < len(b.events)-reserve; i++ {
+		if !isTerminalEvent(b.events[i]) {
+			b.removeAt(i)
+			return
+		}
+	}
+	// 找不到可驱逐的非关键事件，回退到驱逐最旧事件。
+	b.removeAt(0)
+}
+
+// removeAt 删除指定索引的事件并重建 index。
+func (b *eventBuffer) removeAt(idx int) {
+	oldest := b.events[idx]
+	delete(b.index, oldest.EventID)
+	b.events = append(b.events[:idx], b.events[idx+1:]...)
+	for id, i := range b.index {
+		if i > idx {
+			b.index[id] = i - 1
+		}
+	}
 }
 
 // eventsAfter 返回 sinceEventID 严格之后最多 limit 条事件，

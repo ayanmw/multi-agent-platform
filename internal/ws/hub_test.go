@@ -109,6 +109,25 @@ func TestEventBufferLastEvent(t *testing.T) {
 	}
 }
 
+func TestEventBufferCriticalEventsNotEvicted(t *testing.T) {
+	// 容量 10：先填 8 条普通事件，再填 1 条关键事件，最后继续填 5 条普通事件。
+	// 关键事件应被保留，不会被普通事件挤掉。
+	buf := newEventBuffer(10)
+	for i := 0; i < 8; i++ {
+		buf.append(newTestEvent(string(rune('a'+i)), "llm_delta"))
+	}
+	critical := newTestEvent("critical", "task_failed")
+	buf.append(critical)
+	for i := 8; i < 13; i++ {
+		buf.append(newTestEvent(string(rune('a'+i)), "llm_delta"))
+	}
+
+	_, err := buf.eventsAfter("critical", 10)
+	if err != nil {
+		t.Fatalf("critical event was evicted: %v", err)
+	}
+}
+
 func TestHubReplay(t *testing.T) {
 	h := NewHub()
 	h.eventBuf.append(newTestEvent("x", "task_started"))
