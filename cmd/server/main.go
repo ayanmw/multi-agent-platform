@@ -225,12 +225,12 @@ func main() {
 	_ = &cancelRegistry
 
 	// Phase 6-D: 根据配置初始化结构化日志级别。
-	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(os.Getenv("LOG_LEVEL")))
+	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(config.Getenv("LOG_LEVEL")))
 
 	// 配置双日志：一份持久化的结构化日志文件用于详细追踪，控制台用于简洁
 	// 可读的启动/运行时信息。文件日志使用 JSON (StructuredLogger)；
 	// 控制台使用 Go 默认 log 包输出纯文本。LOG_LEVEL 仍然过滤 JSON 文件日志。
-	if logPath := os.Getenv("LOG_FILE"); logPath != "" {
+	if logPath := config.Getenv("LOG_FILE"); logPath != "" {
 		if err := initDualLogging(logPath); err != nil {
 			log.Printf("Warning: failed to open log file %s: %v (continuing with console only)", logPath, err)
 		}
@@ -1135,7 +1135,7 @@ func main() {
 	//   未来新增版本时，在 web/embed.go 的 UIVersionsRegistry 注册即可。
 	serveVersionedUI()
 
-	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
+	requireAuth := config.Getenv("REQUIRE_AUTH") == "true"
 	fallbackUserID := ""
 	if authAPI != nil {
 		fallbackUserID = authAPI.SeedUserID()
@@ -1549,8 +1549,9 @@ func (s *appServer) handleSessionWorkspaceTree(w http.ResponseWriter, r *http.Re
 }
 
 // isTruthyEnv 在环境变量值为 "1"、"true" 或 "yes" 时返回 true。
+// 该值来自 .env / 系统环境变量的统一读取封装。
 func isTruthyEnv(key string) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	v := strings.ToLower(strings.TrimSpace(config.Getenv(key)))
 	return v == "1" || v == "true" || v == "yes"
 }
 

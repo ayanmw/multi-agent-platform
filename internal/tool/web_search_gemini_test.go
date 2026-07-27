@@ -145,6 +145,7 @@ func TestRealGeminiSearch(t *testing.T) {
 		t.Skip("skipping real network test")
 	}
 	key := os.Getenv("GEMINI_API_KEY")
+	_ = key // 若 future 需要 .env 优先可改为通过独立工具函数读取，避免 import cycle
 	if key == "" {
 		t.Skip("GEMINI_API_KEY not set")
 	}
