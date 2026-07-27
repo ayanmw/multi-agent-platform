@@ -36,12 +36,14 @@ func newSkillTestHarness(t *testing.T) (*httptest.Server, *skill.Registry, *skil
 	registry := skill.NewRegistry()
 	store := skill.NewStore(db.DB)
 	loader := skill.NewLoader(store, registry)
+	fl := skill.NewFileLoader(registry, store, &dbSkillSettingStore{}, nil)
+	loader.SetFileLoader(fl, t.TempDir())
 	if err := loader.LoadAll(); err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
 
 	mux := http.NewServeMux()
-	registerSkillRoutes(mux, nil, store, registry)
+	registerSkillRoutes(mux, nil, store, registry, loader, &dbSkillSettingStore{})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, registry, store

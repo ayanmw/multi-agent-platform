@@ -61,6 +61,46 @@ func init() {
 		ALTER TABLE skills ADD COLUMN project_id TEXT DEFAULT '';
 		ALTER TABLE skills ADD COLUMN workspace_dir TEXT DEFAULT '';`,
 	})
+
+	migrations = append(migrations, Migration{
+		Version:     34,
+		Description: "Create settings table for runtime configuration",
+		SQL: `CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key);`,
+	})
+}
+
+// GetSetting 读取单个 setting 值。未找到时返回空字符串与 nil error。
+func GetSetting(key string) (string, error) {
+	if DB == nil {
+		return "", fmt.Errorf("db not initialized")
+	}
+	var value string
+	err := DB.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+// SetSetting 写入或更新单个 setting。
+func SetSetting(key, value string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(
+		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+		key, value, time.Now().UTC(),
+	)
+	return err
 }
 
 // SaveSkill 将 Skill 记录保存到数据库。

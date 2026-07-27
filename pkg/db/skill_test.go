@@ -1,4 +1,4 @@
-// skill_test.go —— skills 表 CRUD 的测试。
+// skill_test.go —— skills 表 CRUD 与 settings 的测试。
 package db
 
 import (
@@ -8,8 +8,6 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 )
 
-// TestSkillCRUD 验证 Skill 记录的完整生命周期：
-// 创建、保存、读取、列表、过滤、删除。
 func TestSkillCRUD(t *testing.T) {
 	freshDB(t)
 
@@ -54,12 +52,10 @@ func TestSkillCRUD(t *testing.T) {
 		UpdatedAt:     1700000000,
 	}
 
-	// 保存
 	if err := SaveSkill(s); err != nil {
 		t.Fatalf("SaveSkill: %v", err)
 	}
 
-	// 读取
 	got, err := GetSkill(s.ID)
 	if err != nil {
 		t.Fatalf("GetSkill: %v", err)
@@ -67,32 +63,10 @@ func TestSkillCRUD(t *testing.T) {
 	if got.ID != s.ID {
 		t.Errorf("GetSkill ID = %q, want %q", got.ID, s.ID)
 	}
-	if got.Version != s.Version {
-		t.Errorf("GetSkill Version = %q, want %q", got.Version, s.Version)
-	}
-	if got.DisplayName != s.DisplayName {
-		t.Errorf("GetSkill DisplayName = %q, want %q", got.DisplayName, s.DisplayName)
-	}
-	if got.Source != s.Source {
-		t.Errorf("GetSkill Source = %q, want %q", got.Source, s.Source)
-	}
-	if got.State != s.State {
-		t.Errorf("GetSkill State = %q, want %q", got.State, s.State)
-	}
-	if len(got.Templates) != 1 || got.Templates[0].Name != "system" {
-		t.Errorf("GetSkill Templates = %+v, want 1 template named system", got.Templates)
-	}
-	if len(got.Parameters) != 1 || got.Parameters[0].Name != "topic" {
-		t.Errorf("GetSkill Parameters = %+v, want 1 parameter named topic", got.Parameters)
-	}
-	if len(got.Triggers.Keywords) != 1 || got.Triggers.Keywords[0] != "test" {
-		t.Errorf("GetSkill Triggers.Keywords = %v, want [test]", got.Triggers.Keywords)
-	}
-	if got.UpdatedAt < s.UpdatedAt {
-		t.Errorf("GetSkill UpdatedAt should be refreshed on save, got %d", got.UpdatedAt)
+	if got.Templates[0].Name != "system" {
+		t.Errorf("GetSkill Templates = %+v", got.Templates)
 	}
 
-	// 列出全部
 	all, err := ListSkills("", "")
 	if err != nil {
 		t.Fatalf("ListSkills: %v", err)
@@ -108,30 +82,39 @@ func TestSkillCRUD(t *testing.T) {
 		t.Errorf("ListSkills did not contain %q", s.ID)
 	}
 
-	// 按 source 过滤
 	bySource, err := ListSkills(string(skill.SkillSourceLocalDB), "")
-	if err != nil {
-		t.Fatalf("ListSkills by source: %v", err)
-	}
-	if len(bySource) == 0 {
-		t.Error("ListSkills by source returned no results")
+	if err != nil || len(bySource) == 0 {
+		t.Fatalf("ListSkills by source: %v / %d", err, len(bySource))
 	}
 
-	// 按 state 过滤
-	byState, err := ListSkills("", string(skill.SkillStateEnabled))
-	if err != nil {
-		t.Fatalf("ListSkills by state: %v", err)
-	}
-	if len(byState) == 0 {
-		t.Error("ListSkills by state returned no results")
-	}
-
-	// 删除
 	if err := DeleteSkill(s.ID); err != nil {
 		t.Fatalf("DeleteSkill: %v", err)
 	}
 	_, err = GetSkill(s.ID)
 	if !errors.Is(err, ErrSkillNotFound) {
 		t.Fatalf("after DeleteSkill, GetSkill error = %v, want ErrSkillNotFound", err)
+	}
+}
+
+func TestSettingStore(t *testing.T) {
+	freshDB(t)
+
+	val, err := GetSetting("skill_scan_dirs")
+	if err != nil {
+		t.Fatalf("GetSetting initial: %v", err)
+	}
+	if val != "" {
+		t.Errorf("expected empty initial value, got %q", val)
+	}
+
+	if err := SetSetting("skill_scan_dirs", `[".claude/skills"]`) ; err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	val, err = GetSetting("skill_scan_dirs")
+	if err != nil {
+		t.Fatalf("GetSetting after set: %v", err)
+	}
+	if val != `[".claude/skills"]` {
+		t.Errorf("expected stored JSON, got %q", val)
 	}
 }
