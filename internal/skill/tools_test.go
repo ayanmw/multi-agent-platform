@@ -32,6 +32,9 @@ func initToolsTestDB(t *testing.T) *sql.DB {
 		"triggers_json TEXT DEFAULT '{}'," +
 		"state TEXT NOT NULL DEFAULT 'discovered'," +
 		"invalid_reason TEXT DEFAULT ''," +
+		"scope TEXT DEFAULT 'global'," +
+		"project_id TEXT DEFAULT ''," +
+		"workspace_dir TEXT DEFAULT ''," +
 		"created_at INTEGER NOT NULL," +
 		"updated_at INTEGER NOT NULL)"
 	if _, err := sqlDB.Exec(schema); err != nil {

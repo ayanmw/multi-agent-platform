@@ -34,6 +34,10 @@ func (st *Store) Save(s *Skill) error {
 	}
 	s.UpdatedAt = now
 
+	if s.Scope == "" {
+		s.Scope = SkillScopeGlobal
+	}
+
 	authorsJSON, _ := json.Marshal(s.Authors)
 	tagsJSON, _ := json.Marshal(s.Tags)
 	templatesJSON, _ := json.Marshal(s.Templates)
@@ -49,14 +53,14 @@ func (st *Store) Save(s *Skill) error {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Version, s.DisplayName, s.Description,
 		string(authorsJSON), string(tagsJSON), string(s.Source), s.SourceURL, s.IsLocalEditable,
 		string(templatesJSON), string(parametersJSON),
 		string(requiredToolsJSON), string(suggestedToolsJSON), string(permissionsJSON),
-		string(triggersJSON), string(s.State), s.InvalidReason,
+		string(triggersJSON), string(s.State), s.InvalidReason, string(s.Scope), s.ProjectID, s.WorkspaceDir,
 		s.CreatedAt, s.UpdatedAt,
 	)
 	return err
@@ -71,7 +75,7 @@ func (st *Store) Get(id string) (*Skill, error) {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
 		 FROM skills WHERE id = ?`, id)
 	s, err := scanSkill(row)
@@ -102,7 +106,7 @@ func (st *Store) ListBySource(source SkillSource) ([]Skill, error) {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
 		  FROM skills`
 	var args []any
@@ -147,7 +151,7 @@ func scanSkill(scanner interface{ Scan(dest ...any) error }) (Skill, error) {
 		&authorsJSON, &tagsJSON, &sourceStr, &s.SourceURL, &s.IsLocalEditable,
 		&templatesJSON, &parametersJSON,
 		&requiredToolsJSON, &suggestedToolsJSON, &permissionsJSON,
-		&triggersJSON, &stateStr, &s.InvalidReason,
+		&triggersJSON, &stateStr, &s.InvalidReason, &s.Scope, &s.ProjectID, &s.WorkspaceDir,
 		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {

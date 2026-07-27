@@ -242,12 +242,18 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 
 	// 恢复路径的 workspace：按反查出的 session 决定。
 	workspaceDir := ""
+	projectID := ""
+	projectName := ""
 	if sessionID != "" {
 		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
+			projectID = wsSess.ProjectID
 			workspaceDir = wsSess.WorkspaceDir
-			if workspaceDir == "" && wsSess.ProjectID != "" {
-				if proj, projErr := db.QueryProjectByID(wsSess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
-					workspaceDir = proj.WorkingDirectory
+			if projectID != "" {
+				if proj, projErr := db.QueryProjectByID(projectID); projErr == nil {
+					projectName = proj.Name
+					if workspaceDir == "" && proj.WorkingDirectory != "" {
+						workspaceDir = proj.WorkingDirectory
+					}
 				}
 			}
 		}
@@ -312,8 +318,14 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 		WorkspaceDir:          workspaceDir,
 		OnLLMUsage:            onUsage,
 		SkillRegistry:         globalSkillRegistry,
-		ActiveSkills:          GetEnabledSkillIDs(globalSkillRegistry),
-		Tracer:                tracer,
+		ActiveSkills:          skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
+		SkillVariables: map[string]any{
+			"project_id":    projectID,
+			"project_name":  projectName,
+			"session_id":    sessionID,
+			"workspace_dir": workspaceDir,
+		},
+		Tracer: tracer,
 		RootTraceCtx:          rootTraceCtx,
 		LLMLatencyRecorder:    func(latency time.Duration) { observability.DefaultMetrics.RecordLLMLatency(latency) },
 		ToolLatencyRecorder:   func(latency time.Duration) { observability.DefaultMetrics.RecordToolLatency(latency) },
@@ -655,12 +667,18 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// 若 session.WorkspaceDir 为空但 session 属于某个 project，则回退到
 	// project.WorkingDirectory，让多个 session 可共享同一个 project workspace。
 	workspaceDir := ""
+	projectID := ""
+	projectName := ""
 	if sessionID != "" {
 		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
+			projectID = wsSess.ProjectID
 			workspaceDir = wsSess.WorkspaceDir
-			if workspaceDir == "" && wsSess.ProjectID != "" {
-				if proj, projErr := db.QueryProjectByID(wsSess.ProjectID); projErr == nil && proj.WorkingDirectory != "" {
-					workspaceDir = proj.WorkingDirectory
+			if projectID != "" {
+				if proj, projErr := db.QueryProjectByID(projectID); projErr == nil {
+					projectName = proj.Name
+					if workspaceDir == "" && proj.WorkingDirectory != "" {
+						workspaceDir = proj.WorkingDirectory
+					}
 				}
 			}
 		}
@@ -929,11 +947,17 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		ToolLatencyRecorder: func(latency time.Duration) {
 			observability.DefaultMetrics.RecordToolLatency(latency)
 		},
-		// Phase skill: 注入 Skill 子系统。ActiveSkills 取当前 registry 中所有
-		// 处于 enabled 状态的 skill id；SkillVariables 暂留 nil，由后续 case/
-		// session 上下文填充。
+		// Phase skill: 注入 Skill 子系统。ActiveSkills 按 session/project/workdir
+		// 解析实际应激活的 skill；SkillVariables 填充 project/session/workdir
+		// 相关变量，供 skill 模板渲染。
 		SkillRegistry: globalSkillRegistry,
-		ActiveSkills:  GetEnabledSkillIDs(globalSkillRegistry),
+		ActiveSkills:  skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
+		SkillVariables: map[string]any{
+			"project_id":    projectID,
+			"project_name":  projectName,
+			"session_id":    sessionID,
+			"workspace_dir": workspaceDir,
+		},
 		// Phase worktree: per-run 可变 CWD holder（worktree 隔离注入）。holder
 		// 非 nil 时 Engine 在每次 tool 调用前读 holder.Get() 经
 		// ExecuteContext.Workdir 注入，优先于 input["workdir"]。holder 值为 ""

@@ -89,16 +89,40 @@ type eventBroadcaster interface {
 
 // handleListSkills 处理 GET /api/skills，返回 registry 中的全部 skill。
 // 可通过 ?source=built_in|local_db|local_file|market|mcp 过滤。
+// 新增可选 ?scope=global|project|session&project_id=...&workdir=... 过滤。
+// 未传过滤参数时返回所有 skill，保持向后兼容。
 func handleListSkills(w http.ResponseWriter, r *http.Request, registry *skill.Registry) {
 	var source *skill.SkillSource
 	if s := strings.TrimSpace(r.URL.Query().Get("source")); s != "" {
 		src := skill.SkillSource(s)
 		source = &src
 	}
+	scopeFilter := strings.TrimSpace(r.URL.Query().Get("scope"))
+	projectIDFilter := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	workdirFilter := strings.TrimSpace(r.URL.Query().Get("workdir"))
+
 	skills := registry.List(source)
 	if skills == nil {
 		skills = []skill.Skill{}
 	}
+
+	if scopeFilter != "" || projectIDFilter != "" || workdirFilter != "" {
+		filtered := make([]skill.Skill, 0, len(skills))
+		for _, s := range skills {
+			if scopeFilter != "" && string(s.Scope) != scopeFilter {
+				continue
+			}
+			if projectIDFilter != "" && s.ProjectID != projectIDFilter {
+				continue
+			}
+			if workdirFilter != "" && s.WorkspaceDir != workdirFilter {
+				continue
+			}
+			filtered = append(filtered, s)
+		}
+		skills = filtered
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(skills)
 }
@@ -164,14 +188,17 @@ func handleGetSkill(w http.ResponseWriter, r *http.Request, registry *skill.Regi
 // skillCreateRequest 是 POST /api/skills 的请求体。
 // 字段命名与 skill.Skill 的 JSON 标签保持一致（snake_case）。
 type skillCreateRequest struct {
-	ID          string                   `json:"id"`
-	DisplayName string                   `json:"display_name"`
-	Description string                   `json:"description"`
-	Content     string                   `json:"content"`
-	Parameters  []skill.SkillParameter   `json:"parameters"`
-	Variables   map[string]any           `json:"variables"`
-	Tags        []string                 `json:"tags"`
-	Authors     []string                 `json:"authors"`
+	ID           string                   `json:"id"`
+	DisplayName  string                   `json:"display_name"`
+	Description  string                   `json:"description"`
+	Content      string                   `json:"content"`
+	Parameters   []skill.SkillParameter   `json:"parameters"`
+	Variables    map[string]any           `json:"variables"`
+	Tags         []string                 `json:"tags"`
+	Authors      []string                 `json:"authors"`
+	Scope        string                   `json:"scope"`
+	ProjectID    string                   `json:"project_id"`
+	WorkspaceDir string                   `json:"workspace_dir"`
 }
 
 // handleCreateSkill 处理 POST /api/skills，创建一条 local_db skill。
@@ -200,6 +227,15 @@ func handleCreateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 		return
 	}
 
+	scope := skill.SkillScope(strings.TrimSpace(req.Scope))
+	if scope == "" {
+		scope = skill.SkillScopeGlobal
+	}
+	if scope != skill.SkillScopeGlobal && scope != skill.SkillScopeProject {
+		writeJSONError(w, "invalid scope: "+string(scope)+" (allowed: global, project)", http.StatusBadRequest)
+		return
+	}
+
 	renderer := skill.NewRenderer()
 	variables := renderer.ExtractVariables(req.Content)
 
@@ -213,6 +249,9 @@ func handleCreateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 		Tags:            req.Tags,
 		Source:          skill.SkillSourceLocalDB,
 		IsLocalEditable: true,
+		Scope:           scope,
+		ProjectID:       strings.TrimSpace(req.ProjectID),
+		WorkspaceDir:    strings.TrimSpace(req.WorkspaceDir),
 		Templates: []skill.SkillTemplate{
 			{
 				Name:       "system_prompt",
@@ -247,12 +286,15 @@ func handleCreateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 }
 
 // skillUpdateRequest 是 PUT /api/skills/:id 的请求体。
-// 所有字段可选；仅 display_name/description/content/parameters 会被更新。
+// 所有字段可选；仅 display_name/description/content/parameters/scope/project_id/workspace_dir 会被更新。
 type skillUpdateRequest struct {
-	DisplayName *string                 `json:"display_name"`
-	Description *string                 `json:"description"`
-	Content     *string                 `json:"content"`
-	Parameters  []skill.SkillParameter  `json:"parameters"`
+	DisplayName  *string                 `json:"display_name"`
+	Description  *string                 `json:"description"`
+	Content      *string                 `json:"content"`
+	Parameters   []skill.SkillParameter  `json:"parameters"`
+	Scope        *string                 `json:"scope"`
+	ProjectID    *string                 `json:"project_id"`
+	WorkspaceDir *string                 `json:"workspace_dir"`
 }
 
 // handleUpdateSkill 处理 PUT /api/skills/:id，仅允许修改 local editable skill。
@@ -320,6 +362,20 @@ func handleUpdateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 	}
 	if req.Parameters != nil {
 		updated.Parameters = req.Parameters
+	}
+	if req.Scope != nil {
+		sc := skill.SkillScope(strings.TrimSpace(*req.Scope))
+		if sc != "" && sc != skill.SkillScopeGlobal && sc != skill.SkillScopeProject {
+			writeJSONError(w, "invalid scope: "+string(sc), http.StatusBadRequest)
+			return
+		}
+		updated.Scope = sc
+	}
+	if req.ProjectID != nil {
+		updated.ProjectID = strings.TrimSpace(*req.ProjectID)
+	}
+	if req.WorkspaceDir != nil {
+		updated.WorkspaceDir = strings.TrimSpace(*req.WorkspaceDir)
 	}
 	updated.UpdatedAt = time.Now().Unix()
 

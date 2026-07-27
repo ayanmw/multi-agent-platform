@@ -14,6 +14,7 @@ func DefaultBuiltins() []*Skill {
 			Source:          SkillSourceBuiltIn,
 			IsLocalEditable: false,
 			State:           SkillStateEnabled,
+			Scope:           SkillScopeGlobal,
 			Templates: []SkillTemplate{
 				{
 					Name:       "system_prompt",
@@ -44,6 +45,7 @@ func DefaultBuiltins() []*Skill {
 			Source:          SkillSourceBuiltIn,
 			IsLocalEditable: false,
 			State:           SkillStateEnabled,
+			Scope:           SkillScopeGlobal,
 			Templates: []SkillTemplate{
 				{
 					Name:       "system_prompt",

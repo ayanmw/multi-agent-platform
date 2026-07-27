@@ -216,8 +216,12 @@ func removeEngine(taskID, agentID string) {
 }
 
 func main() {
-	port := flag.String("port", "8080", "HTTP server port")
+	port := flag.String("port", "", "HTTP server port (overrides SERVER_PORT/.env)")
 	flag.Parse()
+
+	// 强制 system env 优先于 .env，确保脚本 SERVER_PORT 覆盖 .env 中的 SERVER_PORT。
+	// 默认 .env 优先策略下，脚本 export SERVER_PORT=18105 会被 .env 的 30080 覆盖。
+	config.SetOSFirst()
 
 	// 首先注册 WebSocket 控制 handler。它使用包级 cancelRegistry，
 	// 以便 WebSocket 控制消息可以取消运行中的任务。
@@ -231,7 +235,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	globalConfig = cfg
-	if *port != "8080" || cfg.ServerPort == "" {
+	if *port != "" {
 		cfg.ServerPort = *port
 	}
 

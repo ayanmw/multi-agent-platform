@@ -23,6 +23,19 @@ const (
 	SkillSourceMCP SkillSource = "mcp"
 )
 
+// SkillScope 表示 Skill 的可见性作用域。
+// 决定一个启用状态的 Skill 在运行期是否被注入到 Engine。
+type SkillScope string
+
+const (
+	// SkillScopeGlobal 表示全局 Skill，所有 session 都可见。
+	SkillScopeGlobal SkillScope = "global"
+	// SkillScopeProject 表示项目级 Skill，仅当 session/project/workdir 匹配时可见。
+	SkillScopeProject SkillScope = "project"
+	// SkillScopeSession 表示 session 级 Skill，运行期临时创建，本次仅预留常量。
+	SkillScopeSession SkillScope = "session"
+)
+
 // SkillState 表示 Skill 在生命周期中的状态。
 type SkillState string
 
@@ -78,6 +91,12 @@ type Skill struct {
 	State SkillState `json:"state"`
 	// InvalidReason 当 State 为 invalid 时记录失败原因。
 	InvalidReason string `json:"invalid_reason"`
+	// Scope 是 Skill 的可见性作用域：global / project / session。
+	Scope SkillScope `json:"scope"`
+	// ProjectID 是 project 级 Skill 归属的项目标识。global scope 时为空。
+	ProjectID string `json:"project_id"`
+	// WorkspaceDir 是 project 级 Skill 关联的工作目录前缀。global scope 时为空。
+	WorkspaceDir string `json:"workspace_dir"`
 	// CreatedAt 是创建时间戳（Unix 秒）。
 	CreatedAt int64 `json:"created_at"`
 	// UpdatedAt 是最后更新时间戳（Unix 秒）。

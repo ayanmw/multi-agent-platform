@@ -58,3 +58,4 @@ web/v2/tsconfig.tsbuildinfo
 .worktrees/
 /web/v2/pnpm-lock.yaml
 /web/v2/pnpm-workspace.yaml
+/logs

@@ -20,8 +20,11 @@ func NewRenderer() *Renderer {
 }
 
 // Render 渲染单个 SkillTemplate，将占位符替换为 vars 中对应的值。
-// 若变量在 vars 中不存在，保留原始占位符。
+// 若 vars 为 nil 或变量不存在，保留原始占位符。
 func (r *Renderer) Render(tmpl SkillTemplate, vars map[string]any) string {
+	if vars == nil {
+		vars = map[string]any{}
+	}
 	return r.re.ReplaceAllStringFunc(tmpl.Content, func(match string) string {
 		m := r.re.FindStringSubmatch(match)
 		if len(m) < 2 {

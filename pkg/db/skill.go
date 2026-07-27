@@ -22,7 +22,7 @@ import (
 // ErrSkillNotFound 表示指定的 Skill 不存在。
 var ErrSkillNotFound = errors.New("skill not found")
 
-// init 注册 skills 表的 schema 迁移（v24）。
+// init 注册 skills 表的 schema 迁移（v24）与 v33 扩展迁移。
 // 使用 init() 注册可让 database.go 无需显式修改即可在 Init 时自动跑迁移。
 func init() {
 	migrations = append(migrations, Migration{
@@ -52,6 +52,14 @@ func init() {
 		CREATE INDEX IF NOT EXISTS idx_skills_source ON skills(source);
 		CREATE INDEX IF NOT EXISTS idx_skills_state ON skills(state);
 		CREATE INDEX IF NOT EXISTS idx_skills_updated_at ON skills(updated_at DESC);`,
+	})
+
+	migrations = append(migrations, Migration{
+		Version:     33,
+		Description: "Add scope, project_id, workspace_dir to skills table",
+		SQL: `ALTER TABLE skills ADD COLUMN scope TEXT DEFAULT 'global';
+		ALTER TABLE skills ADD COLUMN project_id TEXT DEFAULT '';
+		ALTER TABLE skills ADD COLUMN workspace_dir TEXT DEFAULT '';`,
 	})
 }
 
@@ -83,14 +91,14 @@ func SaveSkill(s skill.Skill) error {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Version, s.DisplayName, s.Description,
 		string(authorsJSON), string(tagsJSON), string(s.Source), s.SourceURL, s.IsLocalEditable,
 		string(templatesJSON), string(parametersJSON),
 		string(requiredToolsJSON), string(suggestedToolsJSON), string(permissionsJSON),
-		string(triggersJSON), string(s.State), s.InvalidReason,
+		string(triggersJSON), string(s.State), s.InvalidReason, string(s.Scope), s.ProjectID, s.WorkspaceDir,
 		s.CreatedAt, s.UpdatedAt,
 	)
 	return err
@@ -107,7 +115,7 @@ func GetSkill(id string) (skill.Skill, error) {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
 		 FROM skills WHERE id = ?`, id)
 	s, err := scanSkill(row)
@@ -131,7 +139,7 @@ func ListSkills(sourceFilter, stateFilter string) ([]skill.Skill, error) {
 			authors_json, tags_json, source, source_url, is_local_editable,
 			templates_json, parameters_json,
 			required_tools_json, suggested_tools_json, permissions_json,
-			triggers_json, state, invalid_reason,
+			triggers_json, state, invalid_reason, scope, project_id, workspace_dir,
 			created_at, updated_at
 		  FROM skills`
 
@@ -194,7 +202,7 @@ func scanSkill(scanner skillScanner) (skill.Skill, error) {
 		&authorsJSON, &tagsJSON, &sourceStr, &s.SourceURL, &s.IsLocalEditable,
 		&templatesJSON, &parametersJSON,
 		&requiredToolsJSON, &suggestedToolsJSON, &permissionsJSON,
-		&triggersJSON, &stateStr, &s.InvalidReason,
+		&triggersJSON, &stateStr, &s.InvalidReason, &s.Scope, &s.ProjectID, &s.WorkspaceDir,
 		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {

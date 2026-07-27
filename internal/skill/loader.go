@@ -32,6 +32,9 @@ func (l *Loader) LoadAll() error {
 		return err
 	}
 	for _, s := range skills {
+		if s.Scope == "" {
+			s.Scope = SkillScopeGlobal
+		}
 		l.registry.Register(s)
 	}
 	return nil
@@ -55,6 +58,9 @@ func (l *Loader) Reload() error {
 		return err
 	}
 	for _, s := range skills {
+		if s.Scope == "" {
+			s.Scope = SkillScopeGlobal
+		}
 		l.registry.Register(s)
 	}
 	return nil
