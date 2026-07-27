@@ -170,12 +170,13 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 		caseService:      caseService,
 		skillRegistry:    skillRegistry,
 		skillStore:       skillStore,
+		skillLoader:      skill.NewLoader(skillStore, skillRegistry),
 	}
 
 	mux := http.NewServeMux()
 
 	// Skill 管理路由：enable / disable 等。
-	registerSkillRoutes(mux, hub, skillStore, skillRegistry)
+	registerSkillRoutes(mux, hub, skillStore, skillRegistry, nil, nil)
 
 	// Sessions 路由：POST /api/sessions 创建 session。
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {

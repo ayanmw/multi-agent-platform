@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
@@ -21,10 +22,13 @@ import (
 //   DELETE /api/skills/:id          — 删除 local editable skill
 //   POST   /api/skills/:id/enable   — 启用 skill（同步 registry 与 store 状态）
 //   POST   /api/skills/:id/disable  — 禁用 skill
+//   GET    /api/skills/scan-config  — 返回当前启用的扫描目录
+//   POST   /api/skills/scan-config  — 更新启用的扫描目录
+//   POST   /api/skills/scan         — 强制刷新所有文件系统 skill
 //
 // 所有 handler 直接操作传入的 skillStore / skillRegistry，避免与全局变量耦合，
 // 方便在测试中传入隔离实例。
-func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *skill.Store, skillRegistry *skill.Registry) {
+func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *skill.Store, skillRegistry *skill.Registry, skillLoader *skill.Loader, settingStore skill.SettingStore) {
 	mux.HandleFunc("/api/skills", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -48,6 +52,23 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 		path := strings.TrimPrefix(r.URL.Path, "/api/skills/")
 		if path == "" {
 			writeJSONError(w, "skill ID required", http.StatusBadRequest)
+			return
+		}
+
+		// 精确子路由：scan / scan-config 有独立 handler，避免与 skill-id 含 "/" 冲突。
+		if path == "scan" && r.Method == http.MethodPost {
+			handleScanSkills(w, r, skillLoader)
+			return
+		}
+		if path == "scan-config" {
+			switch r.Method {
+			case http.MethodGet:
+				handleGetScanConfig(w, r, settingStore)
+			case http.MethodPost:
+				handleSetScanConfig(w, r, settingStore, skillLoader)
+			default:
+				writeJSONError(w, "GET or POST only", http.StatusMethodNotAllowed)
+			}
 			return
 		}
 
@@ -487,6 +508,152 @@ func handleDisableSkill(w http.ResponseWriter, r *http.Request, hub eventBroadca
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s)
+}
+
+// scanConfigResponse 是 GET /api/skills/scan-config 的响应。
+type scanConfigResponse struct {
+	EnabledDirs []string `json:"enabled_dirs"`
+}
+
+// handleGetScanConfig 返回当前启用的扫描目录模板。
+// settings 未初始化或未配置时返回全部默认目录。
+func handleGetScanConfig(w http.ResponseWriter, r *http.Request, store skill.SettingStore) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	dirs := skill.DefaultSkillScanDirs
+	if store != nil {
+		val, err := store.GetSetting("skill_scan_dirs")
+		if err == nil && strings.TrimSpace(val) != "" {
+			var configured []string
+			if json.Unmarshal([]byte(val), &configured) == nil {
+				dirs = filterValidScanDirs(configured)
+			}
+		}
+	}
+	if dirs == nil {
+		dirs = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(scanConfigResponse{EnabledDirs: dirs})
+}
+
+// handleSetScanConfig 保存启用的扫描目录模板，并重扫全局文件系统 skill。
+// 仅接受 DefaultSkillScanDirs 子集，防止写入非法路径模板。
+func handleSetScanConfig(w http.ResponseWriter, r *http.Request, store skill.SettingStore, loader *skill.Loader) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if store == nil {
+		writeJSONError(w, "settings store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req scanConfigResponse
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	filtered := filterValidScanDirs(req.EnabledDirs)
+	if len(filtered) == 0 {
+		writeJSONError(w, "enabled_dirs must be a non-empty subset of default scan dirs", http.StatusBadRequest)
+		return
+	}
+	payload, err := json.Marshal(filtered)
+	if err != nil {
+		writeJSONError(w, "failed to marshal dirs", http.StatusInternalServerError)
+		return
+	}
+	if err := store.SetSetting("skill_scan_dirs", string(payload)); err != nil {
+		writeJSONError(w, "save setting: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 保存后刷新全局文件系统 skill；workdir skill 不在此处重扫。
+	if loader != nil {
+		if err := loader.Reload(); err != nil {
+			writeJSONError(w, "reload failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(scanConfigResponse{EnabledDirs: filtered})
+}
+
+// handleScanSkills 强制刷新所有文件系统 skill。
+// 收集所有已知非空 session workspace_dir，调用 Loader.RefreshAll。
+func handleScanSkills(w http.ResponseWriter, r *http.Request, loader *skill.Loader) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if loader == nil {
+		writeJSONError(w, "skill loader unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	sessions, err := db.QuerySessions(0, "")
+	if err != nil {
+		writeJSONError(w, "list sessions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	workdirs := make([]string, 0, len(sessions))
+	workdirProjectIDs := make(map[string]string)
+	for _, sess := range sessions {
+		wd := sess.WorkspaceDir
+		if wd == "" && sess.ProjectID != "" {
+			if proj, pErr := db.QueryProjectByID(sess.ProjectID); pErr == nil && proj.WorkingDirectory != "" {
+				wd = proj.WorkingDirectory
+			}
+		}
+		if wd == "" {
+			continue
+		}
+		workdirs = append(workdirs, wd)
+		if sess.ProjectID != "" {
+			workdirProjectIDs[wd] = sess.ProjectID
+		}
+	}
+
+	if err := loader.RefreshAll(workdirs, workdirProjectIDs); err != nil {
+		writeJSONError(w, "refresh failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	loaded := 0
+	unloaded := 0 // 完成 refresh 前被移除的 skill 数已在 Loader 内部处理，这里仅作统计占位。
+	for range loader.Registry().List(&localFileSource) {
+		loaded++
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"scanned_workdirs": len(workdirs),
+		"loaded":           loaded,
+		"unloaded":         unloaded,
+	})
+}
+
+var localFileSource = skill.SkillSourceLocalFile
+
+// filterValidScanDirs 仅保留在 DefaultSkillScanDirs 中出现的目录模板。
+func filterValidScanDirs(dirs []string) []string {
+	valid := make(map[string]bool)
+	for _, d := range skill.DefaultSkillScanDirs {
+		valid[d] = true
+	}
+	filtered := make([]string, 0, len(dirs))
+	seen := make(map[string]bool)
+	for _, d := range dirs {
+		if valid[d] && !seen[d] {
+			filtered = append(filtered, d)
+			seen[d] = true
+		}
+	}
+	return filtered
 }
 
 // broadcastSkillEvent 通过 hub 广播 skill 状态变化事件，便于前端实时刷新。
