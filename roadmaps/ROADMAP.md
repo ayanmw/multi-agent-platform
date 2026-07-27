@@ -18,8 +18,8 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → 
 Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅
   (架构演进)    (架构收尾)      (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)
 
-multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-provider ✅
-  (多模型分层路由 P1-P3)   (LLM Provider 与模型持久化)      (Gemini 搜索 provider)
+multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-provider ✅ → dotenv-package ✅
+  (多模型分层路由 P1-P3)   (LLM Provider 与模型持久化)      (Gemini 搜索 provider)   (.env 独立 dotenv 子包)
 ```
 
 ---
@@ -64,6 +64,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 | v0.14.1 Alpha | 2026-07-25 | multi-model-routing P1-P3 完整落地 |
 | v0.15.0 Alpha | 2026-07-26 | LLM Provider & Model Management 多 Provider 配置与模型持久化 |
 | v0.15.1 Alpha | 2026-07-27 | Gemini 搜索 provider 接入 `core/web_search` |
+| v0.15.2 Alpha | 2026-07-27 | 提取 `.env` 层到独立 `internal/config/dotenv` 子包，引入 `godotenv` 解析 |
 
 ---
 

@@ -224,6 +224,17 @@ func main() {
 	// (sync.Map 自带 noCopy 锁；这里取它的地址只是为了副作用。)
 	_ = &cancelRegistry
 
+	// 从 .env 与环境变量加载配置
+	cfg, err := config.Load()
+	if err != nil {
+		observability.DefaultLogger.Error("server", "failed to load config", map[string]any{"error": err.Error()})
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	globalConfig = cfg
+	if *port != "8080" || cfg.ServerPort == "" {
+		cfg.ServerPort = *port
+	}
+
 	// Phase 6-D: 根据配置初始化结构化日志级别。
 	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(config.Getenv("LOG_LEVEL")))
 
@@ -234,17 +245,6 @@ func main() {
 		if err := initDualLogging(logPath); err != nil {
 			log.Printf("Warning: failed to open log file %s: %v (continuing with console only)", logPath, err)
 		}
-	}
-
-	// 从 .env 与环境变量加载配置
-	cfg, err := config.Load()
-	if err != nil {
-		observability.DefaultLogger.Error("server", "failed to load config", map[string]any{"error": err.Error()})
-		log.Fatalf("Failed to load config: %v", err)
-	}
-	globalConfig = cfg
-	if *port != "8080" || cfg.ServerPort == "" {
-		cfg.ServerPort = *port
 	}
 
 	// 初始化 WebSocket Hub
@@ -564,7 +564,6 @@ func main() {
 	}
 
 	log.Printf("ModelService: seeded and loaded models from persistent storage")
-
 
 	// Phase 6 Router: 构建 model router + provider 查找 map。
 	//
@@ -1630,19 +1629,25 @@ func fileExists(fsys fs.FS, path string) bool {
 // tool -> todo -> db -> skill -> tool 的 import cycle。
 type dbStoreAdapter struct{}
 
-func (dbStoreAdapter) InsertTodo(t todo.Todo) error             { return db.InsertTodo(t) }
-func (dbStoreAdapter) UpdateTodo(t todo.Todo) error             { return db.UpdateTodo(t) }
-func (dbStoreAdapter) DeleteTodo(id string) error               { return db.DeleteTodo(id) }
-func (dbStoreAdapter) GetTodo(id string) (todo.Todo, error)    { return db.GetTodo(id) }
+func (dbStoreAdapter) InsertTodo(t todo.Todo) error         { return db.InsertTodo(t) }
+func (dbStoreAdapter) UpdateTodo(t todo.Todo) error         { return db.UpdateTodo(t) }
+func (dbStoreAdapter) DeleteTodo(id string) error           { return db.DeleteTodo(id) }
+func (dbStoreAdapter) GetTodo(id string) (todo.Todo, error) { return db.GetTodo(id) }
 func (dbStoreAdapter) ListTodosBySession(sessionID string, statusFilter []todo.TodoStatus, includeDone bool) ([]todo.Todo, error) {
 	return db.ListTodosBySession(sessionID, statusFilter, includeDone)
 }
-func (dbStoreAdapter) ListTodosByTask(taskID string) ([]todo.Todo, error) { return db.ListTodosByTask(taskID) }
+func (dbStoreAdapter) ListTodosByTask(taskID string) ([]todo.Todo, error) {
+	return db.ListTodosByTask(taskID)
+}
 func (dbStoreAdapter) DeleteCompletedTodosBySession(sessionID string) error {
 	return db.DeleteCompletedTodosBySession(sessionID)
 }
-func (dbStoreAdapter) DeleteAllTodosBySession(sessionID string) error { return db.DeleteAllTodosBySession(sessionID) }
-func (dbStoreAdapter) Reorder(sessionID string, moves []todo.TodoMove) error { return db.Reorder(sessionID, moves) }
+func (dbStoreAdapter) DeleteAllTodosBySession(sessionID string) error {
+	return db.DeleteAllTodosBySession(sessionID)
+}
+func (dbStoreAdapter) Reorder(sessionID string, moves []todo.TodoMove) error {
+	return db.Reorder(sessionID, moves)
+}
 
 // cronDBStoreAdapter 把 pkg/db 中的 cron CRUD 函数适配为 cron.DBStore 接口。
 //
@@ -1650,18 +1655,18 @@ func (dbStoreAdapter) Reorder(sessionID string, moves []todo.TodoMove) error { r
 // 避免循环依赖（pkg/db 已 import internal/cron 用于 Cron/Execution 类型）。
 type cronDBStoreAdapter struct{}
 
-func (cronDBStoreAdapter) InsertCron(c cron.Cron) error            { return db.InsertCron(c) }
-func (cronDBStoreAdapter) UpdateCron(c cron.Cron) error            { return db.UpdateCron(c) }
+func (cronDBStoreAdapter) InsertCron(c cron.Cron) error { return db.InsertCron(c) }
+func (cronDBStoreAdapter) UpdateCron(c cron.Cron) error { return db.UpdateCron(c) }
 func (cronDBStoreAdapter) UpdateCronScheduleMeta(c cron.Cron) error {
 	return db.UpdateCronScheduleMeta(c)
 }
-func (cronDBStoreAdapter) DeleteCron(id string) error                { return db.DeleteCron(id) }
-func (cronDBStoreAdapter) GetCron(id string) (cron.Cron, error)      { return db.GetCron(id) }
+func (cronDBStoreAdapter) DeleteCron(id string) error           { return db.DeleteCron(id) }
+func (cronDBStoreAdapter) GetCron(id string) (cron.Cron, error) { return db.GetCron(id) }
 func (cronDBStoreAdapter) ListCrons(f cron.ListFilter) ([]cron.Cron, error) {
 	return db.ListCrons(f)
 }
-func (cronDBStoreAdapter) InsertExecution(e cron.Execution) error    { return db.InsertExecution(e) }
-func (cronDBStoreAdapter) UpdateExecution(e cron.Execution) error    { return db.UpdateExecution(e) }
+func (cronDBStoreAdapter) InsertExecution(e cron.Execution) error { return db.InsertExecution(e) }
+func (cronDBStoreAdapter) UpdateExecution(e cron.Execution) error { return db.UpdateExecution(e) }
 func (cronDBStoreAdapter) GetExecution(id string) (cron.Execution, error) {
 	return db.GetExecution(id)
 }

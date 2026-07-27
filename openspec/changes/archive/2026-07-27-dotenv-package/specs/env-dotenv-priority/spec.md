@@ -1,8 +1,5 @@
-# env-dotenv-priority Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change env-dotenv-priority. Update Purpose after archive.
-## Requirements
 ### Requirement: Getenv prefers .env by default
 The system SHALL provide a `config.Getenv(key)` function that returns the value from the `.env` file if the key exists there; otherwise it SHALL fall back to the system environment variable. The implementation SHALL be delegated to `internal/config/dotenv` while preserving identical caller behavior.
 
@@ -41,6 +38,8 @@ The system SHALL keep an `ApplyEnvFileToOS(path)` helper that writes `.env` valu
 - **THEN** after `ApplyEnvFileToOS(path)`, `os.Getenv("FOO")` SHALL still be `"fromenv"`
 - **AND** `os.Getenv("BAR")` SHALL be `"fromfile"`
 
+## ADDED Requirements
+
 ### Requirement: Standard dotenv syntax is supported
 The `internal/config/dotenv` package SHALL parse `.env` files using `github.com/joho/godotenv` and therefore support quoted values, comments, empty lines, and the `export` prefix.
 
@@ -51,4 +50,3 @@ The `internal/config/dotenv` package SHALL parse `.env` files using `github.com/
 #### Scenario: Inline comments are ignored
 - **WHEN** `.env` contains `FOO=bar # comment`
 - **THEN** `config.Getenv("FOO")` SHALL return `bar`.
-

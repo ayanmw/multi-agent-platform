@@ -187,16 +187,9 @@ type MCPMarketConfig struct {
 	URL  string `json:"url"`
 }
 
-// Load 读取 .env 文件与环境变量以填充 Config
+// Load 读取 .env 文件与环境变量以填充 Config。
+// 注意：dotenv 包 init 时已自动加载默认 .env，此处不再需要显式 Reload。
 func Load() (*Config, error) {
-	// 先把 .env 加载到内存缓存，后续所有 Getenv 都走 EnvFilePath() 定位的文件。
-	// ENV_FILE 环境变量可指定绝对路径，便于 server 在非项目根 CWD（如测试隔离
-	// 目录）启动时仍能加载项目根的 .env；未指定则回退到 CWD 下的 .env。
-	if err := ReloadEnvCache(); err != nil {
-		// .env 是可选的 — 缺失不应导致失败
-		fmt.Fprintf(os.Stderr, "Warning: .env file not found or unreadable: %v\n", err)
-	}
-
 	cfg := &Config{
 		LLMEndpoint:  "https://aicoding.dobest.com/v1",
 		LLMModel:     "deepseek-v4-flash",

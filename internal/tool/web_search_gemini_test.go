@@ -1,3 +1,59 @@
+/* tool 关于 gemini API 搜索:
+ curl --insecure -X POST "https://generativelanguage.googleapis.com/v1beta/interactions"     -H "x-goog-api-key: $GEMINI_API_KEY"     -H "Content-Type: application/json"     -d '{
+      "model": "gemini-3.5-flash",
+      "input": "Who won the euro 2024?",
+      "tools": [{"type": "google_search"}]
+    }'
+
+//--insecure 为了避免curl安全证书检测: curl: (35) schannel: next InitializeSecurityContext failed: CRYPT_E_REVOCATION_OFFLINE (0x80092013) -
+
+
+
+curl --insecure "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"     -H 'Content-Type: application/json'     -H 'X-goog-api-key: $GEMINI_API_KEY'     -X POST     -d '{
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "Explain how AI works in a few words"
+            }
+          ]
+        }
+      ]
+    }'
+# 返回信息:
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "AI learns patterns from vast amounts of data to make predictions and decisions.",
+            "thoughtSignature": "EpgLCpULARFNMg+wHwEj6A5Gyo45BcLnUMCj6eB0+Qe6OQ/ctgZvT5kXJpHt6kFTjjkKD2zKUgl0wlUD+Lrmq93M05WPL/QGHkCIgV6Z/DpImj9sETuoE7/Sq3wc7hiWcDr6cCaszDxuB00AZnKJ8GZNLbfAXV8D1rcLk15XbSR+lXra4bWVIk43iXXEL8dCfWyG5IGgdamyXsbl795bvxLaE7RV6Zr7scG23Roc0wGDD5Fxp70MoESgSNlwisYJ39UPAs7x08nMQsD7tDnmSmE7BJwkRJvosKvKVzfOzIhRILF0EXK2iFJGMaAcdFMGj7ToMJc9/QmsVLYrAb/0sd2X+QAhexy5GPIlAWPwTHhTFNaxPrhHo1MzQTu3jErWml4+aW6I4jNhuM7SEjEe5mNvAGnx9GZYzChx0Ri6cRCQrKiYEw4G3r47dW5vUg8JRdzG+gyM0AxFLWUbJpzJTUY+NrCRrN39mEzRSmbE0/zuFt1U0hwS+Ay87UH6E/S8ShySesrIRzVraDKjcyl1QOfuycLIcXAWm+kGoOa21W6aKC9egudeX1W/Nk4gCDVtlQKkvmmk9B6/gJ2W0ybq/qX8dSMe8dGLcKwtvBrXKEwFEgC3AG9bR+/RWl3CvUccDXeCQrmKRYNbcQV7BBwXil8WztDXtT94P8bULC8XyIbxbdeIaLz4Xqj9oqywXULNear+Hi7SUKVEdUnUuihVWYZTT1WxWsOo9FkgELJb08I4v8BU5eqxGQm8+OsCAhmMsptFA5k95SJiBrTqDtvS4msiMcbVD1EH5UlCiC1ZqpQEOsinrlYvObbnsL9kCgvyD/qnJxYu8+/T1YnKplt0oorpA49c1vMIvwUePGgYBckrREC5VLbmmjcvAcb1C+hT/mrc9bm6jxQS4x3d8c8upJP4TpZNyCQTAUCfTkqlM+XPkxK0tDlG8IJ95d6+77tNlq9900NCUVLhAlPNmRQlW84sSTomrT7fdqEu5meONqTAm63SYQPcaDHbXK6giuM8a9T8MNwVTe1xPMURBrF7IwkilYCt4B42HMLTZeHIDdHediO5H+h3qHEx4qNZdIRszeH5eJ4o3ouYYWUfBk1aQvgPi1087bNiP1X4z0dTetZGCQhOLeFOTeA1EIHWTzZxbI1Bc5FoCMOaWVzrIdy8M13yEXrlOJd4+LmY/8MvgYrItSydru10vt5SF5lljwvbVVjlza2aqhXdRpHPTKUoC7bxT1igpOayB/NNfJ9cdyk88tfiilGlY3+S7CMyNb0VFK2WF1yPiTYeTQqk0TMf4bxN9ND4ASToTP274xJZo7SOi9YIcU2OC7zKBvaLUe4EHEiM905cdNzmjnuscyXYJph+nJhB1YACucVBHb8TUSIXIpTE9csJCExXhzf/grUtJjYEubcP6oqHPVLU3e0ab2yaQ9FnfysoLkAFZh8k7Fcv3RtMnvd0nbg+47ryTHEDVSLCg8OAeIh0/2wUFxm0fyAyVp2xaZw6+czcUnVRM7X3Iek9UdqKhENLBuAhg++4bcVFtvxewRPcEl0J2aMR8UYnMr60+NLzECzuDIComJO0vYk1Eu4j0RzU7do65e5j3Nz5rvHtgl+Go5/kxa/QzyYCQxOXC1OpuGpH8iUedFfQhCWZm3ZVVMnrPoeFAMjGsZI2NuA+ojy5N6bgere5QO8OzRpKxlDCj0bqPKukvAzw0ED0vGXGtNvjt6SD/uvZVpzByXZsho/P3piNkzIisYVyBrg5HbWKvQ5Vdm+ObYN//USxviqR7KjcuL3zmcarLgLMDmfWUwClW8n15sU/Z1F+7wEEResOjTMTw2zigyypNT1muTABdCogfGtYKS51jE9sbYI2xgciIuJ16Z/4emQKSbCWSB+QmRnFMH/zlUj4obwFz9h8u9SIsA=="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 8,
+    "candidatesTokenCount": 14,
+    "totalTokenCount": 390,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 8
+      }
+    ],
+    "thoughtsTokenCount": 368,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.6-flash",
+  "responseId": "pt1mauGqKd3kjuMPuKHg8Qw"
+}
+*/
 package tool
 
 import (
@@ -5,10 +61,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anmingwei/multi-agent-platform/internal/config/dotenv"
 )
 
 func TestWebSearchGeminiInteractions(t *testing.T) {
@@ -138,14 +195,13 @@ func TestSelectWebSearchProviderGeminiPriority(t *testing.T) {
 	}
 }
 
-// TestRealGeminiSearch 使用 .env 中的 GEMINI_API_KEY 对真实 Gemini interactions
+// TestRealGeminiSearch 使用 .env 中的 GEMINI_API_KEY 对真实 Gemini generateContent
 // 端点做一次搜索冒烟测试。默认 Skip，手动运行时加 -run TestRealGeminiSearch。
 func TestRealGeminiSearch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real network test")
 	}
-	key := os.Getenv("GEMINI_API_KEY")
-	_ = key // 若 future 需要 .env 优先可改为通过独立工具函数读取，避免 import cycle
+	key := dotenv.Getenv("GEMINI_API_KEY")
 	if key == "" {
 		t.Skip("GEMINI_API_KEY not set")
 	}
