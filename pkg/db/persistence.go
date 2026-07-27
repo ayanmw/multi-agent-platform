@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -392,6 +393,28 @@ func AggregateSessionDuration(sessionID string) (int, error) {
 		`SELECT COALESCE(SUM(duration_ms),0) FROM tasks WHERE session_id=?`, sessionID,
 	).Scan(&total)
 	return total, err
+}
+
+// IsTaskTerminated 返回 task 是否已处于终态，以及具体状态字符串。
+// 控制 handler 用它快速判断：终态任务不需要再 cancel/pause/resume。
+func IsTaskTerminated(id string) (bool, string, error) {
+	if DB == nil {
+		return false, "", fmt.Errorf("db not initialized")
+	}
+	var status string
+	err := DB.QueryRow(`SELECT status FROM tasks WHERE id=?`, id).Scan(&status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true, status, nil
+	default:
+		return false, status, nil
+	}
 }
 
 // InsertStep 创建一条新的 step 记录

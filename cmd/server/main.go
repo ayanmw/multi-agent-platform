@@ -279,6 +279,29 @@ func main() {
 			"approval_id": msg.ApprovalID,
 		})
 
+		// resolveControlTarget 先查 DB 任务状态。若任务已终态，广播
+		// task_status_sync 给前端修正状态，并返回 (terminated=true)。
+		// 运行中任务继续走 registry 路径；DB 查询失败时保守继续。
+		resolveControlTarget := func(msg ws.ClientControlMsg, action string) bool {
+			if msg.TaskID == "" {
+				return false
+			}
+			terminated, status, dbErr := db.IsTaskTerminated(msg.TaskID)
+			if dbErr != nil {
+				observability.DefaultLogger.Warn("control", "failed to query task status", map[string]any{"task_id": msg.TaskID, "error": dbErr.Error()})
+				return false
+			}
+			if terminated {
+				observability.DefaultLogger.Info("control", action+" received for already terminated task", map[string]any{"task_id": msg.TaskID, "status": status})
+				hub.SendEvent(event.NewEvent(event.EventTaskStatusSync, msg.TaskID, msg.AgentID, 0, map[string]any{
+					"status": status,
+					"reason": "task_already_" + status,
+				}))
+				return true
+			}
+			return false
+		}
+
 		// Phase 5: 把审批决定路由到 ApprovalHandler
 		switch msg.Action {
 		case "approve":
@@ -292,12 +315,11 @@ func main() {
 		case "cancel":
 			if msg.TaskID == "" {
 				observability.DefaultLogger.Warn("control", "cancel received without task_id", nil)
-				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
-					"message": "cancel requires task_id",
-				}))
 				return
 			}
-			// Phase 7-A：优先按 agentID 精确取消；未提供 agent_id 时退回到 root 任务级取消。
+			if resolveControlTarget(msg, "cancel") {
+				return
+			}
 			if cancelFn, ok := loadCancel(msg.TaskID, msg.AgentID); ok {
 				target := msg.TaskID
 				if msg.AgentID != "" {
@@ -311,9 +333,9 @@ func main() {
 		case "pause":
 			if msg.TaskID == "" {
 				observability.DefaultLogger.Warn("control", "pause received without task_id", nil)
-				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
-					"message": "pause requires task_id",
-				}))
+				return
+			}
+			if resolveControlTarget(msg, "pause") {
 				return
 			}
 			if engine, ok := loadEngine(msg.TaskID, msg.AgentID); ok {
@@ -321,18 +343,13 @@ func main() {
 				engine.Pause()
 			} else {
 				observability.DefaultLogger.Warn("control", "pause received for unknown task", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
-				hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
-					"message":     "pause target not found",
-					"action":      "pause",
-					"status_code": 404,
-				}))
 			}
 		case "resume":
 			if msg.TaskID == "" {
 				observability.DefaultLogger.Warn("control", "resume received without task_id", nil)
-				hub.SendEvent(event.NewEvent("system_info", "", "server", 0, map[string]any{
-					"message": "resume requires task_id",
-				}))
+				return
+			}
+			if resolveControlTarget(msg, "resume") {
 				return
 			}
 			if engine, ok := loadEngine(msg.TaskID, msg.AgentID); ok {
@@ -340,11 +357,6 @@ func main() {
 				engine.Resume()
 			} else {
 				observability.DefaultLogger.Warn("control", "resume received for unknown task", map[string]any{"task_id": msg.TaskID, "agent_id": msg.AgentID})
-				hub.SendEvent(event.NewEvent("system_info", msg.TaskID, "server", 0, map[string]any{
-					"message":     "resume target not found",
-					"action":      "resume",
-					"status_code": 404,
-				}))
 			}
 		case "set_auto_approval_tags":
 			if approvalHandler != nil {

@@ -54,6 +54,12 @@ const (
 	EventWorktreeExitBlocked   = "worktree_exit_blocked"  // exit{remove} 因未提交变更被护栏阻塞
 	EventWorktreeOrphanRemoved = "worktree_orphan_removed" // 启动孤儿扫描清理 crash 残留
 
+	// 控制消息与任务状态同步事件常量。当控制消息到达时任务已处于终态，
+	// 或前端缓存状态与 DB 不一致需要修正时，后端广播 task_status_sync。
+	// control_failed 表示控制动作因目标不可控失败，但不应创建伪 agent lane。
+	EventTaskStatusSync = "task_status_sync"
+	EventControlFailed  = "control_failed"
+
 	// 多模型分层路由事件常量。由 Router / Engine 在执行过程中广播，
 	// 前端 Inspector Routing 面板据此展示 intent 分类、模型命中、
 	// fallback 触发与限流/预算命中状态。

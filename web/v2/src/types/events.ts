@@ -29,6 +29,9 @@ export type EventType =
   | 'system_info'
   | 'system_error'
   | 'session_status'
+  // Control/status sync events
+  | 'task_status_sync'
+  | 'control_failed'
   // Memory / RAG events (Phase 6-F)
   | 'memory_created'
   | 'memory_updated'

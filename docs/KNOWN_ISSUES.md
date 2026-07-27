@@ -79,3 +79,29 @@ Checkpoint 是 ReAct Engine 运行到某一步时的**快照**，包含：
 - 发现新的已知缺陷时，按相同格式追加条目。
 - 修复某条缺陷后，将该条目移到 "已修复" 章节或删除，并在 `docs/API_CHANGELOG.md` / `roadmaps/ROADMAP.md` 中同步更新。
 - 每个条目应包含：现状、影响、为什么暂不修复、未来方向、相关文件。
+
+---
+
+## 3. 已修复：长任务结束后 Pause/Cancel 失效与 UI 状态滞留
+
+### 3.1 问题现象
+
+- real-LLM 长任务耗尽 `max_steps` 失败后，后端已写入 DB 并发出 `task_failed` 事件。
+- 前端因 WS 事件丢失或断线重连 Showing running，用户点击 Pause/Cancel 无响应。
+- 后端控制 handler 只依赖运行时 `cancelRegistry`/`engineRegistry`，任务结束后 entry 已被清理，于是报 "cancel/pause received for unknown task"，并向前端发送 `system_info` 事件，生成 "Server unknown" 伪 agent lane。
+
+### 3.2 修复内容
+
+- 后端：`cmd/server/main.go` 控制 handler 在 cancel/pause/resume 前先查 DB `tasks.status`；若任务已终态（completed/failed/cancelled），广播 `task_status_sync` 给前端，不再发送 `system_info`。
+- 前端：`web/v2/src/composables/useTaskStore.ts` 处理 `task_status_sync` 并将任务状态立即切换到终态；`loadSessionTurns` 对已缓存任务也同步 DB 真实状态，避免 stale running。
+- 事件缓冲：`internal/ws/hub.go` 把 `defaultEventBufferSize` 从 1000 提升到 5000，并优先保留 `task_failed`/`task_completed`/`task_status_sync` 等关键事件，降低断线丢失终态事件的概率。
+
+### 3.3 相关文件
+
+- `cmd/server/main.go` — WebSocket 控制 handler。
+- `pkg/db/persistence.go` — 新增 `IsTaskTerminated`。
+- `pkg/event/event.go` — 新增 `EventTaskStatusSync` / `EventControlFailed`。
+- `web/v2/src/composables/useTaskStore.ts` — 状态同步与事件处理。
+- `internal/ws/hub.go` — eventBuffer 容量与关键事件保护。
+
+---

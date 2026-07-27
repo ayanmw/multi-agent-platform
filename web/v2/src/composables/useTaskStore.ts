@@ -535,6 +535,28 @@ export function useTaskStore() {
         break
       }
 
+      case 'task_status_sync': {
+        // 当控制消息到达时任务已在 DB 中终态，把真实状态同步到前端缓存。
+        // 这能修正 WS 断线重连后 task_failed 事件丢失导致的 stale running UI。
+        const terminalStatus = evt.data.status as TaskStatus | undefined
+        if (terminalStatus && ['completed', 'failed', 'cancelled'].includes(terminalStatus)) {
+          task.status = terminalStatus
+          task.finalResult = task.finalResult || (evt.data.reason as string) || `Task ended with status: ${terminalStatus}`
+          for (const aid of Object.keys(task.agents)) {
+            const a = task.agents[aid]
+            if (a && (a.status === 'running' || a.status === 'paused')) {
+              a.status = terminalStatus === 'completed' ? 'completed' : 'failed'
+            }
+          }
+        }
+        break
+      }
+
+      case 'control_failed': {
+        // 控制动作失败（任务已终态、句柄丢失等），不创建新的 agent lane。
+        break
+      }
+
       case 'todo_list_changed': {
         // 由后端 todo.Service 写入操作后广播，同步到 useTodoStore 避免前端主动轮询
         const data = evt.data as unknown as TodoListChangedData
@@ -1006,8 +1028,23 @@ export function useTaskStore() {
     // Skip tasks already loaded (e.g. currently running ones that may arrive empty)
     let loaded = 0
     for (const t of tasks) {
-      if (taskCache.value[t.id]) {
-        // Track latest even if already cached so we can sync session status
+      const cached = taskCache.value[t.id]
+      if (cached) {
+        // 同步 DB 中的最新状态，避免长任务运行结束后断线重连导致 stale running。
+        const terminalStatuses = ['completed', 'failed', 'cancelled']
+        if (t.status && t.status !== cached.status) {
+          console.log('[useTaskStore] syncing cached task status from DB:', t.id, cached.status, '->', t.status)
+          cached.status = t.status as TaskStatus
+          if (terminalStatuses.includes(t.status)) {
+            cached.finalResult = cached.finalResult || `Task ended with status: ${t.status}`
+            for (const aid of Object.keys(cached.agents)) {
+              const a = cached.agents[aid]
+              if (a && (a.status === 'running' || a.status === 'paused')) {
+                a.status = t.status === 'completed' ? 'completed' : 'failed'
+              }
+            }
+          }
+        }
         if (!latestTask || t.started_at > latestTask.started_at) latestTask = t
         continue
       }
