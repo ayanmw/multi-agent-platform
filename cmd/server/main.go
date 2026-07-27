@@ -793,6 +793,10 @@ func main() {
 		EnableBrave:         cfg.WebSearchEnableBrave,
 		BraveAPIKey:         cfg.WebSearchBraveAPIKey,
 		BraveEndpoint:       cfg.WebSearchBraveEndpoint,
+		EnableGemini:        cfg.WebSearchEnableGemini || cfg.GeminiAPIKey != "",
+		GeminiAPIKey:        cfg.GeminiAPIKey,
+		GeminiEndpoint:      cfg.GeminiSearchEndpoint,
+		GeminiModel:         cfg.GeminiSearchModel,
 		EnableKimiSearch:    cfg.WebSearchEnableKimiSearch,
 		EnableGlmSearch:     cfg.WebSearchEnableGlmSearch,
 		UserAgent:           fmt.Sprintf("multi-agent-platform/%s", version.Version),
@@ -1204,7 +1208,7 @@ func defaultEndpointAndKeyForProvider(cfg *config.Config, provider string) (endp
 		endpoint = cfg.AnthropicEndpoint
 		apiKey = cfg.AnthropicAPIKey
 	case "gemini":
-		endpoint = cfg.GeminiEndpoint
+		endpoint = cfg.GeminiSearchEndpoint
 		apiKey = cfg.GeminiAPIKey
 	default:
 		endpoint = cfg.LLMEndpoint

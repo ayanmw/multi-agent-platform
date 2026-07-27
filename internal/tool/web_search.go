@@ -19,18 +19,24 @@ import (
 //
 // Provider 标识符（配合 WEBSEARCH_PROVIDER 使用）：
 //
-//	"exa", "parallel", "bing", "google", "tavily", "brave",
+//	"gemini", "exa", "parallel", "bing", "google", "tavily", "brave",
 //	"baidu", "sogou", "bing_cn_html",
 //	"kimi_search", "glm_search", "duckduckgo"
 //
 // WEBSEARCH_PROVIDER 为空时的 provider 优先级：
 //
-//	brave -> bing -> google -> tavily -> parallel -> exa
+//	gemini -> brave -> bing -> google -> tavily -> parallel -> exa
 //	-> baidu_mobile -> sogou -> bing_cn_html -> duckduckgo
 //
 // 国内 provider（baidu、sogou、bing_cn_html）默认关闭；DuckDuckGo 默认关闭。
 type WebSearchConfig struct {
 	Provider string // 显式覆盖；空表示自动选择
+
+	// Gemini provider（官方 Google Search 工具，有免费额度）
+	EnableGemini bool
+	GeminiAPIKey string
+	GeminiEndpoint string
+	GeminiModel string
 
 	// MCP provider
 	EnableExa      bool
@@ -90,17 +96,17 @@ type WebSearchConfig struct {
 //   - query                (string, required)：搜索查询。
 //   - num_results          (integer, optional)：结果数量（API/MCP provider
 //     为 1-30，DuckDuckGo 为 1-20；默认 8）。
-//   - livecrawl            (string,  optional)："fallback" 或 "preferred"
-//     （默认 "fallback"）。仅 Exa 使用。
-//   - search_type          (string,  optional)："auto"、"fast" 或 "deep"
-//     （默认 "auto"）。仅 Exa 使用。
+//   - livecrawl            (string,  optional)：“fallback” 或 “preferred”
+//     （默认 “fallback”）。仅 Exa 使用。
+//   - search_type          (string,  optional)：“auto”、“fast” 或 “deep”
+//     （默认 “auto”）。仅 Exa 使用。
 //   - context_max_chars    (integer, optional)：每条结果的最大上下文字符数
 //     （默认 10000）。仅 Exa 使用。
 //   - session_context_id   (string,  optional)：为未来使用预留的稳定 ID。
 //
 // Provider 选择：
 //  1. 若设置了 WEBSEARCH_PROVIDER，则使用该 provider（前提是已配置）。
-//  2. 否则按优先级顺序自动选择第一个已配置的 provider。
+//  2. 否则按优先级顺序自动选择第一个已配置的 provider；Gemini 优先。
 //  3. 若都未配置，则回退到 DuckDuckGo（除非被禁用）。
 func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 	if cfg.Timeout <= 0 {
@@ -127,10 +133,16 @@ func NewWebSearchTool(cfg WebSearchConfig) *BuiltinTool {
 	if cfg.BraveEndpoint == "" {
 		cfg.BraveEndpoint = "https://api.search.brave.com/res/v1/web/search"
 	}
+	if cfg.GeminiEndpoint == "" {
+		cfg.GeminiEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+	}
+	if cfg.GeminiModel == "" {
+		cfg.GeminiModel = "gemini-flash-latest"
+	}
 	return NewBuiltinTool(
 		"web_search",
 		"core",
-		"Search the web using Brave, Bing, Google, Tavily, Exa, Parallel, Baidu, Sogou, Bing China, or DuckDuckGo (no API key). Returns a text summary of search results. Use for recent/current information beyond the model's knowledge cutoff.",
+		"Search the web using Gemini, Brave, Bing, Google, Tavily, Exa, Parallel, Baidu, Sogou, Bing China, or DuckDuckGo (no API key). Returns a text summary of search results. Use for recent/current information beyond the model's knowledge cutoff.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -233,6 +245,8 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 				Livecrawl:            livecrawl,
 				ContextMaxCharacters: contextMaxChars,
 			})
+		case "gemini":
+			text, err = callGemini(ctx, cfg, query, numResults)
 		case "bing":
 			text, err = callBing(ctx, cfg, query, numResults)
 		case "google":
@@ -275,12 +289,15 @@ func webSearchExecutor(cfg WebSearchConfig, input map[string]any) (any, error) {
 }
 
 // selectWebSearchProvider 以确定性方式挑选已配置的 provider。
-// API provider 优先级：brave -> bing -> google -> tavily -> parallel -> exa。
+// API provider 优先级：gemini -> brave -> bing -> google -> tavily -> parallel -> exa。
 // 国内无 key provider 优先级：baidu -> sogou -> bing_cn_html。
 // 当没有任何 provider 被配置时返回 "", 使调用方转而使用 DuckDuckGo(未被禁用时)。
 func selectWebSearchProvider(cfg WebSearchConfig) string {
 	if cfg.Provider != "" {
 		return cfg.Provider
+	}
+	if cfg.EnableGemini || cfg.GeminiAPIKey != "" {
+		return "gemini"
 	}
 	if cfg.EnableBrave || cfg.BraveAPIKey != "" {
 		return "brave"

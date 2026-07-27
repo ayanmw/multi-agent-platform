@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-26
-> **当前版本**: v0.15.0 Alpha
+> **最近更新**: 2026-07-27
+> **当前版本**: v0.15.1 Alpha
 > **更新规则**: 每个 Phase 任务完成后，更新本文件并提交 Git。
 
 ---
@@ -18,8 +18,8 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → 
 Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅
   (架构演进)    (架构收尾)      (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)
 
-multi-model-routing ✅ → llm-provider-model-management ✅
-  (多模型分层路由 P1-P3)   (LLM Provider 与模型持久化)
+multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-provider ✅
+  (多模型分层路由 P1-P3)   (LLM Provider 与模型持久化)      (Gemini 搜索 provider)
 ```
 
 ---
@@ -48,6 +48,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅
 | Phase smoke-fix: 冒烟测试失败修复 | 2026-07-25 | 工具 Unregister fallback、policy 测试路径修复 |
 | Phase multi-model-routing: 多模型分层路由 | 2026-07-25 | 5-tier Router、RateLimiter、预算治理、fallback、前端路由面板 |
 | Phase llm-provider-model-management: Provider 与模型持久化 | 2026-07-26 | Provider `ListModels`、DB 持久化、ProfileResolver、前端 Model Manager |
+| Phase gemini-search-provider: Gemini 搜索 provider | 2026-07-27 | `core/web_search` 新增 gemini provider，走 generateContent google_search 工具 |
 
 ---
 
@@ -62,6 +63,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅
 | v0.13.0–v0.13.7 Alpha | 2026-07-24~25 | Phase 8-B 收尾 + UI-v2 体验 + 权限/自动审批 |
 | v0.14.1 Alpha | 2026-07-25 | multi-model-routing P1-P3 完整落地 |
 | v0.15.0 Alpha | 2026-07-26 | LLM Provider & Model Management 多 Provider 配置与模型持久化 |
+| v0.15.1 Alpha | 2026-07-27 | Gemini 搜索 provider 接入 `core/web_search` |
 
 ---
 

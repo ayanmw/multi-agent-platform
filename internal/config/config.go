@@ -31,11 +31,11 @@ type Config struct {
 	// 默认的 OpenAI-compatible 字段（LLMEndpoint / LLMAPIKey）。
 	AnthropicEndpoint string // ANTHROPIC_ENDPOINT
 	AnthropicAPIKey   string // ANTHROPIC_API_KEY
-	GeminiEndpoint    string // GEMINI_ENDPOINT
-	GeminiAPIKey      string // GEMINI_API_KEY
 	AzureOpenAIEndpoint   string // AZURE_OPENAI_ENDPOINT
 	AzureOpenAIAPIKey     string // AZURE_OPENAI_API_KEY
 	AzureOpenAIAPIVersion string // AZURE_OPENAI_API_VERSION
+	// 注：GeminiAPIKey / GeminiEndpoint 被复用为 Gemini LLM provider 与 Gemini Search
+	// 共享的鉴权字段；搜索端点使用独立的 GeminiSearchEndpoint。
 
 	// LLMProviders 是从 LLM_PROVIDERS 加载的多 Provider 配置列表，
 	// 用于启动时按 endpoint 自动发现模型。api_key 仅保存在内存，不入 DB。
@@ -125,6 +125,12 @@ type Config struct {
 	WebSearchEnableBrave   bool   // WEBSEARCH_ENABLE_BRAVE
 	WebSearchBraveAPIKey   string // WEBSEARCH_BRAVE_API_KEY
 	WebSearchBraveEndpoint string // WEBSEARCH_BRAVE_ENDPOINT
+
+	// Gemini Search API 配置（官方 Google Search 工具，无需信用卡，有免费额度）。
+	WebSearchEnableGemini bool   // WEBSEARCH_ENABLE_GEMINI
+	GeminiSearchEndpoint  string // GEMINI_ENDPOINT
+	GeminiAPIKey          string // GEMINI_API_KEY
+	GeminiSearchModel     string // GEMINI_SEARCH_MODEL
 
 	// 用于未来 kimi_search 和 glm_search 支持的占位 provider。
 	WebSearchEnableKimiSearch bool // WEBSEARCH_ENABLE_KIMI_SEARCH
@@ -241,9 +247,9 @@ func Load() (*Config, error) {
 		cfg.AnthropicAPIKey = v
 	}
 	if v := os.Getenv("GEMINI_ENDPOINT"); v != "" {
-		cfg.GeminiEndpoint = v
+		cfg.GeminiSearchEndpoint = v
 	} else {
-		cfg.GeminiEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+		cfg.GeminiSearchEndpoint = "https://generativelanguage.googleapis.com/v1beta"
 	}
 	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
 		cfg.GeminiAPIKey = v
@@ -371,6 +377,26 @@ func Load() (*Config, error) {
 	}
 	if v := os.Getenv("WEBSEARCH_BRAVE_ENDPOINT"); v != "" {
 		cfg.WebSearchBraveEndpoint = v
+	}
+
+	// Gemini Search API 配置。
+	if v := os.Getenv("WEBSEARCH_ENABLE_GEMINI"); v != "" {
+		cfg.WebSearchEnableGemini = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("GEMINI_ENDPOINT"); v != "" {
+		cfg.GeminiSearchEndpoint = v
+	} else {
+		cfg.GeminiSearchEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+	}
+	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
+		// 已有 Anthropic / Gemini / Azure 多 provider 段读取通用 GeminiEndpoint/GeminiAPIKey，
+		// 这里复用同一份 key（Search Endpoint 仍用专用变量区分）。
+		// 注意：Config.GeminiAPIKey 已在上方字段集中声明，不可再次声明。
+	}
+	if v := os.Getenv("GEMINI_SEARCH_MODEL"); v != "" {
+		cfg.GeminiSearchModel = v
+	} else {
+		cfg.GeminiSearchModel = "gemini-flash-latest"
 	}
 
 	// 占位的 kimi_search / glm_search 配置。

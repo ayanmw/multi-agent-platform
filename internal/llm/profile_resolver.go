@@ -145,7 +145,7 @@ func (r *ProfileResolver) fillDefaults(pc ProviderConfig) ProviderConfig {
 		}
 	case "gemini":
 		if pc.Endpoint == "" {
-			pc.Endpoint = r.cfg.GeminiEndpoint
+			pc.Endpoint = r.cfg.GeminiSearchEndpoint
 		}
 		if pc.APIKey == "" {
 			pc.APIKey = r.cfg.GeminiAPIKey
