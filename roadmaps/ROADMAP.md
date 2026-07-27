@@ -91,6 +91,10 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 - [ ] 部署文档与 K8s/容器化交付物。
 - [ ] Baidu 移动搜索反爬适配：验证码页 fallback（headless/API/cookie 池）。
 
+**已知缺陷（详见 `docs/KNOWN_ISSUES.md`）**
+
+- Checkpoint / 崩溃恢复已实现后端保存与恢复 API，但缺少前端入口、重启自动恢复与事件可观测性，demo 期暂不补齐，规划为企业级功能。
+
 **真实 LLM 已知限制（已记录于 memory）**
 
 - L5 `leader-dispatch` / `fault-tolerance` 在真实 LLM 下可靠性不稳定，mock 回归 21/21 PASS，但 real-LLM 不作为 FAIL 处理。

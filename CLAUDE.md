@@ -410,7 +410,8 @@ Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → 
 | UI-v2 | ✅ | `web/v2/` Observable Control Room（Dock 三栏 + 移动 3-tab，根路径默认 v2，`/ui/v1/` 保留旧版）；构建与核心组件已就绪，端到端冒烟与本分支合并纳入常规迭代 |
 | 7-H2 | ✅ | multi-agent 编排闭环：静态编排（parallel/sequential/DAG）已生产可用；动态 leader-driven `dispatch_sub_agent` 架构已闭环（mock 回归 21/21 PASS），real-LLM 下 leader 可靠派发为后续优化项，已记录限制 |
 | 3+ extend-task-cases | ✅ | 内置 Case 矩阵 5→21（L1-L5 阶梯）+ mock 回归 21/21（OpenSpec change 已归档） |
-| 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署等（Roadmap 统一规划）|
+| 7 生产化 | ⬜ | tokenizer、context 压缩、RBAC、MCP 增强、K8s 部署、Checkpoint 企业级崩溃恢复 UI 与自动恢复等（Roadmap 与 `docs/KNOWN_ISSUES.md` 统一规划）|
+
 | 8-A 架构演进 | ✅ | `AgentRunSpec/AgentDeps/AgentRunner` 收口启动链路（删除 20+ 参数 `runAgentLoop*`）；Tool 接口扩展 `Version/Source/CanonicalName` + `ToolDescriptor/ToolExecutor/ToolLoader` 抽象；v27 tools 表迁移；DB `InsertAgent/UpdateAgent` options struct；`cmd/server` 拆分 main.go / server.go / runner.go / api.go |
 | 8-B 架构收尾 | ✅ | 动态工具 DB 持久化+启动加载；`DynamicTool` 委托 `DynamicExecutor`；`Registry.ExecuteWithCtx` 注入 Workdir；`AgentRunner.Recover` 收口；handler 全方法化 + `taskActionRegistry` 注册表分发；闭包退场；新增 `tasks_api.go` / `checkpoint_api.go`；`go build ./...` + `go test ./...` 全绿 |
 | worktree 隔离 | ✅ | session 级 git worktree 隔离工作区（Manager 原语 + per-run WorkdirHolder + worktree/create·exit·status Agent Tools + REST create/get + v28 active_worktree_id + 启动孤儿扫描 + worktree_* 事件）；完全向后兼容，默认不触发零感知；mock 回归 21/21 不受影响 |
