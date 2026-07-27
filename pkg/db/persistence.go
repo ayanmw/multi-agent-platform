@@ -271,12 +271,12 @@ func QuerySessions(limit int, projectID string) ([]SessionRecord, error) {
 	if projectID != "" {
 		rows, err = DB.Query(
 			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
-			 FROM sessions WHERE project_id=? ORDER BY updated_at DESC LIMIT ?`, projectID, limit,
+			 FROM sessions WHERE project_id=? ORDER BY updated_at DESC`, projectID,
 		)
 	} else {
 		rows, err = DB.Query(
 			`SELECT id, name, COALESCE(root_task_id,''), status, COALESCE(user_input,''), COALESCE(project_id,'default'), COALESCE(turn_count,0), COALESCE(total_tokens,0), COALESCE(context_size,0), COALESCE(workspace_dir,''), COALESCE(workspace_auto,1), created_at, updated_at
-			 FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit,
+			 FROM sessions ORDER BY updated_at DESC`,
 		)
 	}
 	if err != nil {

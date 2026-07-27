@@ -90,6 +90,7 @@ type appServer struct {
 	todoSvc       *todo.Service
 	skillRegistry *skill.Registry
 	skillStore    *skill.Store
+	skillLoader   *skill.Loader
 	cronService   *cron.Service
 	mcpManager    *mcp.Manager
 
@@ -476,7 +477,7 @@ func (s *appServer) registerRoutes() {
 	registerMCPRoutes(http.DefaultServeMux, s.mcpManager)
 
 	// Phase skill: 注册 Skill REST API。
-	registerSkillRoutes(http.DefaultServeMux, s.hub, s.skillStore, s.skillRegistry)
+	registerSkillRoutes(http.DefaultServeMux, s.hub, s.skillStore, s.skillRegistry, s.skillLoader, &dbSkillSettingStore{})
 
 	// 动态 Tool 注册 API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
@@ -798,3 +799,10 @@ func (s *appServer) handleMultiAgent(w http.ResponseWriter, r *http.Request) {
 		"status":      "started",
 	})
 }
+
+// dbSkillSettingStore 把 pkg/db 的 GetSetting / SetSetting 适配为 skill.SettingStore 接口。
+// 用 adapter 而非让 internal/skill 直接 import pkg/db，避免循环依赖。
+type dbSkillSettingStore struct{}
+
+func (dbSkillSettingStore) GetSetting(key string) (string, error) { return db.GetSetting(key) }
+func (dbSkillSettingStore) SetSetting(key, value string) error     { return db.SetSetting(key, value) }

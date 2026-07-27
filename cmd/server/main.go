@@ -106,7 +106,11 @@ func spanRecordToMap(rec observability.SpanRecord) map[string]any {
 // serverShutdown 用于接收进程终止信号，驱动主服务优雅关闭（如停止 Hub）。
 var serverShutdown = make(chan os.Signal, 1)
 
-// globalSkillRegistry 是 Skill 子系统的全局注册表引用。
+// globalSkillLoader 是 Skill 子系统的全局 Loader 引用。
+//
+// 让 api.go 在 session 创建/解析后能为对应 workdir 加载文件系统 skill，
+// 也让 scan REST API 能触发全局刷新。
+var globalSkillLoader *skill.Loader
 //
 // 在 main() 中初始化后保留为包级变量，让 AgentRunner.runAgentLoopWithTurn 能
 // 直接把 SkillRegistry / ActiveSkills 注入 EngineConfig，而不必把参数一路透传
@@ -934,6 +938,9 @@ func main() {
 		skillRegistry = skill.NewRegistry()
 		skillStore = skill.NewStore(db.DB)
 		skillLoader = skill.NewLoader(skillStore, skillRegistry)
+		cwd, _ := os.Getwd()
+		fl := skill.NewFileLoader(skillRegistry, skillStore, &dbSkillSettingStore{}, skill.NewSkillEventBus(hub))
+		skillLoader.SetFileLoader(fl, cwd)
 		if err := skillLoader.LoadAll(); err != nil {
 			observability.DefaultLogger.Warn("skill", "failed to load skills", map[string]any{"error": err.Error()})
 		} else {
@@ -950,9 +957,10 @@ func main() {
 		_ = skillLoader.LoadAll()
 		log.Printf("Skill subsystem: disabled (no database)")
 	}
-	// 把 registry 提升为包级变量，让 AgentRunner.runAgentLoopWithTurn 等入口
-	// 可以直接读取当前已启用的 skill 列表并注入 EngineConfig。
+	// 把 registry 与 loader 提升为包级变量，让 AgentRunner、session handler、scan API
+	// 等入口可以直接读取当前已启用的 skill 列表或触发文件系统刷新。
 	globalSkillRegistry = skillRegistry
+	globalSkillLoader = skillLoader
 
 	// Phase 7: 初始化 Todo 子系统。
 	// Todo 属于 session，跨 task 共享，需尽早创建 service 以便将 LLM 工具
@@ -1111,6 +1119,7 @@ func main() {
 		todoSvc:          todoSvc,
 		skillRegistry:    skillRegistry,
 		skillStore:       skillStore,
+		skillLoader:      skillLoader,
 		cronService:      cronService,
 		mcpManager:       mcpManager,
 		orch:             orch,
