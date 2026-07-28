@@ -41,7 +41,7 @@ import { useSessionFiles } from './composables/useSessionFiles'
 import { useTheme } from './composables/useTheme'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
-import type { SkillCommand } from './types/skill'
+import type { SkillCommand, SkillPickerItem } from './types/skill'
 
 /** Cron 面板固定宽度（与 useLayout 中常量保持一致，仅用于 CSS 变量注入）。 */
 const CRON_DOCK_WIDTH = 280
@@ -125,7 +125,9 @@ const {
 const { agents, availableTools, loadAgents } = useAgentStore()
 const { projects, activeProjectId, loadProjects, setActiveProject } = useProjectStore()
 const { toasts, showError, showInfo, dismissToast } = useToast()
-const { loadSkills, enableSkill } = useSkills()
+const skillApi = useSkills()
+const { loadSkills, enableSkill } = skillApi
+const allSkills = computed(() => skillApi.skills.value)
 const skillCommand = useSkillCommands()
 const { theme } = useTheme()
 const caseStore = useCaseStore()
@@ -135,6 +137,8 @@ const { setActiveSession: setFilesSession, refreshDir: refreshFilesRoot } = useS
 const multiAgentEnabled = ref(false)
 const prefilledCommand = ref('')
 const selectedSkillCommand = ref<SkillCommand | null>(null)
+// 当前选中的 picker 项（skill/command），用于 submit 时判断走 enable 还是 invoke。
+const selectedPickerItem = ref<SkillPickerItem | null>(null)
 
 function onMultiAgentChange(v: boolean) {
   multiAgentEnabled.value = v
@@ -613,11 +617,33 @@ onUnmounted(() => {
 
 // === 发送消息 ===
 async function handleSend(text: string, options: { maxSteps: number; timeoutSeconds: number }) {
-  // SkillCommand 前缀解析：/command-id <rest>
-  const commandMatch = text.match(/^\/([a-zA-Z0-9_:_-]+)(?:\s+(.*))?$/)
-  if (commandMatch && selectedSkillCommand.value) {
+  // 2026-07: SkillPicker 选中项会带 /id 前缀传到这里。优先按 picker 记录的意图处理：
+  const slashMatch = text.match(/^\/([a-zA-Z0-9_:_-]+)(?:\s+(.*))?$/)
+  if (slashMatch && selectedPickerItem.value) {
+    const item = selectedPickerItem.value
+    const remaining = slashMatch[2] || ''
+    if (item.kind === 'command' && item.command) {
+      try {
+        await skillCommand.invokeCommand(item.command.id, activeSession.value?.workspaceDir || '')
+      } catch (err) {
+        showError(err instanceof Error ? err.message : `Failed to invoke command ${item.id}`)
+        return
+      }
+    } else if (item.kind === 'skill' && item.skill) {
+      try {
+        await enableSkill(item.skill.id)
+      } catch (err) {
+        showError(err instanceof Error ? err.message : `Failed to enable skill ${item.skill.id}`)
+        return
+      }
+    }
+    selectedPickerItem.value = null
+    selectedSkillCommand.value = null
+    text = remaining
+  } else if (slashMatch && selectedSkillCommand.value) {
+    // 兼容旧路径：通过 picker 选中的 command 但未用新 selectedPickerItem。
     const cmd = selectedSkillCommand.value
-    const remaining = commandMatch[2] || ''
+    const remaining = slashMatch[2] || ''
     try {
       await skillCommand.invokeCommand(cmd.id, activeSession.value?.workspaceDir || '')
     } catch (err) {
@@ -626,10 +652,10 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
     }
     selectedSkillCommand.value = null
     text = remaining
-  } else if (commandMatch) {
+  } else if (slashMatch) {
     // 没有通过 picker 选中，但文本是 /xxx 形式：尝试按 skill-id 启用。
-    const skillId = commandMatch[1]
-    const remaining = commandMatch[2] || ''
+    const skillId = slashMatch[1]
+    const remaining = slashMatch[2] || ''
     try {
       await enableSkill(skillId)
     } catch (err) {
@@ -889,18 +915,27 @@ async function handleRunCase(caseId: string) {
   }
 }
 
-// === Skill 触发（来自 SkillPanel 等） ===
-async function handleTriggerSkill(command: string) {
-  const match = command.match(/^\/([-a-zA-Z0-9_:]+)(?:\s+.*)?$/)
-  if (match) {
-    prefilledCommand.value = '/' + match[1] + ' '
+// === Skill 触发（来自 SkillPanel / SkillManager） ===
+async function handleTriggerSkill(idOrCommand: string) {
+  const id = idOrCommand.startsWith('/') ? idOrCommand.slice(1).split(/\s+/)[0] : idOrCommand
+  if (!id) return
+  try {
+    await enableSkill(id)
+  } catch (err) {
+    showError(err instanceof Error ? err.message : `Skill ${id} 启用失败`)
+    return
   }
+  prefilledCommand.value = '/' + id + ' '
 }
 
-// === SkillCommand picker 选中后触发 ===
-function handleSkillCommandSelect(cmd: SkillCommand) {
-  selectedSkillCommand.value = cmd
-  prefilledCommand.value = '/' + cmd.id + ' '
+// === SkillCommand / Skill picker 选中后触发（直接启用并发送剩余文本） ===
+function handleSkillPickerSelect(item: SkillPickerItem | undefined) {
+  if (!item) return
+  selectedPickerItem.value = item
+  selectedSkillCommand.value = item.kind === 'command' ? item.command || null : null
+  prefilledCommand.value = '/' + item.id + ' '
+  // 关闭 picker，让 CommandBar 的 submit / 用户 Enter 发送
+  skillPickerOpen.value = false
 }
 
 // === TopBar 状态文字 ===
@@ -1061,8 +1096,9 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           <SkillPicker
             :open="skillPickerOpen"
             :commands="skillCommand.filteredCommands.value"
+            :skills="allSkills"
             :selected-index="skillPickerSelectedIndex"
-            @select="handleSkillCommandSelect"
+            @select="handleSkillPickerSelect"
             @close="skillPickerOpen = false"
           />
           <CommandBar
@@ -1087,7 +1123,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
             @open-agents="openInspectorDialog('agents')"
-            @picker-select="handleSkillCommandSelect"
+            @picker-select="handleSkillPickerSelect"
           />
         </div>
       </section>
@@ -1172,8 +1208,9 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           <SkillPicker
             :open="skillPickerOpen"
             :commands="skillCommand.filteredCommands.value"
+            :skills="allSkills"
             :selected-index="skillPickerSelectedIndex"
-            @select="handleSkillCommandSelect"
+            @select="handleSkillPickerSelect"
             @close="skillPickerOpen = false"
           />
           <CommandBar
@@ -1198,7 +1235,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
             @open-agents="openInspectorDialog('agents')"
-            @picker-select="handleSkillCommandSelect"
+            @picker-select="handleSkillPickerSelect"
           />
         </div>
       </section>
@@ -1283,8 +1320,9 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         <SkillPicker
           :open="skillPickerOpen"
           :commands="skillCommand.filteredCommands.value"
+          :skills="allSkills"
           :selected-index="skillPickerSelectedIndex"
-          @select="handleSkillCommandSelect"
+          @select="handleSkillPickerSelect"
           @close="skillPickerOpen = false"
         />
         <CommandBar
@@ -1309,7 +1347,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           @multiAgentChange="onMultiAgentChange"
           @open-cases="openInspectorDialog('cases')"
           @open-agents="openInspectorDialog('agents')"
-          @picker-select="handleSkillCommandSelect"
+          @picker-select="handleSkillPickerSelect"
         />
       </div>
 

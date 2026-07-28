@@ -3,23 +3,29 @@
 ## 前端测试
 
 ```bash
-cd D:\Claude-Code-MultiAgent\web\v2
+cd /d/Claude-Code-MultiAgent/.claude/worktrees/skill-manager-ui-2026-07-27/web/v2
 npm run test:unit
 ```
+
+结果：19 文件 / 160 用例全绿。
 
 ## 前端构建
 
 ```bash
-cd D:\Claude-Code-MultiAgent\web\v2
+cd /d/Claude-Code-MultiAgent/.claude/worktrees/skill-manager-ui-2026-07-27/web/v2
 npm run build
 ```
+
+结果：vite build 成功，无 TS 错误。
 
 ## 后端编译
 
 ```bash
-cd D:\Claude-Code-MultiAgent
+cd /d/Claude-Code-MultiAgent/.claude/worktrees/skill-manager-ui-2026-07-27
 go build ./...
 ```
+
+结果：无编译错误。
 
 ## 向后兼容
 
@@ -28,6 +34,8 @@ export PYTHONUTF8=1
 export LLM_USE_MOCK=true
 ./scripts/cases-regression.sh
 ```
+
+结果：21/21 PASS（100%）。
 
 ## 手动验收
 
@@ -44,10 +52,10 @@ export LLM_USE_MOCK=true
 
 ## 检查清单
 
-- [ ] SkillManager 替换 SkillPanel。
-- [ ] useSkills 支持完整 CRUD 与事件同步。
-- [ ] local_file 只读、built_in 不可编辑。
-- [ ] CommandBar `/` picker 可用。
-- [ ] ContextWindowPanel 展示 skill 注入。
-- [ ] 移动端 manage tab 正常显示。
-- [ ] mock regression 21/21 PASS。
+- [x] SkillManager 替换 SkillPanel。
+- [x] useSkills 支持完整 CRUD 与事件同步。
+- [x] local_file 只读、built_in 不可编辑。
+- [x] CommandBar `/` picker 可用且支持 skill/command 双分组。
+- [x] ContextWindowPanel 展示 skill 注入占位区。
+- [x] 移动端 manage tab 正常显示。
+- [x] mock regression 21/21 PASS。

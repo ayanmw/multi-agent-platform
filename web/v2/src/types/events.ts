@@ -71,6 +71,13 @@ export type EventType =
   | 'cron_execution_skipped'
   | 'cron_missed'
   | 'cron_notification'
+  // Skill subsystem events (Phase skill-manager-ui)
+  | 'skill_enabled'
+  | 'skill_disabled'
+  | 'skill_loaded'
+  | 'skill_unloaded'
+  | 'skill_changed'
+  | 'skill_rendered'
   // Multi-model layered routing events (Phase multi-model-routing P2)
   | 'model_routed'
   | 'intent_classified'
@@ -206,6 +213,8 @@ export interface ContextWindowSnapshotData {
   estimated_total_tokens: number
   estimated_usage_ratio: number
   messages: ContextSnapshotMessage[]
+  /** Skill 注入块（Spec 5 占位：当前后端暂未下发，前端预留展示位） */
+  skill_blocks?: Array<{ skill_id: string; template_name: string; estimated_tokens: number; char_count: number }>
 }
 
 /** Task status

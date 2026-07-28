@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
-import type { SkillCommand } from '../types/skill'
+import type { Skill, SkillCommand, SkillPickerItem } from '../types/skill'
 
 interface Props {
   /** 是否显示 picker */
   open: boolean
-  /** 待选命令列表 */
+  /** 命令列表（.claude/commands） */
   commands: SkillCommand[]
+  /** Skill 列表 */
+  skills: Skill[]
   /** 当前选中下标 */
   selectedIndex?: number
 }
@@ -17,7 +19,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   /** 用户确认选择某个命令 */
-  (e: 'select', cmd: SkillCommand): void
+  (e: 'select', item: SkillPickerItem): void
   /** 请求关闭 picker */
   (e: 'close'): void
   /** 键盘事件透传，便于父组件做 ↑/↓ 导航 */
@@ -31,27 +33,70 @@ function close() {
 const listRef = ref<HTMLElement | null>(null)
 const itemRefs = ref<HTMLElement[]>([])
 
-const safeIndex = computed(() => {
-  if (!props.commands.length) return -1
-  return Math.max(0, Math.min(props.selectedIndex, props.commands.length - 1))
-})
-
-const grouped = computed(() => {
-  const groups = new Map<string, SkillCommand[]>()
-  for (const cmd of props.commands) {
-    const g = cmd.scope === 'global' ? 'Global' : 'Project'
-    if (!groups.has(g)) groups.set(g, [])
-    groups.get(g)!.push(cmd)
+/** 扁平化的全部待选项：Commands 优先，再 Skills，再 Built-in Skills */
+const items = computed<SkillPickerItem[]>(() => {
+  const result: SkillPickerItem[] = []
+  for (const cmd of props.commands || []) {
+    result.push({
+      kind: 'command',
+      id: cmd.id,
+      name: cmd.name,
+      description: cmd.description,
+      command: cmd,
+    })
   }
-  const result: { label: string; items: SkillCommand[] }[] = []
-  for (const [label, items] of groups) {
-    result.push({ label, items })
+  for (const skill of props.skills || []) {
+    result.push({
+      kind: 'skill',
+      id: skill.id,
+      name: skill.display_name || skill.id,
+      description: skill.description,
+      source: skill.source as SkillPickerItem['source'],
+      state: skill.state,
+      skill,
+    })
   }
   return result
 })
 
-function select(cmd: SkillCommand) {
-  emit('select', cmd)
+const safeIndex = computed(() => {
+  const len = items.value.length
+  if (!len) return -1
+  return Math.max(0, Math.min(props.selectedIndex, len - 1))
+})
+
+interface Group {
+  label: string
+  items: SkillPickerItem[]
+}
+
+const grouped = computed<Group[]>(() => {
+  const groups = new Map<string, SkillPickerItem[]>()
+  for (const item of items.value) {
+    // 分组策略：命令 -> Commands；skill 非 built_in -> Skills；skill built_in -> Built-in
+    let label = 'Unknown'
+    if (item.kind === 'command') {
+      label = 'Commands'
+    } else if (item.skill?.source === 'built_in') {
+      label = 'Built-in'
+    } else {
+      label = 'Skills'
+    }
+    if (!groups.has(label)) groups.set(label, [])
+    groups.get(label)!.push(item)
+  }
+
+  const labelOrder = ['Commands', 'Skills', 'Built-in']
+  const result: Group[] = []
+  for (const label of labelOrder) {
+    const groupItems = groups.get(label)
+    if (groupItems) result.push({ label, items: groupItems })
+  }
+  return result
+})
+
+function select(item: SkillPickerItem) {
+  emit('select', item)
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -64,8 +109,8 @@ function onKeydown(e: KeyboardEvent) {
   }
   if (e.key === 'Enter') {
     e.preventDefault()
-    const cmd = props.commands[safeIndex.value]
-    if (cmd) select(cmd)
+    const item = items.value[safeIndex.value]
+    if (item) select(item)
     return
   }
 }
@@ -99,7 +144,7 @@ watch(
 
 <template>
   <div
-    v-if="open && commands.length"
+    v-if="open && items.length"
     ref="listRef"
     class="skill-picker"
     tabindex="-1"
@@ -107,23 +152,28 @@ watch(
     @blur="onBlur"
   >
     <div class="skill-picker-header">
-      <span class="skill-picker-title">Commands</span>
+      <span class="skill-picker-title">Skills & Commands</span>
       <span class="skill-picker-hint">↑↓ Enter · Esc close</span>
     </div>
     <template v-for="group in grouped" :key="group.label">
       <div class="skill-picker-group">{{ group.label }}</div>
       <div
-        v-for="(cmd, idx) in group.items"
-        :key="cmd.id"
-        ref="(el) => { if (el) itemRefs[commands.indexOf(cmd)] = el as HTMLElement }"
+        v-for="(item, idx) in group.items"
+        :key="item.id + '-' + item.kind"
+        ref="(el) => { if (el) itemRefs[items.indexOf(item)] = el as HTMLElement }"
         class="skill-picker-item"
-        :class="{ active: safeIndex === commands.indexOf(cmd) }"
+        :class="{ active: safeIndex === items.indexOf(item) }"
         tabindex="0"
-        @click="select(cmd)"
+        @click="select(item)"
       >
-        <div class="skill-picker-id">/{{ cmd.id }}</div>
-        <div class="skill-picker-name">{{ cmd.name }}</div>
-        <div v-if="cmd.description" class="skill-picker-desc">{{ cmd.description }}</div>
+        <div class="skill-picker-id">
+          <span v-if="item.kind === 'command'" class="kind-badge kind-badge--command">/</span>
+          <span v-else-if="item.source === 'built_in'" class="kind-badge kind-badge--built-in">★</span>
+          <span v-else class="kind-badge kind-badge--skill">S</span>
+          /{{ item.id }}
+        </div>
+        <div class="skill-picker-name">{{ item.name }}</div>
+        <div v-if="item.description" class="skill-picker-desc">{{ item.description }}</div>
       </div>
     </template>
   </div>
@@ -183,6 +233,35 @@ watch(
   font-family: var(--font-mono, monospace);
   font-size: 0.75rem;
   color: var(--accent-skill, #ff6b35);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kind-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 0.65rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.kind-badge--command {
+  color: var(--accent-running, #00e5ff);
+  background: rgba(0, 229, 255, 0.12);
+}
+
+.kind-badge--built-in {
+  color: var(--accent-warning, #ffb800);
+  background: rgba(255, 184, 0, 0.12);
+}
+
+.kind-badge--skill {
+  color: var(--text-muted, #5c6675);
+  background: var(--bg-elevated);
 }
 
 .skill-picker-name {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import ManageTabs from './ManageTabs.vue'
-import SkillPanel from './SkillPanel.vue'
+import SkillManager from './SkillManager.vue'
 import TodoPanel from './TodoPanel.vue'
 import CronManager from './CronManager.vue'
 import CaseFilter from './CaseFilter.vue'
@@ -253,7 +253,7 @@ function handleMemorySelect(id: string) {
       </div>
 
       <div v-else-if="activeTab === 'skills'" class="tab-pane">
-        <SkillPanel :skills="skills" @trigger="handleTriggerSkill" />
+        <SkillManager @trigger-skill="handleTriggerSkill" />
       </div>
 
       <div v-else-if="activeTab === 'cron'" class="tab-pane">
