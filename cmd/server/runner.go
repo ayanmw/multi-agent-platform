@@ -81,6 +81,11 @@ type AgentRunSpec struct {
 	PreferredTier  string  // 偏好层级，如 "standard" / "premium"，空字符串表示不指定
 	AllowFallback  bool    // auto_route 下是否允许 tier 降级选择
 	MaxCostUSD     float64 // 单次 task 成本预算上限，0 表示无限制
+
+	// Phase fix-agent-model: 本运行请求显式指定的 LLM 模型名。
+	// 优先级高于 DB agent.model，低于 DB agent.preferred_model 的自动路由语义，
+	// 用于 chat / cron / recover 等入口按请求级模型运行。
+	Model string // 空字符串表示未指定，回退 DB agent.model 或 cfg.LLMModel
 }
 
 // AgentDeps 聚合一次 agent 运行所需的全部共享依赖。
@@ -181,8 +186,19 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 
 	caseID := ""
 
+	// Phase fix-agent-model: 恢复路径同样反查 task/agent 以确定 effectiveModel，
+	// 使恢复后的模型与创建时保持一致。
+	var agentRecord *db.AgentRecord
+	if db.DB != nil && cp.AgentID != "" {
+		if a, err := db.QueryAgentByID(cp.AgentID); err == nil && a != nil {
+			agentRecord = a
+		}
+	}
+	// AgentRunSpec 在恢复路径不可复用，按零值构造用于 resolveEffectiveModel。
+	effectiveModel := resolveEffectiveModel(AgentRunSpec{}, agentRecord, cfg)
+
 	// 复用 chat 路径的 provider 解析逻辑；失败时回退 nil，Engine 会再创建默认 provider。
-	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
 		log.Printf("[AgentRunner.Recover] failed to create provider for task=%s: %v", spec.TaskID, err)
 		provider = nil
@@ -274,7 +290,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	engineCfg := runtime.EngineConfig{
 		AgentID:           cp.AgentID,
 		SystemPrompt:      "You are recovering from a checkpoint. Continue the task from where you left off.",
-		Model:             cfg.LLMModel,
+		Model:             effectiveModel, // Phase fix-agent-model: 恢复路径使用 effectiveModel
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,
 		Provider:          provider,
@@ -470,7 +486,19 @@ func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, 
 	return out, nil
 }
 
-// agentAllowedTools 从 DB 加载某 agent 配置的 tools。
+// resolveEffectiveModel 按优先级解析本次运行实际使用的 LLM 模型名。
+// 优先级：spec.Model > DB agent.Model > cfg.LLMModel。
+// 该函数在 runAgentLoopWithTurn 与 Recover 中复用，保证 DB agents.model
+// 不再是摆设，同时保留请求级覆盖能力。
+func resolveEffectiveModel(spec AgentRunSpec, agent *db.AgentRecord, cfg *config.Config) string {
+	if spec.Model != "" {
+		return spec.Model
+	}
+	if agent != nil && agent.Model != "" {
+		return agent.Model
+	}
+	return cfg.LLMModel
+}
 // 如果 agent 不存在或没有配置 tools，返回 nil，在 Engine 与 PolicyGate
 // 中表示"允许所有 tool"。
 func agentAllowedTools(agentID string) []string {
@@ -703,7 +731,17 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// 创建一次并传给 Engine，以便 mock 开关 (LLM_USE_MOCK / LLMRealCases /
 	// LLMMockEndpoints) 生效。出错时记录日志并回退到 nil；Engine 会再用
 	// Endpoint/APIKey/Model 创建一个默认的 OpenAIProvider。
-	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	//
+	// Phase fix-agent-model: 优先按 spec.Model -> DB agent.model -> cfg.LLMModel
+	// 解析 effectiveModel，并在 provider 与 EngineConfig.Model 中保持一致。
+	var agentRecord *db.AgentRecord
+	if db.DB != nil && agentID != "" {
+		if a, err := db.QueryAgentByID(agentID); err == nil && a != nil {
+			agentRecord = a
+		}
+	}
+	effectiveModel := resolveEffectiveModel(spec, agentRecord, cfg)
+	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
 		log.Printf("[runAgentLoopWithTurn] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
 		provider = nil
@@ -825,6 +863,9 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	maxCostUSD := spec.MaxCostUSD
 	if db.DB != nil && agentID != "" {
 		if agent, err := db.QueryAgentByID(agentID); err == nil && agent != nil {
+			// Phase fix-agent-model: 复用已加载的 agent 记录计算 effectiveModel，
+			// 避免在 provider 与 EngineConfig 之间出现模型名不一致。
+			agentRecord = agent
 			if agent.PreferredModel != "" {
 				preferredModel = agent.PreferredModel
 			}
@@ -852,6 +893,10 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		modelMode = "single_model"
 	}
 
+	// 若前面未在 provider 创建阶段加载到 agent，这里用已复用的记录重新计算
+	// effectiveModel，保证单一路径、单一真相源。
+	effectiveModel = resolveEffectiveModel(spec, agentRecord, cfg)
+
 	holder := workspace.NewWorkdirHolder(workspaceDir)
 	if r.Deps.WorkspaceMgr != nil && sessionID != "" {
 		if engineTools == tools {
@@ -869,11 +914,11 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:              agentID,
-		SystemPrompt:         systemPrompt,
-		Model:                cfg.LLMModel,
-		Endpoint:             cfg.LLMEndpoint,
-		APIKey:               cfg.LLMAPIKey,
+		AgentID:      agentID,
+		SystemPrompt: systemPrompt,
+		Model:        effectiveModel, // Phase fix-agent-model: 使用解析后的 effectiveModel
+		Endpoint:     cfg.LLMEndpoint,
+		APIKey:       cfg.LLMAPIKey,
 		Provider:             provider, // 上方解析出的 mock 或真实 provider
 		CaseID:               caseID,   // MockProvider 脚本匹配提示
 		Temperature:          0.7,
