@@ -357,6 +357,30 @@ const ringDash = computed(() => {
         </div>
       </section>
 
+      <!-- Skill Injection 占位区块（Spec 5）：展示本次 prompt 注入的 skill 模板摘要 -->
+      <section v-if="skillBlocks.length" class="skill-injection-section">
+        <div class="section-header">
+          <h3 class="section-title">Skill Injection</h3>
+          <span class="section-meta">{{ skillBlocks.length }} block{{ skillBlocks.length > 1 ? 's' : '' }}</span>
+        </div>
+        <div class="skill-blocks">
+          <div
+            v-for="(block, idx) in skillBlocks"
+            :key="idx"
+            class="skill-block"
+          >
+            <div class="skill-block-top">
+              <span class="skill-block-name">{{ block.skill_id }}</span>
+              <span class="skill-block-template">{{ block.template_name }}</span>
+            </div>
+            <div class="skill-block-meta">
+              <span>{{ formatTokens(block.estimated_tokens) }} tok est</span>
+              <span>{{ block.char_count }} chars</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Message timeline -->
       <section class="timeline-section">
         <div class="section-header">
@@ -808,6 +832,60 @@ const ringDash = computed(() => {
 
 .role-count {
   color:var(--text-muted);
+}
+
+.skill-injection-section {
+  flex-shrink: 0;
+}
+
+.skill-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.skill-block {
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 107, 53, 0.06);
+  border: 1px solid rgba(255, 107, 53, 0.18);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.skill-block:hover {
+  background: rgba(255, 107, 53, 0.1);
+  border-color: rgba(255, 107, 53, 0.3);
+}
+
+.skill-block-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.skill-block-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--accent-skill, #ff6b35);
+  font-weight: 600;
+}
+
+.skill-block-template {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+}
+
+.skill-block-meta {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 0.25rem;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
 }
 
 /* Timeline */

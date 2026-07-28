@@ -5,6 +5,7 @@ import OptionsFlyout from './OptionsFlyout.vue'
 import { useTodoStore } from '@/composables/useTodoStore'
 import { useSessionStore } from '@/composables/useSessionStore'
 import { useAutoApproval } from '@/composables/useAutoApproval'
+import type { SkillPickerItem } from '@/types/skill'
 
 /**
  * 底部命令输入条（TaskInput 的 v2 升级版）。
@@ -95,7 +96,7 @@ const emit = defineEmits<{
   // SkillPicker 选中下标同步
   (e: 'update:pickerSelectedIndex', value: number): void
   // SkillPicker 选中确认
-  (e: 'pickerSelect', cmd: unknown): void
+  (e: 'pickerSelect', item: SkillPickerItem | undefined): void
 }>()
 
 const text = ref('')

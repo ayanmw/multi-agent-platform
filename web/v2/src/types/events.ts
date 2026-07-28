@@ -72,6 +72,13 @@ export type EventType =
   | 'cron_execution_skipped'
   | 'cron_missed'
   | 'cron_notification'
+  // Skill subsystem events (Phase skill-manager-ui)
+  | 'skill_enabled'
+  | 'skill_disabled'
+  | 'skill_loaded'
+  | 'skill_unloaded'
+  | 'skill_changed'
+  | 'skill_rendered'
   // Multi-model layered routing events (Phase multi-model-routing P2)
   | 'model_routed'
   | 'intent_classified'
@@ -84,13 +91,6 @@ export type EventType =
   | 'provider_sync_started'
   | 'provider_sync_completed'
   | 'provider_sync_failed'
-  // Skill lifecycle events (skill-context-window-stats)
-  | 'skill_enabled'
-  | 'skill_disabled'
-  | 'skill_loaded'
-  | 'skill_unloaded'
-  | 'skill_changed'
-  | 'skill_rendered'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {
@@ -213,8 +213,7 @@ export interface ContextWindowSnapshotData {
   max_context_tokens: number
   estimated_total_tokens: number
   estimated_usage_ratio: number
-  messages: ContextSnapshotMessage[]
-  /** Skill 注入明细：仅做展示，不重复计入 total（已含于 system message 中） */
+  /** Skill 注入块（Spec 5 占位：当前后端暂未下发，前端预留展示位） */
   skill_blocks?: SkillBlock[]
 }
 

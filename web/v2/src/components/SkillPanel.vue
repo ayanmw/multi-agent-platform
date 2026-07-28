@@ -6,7 +6,7 @@
  */
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { Skill } from '@/composables/useSkills'
+import type { Skill } from '@/types/skill'
 
 interface Props {
   /** Skill 列表，默认使用 useSkills 中返回的静态列表 */
@@ -34,8 +34,20 @@ function runManual() {
   manualInput.value = ''
 }
 
+interface DisplaySkill {
+  id: string
+  name: string
+  command: string
+  description: string
+}
+
 const displaySkills = props.skills.length
-  ? props.skills
+  ? props.skills.map(s => ({
+      id: s.id,
+      name: s.display_name || s.id,
+      command: '/' + s.id,
+      description: s.description,
+    }))
   : ([
       {
         id: 'graphify',
@@ -55,7 +67,7 @@ const displaySkills = props.skills.length
         command: '/research',
         description: '深度研究并生成带引用的综合报告。',
       },
-    ] as Skill[])
+    ] as DisplaySkill[])
 </script>
 
 <template>
