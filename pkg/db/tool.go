@@ -29,6 +29,8 @@ func init() {
 		Pre: func(db *sql.DB) error {
 			// 旧 tools 表可能不存在（全新库走 createTables 直接建新结构），
 			// 此时 Query 报错属预期，静默返回。
+			// 同时兼容 createTables 已建 v27 结构的情况：直接按旧列名查询会触发
+			// "no such column"，同样静默返回。"no such table" 也静默返回。
 			rows, err := db.Query(`SELECT name, COALESCE(description,''), COALESCE(schema,'{}'), COALESCE(enabled,1), created_at FROM tools`)
 			if err != nil {
 				return nil // 旧表不存在或 schema 不符，忽略

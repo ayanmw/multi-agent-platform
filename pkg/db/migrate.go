@@ -527,6 +527,75 @@ func getAppliedMigrations() (map[int]bool, error) {
 	return applied, rows.Err()
 }
 
+// baselineMigrations 把一组 migration 全部标记为已应用，用于全新数据库。
+// createTables() 已建好核心表结构，但仍需确保各子系统专用表（由 migration
+// 创建）存在；因此先执行所有含 CREATE 语句的 migration 的 SQL，再把全部版本
+// 写入 schema_migrations，避免启动日志刷屏。
+func baselineMigrations(list []Migration) error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 仅执行 CREATE 语句：核心表已由 createTables() 建好，但子系统表（如 crons、
+	// skills、settings）可能只在 migration 里创建。跳过 ALTER/UPDATE/INSERT/SELECT
+	// 等投影语句，避免重复建列或覆盖 seed 数据的日志。
+	// DROP 语句在这里也要执行，因为某些 migration 会先 DROP 旧表再 CREATE 新表
+	// （如 v27 tools 表）。Pre 钩子已在原 Migration 路径中使用；基线化时不调用
+	// Pre，避免在 MaxOpenConns(1) 下 tx 内外并发访问同一连接导致死锁。
+	for _, m := range list {
+		for _, stmt := range splitSQL(m.SQL) {
+			if stmt == "" {
+				continue
+			}
+			upper := strings.ToUpper(stmt)
+			// 基线化时只执行 CREATE/DROP；但 v11/v29/v32/v33 这类 ALTER TABLE 需要
+			// 为 createTables() 尚未带上的新列补列，否则后续 CRUD 会报"no such
+			// column"。对于 ALTER TABLE ADD COLUMN，若列已存在则 SQLite 会报
+			// duplicate column name，这里同样忽略。
+			// INSERT/UPDATE 等 seed/投影语句需要执行，因为 createTables() 不会播
+			// 种 default project 等数据。
+			isSchemaDDL := strings.HasPrefix(upper, "CREATE ") ||
+				strings.HasPrefix(upper, "DROP ") ||
+				strings.HasPrefix(upper, "ALTER TABLE ")
+			if isSchemaDDL {
+				if _, err := tx.Exec(stmt); err != nil {
+					// 对象已存在/不存在/列已存在，都不是故障，基线化继续。
+					msg := err.Error()
+					if strings.Contains(msg, "already exists") ||
+						strings.Contains(msg, "no such") ||
+						strings.Contains(msg, "duplicate column name") {
+						continue
+					}
+					return fmt.Errorf("baseline v%d statement failed: %w", m.Version, err)
+				}
+				continue
+			}
+
+			// 非 schema DDL（如 INSERT/UPDATE）是 seed/回填数据，必须执行。
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("baseline v%d seed statement failed: %w", m.Version, err)
+			}
+		}
+	}
+
+	stmt, err := tx.Prepare(
+		"INSERT INTO schema_migrations (version, description) VALUES (?, ?)")
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, m := range list {
+		if _, err := stmt.Exec(m.Version, m.Description); err != nil {
+			return fmt.Errorf("record v%d: %w", m.Version, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
 // RunMigrations 执行所有待应用的 migration。
 // 在 Init() 中于 createTables() 之后调用，此时表已存在。
 func RunMigrations() error {
@@ -545,6 +614,21 @@ func RunMigrations() error {
 
 	// 对 migrations 切片按 version 去重，防止多个 init() 注册同版本号。
 	uniqueMigrations := deduplicateMigrations(migrations)
+
+	// 全新数据库基线化：schema_migrations 为空说明 createTables() 刚建好核心表。
+	// 对于只含结构演进（ALTER/UPDATE/placeholder）的 migration，无需再执行即可
+	// 直接标记为已应用；对于包含 CREATE TABLE/INDEX 的 migration，仍要执行以确
+	// 保 createTables() 尚未覆盖的子系统表存在。这样新库直接到达最新 schema，同
+	// 时避免启动时逐条打印 30+ 条 migration 日志。老数据库因有已有记录，不会进
+	// 入此分支。
+	if len(applied) == 0 && len(uniqueMigrations) > 0 {
+		if err := baselineMigrations(uniqueMigrations); err != nil {
+			return fmt.Errorf("baseline migrations: %w", err)
+		}
+		log.Printf("[Migration] baseline to v%d; %d historical migrations pre-recorded",
+			uniqueMigrations[len(uniqueMigrations)-1].Version, len(uniqueMigrations))
+		return nil
+	}
 
 	for _, m := range uniqueMigrations {
 		if applied[m.Version] {
