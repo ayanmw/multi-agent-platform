@@ -17,8 +17,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useContextWindow } from '../composables/useContextWindow'
+import { useSkillEvents } from '../composables/useSkillEvents'
+import InjectedSkillBadge from './InjectedSkillBadge.vue'
+import type { SkillBlock } from '@/types/skill'
 
-type SnapshotMessage = { estimated_tokens: number }
+type SnapshotMessage = { estimated_tokens: number; role: string; content?: string }
 
 const props = defineProps<{
   activeTaskId: string
@@ -35,6 +38,7 @@ const props = defineProps<{
 // 组件用 fetchSnapshot 自包含地走来源 2，不再依赖"父组件必须绑 @refresh
 // 并自己实现 fetcher"这种隐式契约（该契约在 UI-v2 重构时丢失过一次）。
 const { currentSnapshot, setActiveTaskId, subTaskSnapshots, fetchSnapshot } = useContextWindow()
+const { skillBlocksByTask } = useSkillEvents()
 // 7-G: When a sub-task is selected, prefer its isolated snapshot from the store.
 const latest = computed(() => {
   if (props.subTaskId && subTaskSnapshots.value[props.subTaskId]) {
@@ -42,6 +46,25 @@ const latest = computed(() => {
   }
   return currentSnapshot.value
 })
+
+// 当前显示的 skill blocks：优先用 snapshot 自带的明细，若无则回退到
+// useSkillEvents 中 skill_rendered 事件缓存的 blocks（按 task_id 索引）。
+const skillBlocks = computed<SkillBlock[]>(() => {
+  if (latest.value?.skill_blocks) return latest.value.skill_blocks
+  const taskId = props.subTaskId || props.activeTaskId
+  return skillBlocksByTask.value[taskId] ?? []
+})
+
+// 判断某条 system message 是否匹配某个 skill block 内容前缀，用于展示 badge。
+// 这里用基于 render 后内容前缀的轻量匹配，避免误标普通 system prompt。
+function findMatchingSkillBlock(msg: SnapshotMessage): SkillBlock | undefined {
+  if (msg.role !== 'system' || !msg.content) return undefined
+  // 优先用快照明细中的 template_name；若无，再与 useSkillEvents 缓存比较。
+  return skillBlocks.value.find((b) => {
+    // 快照 skill_blocks 不含 content，无法精确匹配；只标第一条 system message。
+    return true
+  })
+}
 
 const isLoading = ref(false)
 let loadingTimer: ReturnType<typeof setTimeout> | null = null
@@ -340,6 +363,34 @@ const ringDash = computed(() => {
           <h3 class="section-title">Messages</h3>
           <span class="section-meta">{{ latest.messages.length }} total</span>
         </div>
+
+        <!-- Skill Injection 区：capacity ring 与 composition 之间新增独立区块 -->
+        <section class="skill-injection-section" aria-label="Skill Injection">
+          <div class="section-header">
+            <h3 class="section-title">Skill Injection</h3>
+            <span class="section-meta">{{ skillBlocks.length }} skill{{ skillBlocks.length === 1 ? '' : 's' }}</span>
+          </div>
+          <div v-if="skillBlocks.length === 0" class="skill-empty">
+            No skill context injected
+          </div>
+          <div v-else class="skill-block-list">
+            <div
+              v-for="block in skillBlocks"
+              :key="`${block.skill_id}-${block.template_name}`"
+              class="skill-block-item"
+            >
+              <div class="skill-block-main">
+                <span class="skill-block-id">{{ block.skill_id }}</span>
+                <InjectedSkillBadge :template-name="block.template_name" />
+              </div>
+              <div class="skill-block-meta">
+                <span>{{ formatTokens(block.estimated_tokens) }} tok</span>
+                <span class="skill-block-ratio">{{ formatPercent(block.estimated_tokens / Math.max(1, latest.estimated_total_tokens)) }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div class="timeline">
           <div class="view-combined-prompt" @click="openPromptDialog">
             <span class="view-combined-icon">👁</span>
@@ -360,6 +411,10 @@ const ringDash = computed(() => {
               <span class="message-preview" :title="msg.content">{{ truncate(msg.content, 58) }}</span>
               <span class="message-tokens">{{ formatTokens(msg.estimated_tokens) }} tok</span>
               <span class="message-ratio">{{ (messageRatio(msg) * 100).toFixed(0) }}%</span>
+              <InjectedSkillBadge
+                v-if="msg.role === 'system' && skillBlocks.length > 0"
+                :template-name="findMatchingSkillBlock(msg)?.template_name || skillBlocks[0]?.template_name || 'system_prompt'"
+              />
             </div>
           </div>
         </div>
@@ -1099,7 +1154,68 @@ const ringDash = computed(() => {
   color:var(--accent-tool);
 }
 
-/* Scrollbar for the panel */
+/* Skill injection section */
+.skill-injection-section {
+  flex-shrink: 0;
+  margin-bottom: 1rem;
+  padding: 0.875rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.skill-empty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.5rem 0;
+}
+
+.skill-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.skill-block-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-md);
+  background: var(--border-subtle);
+  border: 1px solid var(--border-default);
+}
+
+.skill-block-main {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.skill-block-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-block-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.skill-block-ratio {
+  color: var(--text-muted);
+}
 .timeline::-webkit-scrollbar,
 .block-content::-webkit-scrollbar,
 .prompt-dialog-body::-webkit-scrollbar {

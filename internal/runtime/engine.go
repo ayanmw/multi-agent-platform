@@ -530,6 +530,10 @@ type Engine struct {
 	// 主 ReAct loop、AgentBus listener 和审批路径都可能在不同 goroutine 中
 	// 追加消息；所有写操作都必须经过 appendMessage 持有 msgMu。
 	msgMu sync.Mutex
+
+	// injectedSkillBlocks 在 NewEngine 渲染 active skills 后记录每个被注入的
+	// Skill 模板块。用于 context_window_snapshot 的明细展示和 skill_rendered 事件。
+	injectedSkillBlocks []skill.InjectedSkillBlock
 }
 
 // NewEngine 根据给定配置、tool 注册表、event bus 和 task ID 创建一个
@@ -595,6 +599,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	// 注入 system prompt。仅追加名为 "system_prompt" 或 "task_prompt" 的
 	// 模板，使用配置的 SkillVariables 渲染。这让 agent 无需修改 base
 	// system prompt 即可动态扩展其指令。
+	var injectedBlocks []skill.InjectedSkillBlock
 	if cfg.SkillRegistry != nil && len(cfg.ActiveSkills) > 0 {
 		renderer := skill.NewRenderer()
 		var rendered []string
@@ -605,13 +610,35 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 			}
 			for _, tmpl := range s.Templates {
 				if tmpl.Name == "system_prompt" || tmpl.Name == "task_prompt" {
-					rendered = append(rendered, renderer.Render(tmpl, cfg.SkillVariables))
+					content := renderer.Render(tmpl, cfg.SkillVariables)
+					rendered = append(rendered, content)
+					injectedBlocks = append(injectedBlocks, skill.InjectedSkillBlock{
+						SkillID:         s.ID,
+						TemplateName:    tmpl.Name,
+						Content:         content,
+						CharCount:       len(content),
+						EstimatedTokens: estimateSkillBlockTokens(content),
+					})
 				}
 			}
 		}
 		if len(rendered) > 0 {
 			systemPrompt += "\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n")
 		}
+
+		// 广播 skill_rendered 事件，让前端在上下文窗口面板中显示已注入 skill。
+		blockData := make([]map[string]any, 0, len(injectedBlocks))
+		for _, b := range injectedBlocks {
+			blockData = append(blockData, map[string]any{
+				"skill_id":         b.SkillID,
+				"template_name":    b.TemplateName,
+				"char_count":       b.CharCount,
+				"estimated_tokens": b.EstimatedTokens,
+			})
+		}
+		bus.SendEvent(event.NewEventWithSubTask(skill.EventSkillRendered, taskID, cfg.SubTaskID, cfg.AgentID, 0, map[string]any{
+			"skill_blocks": blockData,
+		}))
 	}
 
 	// Phase worktree / Phase 7: 把当前 session 的 active TODO 列表（若已配置）注入 system prompt。
@@ -649,7 +676,8 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		providers:         cfg.Providers,       // Router 决策用的 provider 查找 map
 		lastError:         "",
 		consecutiveErrors: 0,
-		resumeCh:          make(chan struct{}),
+		resumeCh:            make(chan struct{}),
+		injectedSkillBlocks: injectedBlocks,
 	}
 }
 
@@ -661,6 +689,28 @@ func parsePreferredTier(s string) llm.ModelTier {
 		return llm.ModelTier(-1)
 	}
 	return tier
+}
+
+// estimateSkillBlockTokens 对 skill 注入文本做与单条消息一致的 token 估算。
+// 这里复用 llm 包的启发式：4 字符约 1 token + 固定开销，保证 skill block
+// 明细与消息级估算口径一致。
+func estimateSkillBlockTokens(content string) int {
+	return len(content)/4 + 5
+}
+
+// toLLMSkillBlocks 把内部 InjectedSkillBlock 转换为对外快照使用的 llm.SkillBlock。
+// content 不对外暴露，避免 context_window_snapshot 事件体积膨胀。
+func toLLMSkillBlocks(blocks []skill.InjectedSkillBlock) []llm.SkillBlock {
+	out := make([]llm.SkillBlock, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, llm.SkillBlock{
+			SkillID:         b.SkillID,
+			TemplateName:    b.TemplateName,
+			EstimatedTokens: b.EstimatedTokens,
+			CharCount:       b.CharCount,
+		})
+	}
+	return out
 }
 
 // appendMessage 以线程安全方式追加一条消息到 Engine.messages。
@@ -1758,7 +1808,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	// API 不提供 per-message token 用量。该比例足够准确，可用于占比
 	// 可视化和容量预警。
 	maxContextTokens := llm.EstimateModelContextWindow(e.cfg.Registry, selectedModel)
-	snapshot := llm.BuildContextWindowSnapshot(selectedModel, maxContextTokens, e.messages)
+	snapshot := llm.BuildContextWindowSnapshot(selectedModel, maxContextTokens, e.messages, toLLMSkillBlocks(e.injectedSkillBlocks))
 
 	// 缓存 snapshot，使 REST API 可以按需返回 live 上下文窗口而无需再
 	// 触发 LLM 调用。

@@ -60,6 +60,15 @@ type ContextSnapshotMessage struct {
 	ToolCalls     []ToolCall `json:"tool_calls,omitempty"`
 }
 
+// SkillBlock 描述被注入到 system prompt 中的单个 Skill 模板片段的 token 占用。
+// Content 不在快照中携带全文，避免污染 context_window_snapshot 事件体积。
+type SkillBlock struct {
+	SkillID         string `json:"skill_id"`
+	TemplateName    string `json:"template_name"`
+	EstimatedTokens int    `json:"estimated_tokens"`
+	CharCount       int    `json:"char_count"`
+}
+
 // ContextWindowSnapshot 描述 LLM 调用前一刻的上下文窗口状态。
 // 它刻意保持轻量、人类可读，便于前端同时渲染进度条和消息级明细。
 type ContextWindowSnapshot struct {
@@ -68,13 +77,15 @@ type ContextWindowSnapshot struct {
 	EstimatedTotalTokens int                      `json:"estimated_total_tokens"`
 	EstimatedUsageRatio  float64                  `json:"estimated_usage_ratio"`
 	Messages             []ContextSnapshotMessage `json:"messages"`
+	SkillBlocks          []SkillBlock             `json:"skill_blocks"`
 }
 
 // BuildContextWindowSnapshot 构造当前上下文窗口的快照。
 //
 // maxContextTokens 从所选 model 的 profile 读取。若为 0，
 // 快照不计算 ratio（usage_ratio 保持为 0）。
-func BuildContextWindowSnapshot(model string, maxContextTokens int, messages []Message) ContextWindowSnapshot {
+// skillBlocks 携带当前已注入的 skill 明细，仅做展示，不重复计入 total。
+func BuildContextWindowSnapshot(model string, maxContextTokens int, messages []Message, skillBlocks []SkillBlock) ContextWindowSnapshot {
 	total := SumEstimatedTokens(messages)
 
 	out := ContextWindowSnapshot{
@@ -82,6 +93,7 @@ func BuildContextWindowSnapshot(model string, maxContextTokens int, messages []M
 		MaxContextTokens:     maxContextTokens,
 		EstimatedTotalTokens: total,
 		Messages:             make([]ContextSnapshotMessage, 0, len(messages)),
+		SkillBlocks:          skillBlocks,
 	}
 
 	if maxContextTokens > 0 && total > 0 {
