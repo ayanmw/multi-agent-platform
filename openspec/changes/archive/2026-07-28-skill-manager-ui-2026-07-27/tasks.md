@@ -43,7 +43,7 @@
   - useSkills 测试（`web/v2/src/composables/__tests__/useSkills.spec.ts`）
   - SkillManager / SkillForm / SkillPicker 组件测试
 
-- [ ] 14. 验证
+- [x] 14. 验证
   - [x] `cd web/v2 && npm run test:unit`（160 passed）
   - [x] `cd web/v2 && npm run build`
   - [x] `go build ./...`
