@@ -1,16 +1,25 @@
-// orchestrator_test.go —— AgentBus 持久化 hook 的单元测试。
+// orchestrator_test.go —— Orchestrator 内部行为单元测试。
 //
-// 这些测试有意保持轻量：它们只验证 AgentBus 的管道行为
-// （RegisterHandler / SendMessage / SetPersistFn），而不启动完整的
-// Engine 或 SQLite。涉及真实 db 包的持久化行为由
-// pkg/db/persistence_test.go 以及 migration 测试覆盖。
+// AgentBus 测试只验证 AgentBus 的管道行为（RegisterHandler / SendMessage /
+// SetPersistFn），不启动完整的 Engine 或 SQLite。涉及真实 db 包的持久化
+// 行为由 pkg/db/persistence_test.go 以及 migration 测试覆盖。
+//
+// runAgent model 解析测试会初始化一个内存 SQLite，验证 orchestrator 能按
+// DB 中的 agent 记录解析 effectiveModel。
 
 package orchestrator
 
 import (
+	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/anmingwei/multi-agent-platform/internal/ws"
+	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
 
 // TestAgentBus_DeliversToRegisteredHandler 验证 SendMessage 会同步调用
@@ -291,5 +300,96 @@ func TestAgentBus_WorkerUnregisterBySubTask(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("unregistering subA should not affect subB delivery")
+	}
+}
+
+// TestRunAgent_UsesDBAgentModel 验证：当子 agent 的 DB 记录配置 Model="minimax-m2.5"
+// 且 spec.Model 为空时，runAgent 解析出的 effectiveModel 与传给 EngineConfig.Model
+// 的 model 都应是该 DB 模型，而非 cfg.LLMModel。该测试不跑完整 Engine，仅通过
+// agent_ready 事件捕获最终选用的 model。
+func TestRunAgent_UsesDBAgentModel(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	if err := db.Init(dbPath); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	defer db.Close()
+
+	agentID := "test_child_agent"
+	agentModel := "minimax-m2.5"
+	if err := db.InsertAgent(db.InsertAgentOptions{
+		ID:    agentID,
+		Name:  "Test Child Agent",
+		Model: agentModel,
+	}); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+
+	bus := NewAgentBus()
+	agentBusAdapter := NewAgentBusAdapter(bus)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	defer func() { _ = hub.Shutdown(context.Background()) }()
+
+	client := hub.RegisterTestClient("test-client")
+	defer hub.UnregisterTestClient(client)
+
+	cfg := &config.Config{
+		LLMModel:    "deepseek-v4-flash",
+		LLMUseMock:  true,
+		LLMEndpoint: "http://mock",
+		LLMAPIKey:   "mock",
+	}
+	tools := tool.NewRegistry()
+	o := New(hub, cfg, tools, nil, agentBusAdapter, nil, nil, nil, nil)
+
+	rootTaskID := "task_root_123"
+	spec := AgentSpec{
+		AgentID:      agentID,
+		Name:         "Test Child Agent",
+		SystemPrompt: "You are a test agent.",
+		// 使用内置 dialogue 脚本关键字，确保 mock provider 在没有 case ID 时仍能命中脚本。
+		Input: "hi",
+		Model: "",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	var seenModel string
+	var mu sync.Mutex
+	go func() {
+		o.RunWithCallback(ctx, rootTaskID, []AgentSpec{spec}, func(r AgentResult) {})
+		close(done)
+	}()
+
+	for {
+		select {
+		case evt := <-client.Send:
+			if evt.Type == "agent_ready" {
+				model, _ := evt.Data["model"].(string)
+				if model != "" {
+					mu.Lock()
+					seenModel = model
+					mu.Unlock()
+					cancel()
+					<-done
+					goto assertModel
+				}
+			}
+		case <-done:
+			goto assertModel
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timeout waiting for agent_ready event")
+		}
+	}
+
+assertModel:
+	mu.Lock()
+	defer mu.Unlock()
+	if seenModel != agentModel {
+		t.Fatalf("agent_ready model = %q, want %q", seenModel, agentModel)
 	}
 }
