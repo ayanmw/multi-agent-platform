@@ -479,6 +479,9 @@ func (s *appServer) registerRoutes() {
 	// Phase skill: 注册 Skill REST API。
 	registerSkillRoutes(http.DefaultServeMux, s.hub, s.skillStore, s.skillRegistry, s.skillLoader, &dbSkillSettingStore{})
 
+	// Phase skill-command-system: 注册 SkillCommand REST API。
+	registerSkillCommandRoutes(http.DefaultServeMux, s.hub, s.skillLoader, s.skillStore, s.skillRegistry)
+
 	// 动态 Tool 注册 API (Phase 2+)
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

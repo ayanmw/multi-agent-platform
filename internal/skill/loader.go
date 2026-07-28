@@ -1,18 +1,15 @@
 package skill
 
-import (
-	"time"
-)
-
 // Loader 负责将内置 Skill、持久化 Skill 与文件系统 Skill 加载到内存注册表。
 // 它是 Skill 系统的初始化入口：启动时先注册 builtins，再加载 store 中记录，
 // 最后扫描文件系统（全局 + 项目级）以发现本地 SKILL.md。
 type Loader struct {
-	store      *Store
-	registry   *Registry
-	builtins   []*Skill
-	fileLoader *FileLoader
-	globalDir  string
+	store          *Store
+	registry       *Registry
+	builtins       []*Skill
+	fileLoader     *FileLoader
+	commandLoader  *CommandLoader
+	globalDir      string
 }
 
 // NewLoader 创建一个 Loader，自动填充 DefaultBuiltins()。
@@ -59,33 +56,57 @@ func (l *Loader) LoadAll() error {
 		}
 	}
 
-	return nil
-}
-
-// LoadForWorkdir 为指定 session workdir 加载文件系统 Skill。
-// 先卸载 source=local_file 且 WorkspaceDir 匹配的旧 skill，避免重复或残留。
-func (l *Loader) LoadForWorkdir(workdir, projectID string) error {
-	if l.fileLoader == nil || workdir == "" {
-		return nil
-	}
-
-	// 清理该 workdir 下旧的 local_file skill，保证删除/重命名后重扫不会残留。
-	for _, s := range l.registry.List(nil) {
-		if s.Source == SkillSourceLocalFile && s.WorkspaceDir == workdir {
-			l.registry.Unregister(s.ID)
+	if l.commandLoader != nil && l.globalDir != "" {
+		if err := l.commandLoader.LoadGlobal(l.globalDir); err != nil {
+			return err
 		}
 	}
 
-	return l.fileLoader.LoadForWorkdir(workdir, projectID)
+	return nil
 }
 
-// RefreshAll 全量刷新文件系统 Skill：卸载所有 local_file，再重扫全局 + 所有已知 workdirs。
-// workdirProjectIDs 把 workdir 映射到 project_id；缺失时传空 map。
-func (l *Loader) RefreshAll(workdirs []string, workdirProjectIDs map[string]string) error {
-	if l.fileLoader == nil {
+// LoadForWorkdir 为指定 session workdir 加载文件系统 Skill 与 commands。
+// 先卸载 source=local_file 且 WorkspaceDir 匹配的旧 skill，避免重复或残留。
+func (l *Loader) LoadForWorkdir(workdir, projectID string) error {
+	if workdir == "" {
 		return nil
 	}
-	return l.fileLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs)
+
+	if l.fileLoader != nil {
+		// 清理该 workdir 下旧的 local_file skill，保证删除/重命名后重扫不会残留。
+		for _, s := range l.registry.List(nil) {
+			if s.Source == SkillSourceLocalFile && s.WorkspaceDir == workdir {
+				l.registry.Unregister(s.ID)
+			}
+		}
+		if err := l.fileLoader.LoadForWorkdir(workdir, projectID); err != nil {
+			return err
+		}
+	}
+
+	if l.commandLoader != nil {
+		l.commandLoader.UnloadForWorkdir(workdir)
+		if err := l.commandLoader.LoadForWorkdir(workdir, projectID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// RefreshAll 全量刷新文件系统 Skill 与 commands。
+func (l *Loader) RefreshAll(workdirs []string, workdirProjectIDs map[string]string) error {
+	if l.fileLoader != nil {
+		if err := l.fileLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs); err != nil {
+			return err
+		}
+	}
+	if l.commandLoader != nil {
+		if err := l.commandLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Reload 清空注册表中所有非内置 Skill，并重新从 store 与全局文件系统加载。
@@ -117,11 +138,19 @@ func (l *Loader) Reload() error {
 		}
 	}
 
+	if l.commandLoader != nil && l.globalDir != "" {
+		if err := l.commandLoader.LoadGlobal(l.globalDir); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-// WaitForDBRetry 是 Loader 内部重试等待时间（未使用，保留以兼容旧调用）。
-var WaitForDBRetry = 100 * time.Millisecond
+// SetCommandLoader 注入 CommandLoader，用于全局/项目级 .claude/commands/**/*.md 扫描。
+func (l *Loader) SetCommandLoader(cl *CommandLoader) {
+	l.commandLoader = cl
+}
 
 // Registry 返回 loader 持有的 registry；若 loader 为 nil 则返回 nil。
 // 外部 handler 可用它做只读统计，不破坏封装。
@@ -130,6 +159,14 @@ func (l *Loader) Registry() *Registry {
 		return nil
 	}
 	return l.registry
+}
+
+// CommandLoader 返回 loader 持有的 commandLoader；若 loader 为 nil 则返回 nil。
+func (l *Loader) CommandLoader() *CommandLoader {
+	if l == nil {
+		return nil
+	}
+	return l.commandLoader
 }
 
 // GlobalDir 返回 loader 配置的全局扫描基准目录。

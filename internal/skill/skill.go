@@ -140,3 +140,42 @@ type SkillTriggers struct {
 	// FilePatterns 是文件通配符列表，当工作区出现匹配文件时触发候选。
 	FilePatterns []string `json:"file_patterns"`
 }
+
+// SkillCommandScope 表示 SkillCommand 的作用范围。
+type SkillCommandScope string
+
+const (
+	// SkillCommandScopeGlobal 表示全局命令，对所有 session 可见。
+	SkillCommandScopeGlobal SkillCommandScope = "global"
+	// SkillCommandScopeProject 表示项目级命令，仅当 workspace_dir 匹配时可见。
+	SkillCommandScopeProject SkillCommandScope = "project"
+)
+
+// SkillCommand 表示从 .claude/commands/**/*.md 扫描到的命令触发器。
+// 命令可以关联已有 Skill，也可以自带 prompt 作为临时 skill 注入当前 run。
+type SkillCommand struct {
+	// ID 是命令唯一标识，例如 "ops:new"，使用冒号分层。
+	ID string `json:"id"`
+	// Name 是展示名。
+	Name string `json:"name"`
+	// Description 是简短说明。
+	Description string `json:"description"`
+	// SourcePath 是源文件路径。
+	SourcePath string `json:"source_path"`
+	// Scope 是命令作用范围：global / project。
+	Scope SkillCommandScope `json:"scope"`
+	// WorkspaceDir 是 project 级命令关联的工作目录。
+	WorkspaceDir string `json:"workspace_dir"`
+	// ProjectID 是 project 级命令归属的项目标识。
+	ProjectID string `json:"project_id"`
+	// SkillID 是可选关联的 skill ID。
+	SkillID string `json:"skill_id"`
+	// Prompt 是 Markdown 正文，作为临时 system_prompt 内容。
+	Prompt string `json:"prompt"`
+	// Tags 是标签列表。
+	Tags []string `json:"tags"`
+	// Icon 是可选图标名。
+	Icon string `json:"icon"`
+	// CommandKey 是可选的覆盖命令 ID 的 key。
+	CommandKey string `json:"command_key"`
+}

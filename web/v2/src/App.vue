@@ -13,6 +13,7 @@ import ManageFlyout from './components/ManageFlyout.vue'
 import CronDockPanel from './components/CronDockPanel.vue'
 import CronManager from './components/CronManager.vue'
 import ThemePalette from './components/ThemePalette.vue'
+import SkillPicker from './components/SkillPicker.vue'
 import MobileBottomSheet from './components/MobileBottomSheet.vue'
 import MobileNav from './components/MobileNav.vue'
 import TimelineTrack from './components/TimelineTrack.vue'
@@ -35,10 +36,12 @@ import { useRecentMods } from './composables/useRecentMods'
 import { useContextWindow } from './composables/useContextWindow'
 import { useKeyboard, SHORTCUTS } from './composables/useKeyboard'
 import { useSkills } from './composables/useSkills'
+import { useSkillCommands } from './composables/useSkillCommands'
 import { useSessionFiles } from './composables/useSessionFiles'
 import { useTheme } from './composables/useTheme'
 import type { Session } from './composables/useSessionStore'
 import type { TaskState } from './types/events'
+import type { SkillCommand } from './types/skill'
 
 /** Cron 面板固定宽度（与 useLayout 中常量保持一致，仅用于 CSS 变量注入）。 */
 const CRON_DOCK_WIDTH = 280
@@ -123,13 +126,15 @@ const { agents, availableTools, loadAgents } = useAgentStore()
 const { projects, activeProjectId, loadProjects, setActiveProject } = useProjectStore()
 const { toasts, showError, showInfo, dismissToast } = useToast()
 const { loadSkills, enableSkill } = useSkills()
+const skillCommand = useSkillCommands()
 const { theme } = useTheme()
 const caseStore = useCaseStore()
 const { setActiveSession: setFilesSession, refreshDir: refreshFilesRoot } = useSessionFiles()
 
-// === Skill / Multi-Agent 状态 ===
+// === Skill / Multi-Agent / SkillCommand 状态 ===
 const multiAgentEnabled = ref(false)
 const prefilledCommand = ref('')
+const selectedSkillCommand = ref<SkillCommand | null>(null)
 
 function onMultiAgentChange(v: boolean) {
   multiAgentEnabled.value = v
@@ -171,6 +176,18 @@ watch(activeSessionId, (sid) => {
   if (sid) setFilesSession(sid)
 }, { immediate: true })
 
+// 切换 session 时重新加载 project scope commands。
+watch(activeSessionId, async (sid, oldSid) => {
+  if (sid && sid !== oldSid) {
+    try {
+      await skillCommand.loadCommands(activeSession.value?.workspaceDir)
+      skillPickerSelectedIndex.value = 0
+    } catch (err) {
+      console.warn('[App] reload commands failed:', err)
+    }
+  }
+})
+
 // === 管理（原 Inspector）大 Dialog ===
 // 7/20: Context 已经抽到 CommandBar 右侧浮窗；此处只保留用于"展开管理"的 90vw Dialog。
 const inspectorDialogOpen = ref(false)
@@ -179,6 +196,8 @@ const inspectorInitialTab = ref<string>('memory')
 // Context 与 Manage 浮窗开关状态
 const contextFlyoutOpen = ref(false)
 const manageFlyoutOpen = ref(false)
+const skillPickerOpen = ref(false)
+const skillPickerSelectedIndex = ref(0)
 // 右侧 Cron 侧边面板（可折叠），桌面/平板均可用（状态已迁移到 useLayout）。
 const commandBarRef = ref<InstanceType<typeof CommandBar> | null>(null)
 const contextAnchorRect = ref<DOMRect | null>(null)
@@ -497,6 +516,11 @@ onMounted(async () => {
     // Skill 列表加载失败不阻塞主流程，useSkills 内部已回退到静态列表
     console.warn('[App] Failed to load skills:', err)
   }
+  try {
+    await skillCommand.loadCommands(activeSession.value?.workspaceDir)
+  } catch (err) {
+    console.warn('[App] Failed to load skill commands:', err)
+  }
 
   // 最近修改弹窗自动提示
   if (recentMods.value.length > 0) {
@@ -589,11 +613,23 @@ onUnmounted(() => {
 
 // === 发送消息 ===
 async function handleSend(text: string, options: { maxSteps: number; timeoutSeconds: number }) {
-  // Skill 前缀解析：/skill-id <rest> 或 /skill-id
-  const skillMatch = text.match(/^\/([a-zA-Z0-9_-]+)\s+(.*)$/) || text.match(/^\/([a-zA-Z0-9_-]+)$/)
-  if (skillMatch) {
-    const skillId = skillMatch[1]
-    const remaining = skillMatch[2] || ''
+  // SkillCommand 前缀解析：/command-id <rest>
+  const commandMatch = text.match(/^\/([a-zA-Z0-9_:_-]+)(?:\s+(.*))?$/)
+  if (commandMatch && selectedSkillCommand.value) {
+    const cmd = selectedSkillCommand.value
+    const remaining = commandMatch[2] || ''
+    try {
+      await skillCommand.invokeCommand(cmd.id, activeSession.value?.workspaceDir || '')
+    } catch (err) {
+      showError(err instanceof Error ? err.message : `Failed to invoke command ${cmd.id}`)
+      return
+    }
+    selectedSkillCommand.value = null
+    text = remaining
+  } else if (commandMatch) {
+    // 没有通过 picker 选中，但文本是 /xxx 形式：尝试按 skill-id 启用。
+    const skillId = commandMatch[1]
+    const remaining = commandMatch[2] || ''
     try {
       await enableSkill(skillId)
     } catch (err) {
@@ -853,12 +889,18 @@ async function handleRunCase(caseId: string) {
   }
 }
 
-// === Skill 触发 ===
+// === Skill 触发（来自 SkillPanel 等） ===
 async function handleTriggerSkill(command: string) {
-  const match = command.match(/^\/([a-zA-Z0-9_-]+)(?:\s+.*)?$/)
+  const match = command.match(/^\/([-a-zA-Z0-9_:]+)(?:\s+.*)?$/)
   if (match) {
     prefilledCommand.value = '/' + match[1] + ' '
   }
+}
+
+// === SkillCommand picker 选中后触发 ===
+function handleSkillCommandSelect(cmd: SkillCommand) {
+  selectedSkillCommand.value = cmd
+  prefilledCommand.value = '/' + cmd.id + ' '
 }
 
 // === TopBar 状态文字 ===
@@ -1016,6 +1058,13 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         />
 
         <div class="command-area">
+          <SkillPicker
+            :open="skillPickerOpen"
+            :commands="skillCommand.filteredCommands.value"
+            :selected-index="skillPickerSelectedIndex"
+            @select="handleSkillCommandSelect"
+            @close="skillPickerOpen = false"
+          />
           <CommandBar
             ref="commandBarRef"
             :disabled="isAgentRunning"
@@ -1024,6 +1073,8 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :prefill="prefilledCommand"
             v-model:context-open="contextFlyoutOpen"
             :context-anchor-rect="contextAnchorRect"
+            v-model:picker-open="skillPickerOpen"
+            :picker-selected-index="skillPickerSelectedIndex"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
             :active-task="currentTask"
@@ -1036,6 +1087,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
             @open-agents="openInspectorDialog('agents')"
+            @picker-select="handleSkillCommandSelect"
           />
         </div>
       </section>
@@ -1117,6 +1169,13 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         />
 
         <div class="command-area">
+          <SkillPicker
+            :open="skillPickerOpen"
+            :commands="skillCommand.filteredCommands.value"
+            :selected-index="skillPickerSelectedIndex"
+            @select="handleSkillCommandSelect"
+            @close="skillPickerOpen = false"
+          />
           <CommandBar
             ref="commandBarRef"
             :disabled="isAgentRunning"
@@ -1125,6 +1184,8 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :prefill="prefilledCommand"
             v-model:context-open="contextFlyoutOpen"
             :context-anchor-rect="contextAnchorRect"
+            v-model:picker-open="skillPickerOpen"
+            :picker-selected-index="skillPickerSelectedIndex"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
             :active-task="currentTask"
@@ -1137,6 +1198,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             @multiAgentChange="onMultiAgentChange"
             @open-cases="openInspectorDialog('cases')"
             @open-agents="openInspectorDialog('agents')"
+            @picker-select="handleSkillCommandSelect"
           />
         </div>
       </section>
@@ -1217,27 +1279,39 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
         </DockPanel>
       </div>
 
-      <CommandBar
-        v-if="isCommandBarVisible"
-        ref="commandBarRef"
-        :disabled="isAgentRunning"
-        :is-running="isAgentRunning"
-        :is-pending="isTaskPending"
-        :prefill="prefilledCommand"
-        v-model:context-open="contextFlyoutOpen"
-        :context-anchor-rect="contextAnchorRect"
-        :agents="agentOptions"
-        :available-tools="availableToolOptions"
-        @send="handleSend"
-        @pause="pauseTask"
-        @resume="resumeTask"
-        @cancel="cancelTask"
-        @update:prefill="prefilledCommand = ''"
-        @update:multiAgent="onMultiAgentChange"
-        @multiAgentChange="onMultiAgentChange"
-        @open-cases="openInspectorDialog('cases')"
-        @open-agents="openInspectorDialog('agents')"
-      />
+      <div class="command-area mobile-command-area">
+        <SkillPicker
+          :open="skillPickerOpen"
+          :commands="skillCommand.filteredCommands.value"
+          :selected-index="skillPickerSelectedIndex"
+          @select="handleSkillCommandSelect"
+          @close="skillPickerOpen = false"
+        />
+        <CommandBar
+          v-if="isCommandBarVisible"
+          ref="commandBarRef"
+          :disabled="isAgentRunning"
+          :is-running="isAgentRunning"
+          :is-pending="isTaskPending"
+          :prefill="prefilledCommand"
+          v-model:context-open="contextFlyoutOpen"
+          :context-anchor-rect="contextAnchorRect"
+          v-model:picker-open="skillPickerOpen"
+          :picker-selected-index="skillPickerSelectedIndex"
+          :agents="agentOptions"
+          :available-tools="availableToolOptions"
+          @send="handleSend"
+          @pause="pauseTask"
+          @resume="resumeTask"
+          @cancel="cancelTask"
+          @update:prefill="prefilledCommand = ''"
+          @update:multiAgent="onMultiAgentChange"
+          @multiAgentChange="onMultiAgentChange"
+          @open-cases="openInspectorDialog('cases')"
+          @open-agents="openInspectorDialog('agents')"
+          @picker-select="handleSkillCommandSelect"
+        />
+      </div>
 
       <MobileNav />
     </div>
