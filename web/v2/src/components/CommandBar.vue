@@ -24,7 +24,7 @@ import type { SkillPickerItem } from '@/types/skill'
  *   - availableTools: 可选工具列表（用于 Options 浮窗）
  *
  * emits:
- *   - send(text, {maxSteps, timeoutSeconds}): 提交输入
+ *   - send(text, {maxSteps, timeoutSeconds, agentId?}): 提交输入
  *   - pause / resume / cancel: 运行控制
  *   - update:multiAgent / multiAgentChange: multi-agent 开关变化
  *   - update:prefill: 预填充消费后重置
@@ -78,7 +78,7 @@ const todoHighPriorityCount = computed(() => activeSession.value ? highPriorityC
 const showTodoNotice = computed(() => todoActiveCount.value > 0)
 
 const emit = defineEmits<{
-  (e: 'send', text: string, options: { maxSteps: number; timeoutSeconds: number }): void
+  (e: 'send', text: string, options: { maxSteps: number; timeoutSeconds: number; agentId?: string }): void
   (e: 'pause'): void
   (e: 'resume'): void
   (e: 'cancel'): void
@@ -104,6 +104,7 @@ const optionsOpen = ref(false)
 const maxSteps = ref(30)
 const timeoutSeconds = ref(0)
 const multiAgent = ref(false)
+const selectedAgentId = ref<string>('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const optionsBtnRef = ref<HTMLElement | null>(null)
 const contextBtnRef = ref<HTMLElement | null>(null)
@@ -209,6 +210,7 @@ function submit() {
   emit('send', value, {
     maxSteps: maxSteps.value,
     timeoutSeconds: timeoutSeconds.value,
+    agentId: selectedAgentId.value || undefined,
   })
   text.value = ''
   nextTick(adjustTextareaHeight)
@@ -355,6 +357,7 @@ watch(
 
     <OptionsFlyout
       :open="optionsOpen"
+      v-model="selectedAgentId"
       :max-steps="maxSteps"
       :timeout-seconds="timeoutSeconds"
       :multi-agent="multiAgent"
