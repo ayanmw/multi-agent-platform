@@ -43,12 +43,19 @@ func initToolsTestDB(t *testing.T) *sql.DB {
 	return sqlDB
 }
 
-func TestCreateAndDeleteSkillTool(t *testing.T) {
+func newSkillToolRegistry(t *testing.T) (*Store, *Registry) {
 	sqlDB := initToolsTestDB(t)
-	defer sqlDB.Close()
-
+	t.Cleanup(func() { sqlDB.Close() })
 	store := NewStore(sqlDB)
 	registry := NewRegistry()
+	for _, s := range DefaultBuiltins() {
+		registry.Register(*s)
+	}
+	return store, registry
+}
+
+func TestCreateAndDeleteSkillTool(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
 
 	toolRegistry := tool.NewRegistry()
 	toolRegistry.Register(NewSkillCreateLocalTool(store, registry))
@@ -86,11 +93,8 @@ func TestCreateAndDeleteSkillTool(t *testing.T) {
 		t.Fatalf("list execute: %v", err)
 	}
 	skills := listRes.([]map[string]any)
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill listed, got %d", len(skills))
-	}
-	if skills[0]["id"] != "test/skill-tool" {
-		t.Fatalf("unexpected listed skill id %v", skills[0]["id"])
+	if len(skills) != 3 { // 2 built-in + 1 created
+		t.Fatalf("expected 3 skills listed, got %d", len(skills))
 	}
 
 	deleteRes, err := toolRegistry.Execute("skill/delete_local", map[string]any{"id": "test/skill-tool"})
@@ -108,13 +112,268 @@ func TestCreateAndDeleteSkillTool(t *testing.T) {
 	if _, err := store.Get("test/skill-tool"); err == nil {
 		t.Fatalf("skill should be removed from store after delete")
 	}
+}
 
-	listRes, err = toolRegistry.Execute("skill/list", nil)
+// TestSkillCreateGetUpdateDeleteFlow 覆盖 CRUD 完整流程：创建 → 列表 → 获取 → 更新 → 禁用/启用 → 删除。
+func TestSkillCreateGetUpdateDeleteFlow(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	create := NewSkillCreateLocalTool(store, registry)
+	_, err := create.Execute(map[string]any{
+		"id":           "local/test-flow",
+		"display_name": "Flow Skill",
+		"description":  "desc",
+		"content":      "Hello {{name}}.",
+	})
 	if err != nil {
-		t.Fatalf("list after delete execute: %v", err)
+		t.Fatalf("create: %v", err)
 	}
-	skills = listRes.([]map[string]any)
-	if len(skills) != 0 {
-		t.Fatalf("expected 0 skills after delete, got %d", len(skills))
+
+	// list 应包含刚创建的 skill（摘要）。
+	listTool := NewSkillListTool(registry)
+	listRes, err := listTool.Execute(map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(listRes.([]map[string]any)) < 1 {
+		t.Fatalf("expected at least 1 skill in list, got %d", len(listRes.([]map[string]any)))
+	}
+
+	// get 应返回完整 skill。
+	getTool := NewSkillGetTool(registry)
+	getRes, err := getTool.Execute(map[string]any{"id": "local/test-flow"})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	got := getRes.(map[string]any)
+	if got["display_name"] != "Flow Skill" {
+		t.Fatalf("expected display_name Flow Skill, got %v", got["display_name"])
+	}
+
+	// update 修改 display_name 和 content。
+	updateTool := NewSkillUpdateLocalTool(store, registry)
+	updateRes, err := updateTool.Execute(map[string]any{
+		"id": "local/test-flow",
+		"updates": map[string]any{
+			"display_name": "Updated Flow",
+			"content":      "Hi {{name}}!",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	updateMap := updateRes.(map[string]any)
+	if updateMap["forked_from"] != false {
+		t.Fatalf("local_db update should not fork")
+	}
+	summary := updateMap["skill"].(map[string]any)
+	if summary["display_name"] != "Updated Flow" {
+		t.Fatalf("expected updated display_name, got %v", summary["display_name"])
+	}
+
+	// get 再查确认模板已改。
+	getRes, err = getTool.Execute(map[string]any{"id": "local/test-flow"})
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	templates := getRes.(map[string]any)["templates"].([]any)
+	if len(templates) != 1 {
+		t.Fatalf("expected 1 template, got %d", len(templates))
+	}
+	tmpl := templates[0].(map[string]any)
+	if tmpl["content"] != "Hi {{name}}!" {
+		t.Fatalf("expected updated content, got %v", tmpl["content"])
+	}
+
+	// disable → 再次 list 不应出现禁用项（list 不过滤状态）。
+	disable := NewSkillDisableTool(store, registry)
+	_, err = disable.Execute(map[string]any{"id": "local/test-flow"})
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	s, _ := registry.Get("local/test-flow")
+	if s.State != SkillStateDisabled {
+		t.Fatalf("expected disabled state, got %s", s.State)
+	}
+
+	// 持久化验证：新 registry 加载后仍为 disabled。
+	newReg := NewRegistry()
+	for _, bs := range DefaultBuiltins() {
+		newReg.Register(*bs)
+	}
+	all, _ := store.ListAll()
+	for _, sk := range all {
+		if sk.Scope == "" {
+			sk.Scope = SkillScopeGlobal
+		}
+		newReg.Register(sk)
+	}
+	if restored, ok := newReg.Get("local/test-flow"); !ok || restored.State != SkillStateDisabled {
+		t.Fatalf("expected restored disabled state, got %+v", restored)
+	}
+
+	enable := NewSkillEnableTool(store, registry)
+	_, err = enable.Execute(map[string]any{"id": "local/test-flow"})
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	s, _ = registry.Get("local/test-flow")
+	if s.State != SkillStateEnabled {
+		t.Fatalf("expected enabled state, got %s", s.State)
+	}
+
+	// search 命中。
+	search := NewSkillSearchTool(registry)
+	searchRes, err := search.Execute(map[string]any{"q": "Updated Flow"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(searchRes.([]map[string]any)) != 1 {
+		t.Fatalf("expected 1 search hit, got %d", len(searchRes.([]map[string]any)))
+	}
+
+	// delete 删除。
+	deleteTool := NewSkillDeleteLocalTool(store, registry)
+	_, err = deleteTool.Execute(map[string]any{"id": "local/test-flow"})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if registry.Exists("local/test-flow") {
+		t.Fatalf("skill should be deleted")
+	}
+}
+
+// TestSkillUpdateForksBuiltIn 验证更新 built_in skill 时自动 fork 为 local_db shadow，
+// 且删除 shadow 后 built_in 重新出现。
+func TestSkillUpdateForksBuiltIn(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	if !registry.Exists("builtin-code-helper") {
+		t.Fatal("expected builtin-code-helper to exist")
+	}
+	original, _ := registry.Get("builtin-code-helper")
+	if original.Source != SkillSourceBuiltIn {
+		t.Fatalf("expected built_in source, got %s", original.Source)
+	}
+
+	updateTool := NewSkillUpdateLocalTool(store, registry)
+	res, err := updateTool.Execute(map[string]any{
+		"id": "builtin-code-helper",
+		"updates": map[string]any{
+			"display_name": "Forked Code Helper",
+			"content":      "You are a {{language}} wizard.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update builtin: %v", err)
+	}
+	resMap := res.(map[string]any)
+	if resMap["forked_from"] != true {
+		t.Fatalf("expected forked_from true, got %v", resMap["forked_from"])
+	}
+
+	s, _ := registry.Get("builtin-code-helper")
+	if s.Source != SkillSourceLocalDB {
+		t.Fatalf("expected shadow source local_db, got %s", s.Source)
+	}
+	if s.DisplayName != "Forked Code Helper" {
+		t.Fatalf("expected forked display name, got %s", s.DisplayName)
+	}
+
+	// store 中应能读到 shadow。
+	stored, err := store.Get("builtin-code-helper")
+	if err != nil {
+		t.Fatalf("store get shadow: %v", err)
+	}
+	if stored.Source != SkillSourceLocalDB {
+		t.Fatalf("expected stored shadow source local_db, got %s", stored.Source)
+	}
+
+	// 删除 shadow 后 built_in 恢复。
+	deleteTool := NewSkillDeleteLocalTool(store, registry)
+	_, err = deleteTool.Execute(map[string]any{"id": "builtin-code-helper"})
+	if err != nil {
+		t.Fatalf("delete shadow: %v", err)
+	}
+	restored, _ := registry.Get("builtin-code-helper")
+	if restored.Source != SkillSourceBuiltIn {
+		t.Fatalf("expected restored built_in source, got %s", restored.Source)
+	}
+	if restored.DisplayName != original.DisplayName {
+		t.Fatalf("expected restored original display name, got %s", restored.DisplayName)
+	}
+}
+
+// TestSkillDeleteBuiltInForbidden 验证直接删除 built_in 与 local_file 被禁止。
+func TestSkillDeleteBuiltInForbidden(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	deleteTool := NewSkillDeleteLocalTool(store, registry)
+	_, err := deleteTool.Execute(map[string]any{"id": "builtin-code-helper"})
+	if err == nil {
+		t.Fatal("expected error deleting built-in")
+	}
+}
+
+// TestSkillUpdateLocalFileForbidden 验证直接更新 local_file 被禁止。
+func TestSkillUpdateLocalFileForbidden(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	// 手动注入一个 local_file skill。
+	registry.Register(Skill{
+		ID:              "local-file/test",
+		DisplayName:     "Local File Skill",
+		Source:          SkillSourceLocalFile,
+		IsLocalEditable: false,
+		State:           SkillStateEnabled,
+	})
+
+	updateTool := NewSkillUpdateLocalTool(store, registry)
+	_, err := updateTool.Execute(map[string]any{
+		"id":      "local-file/test",
+		"updates": map[string]any{"display_name": "X"},
+	})
+	if err == nil {
+		t.Fatal("expected error updating local_file skill")
+	}
+
+	deleteTool := NewSkillDeleteLocalTool(store, registry)
+	_, err = deleteTool.Execute(map[string]any{"id": "local-file/test"})
+	if err == nil {
+		t.Fatal("expected error deleting local_file skill")
+	}
+}
+
+// TestSkillSearchFilters 验证 search 的 source/scope 过滤生效。
+func TestSkillSearchFilters(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	create := NewSkillCreateLocalTool(store, registry)
+	_, err := create.Execute(map[string]any{
+		"id":           "searchable/local",
+		"display_name": "Searchable",
+		"content":      "x",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	search := NewSkillSearchTool(registry)
+	res, err := search.Execute(map[string]any{"source": "built_in"})
+	if err != nil {
+		t.Fatalf("search source: %v", err)
+	}
+	for _, item := range res.([]map[string]any) {
+		if item["source"] != "built_in" {
+			t.Fatalf("source filter leaked: %v", item)
+		}
+	}
+
+	res, err = search.Execute(map[string]any{"scope": "global"})
+	if err != nil {
+		t.Fatalf("search scope: %v", err)
+	}
+	if len(res.([]map[string]any)) < 2 {
+		t.Fatalf("expected at least 2 global scope skills, got %d", len(res.([]map[string]any)))
 	}
 }

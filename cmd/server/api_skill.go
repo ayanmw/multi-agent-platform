@@ -326,15 +326,30 @@ func handleUpdateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 		writeJSONError(w, "skill not found", http.StatusNotFound)
 		return
 	}
-	if !existing.IsLocalEditable {
-		writeJSONError(w, "skill is not local editable", http.StatusForbidden)
-		return
-	}
 
 	var req skillUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// 内置 skill 允许 fork 为 local_db shadow；local_file 禁止修改；其它不可编辑返回 403。
+	switch existing.Source {
+	case skill.SkillSourceBuiltIn:
+		// 自动 fork 为 local_db shadow：保持同 ID 覆盖，后续 system prompt 生效。
+		existing.Source = skill.SkillSourceLocalDB
+		existing.IsLocalEditable = true
+		existing.SourceURL = ""
+	case skill.SkillSourceLocalFile:
+		writeJSONError(w, "skill loaded from local file cannot be edited via API; edit the file directly", http.StatusForbidden)
+		return
+	case skill.SkillSourceLocalDB:
+		// local_db 直接修改，无需 fork。
+	default:
+		if !existing.IsLocalEditable {
+			writeJSONError(w, "skill is not local editable", http.StatusForbidden)
+			return
+		}
 	}
 
 	updated := existing
@@ -417,15 +432,22 @@ func handleUpdateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 	json.NewEncoder(w).Encode(updated)
 }
 
-// handleDeleteSkill 处理 DELETE /api/skills/:id，仅允许删除 local editable skill。
+// handleDeleteSkill 处理 DELETE /api/skills/:id。
+// local_db 可删除；local_db shadow of built_in 删除后恢复内置版本；
+// built_in 本体与 local_file 禁止删除。
 func handleDeleteSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcaster, store *skill.Store, registry *skill.Registry, id string) {
 	existing, ok := registry.Get(id)
 	if !ok {
 		writeJSONError(w, "skill not found", http.StatusNotFound)
 		return
 	}
-	if !existing.IsLocalEditable {
-		writeJSONError(w, "skill is not local editable", http.StatusForbidden)
+	// local_file 禁止删除；built_in 本体禁止删除（shadow 可删）；local_db shadow 可删。
+	switch existing.Source {
+	case skill.SkillSourceLocalFile:
+		writeJSONError(w, "skill loaded from local file cannot be deleted via API; remove the file directly", http.StatusForbidden)
+		return
+	case skill.SkillSourceBuiltIn:
+		writeJSONError(w, "built-in skill cannot be deleted; delete its local shadow to restore", http.StatusForbidden)
 		return
 	}
 
@@ -436,6 +458,15 @@ func handleDeleteSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 		}
 	}
 	registry.Unregister(id)
+	// 若删除的是 built_in 的 local_db shadow，恢复内置版本。
+	if skill.IsShadowOfBuiltIn(existing) {
+		for _, builtin := range skill.DefaultBuiltins() {
+			if builtin.ID == id {
+				registry.Register(*builtin)
+				break
+			}
+		}
+	}
 
 	broadcastSkillEvent(hub, skill.EventSkillUnloaded, id, map[string]any{
 		"id": id,

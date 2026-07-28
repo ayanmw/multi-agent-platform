@@ -232,20 +232,45 @@ func TestSkillAPIEndToEnd(t *testing.T) {
 		t.Errorf("expected updated template content, got %+v", updated.Templates)
 	}
 
-	// 5b. PUT 内置 skill → 403。
-	builtinUpdate, _ := json.Marshal(map[string]any{"display_name": "Hacked"})
+	// 5b. PUT 内置 skill → 自动 fork 为 local_db shadow，返回 200。
+	builtinUpdate, _ := json.Marshal(map[string]any{"display_name": "Forked Builtin"})
 	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/skills/"+builtinID, bytes.NewReader(builtinUpdate))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("update builtin: %v", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 updating builtin, got %d", resp.StatusCode)
+	body = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 fork builtin, got %d: %s", resp.StatusCode, body)
+	}
+	var forked skill.Skill
+	if err := json.Unmarshal([]byte(body), &forked); err != nil {
+		t.Fatalf("decode forked builtin: %v", err)
+	}
+	if forked.Source != skill.SkillSourceLocalDB {
+		t.Fatalf("expected forked source local_db, got %s", forked.Source)
+	}
+	if forked.DisplayName != "Forked Builtin" {
+		t.Fatalf("expected forked display name, got %s", forked.DisplayName)
 	}
 
-	// 5c. PUT 不存在 → 404。
+	// 5c. 删除 fork 后 built_in 恢复，再次 PUT 内置应再次 fork。
+	delReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/skills/"+builtinID, nil)
+	resp, err = client.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete fork: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 deleting fork, got %d", resp.StatusCode)
+	}
+	restored, _ := registry.Get(builtinID)
+	if restored.Source != skill.SkillSourceBuiltIn {
+		t.Fatalf("expected restored built_in source, got %s", restored.Source)
+	}
+
+	// 5d. PUT 不存在 → 404。
 	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/skills/missing/x", bytes.NewReader(builtinUpdate))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = client.Do(req)
