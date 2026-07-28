@@ -650,6 +650,8 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
     text = remaining
   } else if (slashMatch && selectedSkillCommand.value) {
     // 兼容旧路径：通过 picker 选中的 command 但未用新 selectedPickerItem。
+    const cmd = selectedSkillCommand.value
+    const remaining = slashMatch[2] || ''
     try {
       await skillCommand.invokeCommand(cmd.id, activeSession.value?.workspaceDir || '')
     } catch (err) {
