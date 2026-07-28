@@ -21,6 +21,7 @@ import { AUTO_APPROVAL_TAG_OPTIONS, HIGH_RISK_AUTO_APPROVAL_TAGS } from '@/compo
  *   - availableTools: 可选工具列表
  *   - anchorRect: 触发按钮的 DOMRect，用于桌面端定位
  *   - autoApprovalTags: 当前自动审批选中的标签集合
+ *   - modelValue: v-model 当前选中的 agent id
  *
  * Emits:
  *   - update:open
@@ -28,6 +29,7 @@ import { AUTO_APPROVAL_TAG_OPTIONS, HIGH_RISK_AUTO_APPROVAL_TAGS } from '@/compo
  *   - update:timeoutSeconds
  *   - update:multiAgent
  *   - update:autoApprovalTags
+ *   - update:modelValue: agent id 变动
  *   - openAgents: 请求打开 Agents 管理面板
  */
 const props = defineProps<{
@@ -35,10 +37,11 @@ const props = defineProps<{
   maxSteps: number
   timeoutSeconds: number
   multiAgent: boolean
-  agents?: { id: string; name: string; model: string; tools: string[] }[]
+  agents?: { id: string; name: string; model: string; tools: string[]; is_default?: boolean }[]
   availableTools?: { name: string; description: string }[]
   anchorRect?: DOMRect | null
   autoApprovalTags?: string[]
+  modelValue?: string
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +50,7 @@ const emit = defineEmits<{
   (e: 'update:timeoutSeconds', value: number): void
   (e: 'update:multiAgent', value: boolean): void
   (e: 'update:autoApprovalTags', value: string[]): void
+  (e: 'update:modelValue', id: string): void
   (e: 'openAgents'): void
 }>()
 
@@ -55,8 +59,27 @@ const flyoutStyle = ref<Record<string, string>>({})
 const maxStepsValue = ref(props.maxSteps)
 const timeoutSecondsValue = ref(props.timeoutSeconds)
 const multiAgentValue = ref(props.multiAgent)
-const selectedAgentId = ref<string>(props.agents?.[0]?.id ?? '')
 const autoApprovalTagsValue = ref<string[]>(props.autoApprovalTags ?? [])
+
+// 默认 agent：用户已经通过 v-model 显式传入时优先；否则先找 is_default，再取第一个。
+function resolveDefaultAgentId(): string {
+  if (props.modelValue && props.modelValue.length > 0) return props.modelValue
+  const agents = props.agents ?? []
+  if (agents.length === 0) return ''
+  const def = agents.find(a => a.is_default)
+  return def?.id ?? agents[0].id
+}
+
+const selectedAgentId = computed({
+  get() {
+    if (props.modelValue && props.modelValue.length > 0) return props.modelValue
+    const def = resolveDefaultAgentId()
+    return def
+  },
+  set(id: string) {
+    emit('update:modelValue', id)
+  },
+})
 
 const autoApprovalEnabled = computed(() => autoApprovalTagsValue.value.length > 0)
 const allAutoApprovalSelected = computed(() =>
@@ -150,6 +173,13 @@ function computePosition() {
   }
 }
 
+function openDefaultAgent() {
+  const defaultId = resolveDefaultAgentId()
+  if (defaultId) {
+    emit('update:modelValue', defaultId)
+  }
+}
+
 watch(() => props.open, (open) => {
   if (open) {
     maxStepsValue.value = props.maxSteps
@@ -157,11 +187,18 @@ watch(() => props.open, (open) => {
     multiAgentValue.value = props.multiAgent
     autoApprovalTagsValue.value = props.autoApprovalTags ?? []
     nextTick(() => {
-      if (!selectedAgentId.value && props.agents && props.agents.length > 0) {
-        selectedAgentId.value = props.agents[0].id
+      if (!props.modelValue && props.agents && props.agents.length > 0) {
+        emit('update:modelValue', resolveDefaultAgentId())
       }
       computePosition()
     })
+  }
+})
+
+// 没有外部 v-model 时，组件挂载/可用 agent 加载后主动给出默认值（一次）。
+onMounted(() => {
+  if (!props.modelValue && props.agents && props.agents.length > 0) {
+    openDefaultAgent()
   }
 })
 

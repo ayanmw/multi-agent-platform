@@ -139,6 +139,8 @@ const prefilledCommand = ref('')
 const selectedSkillCommand = ref<SkillCommand | null>(null)
 // 当前选中的 picker 项（skill/command），用于 submit 时判断走 enable 还是 invoke。
 const selectedPickerItem = ref<SkillPickerItem | null>(null)
+// 当前选中的 agent id，从 OptionsFlyout 通过 v-model 传入。
+const currentAgentId = ref<string>('')
 
 function onMultiAgentChange(v: boolean) {
   multiAgentEnabled.value = v
@@ -286,6 +288,7 @@ const agentOptions = computed(() =>
     name: a.name,
     model: a.model || '',
     tools: a.tools || [],
+    is_default: a.is_default,
   })),
 )
 
@@ -617,6 +620,11 @@ onUnmounted(() => {
 
 // === 发送消息 ===
 async function handleSend(text: string, options: { maxSteps: number; timeoutSeconds: number }) {
+  const sendOptions = {
+    ...options,
+    agentId: currentAgentId.value || undefined,
+  }
+
   // 2026-07: SkillPicker 选中项会带 /id 前缀传到这里。优先按 picker 记录的意图处理：
   const slashMatch = text.match(/^\/([a-zA-Z0-9_:_-]+)(?:\s+(.*))?$/)
   if (slashMatch && selectedPickerItem.value) {
@@ -633,7 +641,7 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
       try {
         await enableSkill(item.skill.id)
       } catch (err) {
-        showError(err instanceof Error ? err.message : `Failed to enable skill ${item.skill.id}`)
+        showError(err instanceof Error ? err.message : `Failed to enable skill ${item.id}`)
         return
       }
     }
@@ -677,28 +685,24 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
       if (multiAgentEnabled.value && !text.startsWith('/')) {
         await startMultiAgentTask(text, {
           sessionId: newSession.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       } else {
         await startTask(text, {
           sessionId: newSession.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       }
     } else if (!session.rootTaskId) {
       if (multiAgentEnabled.value && !text.startsWith('/')) {
         await startMultiAgentTask(text, {
           sessionId: session.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       } else {
         await startTask(text, {
           sessionId: session.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       }
     } else {
@@ -707,14 +711,12 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
         // first-turn case so it starts a new leader-driven task.
         await startMultiAgentTask(text, {
           sessionId: session.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       } else {
         await startTurn(text, {
           sessionId: session.id,
-          maxSteps: options.maxSteps,
-          timeoutSeconds: options.timeoutSeconds,
+          ...sendOptions,
         })
       }
     }

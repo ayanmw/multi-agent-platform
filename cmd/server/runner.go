@@ -43,9 +43,9 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/todo"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/workspace"
+	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
 	"github.com/google/uuid"
 )
 
@@ -54,17 +54,17 @@ import (
 // 让 chat / cron / checkpoint-recovery / multi-agent leader 等入口用同一种
 // 形式构造运行请求，并便于未来持久化或跨进程派发。
 type AgentRunSpec struct {
-	TaskID       string // 任务 ID（root 或 child）
-	AgentID      string // 执行该任务的 agent ID
-	SystemPrompt string // 完整 system prompt（已含 working memory / history）
-	UserInput    string // 本轮用户输入
-	SessionID    string // 所属 session（可空，如纯 task 无 session）
-	ParentTaskID string // 父任务 ID（多轮对话首轮为空）
-	TurnIndex    int    // 轮次序号；0 表示 root/首轮
-	IsRoot       bool   // 是否为 root task（决定 leader 角色与 session 绑定）
-	Contract     harness.TaskContract
-	CaseID       string        // MockProvider 脚本匹配提示
-	WorkingMemory string       // 注入 system prompt 的工作记忆（已格式化）
+	TaskID        string // 任务 ID（root 或 child）
+	AgentID       string // 执行该任务的 agent ID
+	SystemPrompt  string // 完整 system prompt（已含 working memory / history）
+	UserInput     string // 本轮用户输入
+	SessionID     string // 所属 session（可空，如纯 task 无 session）
+	ParentTaskID  string // 父任务 ID（多轮对话首轮为空）
+	TurnIndex     int    // 轮次序号；0 表示 root/首轮
+	IsRoot        bool   // 是否为 root task（决定 leader 角色与 session 绑定）
+	Contract      harness.TaskContract
+	CaseID        string                      // MockProvider 脚本匹配提示
+	WorkingMemory string                      // 注入 system prompt 的工作记忆（已格式化）
 	RootTraceCtx  *observability.TraceContext // 可选的 root trace context；nil 时由 runner 兜底创建
 
 	// 角色与权限（Phase 7-H）。IsRoot=true 时 runner 默认填 leader，也可显式覆盖。
@@ -81,6 +81,11 @@ type AgentRunSpec struct {
 	PreferredTier  string  // 偏好层级，如 "standard" / "premium"，空字符串表示不指定
 	AllowFallback  bool    // auto_route 下是否允许 tier 降级选择
 	MaxCostUSD     float64 // 单次 task 成本预算上限，0 表示无限制
+
+	// Phase fix-agent-model: 本运行请求显式指定的 LLM 模型名。
+	// 它拥有最高优先级：spec.Model > DB agent.model > cfg.LLMModel。
+	// 与 PreferredModel / ModelMode 互相独立；后者用于 auto_route 交由 Router 选择。
+	Model string // 空字符串表示未指定，回退 DB agent.model 或 cfg.LLMModel
 }
 
 // AgentDeps 聚合一次 agent 运行所需的全部共享依赖。
@@ -181,8 +186,27 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 
 	caseID := ""
 
+	// Phase fix-agent-model: 恢复路径同样反查 task/agent 以确定 effectiveModel，
+	// 使恢复后的模型与创建时保持一致。
+	var agentRecord *db.AgentRecord
+	if db.DB != nil && cp.AgentID != "" {
+		if a, err := db.QueryAgentByID(cp.AgentID); err == nil && a != nil {
+			agentRecord = a
+		} else if err != nil {
+			// agent 不存在时不阻塞运行；其它 DB 错误记录 warning 便于排查。
+			if !strings.Contains(err.Error(), "no rows") {
+				observability.DefaultLogger.Warn("agent", "failed to load agent config for recover", map[string]any{
+					"agent_id": cp.AgentID,
+					"error":    err.Error(),
+				})
+			}
+		}
+	}
+	// AgentRunSpec 在恢复路径不可复用，按零值构造用于 resolveEffectiveModel。
+	effectiveModel := resolveEffectiveModel(AgentRunSpec{}, agentRecord, cfg)
+
 	// 复用 chat 路径的 provider 解析逻辑；失败时回退 nil，Engine 会再创建默认 provider。
-	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
 		log.Printf("[AgentRunner.Recover] failed to create provider for task=%s: %v", spec.TaskID, err)
 		provider = nil
@@ -274,7 +298,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	engineCfg := runtime.EngineConfig{
 		AgentID:           cp.AgentID,
 		SystemPrompt:      "You are recovering from a checkpoint. Continue the task from where you left off.",
-		Model:             cfg.LLMModel,
+		Model:             effectiveModel, // Phase fix-agent-model: 恢复路径使用 effectiveModel
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,
 		Provider:          provider,
@@ -315,25 +339,25 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 				TokenCount: msg.TokenCount,
 			})
 		},
-		WorkspaceDir:          workspaceDir,
-		OnLLMUsage:            onUsage,
-		SkillRegistry:         globalSkillRegistry,
-		ActiveSkills:          skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
+		WorkspaceDir:  workspaceDir,
+		OnLLMUsage:    onUsage,
+		SkillRegistry: globalSkillRegistry,
+		ActiveSkills:  skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
 		SkillVariables: map[string]any{
 			"project_id":    projectID,
 			"project_name":  projectName,
 			"session_id":    sessionID,
 			"workspace_dir": workspaceDir,
 		},
-		Tracer: tracer,
-		RootTraceCtx:          rootTraceCtx,
-		LLMLatencyRecorder:    func(latency time.Duration) { observability.DefaultMetrics.RecordLLMLatency(latency) },
-		ToolLatencyRecorder:   func(latency time.Duration) { observability.DefaultMetrics.RecordToolLatency(latency) },
-		SubTaskID:             spec.TaskID,
-		Role:                  runtime.AgentRoleLeader,
-		CanDispatchSubAgents:  true,
-		CanDefineWorkflow:     true,
-		ApproverMode:          "user",
+		Tracer:               tracer,
+		RootTraceCtx:         rootTraceCtx,
+		LLMLatencyRecorder:   func(latency time.Duration) { observability.DefaultMetrics.RecordLLMLatency(latency) },
+		ToolLatencyRecorder:  func(latency time.Duration) { observability.DefaultMetrics.RecordToolLatency(latency) },
+		SubTaskID:            spec.TaskID,
+		Role:                 runtime.AgentRoleLeader,
+		CanDispatchSubAgents: true,
+		CanDefineWorkflow:    true,
+		ApproverMode:         "user",
 		ActiveTodos: func() string {
 			if r.Deps.TodoSvc == nil || sessionID == "" {
 				return ""
@@ -470,7 +494,20 @@ func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, 
 	return out, nil
 }
 
-// agentAllowedTools 从 DB 加载某 agent 配置的 tools。
+// resolveEffectiveModel 按优先级解析本次运行实际使用的 LLM 模型名。
+// 优先级：spec.Model > DB agent.Model > cfg.LLMModel。
+// 该函数在 runAgentLoopWithTurn 与 Recover 中复用，保证 DB agents.model
+// 不再是摆设，同时保留请求级覆盖能力。
+func resolveEffectiveModel(spec AgentRunSpec, agent *db.AgentRecord, cfg *config.Config) string {
+	if spec.Model != "" {
+		return spec.Model
+	}
+	if agent != nil && agent.Model != "" {
+		return agent.Model
+	}
+	return cfg.LLMModel
+}
+
 // 如果 agent 不存在或没有配置 tools，返回 nil，在 Engine 与 PolicyGate
 // 中表示"允许所有 tool"。
 func agentAllowedTools(agentID string) []string {
@@ -703,7 +740,26 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// 创建一次并传给 Engine，以便 mock 开关 (LLM_USE_MOCK / LLMRealCases /
 	// LLMMockEndpoints) 生效。出错时记录日志并回退到 nil；Engine 会再用
 	// Endpoint/APIKey/Model 创建一个默认的 OpenAIProvider。
-	provider, err := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, caseID)
+	//
+	// Phase fix-agent-model: 优先按 spec.Model -> DB agent.model -> cfg.LLMModel
+	// 解析 effectiveModel，并在 provider 与 EngineConfig.Model 中保持一致。
+	// 以下同一个 agentRecord 将同时用于模型解析与路由偏好读取，只查一次 DB。
+	var agentRecord *db.AgentRecord
+	if db.DB != nil && agentID != "" {
+		if a, err := db.QueryAgentByID(agentID); err == nil && a != nil {
+			agentRecord = a
+		} else if err != nil {
+			// agent 不存在时不阻塞运行；其它 DB 错误记录 warning 便于排查。
+			if !strings.Contains(err.Error(), "no rows") {
+				observability.DefaultLogger.Warn("agent", "failed to load agent config for model resolution", map[string]any{
+					"agent_id": agentID,
+					"error":    err.Error(),
+				})
+			}
+		}
+	}
+	effectiveModel := resolveEffectiveModel(spec, agentRecord, cfg)
+	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
 		log.Printf("[runAgentLoopWithTurn] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
 		provider = nil
@@ -815,42 +871,36 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// sessionID，则给本次 run 注册 worktree/* Agent Tool，注入 holder 与 sessionID。
 	// Manager 为 nil（worktree 未启用）时跳过，holder 仍构造但只用于普通 CWD
 	// 一致性（无 worktree 工具，holder 值恒为 WorkspaceDir，行为等价旧路径）。
-	// Phase multi-model-routing P3-2: 从 Agent DB 记录或 AgentRunSpec 提取
-	// Agent 级路由与预算配置。DB 记录优先，spec 字段兜底，都没设置则 Router
-	// 自动选择。这些值将注入 EngineConfig 与 Router RouteRequest。
+	// Phase multi-model-routing P3-2: 从已加载的 Agent DB 记录或 AgentRunSpec
+	// 提取 Agent 级路由与预算配置。DB 记录优先，spec 字段兜底，都没设置则
+	// Router 自动选择。这些值将注入 EngineConfig 与 Router RouteRequest。
 	preferredModel := spec.PreferredModel
 	preferredTier := spec.PreferredTier
 	modelMode := spec.ModelMode
 	allowFallback := spec.AllowFallback
 	maxCostUSD := spec.MaxCostUSD
-	if db.DB != nil && agentID != "" {
-		if agent, err := db.QueryAgentByID(agentID); err == nil && agent != nil {
-			if agent.PreferredModel != "" {
-				preferredModel = agent.PreferredModel
-			}
-			if agent.PreferredTier != "" {
-				preferredTier = agent.PreferredTier
-			}
-			if agent.ModelMode != "" {
-				modelMode = agent.ModelMode
-			}
-			allowFallback = agent.AllowFallback
-			if agent.MaxCostUSD > 0 {
-				maxCostUSD = agent.MaxCostUSD
-			}
-		} else if err != nil {
-			// agent 不存在时不阻塞运行；其它 DB 错误记录 warning。
-			if !strings.Contains(err.Error(), "no rows") {
-				observability.DefaultLogger.Warn("agent", "failed to load agent config for routing", map[string]any{
-					"agent_id": agentID,
-					"error":    err.Error(),
-				})
-			}
+	if agentRecord != nil {
+		if agentRecord.PreferredModel != "" {
+			preferredModel = agentRecord.PreferredModel
+		}
+		if agentRecord.PreferredTier != "" {
+			preferredTier = agentRecord.PreferredTier
+		}
+		if agentRecord.ModelMode != "" {
+			modelMode = agentRecord.ModelMode
+		}
+		allowFallback = agentRecord.AllowFallback
+		if agentRecord.MaxCostUSD > 0 {
+			maxCostUSD = agentRecord.MaxCostUSD
 		}
 	}
 	if modelMode == "" {
 		modelMode = "single_model"
 	}
+
+	// 若前面未在 provider 创建阶段加载到 agent，这里用已复用的记录重新计算
+	// effectiveModel，保证单一路径、单一真相源。
+	effectiveModel = resolveEffectiveModel(spec, agentRecord, cfg)
 
 	holder := workspace.NewWorkdirHolder(workspaceDir)
 	if r.Deps.WorkspaceMgr != nil && sessionID != "" {
@@ -869,30 +919,30 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	}
 
 	engine := runtime.NewEngine(runtime.EngineConfig{
-		AgentID:              agentID,
-		SystemPrompt:         systemPrompt,
-		Model:                cfg.LLMModel,
-		Endpoint:             cfg.LLMEndpoint,
-		APIKey:               cfg.LLMAPIKey,
-		Provider:             provider, // 上方解析出的 mock 或真实 provider
-		CaseID:               caseID,   // MockProvider 脚本匹配提示
-		Temperature:          0.7,
-		MaxTokens:            4096,
-		MaxSteps:             contract.MaxSteps,
-		Persistence:          persist,
-		PolicyGate:           policyGate,
-		Progress:             progressManager,
-		Contract:             contract,
-		SessionID:            sessionID,
-		IsRoot:               isRoot,
-		ParentTaskID:         parentTaskID,
-		ApprovalHandler:      approvalHandler, // Phase 5: 审批处理器
-		WorkingMemory:        workingMemory,   // Phase 6: 工作记忆注入
-		AgentBus:             agentBus,        // Phase 5: 多Agent通信
-		CheckpointManager:    checkpointMgr,   // Phase 5: 崩溃恢复
-		TurnIndex:            turnIndex,       // 当前轮次
-		WorkspaceDir:         workspaceDir,    // Session 级 workspace 目录（write_file/run_shell 的 CWD）
-		OnLLMUsage:           onUsage,         // Phase 6-D: 成本/指标上报
+		AgentID:           agentID,
+		SystemPrompt:      systemPrompt,
+		Model:             effectiveModel, // Phase fix-agent-model: 使用解析后的 effectiveModel
+		Endpoint:          cfg.LLMEndpoint,
+		APIKey:            cfg.LLMAPIKey,
+		Provider:          provider, // 上方解析出的 mock 或真实 provider
+		CaseID:            caseID,   // MockProvider 脚本匹配提示
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		MaxSteps:          contract.MaxSteps,
+		Persistence:       persist,
+		PolicyGate:        policyGate,
+		Progress:          progressManager,
+		Contract:          contract,
+		SessionID:         sessionID,
+		IsRoot:            isRoot,
+		ParentTaskID:      parentTaskID,
+		ApprovalHandler:   approvalHandler, // Phase 5: 审批处理器
+		WorkingMemory:     workingMemory,   // Phase 6: 工作记忆注入
+		AgentBus:          agentBus,        // Phase 5: 多Agent通信
+		CheckpointManager: checkpointMgr,   // Phase 5: 崩溃恢复
+		TurnIndex:         turnIndex,       // 当前轮次
+		WorkspaceDir:      workspaceDir,    // Session 级 workspace 目录（write_file/run_shell 的 CWD）
+		OnLLMUsage:        onUsage,         // Phase 6-D: 成本/指标上报
 		// Phase 6 Router: 把 model router 接入 Engine，让 chat 路径真正地
 		// 分类 intent 并选择模型 tier。modelRouter 为 nil（classifier 不可用）
 		// 时 Engine 透明地回退到 cfg.Model —— 保留旧行为。
@@ -918,7 +968,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 				TokenCount: msg.TokenCount,
 			})
 		},
-		SubTaskID:            taskID,
+		SubTaskID: taskID,
 		// Phase 7-H: 角色与权限字段。
 		Role:                 role,
 		CanDispatchSubAgents: canDispatchSubAgents,
@@ -984,11 +1034,11 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		// 能根据 RPM 限流状态过滤已被限流的模型。
 		RateLimiter: r.Deps.RateLimiter,
 		// Phase multi-model-routing P3-2: Agent 级路由偏好注入 EngineConfig。
-		ModelMode:              modelMode,
-		PreferredModel:         preferredModel,
-		PreferredTier:          preferredTier,
-		AllowFallback:          allowFallback,
-		MaxCostUSD:             maxCostUSD,
+		ModelMode:      modelMode,
+		PreferredModel: preferredModel,
+		PreferredTier:  preferredTier,
+		AllowFallback:  allowFallback,
+		MaxCostUSD:     maxCostUSD,
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{

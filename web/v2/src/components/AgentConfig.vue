@@ -8,10 +8,92 @@
        - Test connection button to verify API endpoint/key
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch, defineComponent, type PropType } from 'vue'
 import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest, type ToolInfo } from '../composables/useAgentStore'
 import { useModelPrices, fullModelId } from '../composables/useModelPrices'
 import type { LLMModel } from '../types/llm'
+
+/**
+ * ModelDropdown — small local reusable dropdown for picking an LLM model
+ *
+ * Data flow:
+ *   - props.modelValue holds the currently selected model identity (provider/model_id)
+ *   - props.availableModels supplies the selectable options
+ *   - Typing in the filter narrows the list; pressing Enter when exactly one
+ *     candidate remains auto-selects it; clicking an item selects it explicitly
+ */
+interface ModelDropdownProps {
+  modelValue: string
+  availableModels: LLMModel[]
+  label?: string
+  placeholder?: string
+}
+
+const ModelDropdown = defineComponent({
+  // 未使用 interface 仅作类型注释；保留契约说明
+  /* ModelDropdown props: modelValue, availableModels, label?, placeholder? */
+  props: {
+    modelValue: { type: String, required: true },
+    availableModels: { type: Array as PropType<LLMModel[]>, required: true },
+    label: { type: String, default: '' },
+    placeholder: { type: String, default: 'Filter models...' },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
+    const filter = ref(props.modelValue || '')
+
+    watch(() => props.modelValue, (val) => {
+      filter.value = val
+    })
+
+    const filteredModels = computed(() => {
+      const q = filter.value.trim().toLowerCase()
+      if (!q) return props.availableModels
+      return props.availableModels.filter(m =>
+        fullModelId(m).toLowerCase().includes(q) ||
+        (m.display_name || '').toLowerCase().includes(q)
+      )
+    })
+
+    function selectModel(identity: string) {
+      emit('update:modelValue', identity)
+    }
+
+    function onKeydown(e: KeyboardEvent) {
+      if (e.key === 'Enter') {
+        if (filteredModels.value.length === 1) {
+          selectModel(fullModelId(filteredModels.value[0]))
+        }
+      }
+    }
+
+    return { filter, filteredModels, selectModel, onKeydown }
+  },
+  template: `
+    <div class="model-dropdown">
+      <label v-if="label" class="form-label">{{ label }}</label>
+      <input
+        v-model="filter"
+        type="text"
+        class="form-input model-dropdown-filter"
+        :placeholder="placeholder"
+        @keydown="onKeydown"
+      />
+      <div v-if="filteredModels.length" class="model-dropdown-list">
+        <div
+          v-for="m in filteredModels"
+          :key="fullModelId(m)"
+          class="model-dropdown-item"
+          :class="{ active: fullModelId(m) === modelValue }"
+          @click="selectModel(fullModelId(m))"
+        >
+          {{ fullModelId(m) }}{{ m.display_name && m.display_name !== m.model_id ? ' (' + m.display_name + ')' : '' }}
+        </div>
+      </div>
+      <div v-else-if="filter.trim()" class="model-dropdown-empty">No models match</div>
+    </div>
+  `,
+})
 
 const MODEL_TIERS = ['free', 'efficient', 'lightweight', 'standard', 'premium'] as const
 
@@ -53,17 +135,6 @@ const {
 } = useAgentStore()
 
 const { models: availableModels, loadModels: loadAvailableModels } = useModelPrices()
-
-// Model selector filter
-const modelFilter = ref('')
-const filteredModels = computed(() => {
-  const q = modelFilter.value.trim().toLowerCase()
-  if (!q) return availableModels.value
-  return availableModels.value.filter(m =>
-    fullModelId(m).toLowerCase().includes(q) ||
-    (m.display_name || '').toLowerCase().includes(q)
-  )
-})
 
 // Whether the current form is in auto_route mode
 const isAutoRoute = computed(() => form.value.model_mode === 'auto_route')
@@ -192,11 +263,16 @@ function toggleTool(toolName: string) {
   }
 }
 
-/** Validate and save the form (create or update) */
+/** Validate and save the form (create or update)
+ * 仅在 single_model 模式下要求 model 必填，避免用户忘记选模型。 */
 async function handleSave() {
   formError.value = null
   if (!form.value.name.trim()) {
     formError.value = 'Name is required'
+    return
+  }
+  if (form.value.model_mode === 'single_model' && !form.value.model) {
+    formError.value = 'Model is required in Single Model mode'
     return
   }
   saving.value = true
@@ -404,21 +480,12 @@ function formatDate(iso: string): string {
 
           <!-- Single Model selector -->
           <div v-if="!isAutoRoute" class="form-group">
-            <label class="form-label">Model</label>
-            <div class="model-selector">
-              <input
-                v-model="modelFilter"
-                type="text"
-                class="form-input model-filter"
-                placeholder="Filter models (provider/model_id)..."
-              />
-              <select v-model="form.model" class="form-input form-select">
-                <option value="">— Select a model —</option>
-                <option v-for="m in filteredModels" :key="fullModelId(m)" :value="fullModelId(m)">
-                  {{ fullModelId(m) }}{{ m.display_name && m.display_name !== m.model_id ? ` (${m.display_name})` : '' }}
-                </option>
-              </select>
-            </div>
+            <ModelDropdown
+              v-model="form.model"
+              :available-models="availableModels"
+              label="Model"
+              placeholder="Filter models (provider/model_id)..."
+            />
           </div>
 
           <!-- Auto Route controls -->
@@ -467,12 +534,11 @@ function formatDate(iso: string): string {
               />
             </div>
             <div class="form-group form-group-half">
-              <label class="form-label">Preferred Model (optional)</label>
-              <input
+              <ModelDropdown
                 v-model="form.preferred_model"
-                type="text"
-                class="form-input"
-                placeholder="provider/model_id"
+                :available-models="availableModels"
+                label="Preferred Model (optional)"
+                placeholder="Filter models (provider/model_id)..."
               />
             </div>
           </div>
@@ -1238,6 +1304,42 @@ function formatDate(iso: string): string {
 
 /* Utility */
 .text-muted {
+  color:var(--text-muted);
+}
+
+/* ---- Model dropdown ---- */
+.model-dropdown-list {
+  max-height:12rem;
+  overflow-y:auto;
+  border:1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background:var(--bg-elevated);
+  margin-top:0.25rem;
+}
+
+.model-dropdown-item {
+  padding:0.438rem 0.625rem;
+  font-size:0.812rem;
+  color:var(--text-secondary);
+  cursor:pointer;
+  transition:background 0.15s, color 0.15s;
+  font-family:var(--font-mono);
+  border-bottom:1px solid var(--border-subtle);
+}
+
+.model-dropdown-item:last-child {
+  border-bottom:none;
+}
+
+.model-dropdown-item:hover,
+.model-dropdown-item.active {
+  background:var(--bg-hover);
+  color:var(--text-primary);
+}
+
+.model-dropdown-empty {
+  padding:0.5rem 0.625rem;
+  font-size:0.75rem;
   color:var(--text-muted);
 }
 </style>

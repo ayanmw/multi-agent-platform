@@ -73,6 +73,21 @@ type AgentSpec struct {
 	// Model 是该 agent 使用的 LLM model。为空时使用 orchestrator 的默认 model。
 	Model string `json:"model,omitempty"`
 
+	// ModelMode 是模型选择模式：single_model（默认）或 auto_route。
+	ModelMode string `json:"model_mode,omitempty"`
+
+	// PreferredModel 是 auto_route 模式下显式指定的模型名偏好。
+	PreferredModel string `json:"preferred_model,omitempty"`
+
+	// PreferredTier 是 auto_route 模式下偏好的模型层级（如 "standard"）。
+	PreferredTier string `json:"preferred_tier,omitempty"`
+
+	// AllowFallback 控制 auto_route 模式下是否允许 tier 降级选择。
+	AllowFallback bool `json:"allow_fallback,omitempty"`
+
+	// MaxCostUSD 是单次 agent 运行的 USD 成本预算上限；0 表示无限制。
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+
 	// Contract 是该 agent 的 TaskContract，定义范围、预算、可用 tool 等。
 	// 为 nil 时使用 DefaultContract(Input)。
 	Contract *harness.TaskContract `json:"contract,omitempty"`
@@ -895,18 +910,57 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	// 进度跟踪
 	progressManager := harness.NewProgressManager()
 
-	// 若 agent 指定了 model 则使用之，否则使用默认 model
-	model := spec.Model
-	if model == "" {
-		model = o.cfg.LLMModel
+	// 解析该 agent 的 effective model：spec.Model 优先；未指定且 agent ID
+	// 非空时从 agents 表读取 agent.Model；仍为空则回退配置默认 model。
+	// 这样 DB 中配置的子 agent 模型（如 minimax-m2.5）才能在 orchestrator
+	// 子 agent 中生效，而不是一直走 cfg.LLMModel。
+	effectiveModel := spec.Model
+	var dbAgent *db.AgentRecord
+	if effectiveModel == "" && spec.AgentID != "" {
+		if agent, err := db.QueryAgentByID(spec.AgentID); err == nil && agent != nil {
+			dbAgent = agent
+			if agent.Model != "" {
+				effectiveModel = agent.Model
+			}
+		}
 	}
+	if effectiveModel == "" {
+		effectiveModel = o.cfg.LLMModel
+	}
+
+	// 从 agent DB 记录读取路由偏好与预算；DB 非空字段覆盖 spec 值，否则
+	// 保留 spec 传入的值。ModelMode 为空时默认 single_model。
+	modelMode := spec.ModelMode
+	preferredModel := spec.PreferredModel
+	preferredTier := spec.PreferredTier
+	allowFallback := spec.AllowFallback
+	maxCostUSD := spec.MaxCostUSD
+	if dbAgent != nil {
+		if dbAgent.ModelMode != "" {
+			modelMode = dbAgent.ModelMode
+		}
+		if dbAgent.PreferredModel != "" {
+			preferredModel = dbAgent.PreferredModel
+		}
+		if dbAgent.PreferredTier != "" {
+			preferredTier = dbAgent.PreferredTier
+		}
+		allowFallback = dbAgent.AllowFallback
+		if dbAgent.MaxCostUSD > 0 {
+			maxCostUSD = dbAgent.MaxCostUSD
+		}
+	}
+	if modelMode == "" {
+		modelMode = "single_model"
+	}
+	model := effectiveModel
 
 	// 根据 mock/全局配置解析 LLM Provider。provider 每个 agent 创建一次，
 	// 然后传给 Engine，使 mock 开关（LLM_USE_MOCK / LLMRealCases /
 	// LLMMockEndpoints）都能被正确遵守。
 	// 出错时记日志并退回 nil；Engine 会用 Endpoint/APIKey/Model 创建一个
 	// 默认的 OpenAIProvider。
-	provider, err := llm.CreateProviderFromConfig(o.cfg, model, "")
+	provider, err := llm.CreateProviderFromConfig(o.cfg, effectiveModel, "")
 	if err != nil {
 		log.Printf("[Orchestrator] Failed to create provider for agent=%s (falling back to default): %v", spec.AgentID, err)
 		provider = nil
@@ -999,6 +1053,13 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		Router:    o.modelRouter,
 		Registry:  o.routerRegistry,
 		Providers: o.routerProviders,
+		// Phase multi-model-routing: 把 agent 级路由偏好与预算透传给 Engine。
+		// ModelMode 等字段已在上面解析，DB 配置优先、spec 次之、空值兜底。
+		ModelMode:      modelMode,
+		PreferredModel: preferredModel,
+		PreferredTier:  preferredTier,
+		AllowFallback:  allowFallback,
+		MaxCostUSD:     maxCostUSD,
 		// 7-G: 子 agent 拥有各自的 SubTaskID，这样事件和 snapshot 会按
 		// 每个 agent 执行实例相互隔离。
 		SubTaskID: subTaskID,
