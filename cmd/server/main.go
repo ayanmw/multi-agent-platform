@@ -952,7 +952,9 @@ func main() {
 		skillLoader = skill.NewLoader(skillStore, skillRegistry)
 		cwd, _ := os.Getwd()
 		fl := skill.NewFileLoader(skillRegistry, skillStore, &dbSkillSettingStore{}, skill.NewSkillEventBus(hub))
+		cl := skill.NewCommandLoader(skill.NewCommandRegistry(), skill.NewSkillEventBus(hub))
 		skillLoader.SetFileLoader(fl, cwd)
+		skillLoader.SetCommandLoader(cl)
 		if err := skillLoader.LoadAll(); err != nil {
 			observability.DefaultLogger.Warn("skill", "failed to load skills", map[string]any{"error": err.Error()})
 		} else {

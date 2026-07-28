@@ -41,6 +41,10 @@ const props = withDefaults(
     contextAnchorRect?: DOMRect | null
     agents?: { id: string; name: string; model: string; tools: string[] }[]
     availableTools?: { name: string; description: string }[]
+    /** 控制 SkillPicker 是否打开（与 App.vue 同步） */
+    pickerOpen?: boolean
+    /** SkillPicker 当前选中下标 */
+    pickerSelectedIndex?: number
     /** 当前激活任务，用于计算真实进度；不传则使用旧的 38% 占位回退。 */
     activeTask?: {
       status?: string
@@ -57,6 +61,8 @@ const props = withDefaults(
     contextAnchorRect: null,
     agents: () => [],
     availableTools: () => [],
+    pickerOpen: false,
+    pickerSelectedIndex: 0,
     activeTask: null,
   },
 )
@@ -84,6 +90,12 @@ const emit = defineEmits<{
   (e: 'update:contextOpen', value: boolean): void
   // 请求打开 Agents 管理面板
   (e: 'openAgents'): void
+  // SkillPicker 显隐同步
+  (e: 'update:pickerOpen', value: boolean): void
+  // SkillPicker 选中下标同步
+  (e: 'update:pickerSelectedIndex', value: number): void
+  // SkillPicker 选中确认
+  (e: 'pickerSelect', cmd: unknown): void
 }>()
 
 const text = ref('')
@@ -167,9 +179,30 @@ function adjustTextareaHeight() {
 
 watch(text, () => {
   nextTick(adjustTextareaHeight)
+  // 检测 / 触发 SkillPicker：仅当光标在首段且以 / 开头，普通 // 文本不触发。
+  if (textareaRef.value) {
+    const val = text.value
+    const selStart = textareaRef.value.selectionStart ?? 0
+    const selEnd = textareaRef.value.selectionEnd ?? 0
+    const firstLineEnd = val.indexOf('\n')
+    const inFirstLine = firstLineEnd === -1 || selEnd <= firstLineEnd
+    const startsWithSlash = inFirstLine && selStart === 0 && val.startsWith('/')
+    const isDoubleSlash = startsWithSlash && val.startsWith('//')
+    const shouldShow = startsWithSlash && !isDoubleSlash && !props.isRunning && !props.isPending
+    if (shouldShow !== props.pickerOpen) {
+      emit('update:pickerOpen', shouldShow)
+      if (shouldShow) {
+        emit('update:pickerSelectedIndex', 0)
+      }
+    }
+  }
 })
 
 function submit() {
+  if (props.pickerOpen) {
+    emit('pickerSelect', undefined)
+    return
+  }
   const value = text.value.trim()
   if (!value || props.disabled) return
   emit('send', value, {
@@ -179,6 +212,7 @@ function submit() {
   text.value = ''
   nextTick(adjustTextareaHeight)
   optionsOpen.value = false
+  emit('update:pickerOpen', false)
   nextTick(() => textareaRef.value?.focus())
 }
 
@@ -186,6 +220,24 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
     submit()
+    return
+  }
+  if (props.pickerOpen) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      emit('update:pickerSelectedIndex', props.pickerSelectedIndex + 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      emit('update:pickerSelectedIndex', Math.max(0, props.pickerSelectedIndex - 1))
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      emit('update:pickerOpen', false)
+      return
+    }
   }
 }
 

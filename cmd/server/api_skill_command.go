@@ -1,0 +1,299 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/anmingwei/multi-agent-platform/internal/skill"
+)
+
+// registerSkillCommandRoutes 挂载 SkillCommand REST API。
+//   GET    /api/skill-commands?workdir=&project_id=&q=
+//   GET    /api/skill-commands/:id
+//   POST   /api/skill-commands/:id/invoke
+func registerSkillCommandRoutes(mux *http.ServeMux, hub eventBroadcaster, skillLoader *skill.Loader, skillStore *skill.Store, skillRegistry *skill.Registry) {
+	mux.HandleFunc("/api/skill-commands", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		handleListSkillCommands(w, r, skillLoader)
+	})
+
+	mux.HandleFunc("/api/skill-commands/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/skill-commands/")
+		if path == "" {
+			writeJSONError(w, "command ID required", http.StatusBadRequest)
+			return
+		}
+
+		if r.Method == http.MethodGet {
+			handleGetSkillCommand(w, r, skillLoader, path)
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			if suffix, ok := strings.CutSuffix(path, "/invoke"); ok {
+				handleInvokeSkillCommand(w, r, hub, skillLoader, skillStore, skillRegistry, suffix)
+				return
+			}
+		}
+
+		writeJSONError(w, "GET or POST /invoke only", http.StatusMethodNotAllowed)
+	})
+}
+
+// skillCommandListResponse 是 GET /api/skill-commands 的返回结构。
+type skillCommandListResponse struct {
+	Commands []skillCommandResponse `json:"commands"`
+}
+
+// skillCommandResponse 是 skill command 的 JSON 表示。
+type skillCommandResponse struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Scope        string   `json:"scope"`
+	WorkspaceDir string   `json:"workspace_dir"`
+	ProjectID    string   `json:"project_id"`
+	SourcePath   string   `json:"source_path"`
+	SkillID      string   `json:"skill_id"`
+	Tags         []string `json:"tags"`
+	Icon         string   `json:"icon"`
+}
+
+// skillCommandDetailResponse 是 GET /api/skill-commands/:id 的返回结构。
+type skillCommandDetailResponse struct {
+	skillCommandResponse
+	Prompt string `json:"prompt"`
+}
+
+// invokeSkillCommandResponse 是 POST /api/skill-commands/:id/invoke 的返回结构。
+type invokeSkillCommandResponse struct {
+	EnabledSkillIDs    []string `json:"enabled_skill_ids"`
+	TemporarySkillID   string   `json:"temporary_skill_id"`
+}
+
+func toSkillCommandResponse(cmd skill.SkillCommand) skillCommandResponse {
+	return skillCommandResponse{
+		ID:           cmd.ID,
+		Name:         cmd.Name,
+		Description:  cmd.Description,
+		Scope:        string(cmd.Scope),
+		WorkspaceDir: cmd.WorkspaceDir,
+		ProjectID:    cmd.ProjectID,
+		SourcePath:   cmd.SourcePath,
+		SkillID:      cmd.SkillID,
+		Tags:         cmd.Tags,
+		Icon:         cmd.Icon,
+	}
+}
+
+// commandRegistry 返回 loader 中 commandLoader 的 registry；nil safe。
+func commandRegistry(skillLoader *skill.Loader) *skill.CommandRegistry {
+	if skillLoader == nil || skillLoader.CommandLoader() == nil {
+		return nil
+	}
+	return skillLoader.CommandLoader().Registry()
+}
+
+// handleListSkillCommands 处理 GET /api/skill-commands。
+func handleListSkillCommands(w http.ResponseWriter, r *http.Request, skillLoader *skill.Loader) {
+	workdir := strings.TrimSpace(r.URL.Query().Get("workdir"))
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+
+	registry := commandRegistry(skillLoader)
+	if registry == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(skillCommandListResponse{Commands: []skillCommandResponse{}})
+		return
+	}
+
+	var cmds []skill.SkillCommand
+	if workdir != "" {
+		cmds = registry.ListForWorkdir(workdir)
+	} else {
+		cmds = registry.List("")
+	}
+
+	result := make([]skillCommandResponse, 0, len(cmds))
+	for _, cmd := range cmds {
+		if q != "" && !matchCommandKeyword(cmd, q) {
+			continue
+		}
+		result = append(result, toSkillCommandResponse(cmd))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(skillCommandListResponse{Commands: result})
+}
+
+// matchCommandKeyword 按 ID/name/description/tags 匹配关键词。
+func matchCommandKeyword(cmd skill.SkillCommand, q string) bool {
+	if strings.Contains(strings.ToLower(cmd.ID), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(cmd.Name), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(cmd.Description), q) {
+		return true
+	}
+	for _, tag := range cmd.Tags {
+		if strings.Contains(strings.ToLower(tag), q) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleGetSkillCommand 处理 GET /api/skill-commands/:id，包含 prompt 全文。
+func handleGetSkillCommand(w http.ResponseWriter, r *http.Request, skillLoader *skill.Loader, id string) {
+	registry := commandRegistry(skillLoader)
+	if registry == nil {
+		writeJSONError(w, "command loader unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	cmd, ok := registry.Get(id)
+	if !ok {
+		writeJSONError(w, "command not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(skillCommandDetailResponse{
+		skillCommandResponse: toSkillCommandResponse(cmd),
+		Prompt:               cmd.Prompt,
+	})
+}
+
+// handleInvokeSkillCommand 处理 POST /api/skill-commands/:id/invoke。
+// 权限检查：project scope 命令需当前 session workdir 匹配。
+func handleInvokeSkillCommand(w http.ResponseWriter, r *http.Request, hub eventBroadcaster, skillLoader *skill.Loader, skillStore *skill.Store, skillRegistry *skill.Registry, id string) {
+	registry := commandRegistry(skillLoader)
+	if registry == nil {
+		writeJSONError(w, "command loader unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	cmd, ok := registry.Get(id)
+	if !ok {
+		writeJSONError(w, "command not found", http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Workdir string `json:"workdir"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	workdir := strings.TrimSpace(req.Workdir)
+
+	// project scope 命令需要 workdir 匹配。
+	if cmd.Scope == skill.SkillCommandScopeProject {
+		if workdir == "" || !isCommandScopeAllowed(workdir, cmd.WorkspaceDir) {
+			writeJSONError(w, "command not available for this workspace", http.StatusForbidden)
+			return
+		}
+	}
+
+	resp := invokeSkillCommandResponse{
+		EnabledSkillIDs:  []string{},
+		TemporarySkillID: "",
+	}
+
+	// 启用关联 skill。
+	if cmd.SkillID != "" {
+		if err := enableSkillByID(hub, skillStore, skillRegistry, cmd.SkillID); err != nil {
+			writeJSONError(w, "enable skill: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.EnabledSkillIDs = append(resp.EnabledSkillIDs, cmd.SkillID)
+	}
+
+	// 将 prompt 注册为临时 skill。
+	if strings.TrimSpace(cmd.Prompt) != "" {
+		tmpID := registerTemporarySkill(hub, skillRegistry, cmd)
+		resp.TemporarySkillID = tmpID
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// enableSkillByID 按 ID 启用 skill；同 handleEnableSkill 逻辑。
+func enableSkillByID(hub eventBroadcaster, store *skill.Store, registry *skill.Registry, id string) error {
+	s, ok := registry.Get(id)
+	if !ok {
+		return nil
+	}
+	if s.State == skill.SkillStateEnabled {
+		return nil
+	}
+	registry.UpdateState(id, skill.SkillStateEnabled)
+	s.State = skill.SkillStateEnabled
+	s.UpdatedAt = time.Now().Unix()
+	if store != nil {
+		if err := store.Save(&s); err != nil {
+			return err
+		}
+	}
+	broadcastSkillEvent(hub, skill.EventSkillEnabled, id, map[string]any{
+		"id":    id,
+		"state": string(skill.SkillStateEnabled),
+	})
+	return nil
+}
+
+// registerTemporarySkill 把 command 的 prompt 注册为 source=command_temporary 的启用 skill。
+func registerTemporarySkill(hub eventBroadcaster, registry *skill.Registry, cmd skill.SkillCommand) string {
+	if registry == nil {
+		return ""
+	}
+	tmpID := "cmd:" + cmd.ID
+	renderer := skill.NewRenderer()
+	now := time.Now().Unix()
+	s := skill.Skill{
+		ID:              tmpID,
+		Version:         "1.0.0",
+		DisplayName:     cmd.Name,
+		Description:     "temporary command skill for " + cmd.ID,
+		Source:          skill.SkillSourceLocalFile,
+		SourceURL:       cmd.SourcePath,
+		IsLocalEditable: false,
+		State:           skill.SkillStateEnabled,
+		Scope:           skill.SkillScopeSession,
+		WorkspaceDir:    cmd.WorkspaceDir,
+		ProjectID:       cmd.ProjectID,
+		Templates: []skill.SkillTemplate{
+			{
+				Name:       "system_prompt",
+				Content:    cmd.Prompt,
+				Variables:  renderer.ExtractVariables(cmd.Prompt),
+				IsRequired: true,
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	registry.Register(s)
+	broadcastSkillEvent(hub, skill.EventSkillLoaded, tmpID, map[string]any{
+		"id":     tmpID,
+		"source": string(s.Source),
+		"state":  string(s.State),
+	})
+	return tmpID
+}
+
+// isCommandScopeAllowed 判断 workdir 是否匹配 command 的 workspace_dir。
+func isCommandScopeAllowed(workdir, commandWorkdir string) bool {
+	if commandWorkdir == "" {
+		return true
+	}
+	if workdir == "" {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(workdir), strings.TrimSpace(commandWorkdir))
+}

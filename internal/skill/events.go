@@ -36,4 +36,13 @@ const (
 
 	// EventSkillChanged 表示 Skill 的元数据或状态发生了变化。
 	EventSkillChanged = "skill_changed"
+
+	// EventSkillCommandLoaded 表示一个新的 SkillCommand 已加载到内存注册表。
+	EventSkillCommandLoaded = "skill_command_loaded"
+
+	// EventSkillCommandUnloaded 表示一个 SkillCommand 已从内存注册表移除。
+	EventSkillCommandUnloaded = "skill_command_unloaded"
+
+	// EventSkillCommandChanged 表示 SkillCommand 发生了新增、更新或卸载等变化。
+	EventSkillCommandChanged = "skill_command_changed"
 )

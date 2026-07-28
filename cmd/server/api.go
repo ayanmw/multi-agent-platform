@@ -639,7 +639,8 @@ func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Phase skill-filesystem-scanner: session 创建成功后，为 workdir 加载文件系统 skill。
+		// Phase skill-filesystem-scanner + skill-command-system:
+		// session 创建成功后，为 workdir 加载文件系统 skill 与 commands。
 		if globalSkillLoader != nil && workspaceDir != "" {
 			if err := globalSkillLoader.LoadForWorkdir(workspaceDir, req.ProjectID); err != nil {
 				log.Printf("[skill] LoadForWorkdir failed for %s: %v", workspaceDir, err)
