@@ -2059,6 +2059,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	}
 	workdirCtx := tool.ExecuteContext{
 		Workdir:     workdir,
+		Variables:   e.cfg.SkillVariables,
 		TaskID:      e.taskID,
 		AgentID:     e.cfg.AgentID,
 		StepIdx:     e.stepIdx,
@@ -2384,6 +2385,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}
 	workdirCtx := tool.ExecuteContext{
 		Workdir:     workdir,
+		Variables:   e.cfg.SkillVariables,
 		TaskID:      e.taskID,
 		AgentID:     e.cfg.AgentID,
 		StepIdx:     e.stepIdx,

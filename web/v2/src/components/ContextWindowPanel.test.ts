@@ -65,7 +65,7 @@ describe('ContextWindowPanel — prompt 弹窗滚动行为契约', () => {
   it('点击 timeline message 打开 prompt 弹窗，且 DOM 结构正确', async () => {
     const wrapper = await panelWithSnapshot()
 
-    const firstRow = wrapper.find('.message-row')
+    const firstRow = wrapper.find('.view-combined-prompt')
     expect(firstRow.exists()).toBe(true)
     await firstRow.trigger('click')
     await nextTick()
@@ -92,7 +92,7 @@ describe('ContextWindowPanel — prompt 弹窗滚动行为契约', () => {
   it('prompt 弹窗关闭后不应再出现在 DOM 中', async () => {
     const wrapper = await panelWithSnapshot() as any
 
-    await wrapper.find('.message-row').trigger('click')
+    await wrapper.find('.view-combined-prompt').trigger('click')
     await nextTick()
     expect(document.querySelector('.prompt-dialog-overlay')).not.toBeNull()
 
