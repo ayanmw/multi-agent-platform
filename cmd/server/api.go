@@ -178,7 +178,7 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 	}
 
 	maxTokens := llm.EstimateModelContextWindow(nil, model)
-	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages)
+	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages, []llm.SkillBlock{})
 	log.Printf("[ContextWindow] task=%s reconstructed snapshot model=%s messages=%d tokens=%d ratio=%.4f",
 		queryID, snapshot.Model, len(snapshot.Messages), snapshot.EstimatedTotalTokens, snapshot.EstimatedUsageRatio)
 	encodeContextWindowSnapshot(w, snapshot)

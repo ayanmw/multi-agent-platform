@@ -1,4 +1,5 @@
 import type { EvaluationResult } from './case'
+import type { SkillBlock } from './skill'
 
 // Event system type definitions — mirrors the Go backend's pkg/event/event.go
 
@@ -83,6 +84,13 @@ export type EventType =
   | 'provider_sync_started'
   | 'provider_sync_completed'
   | 'provider_sync_failed'
+  // Skill lifecycle events (skill-context-window-stats)
+  | 'skill_enabled'
+  | 'skill_disabled'
+  | 'skill_loaded'
+  | 'skill_unloaded'
+  | 'skill_changed'
+  | 'skill_rendered'
 
 /** Raw event from the WebSocket — matches Go's Event struct */
 export interface AgentEvent {
@@ -206,6 +214,8 @@ export interface ContextWindowSnapshotData {
   estimated_total_tokens: number
   estimated_usage_ratio: number
   messages: ContextSnapshotMessage[]
+  /** Skill 注入明细：仅做展示，不重复计入 total（已含于 system message 中） */
+  skill_blocks?: SkillBlock[]
 }
 
 /** Task status

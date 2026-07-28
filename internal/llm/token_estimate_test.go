@@ -65,7 +65,7 @@ func TestBuildContextWindowSnapshot(t *testing.T) {
 		{Role: "system", Content: strings.Repeat("x", 400)},
 		{Role: "user", Content: "hello"},
 	}
-	snapshot := BuildContextWindowSnapshot("deepseek-v4-flash", 128000, msgs)
+	snapshot := BuildContextWindowSnapshot("deepseek-v4-flash", 128000, msgs, nil)
 
 	if snapshot.Model != "deepseek-v4-flash" {
 		t.Fatalf("model=%s, want deepseek-v4-flash", snapshot.Model)
@@ -98,7 +98,7 @@ func TestBuildContextWindowSnapshotZeroMax(t *testing.T) {
 	msgs := []Message{
 		{Role: "system", Content: "x"},
 	}
-	snapshot := BuildContextWindowSnapshot("unknown", 0, msgs)
+	snapshot := BuildContextWindowSnapshot("unknown", 0, msgs, nil)
 	if snapshot.EstimatedUsageRatio != 0 {
 		t.Fatalf("usage_ratio with zero max should be 0, got %f", snapshot.EstimatedUsageRatio)
 	}
@@ -108,8 +108,34 @@ func TestBuildContextWindowSnapshotCapsRatio(t *testing.T) {
 	msgs := []Message{
 		{Role: "system", Content: strings.Repeat("x", 10000)},
 	}
-	snapshot := BuildContextWindowSnapshot("tiny", 10, msgs)
+	snapshot := BuildContextWindowSnapshot("tiny", 10, msgs, nil)
 	if snapshot.EstimatedUsageRatio != 1.0 {
 		t.Fatalf("usage_ratio should cap at 1.0, got %f", snapshot.EstimatedUsageRatio)
+	}
+}
+
+func TestBuildContextWindowSnapshotSkillBlocks(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "You are a helpful assistant."},
+		{Role: "user", Content: "hi"},
+	}
+	blocks := []SkillBlock{
+		{SkillID: "builtin-code-helper", TemplateName: "system_prompt", EstimatedTokens: 42, CharCount: 168},
+	}
+	snapshot := BuildContextWindowSnapshot("deepseek-v4-flash", 128000, msgs, blocks)
+
+	if len(snapshot.SkillBlocks) != 1 {
+		t.Fatalf("len(skill_blocks)=%d, want 1", len(snapshot.SkillBlocks))
+	}
+	if snapshot.SkillBlocks[0].SkillID != "builtin-code-helper" {
+		t.Fatalf("skill_id=%s, want builtin-code-helper", snapshot.SkillBlocks[0].SkillID)
+	}
+	if snapshot.SkillBlocks[0].EstimatedTokens != 42 {
+		t.Fatalf("estimated_tokens=%d, want 42", snapshot.SkillBlocks[0].EstimatedTokens)
+	}
+	// skill_blocks 只做明细展示，不应重复计入 total（skill content 已在 system message 中）。
+	expectedTotal := SumEstimatedTokens(msgs)
+	if snapshot.EstimatedTotalTokens != expectedTotal {
+		t.Fatalf("estimated_total_tokens=%d, want %d (skill blocks should not be double-counted)", snapshot.EstimatedTotalTokens, expectedTotal)
 	}
 }

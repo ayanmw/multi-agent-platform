@@ -21,17 +21,24 @@ vi.mock('@/composables/useContextWindow', () => ({
   }),
 }))
 
-const LONG_SNAPSHOT: import('@/types/events').ContextWindowSnapshotData = {
+vi.mock('@/composables/useSkillEvents', () => ({
+  useSkillEvents: () => ({
+    skillBlocksByTask: { value: {} },
+  }),
+}))
+
+const SKILL_SNAPSHOT: import('@/types/events').ContextWindowSnapshotData = {
   model: 'deepseek-v4-flash',
   max_context_tokens: 200000,
   estimated_total_tokens: 1234,
   estimated_usage_ratio: 0.00617,
-  messages: Array.from({ length: 50 }, (_, i) => ({
-    role: i % 2 === 0 ? 'user' : 'assistant',
-    content: `message ${i}: ` + 'xy '.repeat(100),
-    estimated_tokens: 60,
-    usage_ratio: 0.05,
-  })),
+  messages: [
+    { role: 'system', content: 'sys with skill', estimated_tokens: 10, usage_ratio: 0.5 },
+    { role: 'user', content: 'hi', estimated_tokens: 2, usage_ratio: 0.5 },
+  ],
+  skill_blocks: [
+    { skill_id: 'builtin-code-helper', template_name: 'system_prompt', estimated_tokens: 42, char_count: 168 },
+  ],
 }
 
 async function panelWithSnapshot(snapshot = LONG_SNAPSHOT, subTaskId = '') {
@@ -44,6 +51,19 @@ async function panelWithSnapshot(snapshot = LONG_SNAPSHOT, subTaskId = '') {
   await nextTick()
   await nextTick()
   return wrapper
+}
+
+const LONG_SNAPSHOT: import('@/types/events').ContextWindowSnapshotData = {
+  model: 'deepseek-v4-flash',
+  max_context_tokens: 200000,
+  estimated_total_tokens: 1234,
+  estimated_usage_ratio: 0.00617,
+  messages: Array.from({ length: 50 }, (_, i) => ({
+    role: i % 2 === 0 ? 'user' : 'assistant',
+    content: `message ${i}: ` + 'xy '.repeat(100),
+    estimated_tokens: 60,
+    usage_ratio: 0.05,
+  })),
 }
 
 beforeEach(() => {
@@ -60,6 +80,36 @@ afterEach(() => {
 function getComponentSource(): string {
   return readFileSync(resolve(__dirname, './ContextWindowPanel.vue'), 'utf-8')
 }
+
+describe('ContextWindowPanel — Skill Injection 区', () => {
+  it('渲染 skill blocks 明细：skill id、template name、estimated tokens', async () => {
+    const wrapper = await panelWithSnapshot(SKILL_SNAPSHOT)
+    expect(wrapper.find('.skill-injection-section').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Skill Injection')
+    expect(wrapper.text()).toContain('builtin-code-helper')
+    expect(wrapper.text()).toContain('42 tok')
+    // 验证 InjectedSkillBadge 出现在 system message 行
+    const badge = wrapper.findComponent({ name: 'InjectedSkillBadge' })
+    expect(badge.exists()).toBe(true)
+    expect(badge.props('templateName')).toBe('system_prompt')
+    wrapper.unmount()
+  })
+
+  it('skill_blocks 为空时显示 No skill context injected', async () => {
+    const emptySnapshot: import('@/types/events').ContextWindowSnapshotData = {
+      model: 'deepseek-v4-flash',
+      max_context_tokens: 200000,
+      estimated_total_tokens: 2,
+      estimated_usage_ratio: 0.00001,
+      messages: [{ role: 'user', content: 'hi', estimated_tokens: 2, usage_ratio: 1 }],
+      skill_blocks: [],
+    }
+    const wrapper = await panelWithSnapshot(emptySnapshot)
+    expect(wrapper.find('.skill-empty').exists()).toBe(true)
+    expect(wrapper.text()).toContain('No skill context injected')
+    wrapper.unmount()
+  })
+})
 
 describe('ContextWindowPanel — prompt 弹窗滚动行为契约', () => {
   it('点击 timeline message 打开 prompt 弹窗，且 DOM 结构正确', async () => {

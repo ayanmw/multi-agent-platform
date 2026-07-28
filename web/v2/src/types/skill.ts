@@ -71,6 +71,14 @@ export interface SkillCommandDetail extends SkillCommand {
   prompt: string
 }
 
+/** Skill 注入到上下文窗口中的单个模板块（与后端 llm.SkillBlock 对齐） */
+export interface SkillBlock {
+  skill_id: string
+  template_name: string
+  estimated_tokens: number
+  char_count: number
+}
+
 /** invoke 接口响应 */
 export interface InvokeSkillCommandResult {
   enabled_skill_ids: string[]

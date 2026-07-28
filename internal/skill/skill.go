@@ -116,6 +116,17 @@ type SkillTemplate struct {
 	IsRequired bool `json:"is_required"`
 }
 
+// InjectedSkillBlock 描述 Engine 在运行期注入到 system prompt 中的
+// 单个 Skill 模板片段。它保留完整 Content，用于 token 估算、事件广播
+// 以及生成传给前端的 SkillBlock 明细。
+type InjectedSkillBlock struct {
+	SkillID         string
+	TemplateName    string
+	Content         string
+	CharCount       int
+	EstimatedTokens int
+}
+
 // SkillParameter 描述 Skill 接受的一个参数。
 type SkillParameter struct {
 	// Name 是参数名，用于在模板变量和 API 中引用。
