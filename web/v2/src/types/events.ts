@@ -213,6 +213,8 @@ export interface ContextWindowSnapshotData {
   max_context_tokens: number
   estimated_total_tokens: number
   estimated_usage_ratio: number
+  /** 当前窗口消息快照；后端未下发时前端可容纳为空数组 */
+  messages: ContextSnapshotMessage[]
   /** Skill 注入块（Spec 5 占位：当前后端暂未下发，前端预留展示位） */
   skill_blocks?: SkillBlock[]
 }
