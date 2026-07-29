@@ -101,8 +101,17 @@ const emit = defineEmits<{
 
 const text = ref('')
 const optionsOpen = ref(false)
-const maxSteps = ref(30)
-const timeoutSeconds = ref(0)
+// MAX STEPS / TIMEOUT 持久化到浏览器 localStorage，刷新后保留（同源同浏览器）。
+const LS_MAX_STEPS = 'mcp.maxSteps'
+const LS_TIMEOUT_SECONDS = 'mcp.timeoutSeconds'
+const readLsNumber = (key: string, fallback: number): number => {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
+  if (raw === null) return fallback
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+const maxSteps = ref(readLsNumber(LS_MAX_STEPS, 30))
+const timeoutSeconds = ref(readLsNumber(LS_TIMEOUT_SECONDS, 0))
 const multiAgent = ref(false)
 const selectedAgentId = ref<string>('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -254,6 +263,14 @@ watch(
 watch(multiAgent, (value) => {
   emit('update:multiAgent', value)
   emit('multiAgentChange', value)
+})
+
+// 选项变化时落库到 localStorage，确保刷新后保留。
+watch(maxSteps, (value) => {
+  try { localStorage.setItem(LS_MAX_STEPS, String(value)) } catch { /* 忽略隐私模式等写入失败 */ }
+})
+watch(timeoutSeconds, (value) => {
+  try { localStorage.setItem(LS_TIMEOUT_SECONDS, String(value)) } catch { /* 忽略隐私模式等写入失败 */ }
 })
 
 watch(
