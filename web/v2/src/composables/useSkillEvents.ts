@@ -10,6 +10,7 @@
 import { ref } from 'vue'
 import { useWebSocket } from './useWebSocket'
 import { useSkills } from './useSkills'
+import { useSkillCommands } from './useSkillCommands'
 import type { AgentEvent, EventType } from '@/types/events'
 import type { SkillBlock } from '@/types/skill'
 
@@ -24,6 +25,10 @@ const SKILL_EVENT_TYPES: EventType[] = [
   'skill_unloaded',
   'skill_changed',
   'skill_rendered',
+  // H5：skill_command_* 事件触发命令列表刷新（useSkillCommands.loadCommands）。
+  'skill_command_loaded',
+  'skill_command_unloaded',
+  'skill_command_changed',
 ]
 
 function isSkillEvent(event: AgentEvent): boolean {
@@ -50,6 +55,7 @@ const stats = ref({
   unloaded: 0,
   changed: 0,
   rendered: 0,
+  commandChanged: 0,
 })
 
 /** 更新计数器。 */
@@ -72,6 +78,11 @@ function bumpStats(event: AgentEvent): void {
       break
     case 'skill_rendered':
       stats.value.rendered++
+      break
+    case 'skill_command_loaded':
+    case 'skill_command_unloaded':
+    case 'skill_command_changed':
+      stats.value.commandChanged++
       break
   }
 }
@@ -122,6 +133,18 @@ function onEvent(event: AgentEvent): void {
   if (event.type === 'skill_unloaded' && id) {
     enabledSkillIds.value.delete(id)
     refreshSkillList()
+    return
+  }
+
+  // H5：skill_command_* 事件触发 useSkillCommands 命令列表刷新，让 CommandBar 的
+  // `/` picker 无需手动 reload 即可看到新增/删除的命令。
+  if (
+    event.type === 'skill_command_loaded' ||
+    event.type === 'skill_command_unloaded' ||
+    event.type === 'skill_command_changed'
+  ) {
+    refreshCommandList()
+    return
   }
 }
 
@@ -153,6 +176,23 @@ function refreshSkillList(): void {
   }
 }
 
+/** 刷新 skill command 列表（best-effort，H5）。
+ *  直接复用 useSkillCommands module-level 单例（与 useSkills 同模式）；
+ *  若尚未挂载则静默跳过——picker 打开时会主动 loadCommands。 */
+function refreshCommandList(): void {
+  try {
+    const store = useSkillCommands()
+    const promise = store.loadCommands?.()
+    if (promise && typeof promise.catch === 'function') {
+      promise.catch((err: unknown) => {
+        console.error('[useSkillEvents] loadCommands failed:', err)
+      })
+    }
+  } catch (err) {
+    console.error('[useSkillEvents] refresh command list failed:', err)
+  }
+}
+
 /** 清空事件历史与计数器。 */
 function clear(): void {
   skillEvents.value = []
@@ -166,6 +206,7 @@ function clear(): void {
     unloaded: 0,
     changed: 0,
     rendered: 0,
+    commandChanged: 0,
   }
 }
 

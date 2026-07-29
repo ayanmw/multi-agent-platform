@@ -79,6 +79,10 @@ export type EventType =
   | 'skill_unloaded'
   | 'skill_changed'
   | 'skill_rendered'
+  // Skill command lifecycle events (review H5：后端已广播，前端此前未订阅)
+  | 'skill_command_loaded'
+  | 'skill_command_unloaded'
+  | 'skill_command_changed'
   // Multi-model layered routing events (Phase multi-model-routing P2)
   | 'model_routed'
   | 'intent_classified'
