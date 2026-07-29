@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -74,6 +75,7 @@ type skillCommandDetailResponse struct {
 type invokeSkillCommandResponse struct {
 	EnabledSkillIDs    []string `json:"enabled_skill_ids"`
 	TemporarySkillID   string   `json:"temporary_skill_id"`
+	Warnings           []string `json:"warnings"`
 }
 
 func toSkillCommandResponse(cmd skill.SkillCommand) skillCommandResponse {
@@ -202,15 +204,25 @@ func handleInvokeSkillCommand(w http.ResponseWriter, r *http.Request, hub eventB
 	resp := invokeSkillCommandResponse{
 		EnabledSkillIDs:  []string{},
 		TemporarySkillID: "",
+		Warnings:         []string{},
 	}
 
 	// 启用关联 skill。
 	if cmd.SkillID != "" {
-		if err := enableSkillByID(hub, skillStore, skillRegistry, cmd.SkillID); err != nil {
+		enabled, err := enableSkillByID(hub, skillStore, skillRegistry, cmd.SkillID)
+		if err != nil {
 			writeJSONError(w, "enable skill: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		resp.EnabledSkillIDs = append(resp.EnabledSkillIDs, cmd.SkillID)
+		if enabled {
+			resp.EnabledSkillIDs = append(resp.EnabledSkillIDs, cmd.SkillID)
+		} else {
+			resp.Warnings = append(resp.Warnings, fmt.Sprintf("associated skill %q not found in registry, skipped", cmd.SkillID))
+			if strings.TrimSpace(cmd.Prompt) == "" {
+				writeJSONError(w, "command has no executable content: associated skill not found and no prompt", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	// 将 prompt 注册为临时 skill。
@@ -223,28 +235,29 @@ func handleInvokeSkillCommand(w http.ResponseWriter, r *http.Request, hub eventB
 	json.NewEncoder(w).Encode(resp)
 }
 
-// enableSkillByID 按 ID 启用 skill；同 handleEnableSkill 逻辑。
-func enableSkillByID(hub eventBroadcaster, store *skill.Store, registry *skill.Registry, id string) error {
+// enableSkillByID 按 ID 启用 skill；返回 (enabled, error)，其中 enabled=false 表示未实际启用（skill 不存在）
+// 但不属于错误（调用方据此决定是否 warn 跳过）。
+func enableSkillByID(hub eventBroadcaster, store *skill.Store, registry *skill.Registry, id string) (bool, error) {
 	s, ok := registry.Get(id)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if s.State == skill.SkillStateEnabled {
-		return nil
+		return true, nil
 	}
 	registry.UpdateState(id, skill.SkillStateEnabled)
 	s.State = skill.SkillStateEnabled
 	s.UpdatedAt = time.Now().Unix()
 	if store != nil {
 		if err := store.Save(&s); err != nil {
-			return err
+			return false, err
 		}
 	}
 	broadcastSkillEvent(hub, skill.EventSkillEnabled, id, map[string]any{
 		"id":    id,
 		"state": string(skill.SkillStateEnabled),
 	})
-	return nil
+	return true, nil
 }
 
 // registerTemporarySkill 把 command 的 prompt 注册为 source=command_temporary 的启用 skill。

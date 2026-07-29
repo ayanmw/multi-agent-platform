@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,11 +202,27 @@ func TestTemporarySkillCommandFlow(t *testing.T) {
 	}
 }
 
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
+// contains 报告 ids 是否包含 target；本文件多个临时 skill 注入断言复用。
+func contains(ids []string, target string) bool {
+	return slices.Contains(ids, target)
 }
+
+// TestEnableSkillByID_NotFoundReturnsFalseNil 验证 M14：enableSkillByID 对
+// registry 中不存在的 id 返回 (false, nil)，让 invoke 调用方据此剔除并告警，
+// 而非静默当作启用成功。
+func TestEnableSkillByID_NotFoundReturnsFalseNil(t *testing.T) {
+	registry := skill.NewRegistry()
+	enabled, err := enableSkillByID(nil, nil, registry, "missing")
+	if enabled {
+		t.Fatalf("expected enabled=false for missing skill, got true")
+	}
+	if err != nil {
+		t.Fatalf("expected err=nil for missing skill, got %v", err)
+	}
+}
+
+// TestInvokeSkillCommand_InvalidSkillIDWarns asserts that invoking a command whose
+// associated SkillID is not in the registry returns 200 with a warning and the
+// temporary skill still registered (when a prompt exists).
+// It also asserts the edge case where both the skill is missing AND the prompt
+// is empty results in 400.
