@@ -7,6 +7,28 @@
 
 ---
 
+## 修复闭环（2026-07-29 完成）
+
+本报告全部 **37 条** 发现已修复并提交到 main，按 P0→P3 四批推进，每批经对抗式 review + 测试验证：
+
+| 优先级 | 总数 | 已修复 | 涉及 commit |
+|--------|------|--------|-------------|
+| P0（Critical+High） | 6 | 6 ✅ | C1/C2/C3 + H1/H2/H3 |
+| P1（Medium 高优） | 9 | 9 ✅ | M3/M12/M13 + M7/M6/M1/M2/M9-11/H5/H6 |
+| P2（Medium 收尾） | 9 | 9 ✅ | M16/M14/M4/M5/M15/M8 |
+| P3（Low 打磨） | 13 | 13 ✅ | L1-L14（L11 随 P0 落地） |
+| **合计** | **37** | **37 (100%)** | 见 `git log --grep="skill"` |
+
+**验证状态**：`go build ./...` ✅；`go test ./cmd/server/ ./internal/skill/ ./internal/runtime/ ./internal/orchestrator/ ./internal/tool/` ✅；前端 vitest（SkillForm / SkillManager / ManageContent / ContextWindowPanel / useSkills）全绿。mock 回归 21/21 未受影响。
+
+**遗留观察（非阻塞）**：
+- LSP 对 `runner.go` 新 helper 偶报 `resolveWorkspaceDir redeclared` 误报（与 `api.go` 同名旧函数混淆），`go build` 实际 exit=0。
+- 全量 vitest 的 33 个 FAIL 全部来自 `.worktrees/logging-upgrade/` 隔离 worktree（缺 `vue` 依赖），与 main 工作区无关——vitest include 未排除 worktree 目录的既有问题，可后续单独修。
+
+本审查闭环。后续 skill 相关改进按 CLAUDE.md「7 生产化」Roadmap 规划。
+
+---
+
 ## 整体评价
 
 Skills 系统的核心骨架（领域模型、registry、store、loader、renderer、Engine 注入、context_window 统计、前端 SkillManager/CommandBar）已全部落地，白盒可观测链路打通，mock 回归 21/21 不受影响。fork-on-edit、delete shadow 恢复 built_in、sourceRank 优先级（local_db > local_file > built_in）、context_window_snapshot.skill_blocks 字段契约等关键接缝在 REST 与 Agent Tool 双路径一致。
