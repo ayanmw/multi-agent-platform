@@ -23,6 +23,8 @@ const { createSkill, updateSkill, refresh } = useSkills()
 const { showError, showInfo } = useToast()
 
 const isEdit = computed(() => !!props.skill)
+// built_in skill 的 fork 语义：编辑内置 skill 实际是创建本地副本
+const isBuiltInFork = computed(() => !!props.skill && props.skill.source === 'built_in')
 
 const id = ref('')
 const displayName = ref('')
@@ -37,7 +39,7 @@ const formError = ref('')
 const availableScopes: { value: SkillScope; label: string }[] = [
   { value: 'global', label: 'Global' },
   { value: 'project', label: 'Project' },
-  { value: 'session', label: 'Session' },
+  { value: 'session', label: 'Session (this run only)' },
 ]
 
 /**
@@ -103,7 +105,7 @@ async function handleSubmit() {
 
     const tags = parseTags(tagsText.value)
 
-    if (isEdit.value) {
+    if (isEdit.value && !isBuiltInFork.value) {
       const changes: UpdateSkillRequest = {
         display_name: displayName.value,
         description: description.value,
@@ -126,7 +128,9 @@ async function handleSubmit() {
       showInfo('Skill 已更新')
     } else {
       const req: CreateSkillRequest = {
-        id: id.value.trim(),
+        id: (isBuiltInFork.value && props.skill
+          ? (id.value.trim() || `${props.skill.id}-fork`)
+          : id.value.trim()),
         display_name: displayName.value,
         description: description.value,
         content: (templates as any[]).find((t: any) => t?.name === 'system_prompt')?.content || '',
@@ -136,7 +140,7 @@ async function handleSubmit() {
       }
       if (projectId.value) req.project_id = projectId.value
       await createSkill(req)
-      showInfo('Skill 已创建')
+      showInfo(isBuiltInFork.value ? 'Skill 已 fork' : 'Skill 已创建')
     }
 
     await refresh()
@@ -153,16 +157,21 @@ async function handleSubmit() {
       <div v-if="show" class="skill-form-overlay" @click.self="emit('close')">
         <div class="skill-form-panel" role="dialog" aria-modal="true">
           <header class="skill-form-header">
-            <h3 class="skill-form-title">{{ isEdit ? 'Edit Skill' : 'New Skill' }}</h3>
+            <h3 class="skill-form-title">
+              {{ isBuiltInFork ? 'Fork Skill' : (isEdit ? 'Edit Skill' : 'New Skill') }}
+            </h3>
             <button class="skill-form-close" aria-label="关闭" @click="emit('close')">×</button>
           </header>
 
           <div class="skill-form-body">
+            <div v-if="isBuiltInFork" class="skill-form-fork-hint">
+              编辑内置 skill 会自动创建一个本地副本（fork），原内置 skill 不受影响。
+            </div>
             <div v-if="formError" class="skill-form-error">{{ formError }}</div>
 
             <label class="skill-field">
               <span class="skill-field-label">ID</span>
-              <input v-model="id" type="text" class="skill-field-input" :disabled="isEdit" placeholder="my-skill" />
+              <input v-model="id" type="text" class="skill-field-input" :disabled="isEdit && !isBuiltInFork" placeholder="my-skill" />
             </label>
 
             <label class="skill-field">
@@ -208,7 +217,7 @@ async function handleSubmit() {
           <footer class="skill-form-footer">
             <button class="skill-form-btn" @click="emit('close')">Cancel</button>
             <button class="skill-form-btn skill-form-btn--primary" @click="handleSubmit">
-              {{ isEdit ? 'Save' : 'Create' }}
+              {{ isBuiltInFork ? 'Fork & Save' : (isEdit ? 'Save' : 'Create') }}
             </button>
           </footer>
         </div>
@@ -293,6 +302,16 @@ async function handleSubmit() {
   color: var(--accent-danger);
   border-radius: var(--radius-md);
   font-size: 0.8rem;
+}
+
+.skill-form-fork-hint {
+  padding: var(--space-sm);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--accent-running);
+  border-radius: var(--radius-md);
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .skill-field {

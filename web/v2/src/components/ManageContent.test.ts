@@ -80,8 +80,15 @@ const CaseFilterStub = defineComponent({
 
 const EmptyStub = defineComponent({ name: 'Empty', render: () => null })
 
-// ManageTabs stub：渲染默认 slot，并提供一个按钮把 activeTab 切到 cases，
-// 便于测试驱动 v-model 切换。通过 emit('update:activeTab', 'cases') 通知父级。
+// SkillManager stub
+const SkillManagerStub = defineComponent({
+  name: 'SkillManager',
+  emits: ['trigger-skill'],
+  render: () => h('div', { class: 'skill-manager-stub' }),
+})
+
+// ManageTabs stub：渲染默认 slot，并提供按钮把 activeTab 切到 cases / skills，
+// 便于测试驱动 v-model 切换。通过 emit('update:activeTab', ...) 通知父级。
 const ManageTabsStub = defineComponent({
   name: 'ManageTabs',
   props: { activeTab: { type: String, default: 'memory' } },
@@ -93,6 +100,10 @@ const ManageTabsStub = defineComponent({
           class: 'tabs-goto-cases',
           onClick: () => emit('update:activeTab', 'cases'),
         }, 'go-cases'),
+        h('button', {
+          class: 'tabs-goto-skills',
+          onClick: () => emit('update:activeTab', 'skills'),
+        }, 'go-skills'),
         slots.default?.(),
       ])
   },
@@ -157,7 +168,7 @@ async function mountInspector() {
         ContextWindowPanel: EmptyStub,
         AgentConfig: EmptyStub,
         ProjectConfig: EmptyStub,
-        SkillPanel: EmptyStub,
+        SkillManager: SkillManagerStub,
         CronManager: EmptyStub,
       },
     },
@@ -268,6 +279,16 @@ describe('ManageContent — Cases tab 状态机', () => {
     await wrapper.find('.fm-close').trigger('click')
     await flushPromises()
     expect(createSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="form-modal"]').exists()).toBe(false)
+  })
+
+  it('Skills tab → 渲染 SkillManager 且无 Cases 弹窗', async () => {
+    const { wrapper } = await mountInspector()
+    await wrapper.find('.tabs-goto-skills').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.skill-manager-stub').exists()).toBe(true)
+    // 切到 skills 后 Cases 相关弹窗不应存在
+    expect(wrapper.find('[data-testid="detail-modal"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="form-modal"]').exists()).toBe(false)
   })
 })

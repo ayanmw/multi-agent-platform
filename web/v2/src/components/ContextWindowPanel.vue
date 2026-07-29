@@ -55,15 +55,23 @@ const skillBlocks = computed<SkillBlock[]>(() => {
   return skillBlocksByTask.value[taskId] ?? []
 })
 
-// 判断某条 system message 是否匹配某个 skill block 内容前缀，用于展示 badge。
-// 这里用基于 render 后内容前缀的轻量匹配，避免误标普通 system prompt。
+// 找出第一条 system message 的下标。Skill 注入只追加到 system prompt，
+// 因此只在唯一/首条 system message 上标 badge，避免给所有 system message
+// 误标同一个 skill（snapshot 的 skill_blocks 不含 content，无法按内容精确归属）。
+const firstSystemMessageIdx = computed(() => {
+  const msgs = latest.value?.messages ?? []
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role === 'system') return i
+  }
+  return -1
+})
+
+// 判断某条 system message 是否应展示 skill 注入 badge。
+// 仅首条 system message 标记，且用 skill_blocks 中对应模板名；多块时只取首个
+// 模板名作为代表（完整明细见上方 Skill Injection 区，避免逐条误标）。
 function findMatchingSkillBlock(msg: SnapshotMessage): SkillBlock | undefined {
   if (msg.role !== 'system' || !msg.content) return undefined
-  // 优先用快照明细中的 template_name；若无，再与 useSkillEvents 缓存比较。
-  return skillBlocks.value.find((b) => {
-    // 快照 skill_blocks 不含 content，无法精确匹配；只标第一条 system message。
-    return true
-  })
+  return skillBlocks.value[0]
 }
 
 const isLoading = ref(false)
@@ -436,7 +444,7 @@ const ringDash = computed(() => {
               <span class="message-tokens">{{ formatTokens(msg.estimated_tokens) }} tok</span>
               <span class="message-ratio">{{ (messageRatio(msg) * 100).toFixed(0) }}%</span>
               <InjectedSkillBadge
-                v-if="msg.role === 'system' && skillBlocks.length > 0"
+                v-if="msg.role === 'system' && skillBlocks.length > 0 && idx === firstSystemMessageIdx"
                 :template-name="findMatchingSkillBlock(msg)?.template_name || skillBlocks[0]?.template_name || 'system_prompt'"
               />
             </div>
