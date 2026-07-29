@@ -136,6 +136,30 @@ func TestSkillMatchesScope(t *testing.T) {
 	}
 }
 
+// TestMatchWorkdirPublic 验证公开的 MatchWorkdir 与 isSubDirOrEqual 同语义，
+// 供 cmd/server 三处 workdir 判定共用（review M9/M10/M11）。
+func TestMatchWorkdirPublic(t *testing.T) {
+	// workdir == skillDir
+	if !MatchWorkdir("/repo/proj", "/repo/proj") {
+		t.Fatalf("equal paths should match")
+	}
+	// workdir 是 skillDir 子目录
+	if !MatchWorkdir("/repo/proj", "/repo/proj/sub") {
+		t.Fatalf("subdir should match")
+	}
+	// 分隔符感知：/repo/proj-evil 不是 /repo/proj 子目录
+	if MatchWorkdir("/repo/proj", "/repo/proj-evil") {
+		t.Fatalf("false prefix should not match")
+	}
+	// 空值
+	if MatchWorkdir("", "/repo/proj") {
+		t.Fatalf("empty workdir should not match")
+	}
+	if MatchWorkdir("/repo/proj", "") {
+		t.Fatalf("empty skillDir should not match")
+	}
+}
+
 func TestResolveActiveSkillsWithExtraInjectsSessionSkill(t *testing.T) {
 	// 模拟 registerTemporarySkill 注册后的 cmd:xxx skill（scope=session, state=enabled）。
 	r := NewRegistry()

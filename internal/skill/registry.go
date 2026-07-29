@@ -153,7 +153,22 @@ func scopePriority(scope SkillScope) int {
 	}
 }
 
+// MatchWorkdir 是 workdir 判定的公开入口，供 cmd/server 的列表过滤与 invoke
+// scope 校验共用，与 ResolveActiveSkills 内部的 isSubDirOrEqual 同语义：
+// 当 workdir 等于 skillDir 或为其子目录时返回 true（skillDir 是锚点目录）。
+//
+// 用途统一三处判定（review M9/M10/M11）：
+//   - ResolveActiveSkills：运行期注入
+//   - GET /api/skills?workdir=：列表过滤
+//   - POST /api/skill-commands/:id/invoke：project scope 放行
+func MatchWorkdir(skillDir, workdir string) bool {
+	return isSubDirOrEqual(workdir, skillDir)
+}
+
 // isSubDirOrEqual 判断 child 是否等于 parent 或其子目录（路径前缀匹配）。
+// 这是 workdir 判定的单一权威实现：registry 的 ResolveActiveSkills、
+// GET /api/skills?workdir= 过滤、invoke 的 isCommandScopeAllowed 三处共用，
+// 消除"列表/运行期/invoke 三处 workdir 语义不一致"（review M9/M10/M11）。
 func isSubDirOrEqual(child, parent string) bool {
 	if child == "" || parent == "" {
 		return false

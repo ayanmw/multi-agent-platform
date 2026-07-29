@@ -136,7 +136,7 @@ func handleListSkills(w http.ResponseWriter, r *http.Request, registry *skill.Re
 			if projectIDFilter != "" && s.ProjectID != projectIDFilter {
 				continue
 			}
-			if workdirFilter != "" && s.WorkspaceDir != workdirFilter {
+			if workdirFilter != "" && !skill.MatchWorkdir(s.WorkspaceDir, workdirFilter) {
 				continue
 			}
 			filtered = append(filtered, s)
@@ -252,8 +252,12 @@ func handleCreateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 	if scope == "" {
 		scope = skill.SkillScopeGlobal
 	}
-	if scope != skill.SkillScopeGlobal && scope != skill.SkillScopeProject {
-		writeJSONError(w, "invalid scope: "+string(scope)+" (allowed: global, project)", http.StatusBadRequest)
+	// 允许 global/project/session 三种 scope（review H6）：
+	// session scope 可写入存储，但 ResolveActiveSkills 对 session scope 暂不注入
+	// （仅经 ResolveActiveSkillsWithExtra 的 extraIDs 显式纳入当前 run）。
+	// 与 spec.md:94 "local_db 可设置 scope=project 或 session" 对齐。
+	if scope != skill.SkillScopeGlobal && scope != skill.SkillScopeProject && scope != skill.SkillScopeSession {
+		writeJSONError(w, "invalid scope: "+string(scope)+" (allowed: global, project, session)", http.StatusBadRequest)
 		return
 	}
 
@@ -401,7 +405,7 @@ func handleUpdateSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 	}
 	if req.Scope != nil {
 		sc := skill.SkillScope(strings.TrimSpace(*req.Scope))
-		if sc != "" && sc != skill.SkillScopeGlobal && sc != skill.SkillScopeProject {
+		if sc != "" && sc != skill.SkillScopeGlobal && sc != skill.SkillScopeProject && sc != skill.SkillScopeSession {
 			writeJSONError(w, "invalid scope: "+string(sc), http.StatusBadRequest)
 			return
 		}
@@ -609,12 +613,10 @@ func handleSetScanConfig(w http.ResponseWriter, r *http.Request, store skill.Set
 		return
 	}
 
-	// 保存后刷新全局文件系统 skill；workdir skill 不在此处重扫。
+	// 保存后只重扫全局层文件系统 skill；project scope local_file skill 保留不动
+	// （review M1：spec 要求"不改变已扫描 workdir"，旧实现复用 Reload 会清空 project skill）。
 	if loader != nil {
-		if err := loader.Reload(); err != nil {
-			writeJSONError(w, "reload failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		loader.FileLoader().RefreshGlobal(loader.GlobalDir())
 	}
 
 	w.Header().Set("Content-Type", "application/json")

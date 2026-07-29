@@ -109,4 +109,43 @@ func TestSkillProjectScopeAPI(t *testing.T) {
 	if slices.Contains(ids, "proj/go-helper") {
 		t.Fatalf("project skill should not be active for other project")
 	}
+
+	// M10：GET /api/skills?workdir=<子目录> 应与 ResolveActiveSkills 同语义（isSubDirOrEqual），
+	// 而非旧实现的精确等值。project skill workspace_dir=/home/proj-go-v2（PUT 后改过 project_id 但
+	// workspace_dir 仍是 /home/proj-go）。这里用 workspace_dir 子目录查询，应能列出该 skill。
+	resp, err = client.Get(ts.URL + "/api/skills?workdir=" + "/home/proj-go/sub")
+	if err != nil {
+		t.Fatalf("filter by workdir subdir: %v", err)
+	}
+	body = readBody(t, resp)
+	listed = nil
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("decode workdir subdir: %v", err)
+	}
+	foundSub := false
+	for _, s := range listed {
+		if s.ID == "proj/go-helper" {
+			foundSub = true
+			break
+		}
+	}
+	if !foundSub {
+		t.Fatalf("M10: project skill should be listed for workdir subdir (isSubDirOrEqual), got %v", listed)
+	}
+
+	// 分隔符感知：/home/proj-go-evil 不是 /home/proj-go 子目录，不应列出。
+	resp, err = client.Get(ts.URL + "/api/skills?workdir=" + "/home/proj-go-evil")
+	if err != nil {
+		t.Fatalf("filter by false-prefix workdir: %v", err)
+	}
+	body = readBody(t, resp)
+	listed = nil
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("decode false-prefix: %v", err)
+	}
+	for _, s := range listed {
+		if s.ID == "proj/go-helper" {
+			t.Fatalf("M10: false-prefix workdir should not match project skill, got %v", listed)
+		}
+	}
 }

@@ -288,6 +288,8 @@ func registerTemporarySkill(hub eventBroadcaster, registry *skill.Registry, cmd 
 }
 
 // isCommandScopeAllowed 判断 workdir 是否匹配 command 的 workspace_dir。
+// 复用 skill.MatchWorkdir（与 ResolveActiveSkills / GET /api/skills?workdir= 同语义），
+// 避免裸 strings.HasPrefix 导致 "/repo/proj-evil" 被当作 "/repo/proj" 子目录放行（review M9）。
 func isCommandScopeAllowed(workdir, commandWorkdir string) bool {
 	if commandWorkdir == "" {
 		return true
@@ -295,5 +297,5 @@ func isCommandScopeAllowed(workdir, commandWorkdir string) bool {
 	if workdir == "" {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(workdir), strings.TrimSpace(commandWorkdir))
+	return skill.MatchWorkdir(commandWorkdir, workdir)
 }
