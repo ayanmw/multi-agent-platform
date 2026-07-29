@@ -960,6 +960,12 @@ func main() {
 		} else {
 			log.Printf("Skill subsystem: loaded %d skill(s) into registry", len(skillRegistry.List(nil)))
 		}
+		// L12: 启动时若 skill_scan_dirs 为空，写入默认值，使配置可被后续 REST 读取/修改。
+		if val, _ := db.GetSetting("skill_scan_dirs"); val == "" {
+			if b, err := json.Marshal(skill.DefaultSkillScanDirs); err == nil {
+				_ = db.SetSetting("skill_scan_dirs", string(b))
+			}
+		}
 		// 注册 skill 管理工具（create_local / delete_local / list / get / update_local / enable / disable / search），让 Agent 也能操作 skill。
 		// 有改写的工具通过 WithBus 注入广播适配器，确保 tool 执行后在 event bus 上广播 skill_* 事件。
 		skillBus := &skillEventBusAdapter{hub: hub}

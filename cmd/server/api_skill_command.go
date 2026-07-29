@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -190,7 +191,16 @@ func handleInvokeSkillCommand(w http.ResponseWriter, r *http.Request, hub eventB
 	var req struct {
 		Workdir string `json:"workdir"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+	if decodeErr != nil {
+		// 空 body（EOF）允许通过，workdir 回退到 query param。
+		if decodeErr == io.EOF {
+			req.Workdir = strings.TrimSpace(r.URL.Query().Get("workdir"))
+		} else {
+			writeJSONError(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+	}
 	workdir := strings.TrimSpace(req.Workdir)
 
 	// project scope 命令需要 workdir 匹配。

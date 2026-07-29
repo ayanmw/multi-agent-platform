@@ -603,6 +603,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	if cfg.SkillRegistry != nil && len(cfg.ActiveSkills) > 0 {
 		renderer := skill.NewRenderer()
 		var rendered []string
+		isFirstBlock := true
 		for _, id := range cfg.ActiveSkills {
 			s, ok := cfg.SkillRegistry.Get(id)
 			if !ok {
@@ -617,8 +618,9 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 						TemplateName:    tmpl.Name,
 						Content:         content,
 						CharCount:       len(content),
-						EstimatedTokens: estimateSkillBlockTokens(content),
+						EstimatedTokens: estimateSkillBlockTokens(content, isFirstBlock),
 					})
+					isFirstBlock = false
 				}
 			}
 		}
@@ -626,19 +628,22 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 			systemPrompt += "\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n")
 		}
 
-		// 广播 skill_rendered 事件，让前端在上下文窗口面板中显示已注入 skill。
-		blockData := make([]map[string]any, 0, len(injectedBlocks))
-		for _, b := range injectedBlocks {
-			blockData = append(blockData, map[string]any{
-				"skill_id":         b.SkillID,
-				"template_name":    b.TemplateName,
-				"char_count":       b.CharCount,
-				"estimated_tokens": b.EstimatedTokens,
-			})
+		// 仅当实际注入了 skill 模板块时才广播 skill_rendered 事件。
+		// 避免 registry 非空或有 activeSkills 但无有效模板时发送空 skill_blocks。
+		if len(injectedBlocks) > 0 {
+			blockData := make([]map[string]any, 0, len(injectedBlocks))
+			for _, b := range injectedBlocks {
+				blockData = append(blockData, map[string]any{
+					"skill_id":         b.SkillID,
+					"template_name":    b.TemplateName,
+					"char_count":       b.CharCount,
+					"estimated_tokens": b.EstimatedTokens,
+				})
+			}
+			bus.SendEvent(event.NewEventWithSubTask(skill.EventSkillRendered, taskID, cfg.SubTaskID, cfg.AgentID, 0, map[string]any{
+				"skill_blocks": blockData,
+			}))
 		}
-		bus.SendEvent(event.NewEventWithSubTask(skill.EventSkillRendered, taskID, cfg.SubTaskID, cfg.AgentID, 0, map[string]any{
-			"skill_blocks": blockData,
-		}))
 	}
 
 	// Phase worktree / Phase 7: 把当前 session 的 active TODO 列表（若已配置）注入 system prompt。
@@ -694,8 +699,12 @@ func parsePreferredTier(s string) llm.ModelTier {
 // estimateSkillBlockTokens 对 skill 注入文本做与单条消息一致的 token 估算。
 // 这里复用 llm 包的启发式：4 字符约 1 token + 固定开销，保证 skill block
 // 明细与消息级估算口径一致。
-func estimateSkillBlockTokens(content string) int {
-	return len(content)/4 + 5
+// isFirstBlock 控制是否计入固定开销：仅首块加 +5，后续块省略，避免多块场景高估。
+func estimateSkillBlockTokens(content string, isFirstBlock bool) int {
+	if isFirstBlock {
+		return len(content)/4 + 5
+	}
+	return len(content) / 4
 }
 
 // toLLMSkillBlocks 把内部 InjectedSkillBlock 转换为对外快照使用的 llm.SkillBlock。

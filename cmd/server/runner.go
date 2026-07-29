@@ -269,24 +269,8 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 		observability.DefaultMetrics.RecordCost(record.CostCents)
 	}
 
-	// 恢复路径的 workspace：按反查出的 session 决定。
-	workspaceDir := ""
-	projectID := ""
-	projectName := ""
-	if sessionID != "" {
-		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
-			projectID = wsSess.ProjectID
-			workspaceDir = wsSess.WorkspaceDir
-			if projectID != "" {
-				if proj, projErr := db.QueryProjectByID(projectID); projErr == nil {
-					projectName = proj.Name
-					if workspaceDir == "" && proj.WorkingDirectory != "" {
-						workspaceDir = proj.WorkingDirectory
-					}
-				}
-			}
-		}
-	}
+	// 恢复路径的 workspace：按反查出的 session 决定。与 chat 路径共用同一解析逻辑。
+	workspaceDir, projectID, projectName := resolveSessionWorkspace(sessionID)
 
 	// 恢复路径的 working memory 与 active todos：与 chat 路径保持一致。
 	workingMemory := ""
@@ -500,6 +484,45 @@ func (d *orchestratorDispatcher) Dispatch(ctx context.Context, leaderSubTaskID, 
 	return out, nil
 }
 
+// resolveSessionWorkspace 从 session 反查其 workspace 目录，供 chat / recover 等
+// 入口共用。优先级：
+//  1. session.WorkspaceDir
+//  2. project.WorkingDirectory（project 由 session.ProjectID 反查）
+//  3. <cwd>/workspace 兜底（保证 write_file / run_shell 始终有 CWD 锚点，
+//     不污染 server CWD 源码树）
+// 同时返回 projectID 与 projectName，避免调用方重复查库。
+func resolveSessionWorkspace(sessionID string) (workspaceDir, projectID, projectName string) {
+	if sessionID != "" {
+		wsSess, err := db.QuerySessionByID(sessionID)
+		if err == nil && wsSess != nil {
+			projectID = wsSess.ProjectID
+			workspaceDir = wsSess.WorkspaceDir
+			if projectID != "" {
+				proj, projErr := db.QueryProjectByID(projectID)
+				if projErr == nil && proj != nil {
+					projectName = proj.Name
+					if workspaceDir == "" && proj.WorkingDirectory != "" {
+						workspaceDir = proj.WorkingDirectory
+					}
+				}
+			}
+		}
+	}
+	// 最后一道兜底：session/project 解析后 workspaceDir 仍为空（含 sessionID 为空的
+	// 子 agent 路径、或旧 session 记录未带 workspace_dir）时，落到默认 <cwd>/workspace/。
+	// 这是 write_file/run_shell 相对路径的最后锚点，避免回退到 server CWD 污染源码树。
+	// 仅作 CWD 锚点用，不在此创建 per-task 子目录（产物归属由上游 session 兜底，
+	// 见 resolveSession / handleRunCase 的匿名 session 逻辑）。
+	if workspaceDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workspaceDir = filepath.Join(cwd, "workspace")
+			_ = os.MkdirAll(workspaceDir, 0755)
+			log.Printf("[resolveSessionWorkspace] session=%q 无 workspace_dir，兜底到 %s", sessionID, workspaceDir)
+		}
+	}
+	return
+}
+
 // resolveEffectiveModel 按优先级解析本次运行实际使用的 LLM 模型名。
 // 优先级：spec.Model > DB agent.Model > cfg.LLMModel。
 // 该函数在 runAgentLoopWithTurn 与 Recover 中复用，保证 DB agents.model
@@ -706,41 +729,8 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	// 解析 session 的 workspace 目录，让工具（run_shell、write_file、
 	// read_file）以正确的 CWD 执行。每一轮都要读取 —— 不只是 root ——
 	// 这样多轮对话的后续轮次才能继承同一个 workspace。
-	//
-	// 若 session.WorkspaceDir 为空但 session 属于某个 project，则回退到
-	// project.WorkingDirectory，让多个 session 可共享同一个 project workspace。
-	workspaceDir := ""
-	projectID := ""
-	projectName := ""
-	if sessionID != "" {
-		if wsSess, err := db.QuerySessionByID(sessionID); err == nil {
-			projectID = wsSess.ProjectID
-			workspaceDir = wsSess.WorkspaceDir
-			if projectID != "" {
-				if proj, projErr := db.QueryProjectByID(projectID); projErr == nil {
-					projectName = proj.Name
-					if workspaceDir == "" && proj.WorkingDirectory != "" {
-						workspaceDir = proj.WorkingDirectory
-					}
-				}
-			}
-		}
-	}
-
-	// 最后一道兜底：若经 session/project 解析后 workspaceDir 仍为空（如 session
-	// 记录未带 workspace_dir 的旧数据、或子 agent 无 session 路径），落到默认
-	// <cwd>/workspace/ 目录。这是 write_file/run_shell 相对路径的最后锚点 ——
-	// 避免回退到 server CWD（可能是仓库根目录）污染源码树。
-	// 仅作 CWD 锚点用，不在此创建 per-task 子目录（产物归属应由上游 session 兜底，
-	// 见 resolveSession / handleRunCase 的匿名 session 逻辑）。
-	if workspaceDir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			workspaceDir = filepath.Join(cwd, "workspace")
-			_ = os.MkdirAll(workspaceDir, 0755)
-			log.Printf("[runAgentLoopWithTurn] session=%q 无 workspace_dir，兜底到 %s（产物将落此，建议上游绑定 session workspace）",
-				sessionID, workspaceDir)
-		}
-	}
+	// 与 Recover 路径共用 resolveWorkspaceDir，保证行为一致。
+	workspaceDir, projectID, projectName := resolveSessionWorkspace(sessionID)
 
 	// 从 mock/全局配置解析 LLM Provider。Provider 在每个 agent loop 中只
 	// 创建一次并传给 Engine，以便 mock 开关 (LLM_USE_MOCK / LLMRealCases /

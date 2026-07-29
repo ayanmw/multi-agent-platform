@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -314,6 +315,68 @@ func TestParseSkillFile_EmptyFrontmatter(t *testing.T) {
 	}
 	if s.Templates[0].Content != "just body" {
 		t.Fatalf("body = %q, want 'just body' (no `---`)", s.Templates[0].Content)
+	}
+}
+
+// TestFileLoaderLoadGlobalDiscoversAgentAndOpencodeDirs 验证 M4：
+// .agent/skills 与 .opencode/skills 目录中的 Skill 能被 FileLoader 扫描并注册，
+// 模板内容完整保留。
+func TestFileLoaderLoadGlobalDiscoversAgentAndOpencodeDirs(t *testing.T) {
+	base := t.TempDir()
+	for _, tc := range []struct {
+		dir   string
+		id    string
+		body  string
+		tmpl  string
+	}{
+		{".agent/skills/agent-helper", "agent-helper", "body for agent skill.", "system_prompt"},
+		{".opencode/skills/opencode-helper", "opencode-helper", "body for opencode skill.", "task_prompt"},
+	} {
+		full := filepath.Join(base, filepath.FromSlash(tc.dir))
+		if err := os.MkdirAll(full, 0755); err != nil {
+			t.Fatal(err)
+		}
+		content := fmt.Sprintf("---\nname: %s\ndescription: desc-%s\ntemplate_name: %s\n---\n%s",
+			tc.id, tc.id, tc.tmpl, tc.body)
+		if err := os.WriteFile(filepath.Join(full, "SKILL.md"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reg := NewRegistry()
+	fl := NewFileLoader(reg, nil, nil, nil)
+	if err := fl.LoadGlobal(base); err != nil {
+		t.Fatalf("LoadGlobal failed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		id   string
+		name string
+		tmpl string
+		body string
+	}{
+		{"agent-helper", "agent-helper", "system_prompt", "body for agent skill."},
+		{"opencode-helper", "opencode-helper", "task_prompt", "body for opencode skill."},
+	} {
+		s, ok := reg.Get(tc.id)
+		if !ok {
+			t.Fatalf("expected skill %q to be registered", tc.id)
+		}
+		if s.Source != SkillSourceLocalFile {
+			t.Errorf("%q: source = %q, want local_file", tc.id, s.Source)
+		}
+		if s.Scope != SkillScopeGlobal {
+			t.Errorf("%q: scope = %q, want global", tc.id, s.Scope)
+		}
+		if len(s.Templates) != 1 {
+			t.Fatalf("%q: expected 1 template, got %d: %+v", tc.id, len(s.Templates), s.Templates)
+		}
+		if s.Templates[0].Name != tc.tmpl {
+			t.Errorf("%q: template name = %q, want %q", tc.id, s.Templates[0].Name, tc.tmpl)
+		}
+		if s.Templates[0].Content != tc.body {
+			t.Errorf("%q: template body = %q, want %q", tc.id, s.Templates[0].Content, tc.body)
+		}
 	}
 }
 

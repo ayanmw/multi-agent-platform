@@ -127,6 +127,155 @@ func TestEngineSkillRenderedEvent(t *testing.T) {
 	}
 }
 
+// TestEngineSkillRenderedNotBroadcastWhenNoBlocks 验证 NewEngine 在 skill 子系统
+// 处于多种负向配置时不广播 skill_rendered 事件：
+//  (1) SkillRegistry=nil
+//  (2) ActiveSkills 为空切片
+//  (3) ActiveSkills 指向 registry 中不存在的 ID
+//  (4) Skill 存在但无 system_prompt/task_prompt 模板
+// 这些边界条件保证 "registry 非空但无有效 skill 可注入" 时不会发送含空
+// skill_blocks 的事件污染前端事件流。
+func TestEngineSkillRenderedNotBroadcastWhenNoBlocks(t *testing.T) {
+	// 场景1：nil registry + nil ActiveSkills——不应广播。
+	bus1 := &recordingBus{}
+	cfg1 := EngineConfig{
+		AgentID:      "test-agent",
+		SystemPrompt: "You are a helpful assistant.",
+		Model:        "fake-model",
+	}
+	_ = NewEngine(cfg1, tool.NewRegistry(), bus1, "task-skill-nil")
+	for _, ev := range bus1.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("nil registry 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+
+	// 场景2：非空 registry 但 ActiveSkills 为空——不应广播。
+	bus2 := &recordingBus{}
+	reg := skill.NewRegistry()
+	cfg2 := EngineConfig{
+		AgentID:        "test-agent",
+		SystemPrompt:   "You are a helpful assistant.",
+		Model:          "fake-model",
+		SkillRegistry:  reg,
+		ActiveSkills:   []string{},
+		SkillVariables: map[string]any{},
+	}
+	_ = NewEngine(cfg2, tool.NewRegistry(), bus2, "task-skill-empty")
+	for _, ev := range bus2.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("空 ActiveSkills 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+
+	// 场景3：ActiveSkills 指向不存在 skill id——不应广播空 skill_blocks。
+	bus3 := &recordingBus{}
+	cfg3 := EngineConfig{
+		AgentID:        "test-agent",
+		SystemPrompt:   "You are a helpful assistant.",
+		Model:          "fake-model",
+		SkillRegistry:  reg,
+		ActiveSkills:   []string{"non-existent"},
+		SkillVariables: map[string]any{},
+	}
+	_ = NewEngine(cfg3, tool.NewRegistry(), bus3, "task-skill-missing")
+	for _, ev := range bus3.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("不存在的 skill 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+
+	// 场景4：skill 存在但无 system_prompt/task_prompt 模板——不应广播空 skill_blocks。
+	reg.Register(skill.Skill{
+		ID:          "no-template",
+		DisplayName: "No Template",
+		Source:      skill.SkillSourceBuiltIn,
+		State:       skill.SkillStateEnabled,
+		Templates:   []skill.SkillTemplate{}, // 空 templates
+	})
+	bus4 := &recordingBus{}
+	cfg4 := EngineConfig{
+		AgentID:        "test-agent",
+		SystemPrompt:   "You are a helpful assistant.",
+		Model:          "fake-model",
+		SkillRegistry:  reg,
+		ActiveSkills:   []string{"no-template"},
+		SkillVariables: map[string]any{},
+	}
+	_ = NewEngine(cfg4, tool.NewRegistry(), bus4, "task-skill-no-tmpl")
+	for _, ev := range bus4.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("无匹配模板的 skill 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+}
+
+// TestEngineSkillRenderedNotBroadcastWhenInactive 覆盖 NewEngine 在 skill
+// 子系统处于三种负向配置时不广播 skill_rendered 事件且 injectedSkillBlocks 为空：
+//  (1) SkillRegistry=nil；(2) ActiveSkills 为空切片；(3) ActiveSkills 指向不存在 ID。
+// 相比 TestEngineSkillRenderedNotBroadcastWhenNoBlocks，本测试额外断言
+// Engine.injectedSkillBlocks 字段在这些负向场景下保持空切片，防止 future change
+// 静默写入空 block 但事件被条件跳过时遗漏检测。
+func TestEngineSkillRenderedNotBroadcastWhenInactive(t *testing.T) {
+	// 场景1：nil registry + nil ActiveSkills——不应广播，injectedSkillBlocks 为空。
+	bus1 := &recordingBus{}
+	cfg1 := EngineConfig{
+		AgentID:      "test-agent",
+		SystemPrompt: "You are a helpful assistant.",
+		Model:        "fake-model",
+	}
+	e1 := NewEngine(cfg1, tool.NewRegistry(), bus1, "task-skill-nil")
+	for _, ev := range bus1.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("nil registry 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+	if len(e1.injectedSkillBlocks) != 0 {
+		t.Fatalf("nil registry 时 injectedSkillBlocks 应为空, got %d blocks", len(e1.injectedSkillBlocks))
+	}
+
+	// 场景2：非空 registry 但 ActiveSkills 为空——不应广播，injectedSkillBlocks 为空。
+	bus2 := &recordingBus{}
+	reg := skill.NewRegistry()
+	cfg2 := EngineConfig{
+		AgentID:        "test-agent",
+		SystemPrompt:   "You are a helpful assistant.",
+		Model:          "fake-model",
+		SkillRegistry:  reg,
+		ActiveSkills:   []string{},
+		SkillVariables: map[string]any{},
+	}
+	e2 := NewEngine(cfg2, tool.NewRegistry(), bus2, "task-skill-empty")
+	for _, ev := range bus2.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("空 ActiveSkills 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+	if len(e2.injectedSkillBlocks) != 0 {
+		t.Fatalf("空 ActiveSkills 时 injectedSkillBlocks 应为空, got %d blocks", len(e2.injectedSkillBlocks))
+	}
+
+	// 场景3：ActiveSkills 指向不存在 skill id——不应广播，injectedSkillBlocks 为空。
+	bus3 := &recordingBus{}
+	cfg3 := EngineConfig{
+		AgentID:        "test-agent",
+		SystemPrompt:   "You are a helpful assistant.",
+		Model:          "fake-model",
+		SkillRegistry:  reg,
+		ActiveSkills:   []string{"non-existent"},
+		SkillVariables: map[string]any{},
+	}
+	e3 := NewEngine(cfg3, tool.NewRegistry(), bus3, "task-skill-missing")
+	for _, ev := range bus3.events {
+		if ev.Type == skill.EventSkillRendered {
+			t.Fatalf("不存在的 skill 不应广播 skill_rendered, got: %v", ev)
+		}
+	}
+	if len(e3.injectedSkillBlocks) != 0 {
+		t.Fatalf("不存在的 skill id 时 injectedSkillBlocks 应为空, got %d blocks", len(e3.injectedSkillBlocks))
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

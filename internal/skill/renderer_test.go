@@ -2,6 +2,38 @@ package skill
 
 import "testing"
 
+// TestRenderNilSafe 验证 Renderer.Render 在边界输入下不 panic：
+//   (1) 模板 content 为空串；
+//   (2) vars 为 nil；
+//   (3) 模板无占位符原样返回。
+//
+// 已知限制：本实现签名仅接收 map[string]any variables，不接收 SkillParameter 列表，
+// 因此 "preferring SkillParameter.Default" 回退暂未实现。若后续扩展签名，
+// 需补充 Default 回退相关用例。
+func TestRenderNilSafe(t *testing.T) {
+	r := NewRenderer()
+
+	// (1) 空模板不 panic，返回空串。
+	got := r.Render(SkillTemplate{Content: ""}, nil)
+	if got != "" {
+		t.Fatalf("empty content Render = %q, want empty", got)
+	}
+
+	// (2) vars 为 nil 不 panic，变量未匹配时保留占位符。
+	got = r.Render(SkillTemplate{Content: "{{greeting}} {{name}}"}, nil)
+	if got != "{{greeting}} {{name}}" {
+		t.Fatalf("nil vars Render = %q, want placeholders preserved", got)
+	}
+
+	// (3) 无占位符原样返回。
+	got = r.Render(SkillTemplate{Content: "plain text, no placeholders"}, map[string]any{
+		"greeting": "hi",
+	})
+	if got != "plain text, no placeholders" {
+		t.Fatalf("no placeholder Render = %q, want original", got)
+	}
+}
+
 func TestRendererRender(t *testing.T) {
 	r := NewRenderer()
 	tmpl := SkillTemplate{

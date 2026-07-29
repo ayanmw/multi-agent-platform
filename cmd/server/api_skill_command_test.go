@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,6 +208,26 @@ func contains(ids []string, target string) bool {
 	return slices.Contains(ids, target)
 }
 
+// TestAPIInvokeSkillCommand_InvalidJSONBody asserts that invoking with a malformed
+// JSON body returns 400 "invalid json body" (L13).
+func TestAPIInvokeSkillCommand_InvalidJSONBody(t *testing.T) {
+	files := map[string]string{
+		".claude/commands/ops/new.md": "---\nname: New\nskill: openspec-new-change\n---\nhelp",
+	}
+	ts, _, _ := setupSkillCommandTestServer(t, files)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/skill-commands/ops:new/invoke", "application/json", strings.NewReader("not-json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d, body: %s", resp.StatusCode, string(body))
+	}
+}
+
 // TestEnableSkillByID_NotFoundReturnsFalseNil 验证 M14：enableSkillByID 对
 // registry 中不存在的 id 返回 (false, nil)，让 invoke 调用方据此剔除并告警，
 // 而非静默当作启用成功。
@@ -218,6 +239,108 @@ func TestEnableSkillByID_NotFoundReturnsFalseNil(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("expected err=nil for missing skill, got %v", err)
+	}
+}
+
+// TestInvokeSkillCommand_EnableSkillLinked 验证 L14：invoke 关联 skill 存在时，
+// enabled_skill_ids 含该 skill ID；关联 skill 不存在时 enabled_skill_ids 为空且 warning 提示。
+func TestInvokeSkillCommand_EnableSkillLinked(t *testing.T) {
+	// 场景1：关联 skill 存在且禁用 → invoke 应将其含入 enabled_skill_ids。
+	reg := skill.NewRegistry()
+	linked := skill.Skill{
+		ID:          "openspec-new-change",
+		DisplayName: "Linked",
+		Source:      skill.SkillSourceLocalDB,
+		State:       skill.SkillStateDisabled,
+		Scope:       skill.SkillScopeGlobal,
+		Templates:   []skill.SkillTemplate{{Name: "system_prompt", Content: "", Variables: nil}},
+	}
+	reg.Register(linked)
+
+	cmdReg := skill.NewCommandRegistry()
+	cmdLoader := skill.NewCommandLoader(cmdReg, nil)
+
+	dir1 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir1, ".claude", "commands", "ops"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir1, ".claude", "commands", "ops", "new.md"), []byte("---\nname: New\nskill: openspec-new-change\n---\nprompt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdLoader.LoadGlobal(dir1); err != nil {
+		t.Fatal(err)
+	}
+	loader1 := skill.NewLoader(nil, reg)
+	loader1.SetCommandLoader(cmdLoader)
+
+	testMux := http.NewServeMux()
+	registerSkillCommandRoutes(testMux, nil, loader1, nil, reg)
+	testServer := httptest.NewServer(testMux)
+	defer testServer.Close()
+
+	bodyReq := map[string]string{"workdir": ""}
+	b, _ := json.Marshal(bodyReq)
+	resp, err := http.Post(testServer.URL+"/api/skill-commands/ops:new/invoke", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d, body: %s", resp.StatusCode, string(body))
+	}
+	var result invokeSkillCommandResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.EnabledSkillIDs) != 1 || result.EnabledSkillIDs[0] != "openspec-new-change" {
+		t.Fatalf("expected enabled_skill_ids [openspec-new-change], got %v", result.EnabledSkillIDs)
+	}
+	if result.TemporarySkillID != "cmd:ops:new" {
+		t.Fatalf("unexpected temporary_skill_id: %s", result.TemporarySkillID)
+	}
+
+	// 场景2：关联 skill 不存在 → enabled_skill_ids 为空，warnings 提示跳过。
+	reg2 := skill.NewRegistry()
+	cmdReg2 := skill.NewCommandLoader(skill.NewCommandRegistry(), nil)
+	dir2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir2, ".claude", "commands", "ops"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, ".claude", "commands", "ops", "new2.md"), []byte("---\nname: New2\nskill: missing-skill\n---\nprompt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdReg2.LoadGlobal(dir2); err != nil {
+		t.Fatal(err)
+	}
+	loader2 := skill.NewLoader(nil, reg2)
+	loader2.SetCommandLoader(cmdReg2)
+
+	testMux2 := http.NewServeMux()
+	registerSkillCommandRoutes(testMux2, nil, loader2, nil, reg2)
+	testServer2 := httptest.NewServer(testMux2)
+	defer testServer2.Close()
+
+	body2 := map[string]string{"workdir": ""}
+	b2, _ := json.Marshal(body2)
+	resp2, err := http.Post(testServer2.URL+"/api/skill-commands/ops:new2/invoke", "application/json", bytes.NewReader(b2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("expected 200, got %d, body: %s", resp2.StatusCode, string(b))
+	}
+	var result2 invokeSkillCommandResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&result2); err != nil {
+		t.Fatal(err)
+	}
+	if len(result2.EnabledSkillIDs) != 0 {
+		t.Fatalf("expected empty enabled_skill_ids for missing skill, got %v", result2.EnabledSkillIDs)
+	}
+	if len(result2.Warnings) != 1 || !strings.Contains(result2.Warnings[0], "missing-skill") {
+		t.Fatalf("expected warning about missing skill, got %v", result2.Warnings)
 	}
 }
 

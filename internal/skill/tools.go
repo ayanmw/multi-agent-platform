@@ -382,8 +382,9 @@ func (t *SkillUpdateLocalTool) Execute(input map[string]any) (any, error) {
 	}
 
 	// 构造副本：built_in 自动 fork 为 local_db shadow；local_db 直接修改。
+	// 二次编辑已有的 local_db shadow 时，仍需保留 shadow 语义（forked_from=true）。
 	updated := existing
-	if existing.Source == SkillSourceBuiltIn {
+	if existing.Source == SkillSourceBuiltIn || IsShadowOfBuiltIn(existing) {
 		updated.Source = SkillSourceLocalDB
 		updated.IsLocalEditable = true
 		updated.SourceURL = ""
@@ -422,14 +423,14 @@ func (t *SkillUpdateLocalTool) Execute(input map[string]any) (any, error) {
 			"id":          id,
 			"source":      string(updated.Source),
 			"scope":       string(updated.Scope),
-			"forked_from": existing.Source == SkillSourceBuiltIn,
+			"forked_from": existing.Source == SkillSourceBuiltIn || IsShadowOfBuiltIn(existing),
 		})
 	}
 
 	return map[string]any{
 		"id":          id,
 		"updated":     true,
-		"forked_from": existing.Source == SkillSourceBuiltIn,
+		"forked_from": existing.Source == SkillSourceBuiltIn || IsShadowOfBuiltIn(existing),
 		"skill":       skillToSummary(&updated),
 	}, nil
 }

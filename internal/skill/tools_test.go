@@ -304,6 +304,51 @@ func TestSkillUpdateForksBuiltIn(t *testing.T) {
 	}
 }
 
+// TestSkillUpdateShadowOfBuiltInReturnsForkedFrom 验证对已有的 local_db shadow 做二次编辑时，
+// forked_from 仍返回 true，表示底层是 built_in。
+func TestSkillUpdateShadowOfBuiltInReturnsForkedFrom(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	updateTool := NewSkillUpdateLocalTool(store, registry)
+
+	// 第一步：把 built_in 更新为 shadow（首次 fork）。
+	res, err := updateTool.Execute(map[string]any{
+		"id": "builtin-code-helper",
+		"updates": map[string]any{
+			"display_name": "Shadowed Helper",
+			"content":      "You are a coding assistant focused on {{language}}.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update builtin: %v", err)
+	}
+	if res.(map[string]any)["forked_from"] != true {
+		t.Fatalf("first update should forked_from=true, got %v", res.(map[string]any)["forked_from"])
+	}
+
+	// 第二步：对已有的 shadow 做二次编辑，应仍返回 forked_from=true。
+	res2, err := updateTool.Execute(map[string]any{
+		"id": "builtin-code-helper",
+		"updates": map[string]any{
+			"display_name": "Shadowed Helper v2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update shadow: %v", err)
+	}
+	if res2.(map[string]any)["forked_from"] != true {
+		t.Fatalf("expected forked_from=true on shadow re-edit, got %v", res2.(map[string]any)["forked_from"])
+	}
+
+	s, _ := registry.Get("builtin-code-helper")
+	if s.Source != SkillSourceLocalDB {
+		t.Fatalf("expected shadow source local_db, got %s", s.Source)
+	}
+	if s.DisplayName != "Shadowed Helper v2" {
+		t.Fatalf("expected updated display name, got %s", s.DisplayName)
+	}
+}
+
 // TestSkillDeleteBuiltInForbidden 验证直接删除 built_in 与 local_file 被禁止。
 func TestSkillDeleteBuiltInForbidden(t *testing.T) {
 	store, registry := newSkillToolRegistry(t)
@@ -432,6 +477,66 @@ func TestSkillUpdateLocalCrossProjectRejected(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("update without _project_id should be allowed: %v", err)
+	}
+}
+
+// TestSkillListAndSearchExcludeSensitiveFields 验证 L14：
+// skill/list 与 skill/search 的返回项只含摘要字段，不泄露 templates / parameters / authors 等完整内容。
+func TestSkillListAndSearchExcludeSensitiveFields(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	// 构造一个带大量敏感内容的 skill（templates / parameters / authors）。
+	create := NewSkillCreateLocalTool(store, registry)
+	_, err := create.Execute(map[string]any{
+		"id":           "heavy/skill",
+		"display_name": "Heavy",
+		"description":  "desc",
+		"content":      "system prompt with {{secret}}.",
+		"parameters": []any{
+			map[string]any{"name": "secret", "type": "string", "required": true},
+		},
+		"authors": []any{"alice", "bob"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// list
+	listRes, err := NewSkillListTool(registry).Execute(map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, item := range listRes.([]map[string]any) {
+		if item["id"] != "heavy/skill" {
+			continue
+		}
+		for _, key := range []string{"templates", "parameters", "authors", "created_at", "updated_at", "invalid_reason"} {
+			if _, ok := item[key]; ok {
+				t.Errorf("list leaked field %q for skill %q", key, item["id"])
+			}
+		}
+		// 摘要应保留的字段。
+		for _, key := range []string{"id", "display_name", "description", "source", "scope", "project_id", "tags", "state"} {
+			if _, ok := item[key]; !ok {
+				t.Errorf("list missing expected field %q", key)
+			}
+		}
+	}
+
+	// search
+	searchRes, err := NewSkillSearchTool(registry).Execute(map[string]any{"q": "Heavy"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	for _, item := range searchRes.([]map[string]any) {
+		if item["id"] != "heavy/skill" {
+			continue
+		}
+		for _, key := range []string{"templates", "parameters", "authors", "created_at", "updated_at", "invalid_reason"} {
+			if _, ok := item[key]; ok {
+				t.Errorf("search leaked field %q for skill %q", key, item["id"])
+			}
+		}
 	}
 }
 
