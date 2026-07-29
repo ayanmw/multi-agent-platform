@@ -187,6 +187,16 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 		if err := db.InsertSession(sess); err != nil {
 			return "", "", fmt.Errorf("create session: %w", err)
 		}
+
+		// H1 修复：新建 session 后触发 workdir 扫描，加载 .claude/skills 与 .claude/commands。
+		// 与 handleSessions POST 的 LoadForWorkdir 调用语义一致；此处无 projectID 上下文，传 ""。
+		// nil-safe：globalSkillLoader 未初始化（如 db 不可用）时跳过。
+		if globalSkillLoader != nil && workspaceDir != "" {
+			if err := globalSkillLoader.LoadForWorkdir(workspaceDir, ""); err != nil {
+				log.Printf("[resolveSession] LoadForWorkdir failed for %s: %v", workspaceDir, err)
+			}
+		}
+
 		if workspaceDir != "" {
 			log.Printf("[resolveSession] 新建 session=%s 绑定默认 workspace=%s", newID, workspaceDir)
 		} else {
