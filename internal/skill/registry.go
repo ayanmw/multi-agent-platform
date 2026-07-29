@@ -76,6 +76,17 @@ func (r *Registry) UpdateState(id string, state SkillState) bool {
 //   - 同 ID 去重：project 覆盖 global，session 覆盖 project；按 scope 优先级保留。
 //   - 仅返回 State == enabled 的 skill。
 func ResolveActiveSkills(registry *Registry, projectID, workspaceDir string) []string {
+	return ResolveActiveSkillsWithExtra(registry, projectID, workspaceDir, nil)
+}
+
+// ResolveActiveSkillsWithExtra 与 ResolveActiveSkills 相同，但额外接受需要
+// 强制纳入（跳过 scope 过滤）的 skill ID 列表。用于临时 skill（如 command invoke
+// 后注册的 cmd:xxx）：scope=session 的 skill 不在普通 ResolveActiveSkills 中可见，
+// 但当前 run 需要它注入为临时 system_prompt。
+//
+// extraIDs 中的 ID 必须满足：registry 中存在 && State == enabled；
+// 仍受去重规则约束：与已 picked 的 global/project skill 冲突时优先级高的保留。
+func ResolveActiveSkillsWithExtra(registry *Registry, projectID, workspaceDir string, extraIDs []string) []string {
 	if registry == nil {
 		return nil
 	}
@@ -88,7 +99,15 @@ func ResolveActiveSkills(registry *Registry, projectID, workspaceDir string) []s
 		if s.State != SkillStateEnabled {
 			continue
 		}
-		if !skillMatchesScope(s, projectID, workspaceDir) {
+		// extraIDs 中的 skill 跳过 scope 过滤直接纳入（但仍需 enabled）。
+		isExtra := false
+		for _, eid := range extraIDs {
+			if eid != "" && s.ID == eid {
+				isExtra = true
+				break
+			}
+		}
+		if !isExtra && !skillMatchesScope(s, projectID, workspaceDir) {
 			continue
 		}
 		cur, exists := picked[s.ID]

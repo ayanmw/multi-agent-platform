@@ -122,3 +122,90 @@ func TestAPIInvokeSkillCommand_EnableSkillAndTemporary(t *testing.T) {
 		t.Fatalf("unexpected temporary skill id: %s", result.TemporarySkillID)
 	}
 }
+
+// TestTemporarySkillResolveActiveSkillsWithExtra 验证 C1 修复：
+// session scope 的临时 skill（如 cmd:xxx）通过 ResolveActiveSkillsWithExtra 的
+// extraIDs 只对当前 run 注入：当前 run 包含、无 extraIDs 的其它 run 不包含。
+func TestTemporarySkillResolveActiveSkillsWithExtra(t *testing.T) {
+	reg := skill.NewRegistry()
+	tmp := skill.Skill{
+		ID:          "cmd:my-cmd",
+		State:       skill.SkillStateEnabled,
+		Scope:       skill.SkillScopeSession,
+		WorkspaceDir: "/home/user/proj",
+		ProjectID:   "proj-a",
+		Templates:   []skill.SkillTemplate{{Name: "system_prompt", Content: "prompt", Variables: nil}},
+	}
+	reg.Register(tmp)
+	global := skill.Skill{ID: "global-sk", State: skill.SkillStateEnabled, Scope: skill.SkillScopeGlobal}
+	reg.Register(global)
+
+	// 无 extraIDs 时 session scope 的临时 skill 不应出现。
+	ids := skill.ResolveActiveSkillsWithExtra(reg, "proj-a", "/home/user/proj", nil)
+	if contains(ids, "cmd:my-cmd") {
+		t.Fatalf("extraIDs 为空时 session scope 临时 skill 不应进入 ActiveSkills，got %v", ids)
+	}
+	if !contains(ids, "global-sk") {
+		t.Fatalf("global skill 应在 ActiveSkills 中，got %v", ids)
+	}
+
+	// 传入 extraIDs 时临时 skill 被强制纳入。
+	ids = skill.ResolveActiveSkillsWithExtra(reg, "proj-a", "/home/user/proj", []string{"cmd:my-cmd"})
+	if !contains(ids, "cmd:my-cmd") {
+		t.Fatalf("extraIDs 包含 cmd:my-cmd 时应注入当前 run，got %v", ids)
+	}
+	if !contains(ids, "global-sk") {
+		t.Fatalf("global skill 应在 ActiveSkills 中，got %v", ids)
+	}
+
+	// 另一 session 的 workspaceDir 不同时，仍需主动传 extraIDs 才注入（验证不自动污染）。
+	ids = skill.ResolveActiveSkillsWithExtra(reg, "other-proj", "/home/other", nil)
+	if contains(ids, "cmd:my-cmd") {
+		t.Fatalf("其它 session 且无 extraIDs 时不应注入临时 skill，got %v", ids)
+	}
+}
+
+// TestTemporarySkillCommandFlow 验证 registerTemporarySkill + invoke 返回的 temporary_skill_id
+// 能被 runner 通过 ResolveActiveSkillsWithExtra 注入当前 run，且仅限当前 run。
+func TestTemporarySkillCommandFlow(t *testing.T) {
+	reg := skill.NewRegistry()
+	cmd := skill.SkillCommand{
+		ID:          "cmd-test",
+		Name:        "Test Cmd",
+		Prompt:      "You are a test command.",
+		Scope:       skill.SkillCommandScopeProject,
+		ProjectID:   "proj-a",
+		WorkspaceDir: "/home/user/proj-a",
+	}
+	tmpID := registerTemporarySkill(nil, reg, cmd)
+	if tmpID != "cmd:cmd-test" {
+		t.Fatalf("expected temporary_skill_id=cmd:cmd-test, got %s", tmpID)
+	}
+
+	// 模拟 session chat WITHOUT extraIDs → 不应注入 session scope 的临时 skill。
+	ids := skill.ResolveActiveSkillsWithExtra(reg, "proj-a", "/home/user/proj-a", nil)
+	if contains(ids, tmpID) {
+		t.Fatalf("无 extraIDs 的 run 不应注入临时 skill，got %v", ids)
+	}
+
+	// 模拟 session chat WITH extraIDs → 应注入。
+	ids = skill.ResolveActiveSkillsWithExtra(reg, "proj-a", "/home/user/proj-a", []string{tmpID})
+	if !contains(ids, tmpID) {
+		t.Fatalf("有 extraIDs 的 run 应注入临时 skill，got %v", ids)
+	}
+
+	// 模拟其它 session 的 run → 不应自动注入（验证不污染其它 run）。
+	ids = skill.ResolveActiveSkillsWithExtra(reg, "other-proj", "/home/other", nil)
+	if contains(ids, tmpID) {
+		t.Fatalf("其它 session 的 run 不应注入 session scope 临时 skill，got %v", ids)
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

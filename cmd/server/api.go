@@ -1853,17 +1853,19 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 
 	// 解析请求
 	var req struct {
-		Input          string `json:"input"`
-		AgentID        string `json:"agent_id"`
-		SystemPrompt   string `json:"system_prompt"`
-		MaxSteps       int    `json:"max_steps"`
-		TimeoutSeconds int    `json:"timeout_seconds"`
+		Input              string `json:"input"`
+		AgentID            string `json:"agent_id"`
+		SystemPrompt       string `json:"system_prompt"`
+		MaxSteps           int    `json:"max_steps"`
+		TimeoutSeconds     int    `json:"timeout_seconds"`
 		// TaskContract 可选覆盖项 —— 大于 0 / 非空时覆盖默认 contract，
 		// 让前端能驱动 PolicyChain。
-		Scope         string   `json:"scope"`
-		AllowedTools  []string `json:"allowed_tools"`
-		TokenBudget   int      `json:"token_budget"`
-		CostBudgetUSD float64  `json:"cost_budget_usd"`
+		Scope              string   `json:"scope"`
+		AllowedTools       []string `json:"allowed_tools"`
+		TokenBudget        int      `json:"token_budget"`
+		CostBudgetUSD      float64  `json:"cost_budget_usd"`
+		// C1: 前置 invoke 返回的临时 command skill ID 列表；只对当前 run 注入。
+		TemporarySkillIDs  []string `json:"temporary_skill_ids,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2005,16 +2007,17 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 		// 与旧 runAgentLoopWithTurn(...,turnIndex,sess.RootTaskID,...) 语义一致。
 		runner := s.newRunner()
 		runner.Run(context.Background(), AgentRunSpec{
-			TaskID:        taskID,
-			AgentID:       agentID,
-			SystemPrompt:  fullSystemPrompt,
-			UserInput:     req.Input,
-			SessionID:     id,
-			ParentTaskID:  sess.RootTaskID,
-			TurnIndex:     turnIndex,
-			IsRoot:        false,
-			Contract:      contract,
-			WorkingMemory: workingMemory,
+			TaskID:             taskID,
+			AgentID:            agentID,
+			SystemPrompt:       fullSystemPrompt,
+			UserInput:          req.Input,
+			SessionID:          id,
+			ParentTaskID:       sess.RootTaskID,
+			TurnIndex:          turnIndex,
+			IsRoot:             false,
+			Contract:           contract,
+			WorkingMemory:      workingMemory,
+			TemporarySkillIDs: req.TemporarySkillIDs,
 		})
 	}()
 

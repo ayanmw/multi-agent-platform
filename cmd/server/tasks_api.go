@@ -22,19 +22,21 @@ import (
 
 // taskRequest 是 POST /api/tasks 的请求体。
 type taskRequest struct {
-	Action         string                   `json:"action"`
-	AgentID        string                   `json:"agent_id"`
-	Input          string                   `json:"input"`
-	SystemPrompt   string                   `json:"system_prompt"`
-	CaseType       string                   `json:"case_type"`
-	MaxSteps       int                      `json:"max_steps"`
-	TimeoutSeconds int                      `json:"timeout_seconds"`
-	SessionID      string                   `json:"session_id"`
-	Agents         []orchestrator.AgentSpec `json:"agents"`
-	Scope          string                   `json:"scope"`
-	AllowedTools   []string                 `json:"allowed_tools"`
-	TokenBudget    int                      `json:"token_budget"`
-	CostBudgetUSD  float64                  `json:"cost_budget_usd"`
+	Action            string                   `json:"action"`
+	AgentID           string                   `json:"agent_id"`
+	Input             string                   `json:"input"`
+	SystemPrompt      string                   `json:"system_prompt"`
+	CaseType          string                   `json:"case_type"`
+	MaxSteps          int                      `json:"max_steps"`
+	TimeoutSeconds    int                      `json:"timeout_seconds"`
+	SessionID         string                   `json:"session_id"`
+	Agents            []orchestrator.AgentSpec `json:"agents"`
+	Scope             string                   `json:"scope"`
+	AllowedTools      []string                 `json:"allowed_tools"`
+	TokenBudget       int                      `json:"token_budget"`
+	CostBudgetUSD     float64                  `json:"cost_budget_usd"`
+	// C1: 前置 invoke 返回的临时 command skill ID 列表；只对当前 run 注入。
+	TemporarySkillIDs []string                   `json:"temporary_skill_ids,omitempty"`
 }
 
 // taskAction 是 /api/tasks POST action 的处理函数签名。
@@ -277,17 +279,18 @@ func (s *appServer) actionChat(w http.ResponseWriter, r *http.Request, req taskR
 	}
 
 	sessionID, taskID, err := s.startChatTask(startChatTaskOpts{
-		AgentID:        req.AgentID,
-		Input:          req.Input,
-		SystemPrompt:   req.SystemPrompt,
-		SessionID:      req.SessionID,
-		MaxSteps:       req.MaxSteps,
-		TimeoutSeconds: req.TimeoutSeconds,
-		Scope:          req.Scope,
-		AllowedTools:   req.AllowedTools,
-		TokenBudget:    req.TokenBudget,
-		CostBudgetUSD:  req.CostBudgetUSD,
-		CaseID:         caseID,
+		AgentID:            req.AgentID,
+		Input:              req.Input,
+		SystemPrompt:       req.SystemPrompt,
+		SessionID:          req.SessionID,
+		MaxSteps:           req.MaxSteps,
+		TimeoutSeconds:     req.TimeoutSeconds,
+		Scope:              req.Scope,
+		AllowedTools:       req.AllowedTools,
+		TokenBudget:        req.TokenBudget,
+		CostBudgetUSD:      req.CostBudgetUSD,
+		CaseID:             caseID,
+		TemporarySkillIDs: req.TemporarySkillIDs,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -410,16 +413,17 @@ func (s *appServer) startChatTask(opts startChatTaskOpts) (sessionID, taskID str
 
 	runner := s.newRunner()
 	spec := AgentRunSpec{
-		TaskID:        tid,
-		AgentID:       agentID,
-		SystemPrompt:  systemPrompt,
-		UserInput:     opts.Input,
-		SessionID:     sid,
-		IsRoot:        true,
-		Contract:      contract,
-		CaseID:        opts.CaseID,
-		WorkingMemory: workingMemory,
-		RootTraceCtx:  rootTraceCtx,
+		TaskID:             tid,
+		AgentID:            agentID,
+		SystemPrompt:       systemPrompt,
+		UserInput:          opts.Input,
+		SessionID:          sid,
+		IsRoot:             true,
+		Contract:           contract,
+		CaseID:             opts.CaseID,
+		WorkingMemory:      workingMemory,
+		RootTraceCtx:       rootTraceCtx,
+		TemporarySkillIDs: opts.TemporarySkillIDs,
 	}
 	go runner.Run(context.Background(), spec)
 

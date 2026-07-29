@@ -33,6 +33,9 @@ type startChatTaskOpts struct {
 	TokenBudget    int
 	CostBudgetUSD  float64
 	CaseID         string
+	// C1: 临时 command skill 透传；invoke 返回的 temporary_skill_id 由此传入，
+	// runner 用 ResolveActiveSkillsWithExtra 只对当前 run 注入，不污染 registry。
+	TemporarySkillIDs []string
 }
 
 // RegisterCronAPI 注册 /api/crons* 全部 REST 端点，挂载到传入的 mux。

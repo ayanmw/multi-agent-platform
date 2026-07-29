@@ -739,6 +739,8 @@ export function useTaskStore() {
       sessionId?: string
       timeoutSeconds?: number
       scope?: string
+      // C1: 仅本次 chat 生效的临时 command skill ID 列表。
+      temporarySkillIds?: string[]
     } = {}
   ): Promise<{ sessionId: string; taskId: string }> {
     lastUserInput.value = input
@@ -762,6 +764,11 @@ export function useTaskStore() {
         body.timeout_seconds = options.timeoutSeconds
       }
       if (options.scope) body.scope = options.scope
+
+      // C1: 临时 command skill ID 透传到后端，仅本次 chat 注入。
+      if (options.temporarySkillIds && options.temporarySkillIds.length > 0) {
+        body.temporary_skill_ids = options.temporarySkillIds
+      }
 
       const resp = await fetch('/api/tasks', {
         method: 'POST',
@@ -852,6 +859,8 @@ export function useTaskStore() {
       maxSteps?: number
       timeoutSeconds?: number
       scope?: string
+      // C1: 仅本次 turn 生效的临时 command skill ID 列表。
+      temporarySkillIds?: string[]
     }
   ): Promise<{ sessionId: string; taskId: string; turnIndex: number }> {
     lastUserInput.value = input
@@ -870,6 +879,10 @@ export function useTaskStore() {
         body.timeout_seconds = options.timeoutSeconds
       }
       if (options.scope) body.scope = options.scope
+      // C1: 临时 command skill ID 透传到后端。
+      if (options.temporarySkillIds && options.temporarySkillIds.length > 0) {
+        body.temporary_skill_ids = options.temporarySkillIds
+      }
 
       const resp = await fetch(`/api/sessions/${encodeURIComponent(options.sessionId)}/chat`, {
         method: 'POST',

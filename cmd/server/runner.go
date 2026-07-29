@@ -82,6 +82,11 @@ type AgentRunSpec struct {
 	AllowFallback  bool    // auto_route 下是否允许 tier 降级选择
 	MaxCostUSD     float64 // 单次 task 成本预算上限，0 表示无限制
 
+	// Phase skill: 临时 command skill（如 cmd:xxx）通过 session scope 无法被普通
+	// ResolveActiveSkills 纳入；TemporarySkillIDs 由 chat/task 请求体透传，runner
+	// 在构建 ActiveSkills 时显式追加，保证"当前 run 可见、不污染其它 run"。
+	TemporarySkillIDs []string `json:"temporary_skill_ids,omitempty"`
+
 	// Phase fix-agent-model: 本运行请求显式指定的 LLM 模型名。
 	// 它拥有最高优先级：spec.Model > DB agent.model > cfg.LLMModel。
 	// 与 PreferredModel / ModelMode 互相独立；后者用于 auto_route 交由 Router 选择。
@@ -342,7 +347,8 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 		WorkspaceDir:  workspaceDir,
 		OnLLMUsage:    onUsage,
 		SkillRegistry: globalSkillRegistry,
-		ActiveSkills:  skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
+		// recover 路径无 temporary_skill_ids、仍走普通 ResolveActiveSkills（extraIDs 为空）。
+		ActiveSkills: skill.ResolveActiveSkillsWithExtra(globalSkillRegistry, projectID, workspaceDir, nil),
 		SkillVariables: map[string]any{
 			"project_id":    projectID,
 			"project_name":  projectName,
@@ -998,10 +1004,10 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 			observability.DefaultMetrics.RecordToolLatency(latency)
 		},
 		// Phase skill: 注入 Skill 子系统。ActiveSkills 按 session/project/workdir
-		// 解析实际应激活的 skill；SkillVariables 填充 project/session/workdir
-		// 相关变量，供 skill 模板渲染。
+		// 解析实际应激活的 skill；TemporarySkillIDs 由 chat/task 请求体透传，runner
+		// 在构建 ActiveSkills 时经 extraIDs 强制纳入当前 run，不污染其它 run。
 		SkillRegistry: globalSkillRegistry,
-		ActiveSkills:  skill.ResolveActiveSkills(globalSkillRegistry, projectID, workspaceDir),
+		ActiveSkills: skill.ResolveActiveSkillsWithExtra(globalSkillRegistry, projectID, workspaceDir, spec.TemporarySkillIDs),
 		SkillVariables: map[string]any{
 			"project_id":    projectID,
 			"project_name":  projectName,
