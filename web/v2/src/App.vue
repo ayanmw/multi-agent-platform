@@ -932,6 +932,8 @@ async function handleRunCase(caseId: string) {
 }
 
 // === Skill 触发（来自 SkillPanel / SkillManager） ===
+// 按 spec 11：点击 Trigger 应"直接调用 enableSkill + handleSend('/id ', ...)"
+// 立即发出任务，而不是仅 prefill 到输入框等用户再 Ctrl+Enter（review M6）。
 async function handleTriggerSkill(idOrCommand: string) {
   const id = idOrCommand.startsWith('/') ? idOrCommand.slice(1).split(/\s+/)[0] : idOrCommand
   if (!id) return
@@ -941,7 +943,14 @@ async function handleTriggerSkill(idOrCommand: string) {
     showError(err instanceof Error ? err.message : `Skill ${id} 启用失败`)
     return
   }
+  // 立即发送空剩余文本的 trigger 任务；保留 prefill 作回退（如 handleSend 失败时仍可手动发送）。
   prefilledCommand.value = '/' + id + ' '
+  try {
+    // 传 0 表示沿用后端默认 max_steps/timeout（useTaskStore 仅在 >0 时透传）。
+    await handleSend('/' + id + ' ', { maxSteps: 0, timeoutSeconds: 0 })
+  } catch (err) {
+    showError(err instanceof Error ? err.message : `Skill ${id} 触发失败`)
+  }
 }
 
 // === SkillCommand / Skill picker 选中后触发（直接启用并发送剩余文本） ===

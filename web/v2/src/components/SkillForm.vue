@@ -110,12 +110,16 @@ async function handleSubmit() {
         scope: scope.value,
         project_id: projectId.value,
       }
-      // 编辑时若用户改了 templates/parameters 则一起提交；否则只改元数据。
+      // templates 变更检测：仅当用户改了 templates JSON 时提交 content（system_prompt 内容）。
       if (templatesJson.value !== JSON.stringify(props.skill!.templates || [], null, 2)) {
         // 后端 PUT 只接受 content / parameters；templates 通过 content 字段更新 system_prompt。
         // 这里把第一个 system_prompt / task_prompt 的 content 作为 content 字段。
         const first = (templates as any[]).find((t: any) => t?.name === 'system_prompt' || t?.name === 'task_prompt')
         if (first) changes.content = first.content
+      }
+      // parameters 变更检测独立于 templates（review M7）：用户只改 parameters 时，
+      // 原代码因与 templates 共用同一 if 分支导致 changes.parameters 不赋值、PUT 丢失修改。
+      if (parametersJson.value !== JSON.stringify(props.skill!.parameters || [], null, 2)) {
         changes.parameters = parameters as any[]
       }
       await updateSkill(props.skill!.id, changes)
