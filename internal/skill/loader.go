@@ -152,6 +152,15 @@ func (l *Loader) SetCommandLoader(cl *CommandLoader) {
 	l.commandLoader = cl
 }
 
+// FileLoader 返回 loader 持有的 fileLoader；若 loader 为 nil 则返回 nil。
+// 供 handler 调用 FileLoader 级别的细粒度刷新（如 RefreshGlobal，只重扫全局层）。
+func (l *Loader) FileLoader() *FileLoader {
+	if l == nil {
+		return nil
+	}
+	return l.fileLoader
+}
+
 // Registry 返回 loader 持有的 registry；若 loader 为 nil 则返回 nil。
 // 外部 handler 可用它做只读统计，不破坏封装。
 func (l *Loader) Registry() *Registry {
