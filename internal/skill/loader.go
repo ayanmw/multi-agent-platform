@@ -95,18 +95,22 @@ func (l *Loader) LoadForWorkdir(workdir, projectID string) error {
 }
 
 // RefreshAll 全量刷新文件系统 Skill 与 commands。
-func (l *Loader) RefreshAll(workdirs []string, workdirProjectIDs map[string]string) error {
+func (l *Loader) RefreshAll(workdirs []string, workdirProjectIDs map[string]string) (int, int, error) {
+	var fileLoaded, fileUnloaded, cmdLoaded, cmdUnloaded int
+	var err error
 	if l.fileLoader != nil {
-		if err := l.fileLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs); err != nil {
-			return err
+		fileLoaded, fileUnloaded, err = l.fileLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs)
+		if err != nil {
+			return fileLoaded + cmdLoaded, fileUnloaded + cmdUnloaded, err
 		}
 	}
 	if l.commandLoader != nil {
-		if err := l.commandLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs); err != nil {
-			return err
+		cmdLoaded, cmdUnloaded, err = l.commandLoader.RefreshAll(l.globalDir, workdirs, workdirProjectIDs)
+		if err != nil {
+			return fileLoaded + cmdLoaded, fileUnloaded + cmdUnloaded, err
 		}
 	}
-	return nil
+	return fileLoaded + cmdLoaded, fileUnloaded + cmdUnloaded, nil
 }
 
 // Reload 清空注册表中所有非内置 Skill，并重新从 store 与全局文件系统加载。

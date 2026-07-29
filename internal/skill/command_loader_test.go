@@ -103,7 +103,7 @@ func TestCommandLoader_RefreshAll(t *testing.T) {
 	}
 	dir := setupCommandDir(t, files)
 	loader := NewCommandLoader(NewCommandRegistry(), nil)
-	if err := loader.RefreshAll(dir, []string{dir}, map[string]string{dir: "p1"}); err != nil {
+	if _, _, err := loader.RefreshAll(dir, []string{dir}, map[string]string{dir: "p1"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := loader.Registry().Get("a"); !ok {

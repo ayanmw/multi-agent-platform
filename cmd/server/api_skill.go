@@ -659,15 +659,10 @@ func handleScanSkills(w http.ResponseWriter, r *http.Request, loader *skill.Load
 		}
 	}
 
-	if err := loader.RefreshAll(workdirs, workdirProjectIDs); err != nil {
+	loaded, unloaded, err := loader.RefreshAll(workdirs, workdirProjectIDs)
+	if err != nil {
 		writeJSONError(w, "refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	loaded := 0
-	unloaded := 0 // 完成 refresh 前被移除的 skill 数已在 Loader 内部处理，这里仅作统计占位。
-	for range loader.Registry().List(&localFileSource) {
-		loaded++
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -677,8 +672,6 @@ func handleScanSkills(w http.ResponseWriter, r *http.Request, loader *skill.Load
 		"unloaded":         unloaded,
 	})
 }
-
-var localFileSource = skill.SkillSourceLocalFile
 
 // filterValidScanDirs 仅保留在 DefaultSkillScanDirs 中出现的目录模板。
 func filterValidScanDirs(dirs []string) []string {

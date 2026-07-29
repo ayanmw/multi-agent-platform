@@ -118,21 +118,24 @@ func (cl *CommandLoader) UnloadForWorkdir(workdir string) {
 }
 
 // RefreshAll 全量刷新 commands：卸载所有，再重扫全局 + workdirs。
-func (cl *CommandLoader) RefreshAll(globalBaseDir string, workdirs []string, projectIDs map[string]string) error {
+// 返回实际 loaded / unloaded 数量。
+func (cl *CommandLoader) RefreshAll(globalBaseDir string, workdirs []string, projectIDs map[string]string) (int, int, error) {
+	unloaded := len(cl.registry.List(""))
 	cl.registry.Clear()
 	if err := cl.LoadGlobal(globalBaseDir); err != nil {
-		return err
+		return 0, unloaded, err
 	}
 	for _, wd := range workdirs {
 		pid := projectIDs[wd]
 		if err := cl.LoadForWorkdir(wd, pid); err != nil {
-			return err
+			return 0, unloaded, err
 		}
 	}
+	loaded := len(cl.registry.List(""))
 	cl.broadcast(EventSkillCommandChanged, "", map[string]any{
 		"reason": "refresh_all",
 	})
-	return nil
+	return loaded, unloaded, nil
 }
 
 // commandFileFrontmatter 表示 command 文件 YAML frontmatter 的可识别字段。

@@ -137,13 +137,49 @@ func TestFileLoaderRefreshUnloadsDeletedSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := fl.RefreshAll(base, nil, nil); err != nil {
+	if _, _, err := fl.RefreshAll(base, nil, nil); err != nil {
 		t.Fatalf("RefreshAll failed: %v", err)
 	}
 	if _, ok := reg.Get("delete-me"); ok {
 		t.Errorf("expected 'delete-me' to be unloaded after refresh")
 	}
 }
+
+// TestFileLoaderRefreshAllReturnsUnloadedCount 验证 M4：RefreshAll 返回的
+// unloaded / loaded 据实反映本次刷新的卸载与加载计数，而非恒为 0。
+func TestFileLoaderRefreshAllReturnsUnloadedCount(t *testing.T) {
+	// 先在一个 base 装一个全局 skill。
+	seedBase := t.TempDir()
+	skillDir := filepath.Join(seedBase, ".claude", "skills", "will-unload")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\n---\nbody"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	fl := NewFileLoader(reg, nil, nil, nil)
+	if err := fl.LoadGlobal(seedBase); err != nil {
+		t.Fatal(err)
+	}
+
+	// 切到一个空的 base 做 RefreshAll：原 skill 被卸载，新 base 无 skill。
+	emptyBase := t.TempDir()
+	loaded, unloaded, err := fl.RefreshAll(emptyBase, nil, nil)
+	if err != nil {
+		t.Fatalf("RefreshAll failed: %v", err)
+	}
+	if unloaded < 1 {
+		t.Fatalf("expected unloaded >= 1 (previously loaded skill unloaded), got %d", unloaded)
+	}
+	if loaded != 0 {
+		t.Fatalf("expected loaded == 0 for empty base, got %d", loaded)
+	}
+	if _, ok := reg.Get("will-unload"); ok {
+		t.Errorf("expected 'will-unload' to be unloaded after refresh")
+	}
+}
+
 
 func TestFileLoaderFrontmatterOverrides(t *testing.T) {
 	base := t.TempDir()

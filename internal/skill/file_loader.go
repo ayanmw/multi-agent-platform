@@ -147,16 +147,30 @@ func (fl *FileLoader) countGlobalLocalFile() int {
 	return n
 }
 
+// countLocalFileTotal 统计 registry 中 source=local_file 的 skill 总数（含所有 scope）。
+func (fl *FileLoader) countLocalFileTotal() int {
+	n := 0
+	for _, s := range fl.registry.List(nil) {
+		if s.Source == SkillSourceLocalFile {
+			n++
+		}
+	}
+	return n
+}
+
 // RefreshAll 全量刷新文件系统 Skill。
 // 先卸载所有 source=local_file 的 skill，再重扫全局 baseDir + 所有已知 workdirs。
-func (fl *FileLoader) RefreshAll(globalBaseDir string, workdirs []string, projectIDs map[string]string) error {
+// 返回实际 loaded / unloaded 数量，供 handleScanSkills 等调用方做精确统计。
+func (fl *FileLoader) RefreshAll(globalBaseDir string, workdirs []string, projectIDs map[string]string) (int, int, error) {
 	if fl.registry == nil {
-		return nil
+		return 0, 0, nil
 	}
+	unloaded := 0
 	// 1. 卸载所有当前 local_file skill。
 	for _, s := range fl.registry.List(nil) {
 		if s.Source == SkillSourceLocalFile {
 			fl.registry.Unregister(s.ID)
+			unloaded++
 			fl.broadcast(EventSkillUnloaded, s.ID, map[string]any{
 				"id":     s.ID,
 				"source": string(s.Source),
@@ -164,18 +178,24 @@ func (fl *FileLoader) RefreshAll(globalBaseDir string, workdirs []string, projec
 			})
 		}
 	}
-	// 2. 重新扫描全局。
+	// 2. 重新扫描全局；通过前后计数差得到 loaded。
+	before := fl.countLocalFileTotal()
 	if err := fl.LoadGlobal(globalBaseDir); err != nil {
-		return err
+		return 0, unloaded, err
 	}
 	// 3. 重新扫描每个 workdir。
 	for _, wd := range workdirs {
 		pid := projectIDs[wd]
 		if err := fl.LoadForWorkdir(wd, pid); err != nil {
-			return err
+			return 0, unloaded, err
 		}
 	}
-	return nil
+	after := fl.countLocalFileTotal()
+	loaded := after - before
+	if loaded < 0 {
+		loaded = 0
+	}
+	return loaded, unloaded, nil
 }
 
 // loadDir 递归扫描 root 下的直接子目录（每个子目录视为一个 skill-id），
