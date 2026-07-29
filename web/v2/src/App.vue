@@ -139,6 +139,8 @@ const prefilledCommand = ref('')
 const selectedSkillCommand = ref<SkillCommand | null>(null)
 // 当前选中的 picker 项（skill/command），用于 submit 时判断走 enable 还是 invoke。
 const selectedPickerItem = ref<SkillPickerItem | null>(null)
+// C1: 保存 command invoke 返回的临时 skill ID，下一次 chat 请求时透传。
+const pendingTemporarySkillIDs = ref<string[]>([])
 // 当前选中的 agent id，从 OptionsFlyout 通过 v-model 传入。
 const currentAgentId = ref<string>('')
 
@@ -623,6 +625,9 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
   const sendOptions = {
     ...options,
     agentId: currentAgentId.value || undefined,
+    // C1: 把本次 invoke 得到的临时 command skill ID 随 chat 请求发送到后端，
+    // 仅对当前 run 注入，发送后立即清空，不会污染后续对话。
+    temporarySkillIds: [...pendingTemporarySkillIDs.value],
   }
 
   // 2026-07: SkillPicker 选中项会带 /id 前缀传到这里。优先按 picker 记录的意图处理：
@@ -632,7 +637,10 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
     const remaining = slashMatch[2] || ''
     if (item.kind === 'command' && item.command) {
       try {
-        await skillCommand.invokeCommand(item.command.id, activeSession.value?.workspaceDir || '')
+        const result = await skillCommand.invokeCommand(item.command.id, activeSession.value?.workspaceDir || '')
+        if (result.temporary_skill_id) {
+          pendingTemporarySkillIDs.value = [result.temporary_skill_id]
+        }
       } catch (err) {
         showError(err instanceof Error ? err.message : `Failed to invoke command ${item.id}`)
         return
@@ -653,7 +661,10 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
     const cmd = selectedSkillCommand.value
     const remaining = slashMatch[2] || ''
     try {
-      await skillCommand.invokeCommand(cmd.id, activeSession.value?.workspaceDir || '')
+      const result = await skillCommand.invokeCommand(cmd.id, activeSession.value?.workspaceDir || '')
+      if (result.temporary_skill_id) {
+        pendingTemporarySkillIDs.value = [result.temporary_skill_id]
+      }
     } catch (err) {
       showError(err instanceof Error ? err.message : `Failed to invoke command ${cmd.id}`)
       return
@@ -722,6 +733,9 @@ async function handleSend(text: string, options: { maxSteps: number; timeoutSeco
     }
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Failed to start task')
+  } finally {
+    // C1: 临时 command skill ID 只对本次发送生效，发送后立即清空，不污染后续对话。
+    pendingTemporarySkillIDs.value = []
   }
 }
 
@@ -1113,6 +1127,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :context-anchor-rect="contextAnchorRect"
             v-model:picker-open="skillPickerOpen"
             :picker-selected-index="skillPickerSelectedIndex"
+            @update:pickerSelectedIndex="skillPickerSelectedIndex = $event"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
             :active-task="currentTask"
@@ -1225,6 +1240,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
             :context-anchor-rect="contextAnchorRect"
             v-model:picker-open="skillPickerOpen"
             :picker-selected-index="skillPickerSelectedIndex"
+            @update:pickerSelectedIndex="skillPickerSelectedIndex = $event"
             :agents="agentOptions"
             :available-tools="availableToolOptions"
             :active-task="currentTask"
@@ -1338,6 +1354,7 @@ async function handleCreateSession(payload: { name: string; workspaceDir: string
           :context-anchor-rect="contextAnchorRect"
           v-model:picker-open="skillPickerOpen"
           :picker-selected-index="skillPickerSelectedIndex"
+          @update:pickerSelectedIndex="skillPickerSelectedIndex = $event"
           :agents="agentOptions"
           :available-tools="availableToolOptions"
           @send="handleSend"
