@@ -230,3 +230,89 @@ func (m *memorySettingStore) SetSetting(key, value string) error {
 	m.data[key] = value
 	return nil
 }
+
+// TestParseSkillFile_CRLF 验证 M2：Windows CRLF 文件的 frontmatter 仍能正确解析，
+// 不会把含 `---` 分隔符的原文回退为 system_prompt 模板。
+func TestParseSkillFile_CRLF(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "crlf-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	crlf := "---\r\nname: CRLF Skill\r\ndescription: crlf test\r\n---\r\nYou are a CRLF skill.\r\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(crlf), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := parseSkillFile(filepath.Join(skillDir, "SKILL.md"), SkillScopeGlobal, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.DisplayName != "CRLF Skill" {
+		t.Fatalf("display_name = %q, want 'CRLF Skill'", s.DisplayName)
+	}
+	if s.Description != "crlf test" {
+		t.Fatalf("description = %q, want 'crlf test'", s.Description)
+	}
+	if len(s.Templates) != 1 || s.Templates[0].Content != "You are a CRLF skill." {
+		t.Fatalf("template body should not contain `---` separators, got %+v", s.Templates)
+	}
+}
+
+// TestParseSkillFile_EmptyFrontmatter 验证 M3：空 frontmatter（`---\n---\nbody`）
+// 不再把分隔符当 body 写进模板。
+func TestParseSkillFile_EmptyFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "empty-fm")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\n---\njust body"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := parseSkillFile(filepath.Join(skillDir, "SKILL.md"), SkillScopeGlobal, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Templates) != 1 {
+		t.Fatalf("expected 1 template, got %d", len(s.Templates))
+	}
+	if s.Templates[0].Content != "just body" {
+		t.Fatalf("body = %q, want 'just body' (no `---`)", s.Templates[0].Content)
+	}
+}
+
+// TestFileLoaderRefreshGlobalPreservesProject 验证 M1：RefreshGlobal 只重扫全局层，
+// 保留 project scope local_file skill 不被清空。
+func TestFileLoaderRefreshGlobalPreservesProject(t *testing.T) {
+	base := t.TempDir()
+	// 全局层 skill
+	globalSkill := filepath.Join(base, ".claude", "skills", "g-skill")
+	os.MkdirAll(globalSkill, 0755)
+	os.WriteFile(filepath.Join(globalSkill, "SKILL.md"), []byte("---\nname: G\n---\ngb"), 0644)
+	// project 层 skill（不同 workdir）
+	workdir := t.TempDir()
+	projSkill := filepath.Join(workdir, ".claude", "skills", "p-skill")
+	os.MkdirAll(projSkill, 0755)
+	os.WriteFile(filepath.Join(projSkill, "SKILL.md"), []byte("---\nname: P\n---\npb"), 0644)
+
+	reg := NewRegistry()
+	fl := NewFileLoader(reg, nil, nil, nil)
+	if err := fl.LoadGlobal(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := fl.LoadForWorkdir(workdir, "proj-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("p-skill"); !ok {
+		t.Fatal("expected p-skill loaded")
+	}
+
+	// RefreshGlobal 只重扫全局层，project skill 必须保留。
+	fl.RefreshGlobal(base)
+	if _, ok := reg.Get("p-skill"); !ok {
+		t.Fatalf("M1: project skill 'p-skill' should survive RefreshGlobal, got: %+v", reg.List(nil))
+	}
+	if _, ok := reg.Get("g-skill"); !ok {
+		t.Fatalf("global skill 'g-skill' should still exist after RefreshGlobal")
+	}
+}

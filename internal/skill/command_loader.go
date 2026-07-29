@@ -64,6 +64,26 @@ func (cl *CommandLoader) LoadForWorkdir(workdir, projectID string) error {
 		if err != nil {
 			return err
 		}
+		// M13：frontmatter id 字符校验。非法 id（如 `../evil`、含空格）回退到 rel 路径生成的 id，
+		// 避免路径遍历或 skill ID 碰撞。parseCommandFile 已按 command>id>rel 顺序生成，
+		// 这里再做一次校验并在非法时用 rel 兜底。
+		if !isValidCommandID(cmd.ID) {
+			fallback := filepath.ToSlash(strings.TrimSuffix(rel, ".md"))
+			fallback = strings.ReplaceAll(fallback, "/", ":")
+			if isValidCommandID(fallback) {
+				cmd.ID = fallback
+				if cmd.Name == "" {
+					cmd.Name = fallback
+				}
+			} else {
+				// 跳过无法生成合法 id 的文件，避免污染 registry。
+				cl.broadcast(EventSkillCommandChanged, "", map[string]any{
+					"reason": "invalid command id",
+					"path":   path,
+				})
+				return nil
+			}
+		}
 		cl.registry.Register(*cmd)
 		cl.broadcast(EventSkillCommandLoaded, cmd.ID, map[string]any{
 			"id":            cmd.ID,
@@ -74,10 +94,21 @@ func (cl *CommandLoader) LoadForWorkdir(workdir, projectID string) error {
 	})
 }
 
-// UnloadForWorkdir 卸载该 workdir 下的所有 project scope commands。
+// UnloadForWorkdir 卸载该 workdir 下的所有 project scope commands（review M12）。
+// 旧实现复用 ListForWorkdir（同时返回 global + 匹配 project），会把全局命令一并删除且不再重载。
+// 这里只卸载 Scope==project && WorkspaceDir==workdir 的条目，跳过 global。
 func (cl *CommandLoader) UnloadForWorkdir(workdir string) {
-	for _, cmd := range cl.registry.ListForWorkdir(workdir) {
-		cl.registry.Unregister(cmd.ID)
+	if workdir == "" {
+		return
+	}
+	for _, cmd := range cl.registry.List("") {
+		if cmd.Scope != SkillCommandScopeProject {
+			continue
+		}
+		if cmd.WorkspaceDir != workdir {
+			continue
+		}
+		cl.registry.UnregisterScoped(cmd)
 		cl.broadcast(EventSkillCommandUnloaded, cmd.ID, map[string]any{
 			"id":            cmd.ID,
 			"scope":         string(cmd.Scope),
@@ -115,7 +146,9 @@ type commandFileFrontmatter struct {
 	Icon        string   `yaml:"icon"`
 }
 
-var commandFrontmatterRegex = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n(.*)$`)
+// commandFrontmatterRegex 匹配 command 文件的 YAML frontmatter。
+// 第二个 `---` 前换行设为可选（\n?）以兼容空 frontmatter；CRLF 已在 parseCommandFile 入口归一化为 LF。
+var commandFrontmatterRegex = regexp.MustCompile(`(?s)^---\n(.*?)\n?---\n(.*)$`)
 
 // parseCommandFile 解析单个 command markdown 文件。
 func parseCommandFile(path, rel string, scope SkillCommandScope, workdir, projectID string) (*SkillCommand, error) {
@@ -124,6 +157,9 @@ func parseCommandFile(path, rel string, scope SkillCommandScope, workdir, projec
 		return nil, err
 	}
 	content := string(data)
+	// 归一化 CRLF → LF（与 file_loader 对齐），避免 Windows 编辑器 \r\n 使正则失配。
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
 	var body string
 	fm := commandFileFrontmatter{}
 

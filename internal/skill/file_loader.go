@@ -103,6 +103,50 @@ func (fl *FileLoader) LoadForWorkdir(workdir, projectID string) error {
 	return nil
 }
 
+// RefreshGlobal 只卸载全局层（source=local_file 且 scope=global）的 skill 并重扫全局，
+// 保留所有 project scope local_file skill（review M1）。
+// 用于 scan-config 变更：spec 要求"不改变已扫描 workdir"，而 Reload/全量 RefreshAll 会
+// 把 project skill 一并清空、之后又不重扫 workdir，导致用户已加载的 project skill 消失。
+func (fl *FileLoader) RefreshGlobal(globalBaseDir string) (int, int) {
+	if fl.registry == nil {
+		return 0, 0
+	}
+	loaded, unloaded := 0, 0
+	// 仅卸载全局层 local_file skill。
+	for _, s := range fl.registry.List(nil) {
+		if s.Source == SkillSourceLocalFile && s.Scope == SkillScopeGlobal {
+			fl.registry.Unregister(s.ID)
+			unloaded++
+			fl.broadcast(EventSkillUnloaded, s.ID, map[string]any{
+				"id":     s.ID,
+				"source": string(s.Source),
+				"scope":  string(s.Scope),
+			})
+		}
+	}
+	// 重扫全局层；统计重扫后全局层 local_file 数量作为 loaded（含原有保留的）。
+	before := fl.countGlobalLocalFile()
+	if err := fl.LoadGlobal(globalBaseDir); err != nil {
+		return loaded, unloaded
+	}
+	after := fl.countGlobalLocalFile()
+	if after > before {
+		loaded = after - before
+	}
+	return loaded, unloaded
+}
+
+// countGlobalLocalFile 统计 registry 中 source=local_file 且 scope=global 的 skill 数。
+func (fl *FileLoader) countGlobalLocalFile() int {
+	n := 0
+	for _, s := range fl.registry.List(nil) {
+		if s.Source == SkillSourceLocalFile && s.Scope == SkillScopeGlobal {
+			n++
+		}
+	}
+	return n
+}
+
 // RefreshAll 全量刷新文件系统 Skill。
 // 先卸载所有 source=local_file 的 skill，再重扫全局 baseDir + 所有已知 workdirs。
 func (fl *FileLoader) RefreshAll(globalBaseDir string, workdirs []string, projectIDs map[string]string) error {
@@ -222,7 +266,10 @@ type skillFileFrontmatter struct {
 	Version         string   `yaml:"version"`
 }
 
-var frontmatterRegex = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n(.*)$`)
+// frontmatterRegex 匹配 YAML frontmatter（`---\n...\n---\nbody`）。
+// 第二个 `---` 前的换行设为可选（\n?），以兼容空 frontmatter（`---\n---\nbody`）。
+// CRLF 已在 parseSkillFile 入口归一化为 LF，故此处只认 \n。
+var frontmatterRegex = regexp.MustCompile(`(?s)^---\n(.*?)\n?---\n(.*)$`)
 
 // parseSkillFile 解析单个 SKILL.md 文件为 Skill 对象。
 // 目录名作为默认 skill-id；frontmatter 中的 id/name/description/tags/scope 可覆盖默认值。
@@ -239,6 +286,10 @@ func parseSkillFile(path string, scope SkillScope, workspaceDir, projectID strin
 		return nil, err
 	}
 	content := string(data)
+	// 归一化 CRLF → LF，避免 Windows 编辑器产生的 \r\n 让 frontmatterRegex（只认 \n）整条不匹配，
+	// 进而把含 `---` 分隔符的原文回退为 system_prompt 模板。见 review M2/M3。
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
 	var body string
 	frontmatter := skillFileFrontmatter{}
 
