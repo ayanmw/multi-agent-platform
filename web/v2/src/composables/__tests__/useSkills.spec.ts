@@ -7,6 +7,23 @@
  * 注意：useSkills 是模块级单例，测试通过 vi.resetModules() 获取新实例。
  */
 import { describe, it, expect, beforeEach, vi, afterEach, type MockedFunction } from 'vitest'
+import type { AgentEvent } from '@/types/events'
+
+/** 由 mock useWebSocket 捕获的 onEvent 处理器，供测试直接触发事件 */
+let capturedHandler: ((event: AgentEvent) => void) | null = null
+
+vi.mock('../useWebSocket', () => {
+  return {
+    useWebSocket: () => ({
+      onEvent: (handler: (event: AgentEvent) => void) => {
+        capturedHandler = handler
+        return () => {
+          capturedHandler = null
+        }
+      },
+    }),
+  }
+})
 
 async function freshUseSkills() {
   vi.resetModules()
@@ -70,6 +87,7 @@ function lastCallUrl(): string | undefined {
 
 beforeEach(() => {
   vi.resetModules()
+  capturedHandler = null
   globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch
   // 给 URL 构造函数一个完整 base，避免 jsdom 解析相对路径失败
   vi.stubGlobal('window', { location: { origin: BASE_URL, protocol: 'http:', host: 'localhost' } })
@@ -201,23 +219,82 @@ describe('useSkills — enable/disable', () => {
 })
 
 describe('useSkills — events', () => {
-  it('skill_enabled 事件更新本地 skill 状态', async () => {
-    mockFetch(async () => createOkResponse(mockSkill('evt', { state: 'enabled' })))
+  it('skill_enabled 事件更新本地状态并刷新 /api/skills/:id', async () => {
+    const skillAfter = mockSkill('evt', { state: 'enabled' })
+    mockFetch(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/skills/evt')) return createOkResponse(skillAfter)
+      return createOkResponse([])
+    })
 
     const { skills, enabledIds } = await freshUseSkills()
     skills.value = [{ ...(mockSkill('evt', { state: 'disabled' }) as any) }]
-    skills.value[0].state = 'enabled'
-    syncEnabledIds(skills.value, enabledIds)
+
+    expect(capturedHandler).not.toBeNull()
+    capturedHandler!({
+      type: 'skill_enabled',
+      task_id: '',
+      agent_id: 'skill',
+      step_index: 0,
+      timestamp: Date.now(),
+      data: { id: 'evt', state: 'enabled' },
+    } as AgentEvent)
+
+    // ensureSubscribed 内 getSkill 是异步的，flush 等待 then 回调完成
+    await new Promise(r => setTimeout(r, 0))
 
     expect(skills.value[0].state).toBe('enabled')
     expect(enabledIds.value.has('evt')).toBe(true)
   })
-})
 
-function syncEnabledIds(skills: { state: string; id: string }[], enabledIds: { value: Set<string> }) {
-  const set = new Set<string>()
-  for (const s of skills) {
-    if (s.state === 'enabled') set.add(s.id)
-  }
-  enabledIds.value = set
-}
+  it('skill_unloaded 事件移除对应 skill', async () => {
+    mockFetch(async () => createOkResponse([]))
+
+    const { skills } = await freshUseSkills()
+    skills.value = [
+      { ...(mockSkill('keep') as any) },
+      { ...(mockSkill('remove') as any) },
+    ]
+
+    expect(capturedHandler).not.toBeNull()
+    capturedHandler!({
+      type: 'skill_unloaded',
+      task_id: '',
+      agent_id: 'skill',
+      step_index: 0,
+      timestamp: Date.now(),
+      data: { id: 'remove' },
+    } as AgentEvent)
+
+    expect(skills.value).toHaveLength(1)
+    expect(skills.value[0].id).toBe('keep')
+  })
+
+  it('skill_rendered 事件写入 injectedSkillBlocks', async () => {
+    mockFetch(async () => createOkResponse([]))
+
+    const { injectedSkillBlocks } = await freshUseSkills()
+
+    expect(capturedHandler).not.toBeNull()
+    capturedHandler!({
+      type: 'skill_rendered',
+      task_id: 't1',
+      agent_id: 'skill',
+      step_index: 0,
+      timestamp: Date.now(),
+      data: {
+        skill_blocks: [
+          {
+            skill_id: 's1',
+            template_name: 'system_prompt',
+            rendered_content: 'rendered',
+            estimated_tokens: 10,
+          },
+        ],
+      },
+    } as AgentEvent)
+
+    expect(injectedSkillBlocks.value['t1']).toHaveLength(1)
+    expect(injectedSkillBlocks.value['t1'][0].skill_id).toBe('s1')
+  })
+})
