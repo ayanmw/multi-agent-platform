@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/auth"
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
@@ -26,6 +27,9 @@ import (
 //   POST   /api/skills/scan-config  — 更新启用的扫描目录
 //   POST   /api/skills/scan         — 强制刷新所有文件系统 skill
 //
+// GET 读取接口保持公开；所有写入操作（POST/PUT/DELETE/enable/disable/scan/scan-config）
+// 需要 RoleAdmin，由 RequireRoleFunc 在每个写方法闭包内守卫。
+//
 // 所有 handler 直接操作传入的 skillStore / skillRegistry，避免与全局变量耦合，
 // 方便在测试中传入隔离实例。
 func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *skill.Store, skillRegistry *skill.Registry, skillLoader *skill.Loader, settingStore skill.SettingStore) {
@@ -34,6 +38,9 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 		case http.MethodGet:
 			handleListSkills(w, r, skillRegistry)
 		case http.MethodPost:
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleCreateSkill(w, r, hub, skillStore, skillRegistry)
 		default:
 			writeJSONError(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -57,6 +64,9 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 
 		// 精确子路由：scan / scan-config 有独立 handler，避免与 skill-id 含 "/" 冲突。
 		if path == "scan" && r.Method == http.MethodPost {
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			handleScanSkills(w, r, skillLoader)
 			return
 		}
@@ -65,6 +75,9 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 			case http.MethodGet:
 				handleGetScanConfig(w, r, settingStore)
 			case http.MethodPost:
+				if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+					return
+				}
 				handleSetScanConfig(w, r, settingStore, skillLoader)
 			default:
 				writeJSONError(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -76,6 +89,9 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 		// 注意：skill id 允许包含 "/"（如 "user/test-skill"），因此只能用
 		// 后缀匹配识别子资源，而不能用 strings.Contains(path, "/") 判断。
 		if r.Method == http.MethodPost {
+			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+				return
+			}
 			if suffix, ok := strings.CutSuffix(path, "/enable"); ok {
 				handleEnableSkill(w, r, hub, skillStore, skillRegistry, suffix)
 				return
@@ -87,18 +103,24 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 		}
 
 		// 其它子路径（例如 /api/skills/foo/bar/baz）按非法资源处理。
-		// 但合法 skill id 本身可含 "/"，故只对未知后缀 + 非 GET/PUT/DELETE 的
-		// 请求返回 404；常规 CRUD 仍把整段 path 当作 id 处理。
-		switch r.Method {
-		case http.MethodGet:
-			handleGetSkill(w, r, skillRegistry, path)
-		case http.MethodPut:
-			handleUpdateSkill(w, r, hub, skillStore, skillRegistry, path)
-		case http.MethodDelete:
-			handleDeleteSkill(w, r, hub, skillStore, skillRegistry, path)
-		default:
-			writeJSONError(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
-		}
+			// 但合法 skill id 本身可含 "/"，故只对未知后缀 + 非 GET/PUT/DELETE 的
+			// 请求返回 404；常规 CRUD 仍把整段 path 当作 id 处理。
+			switch r.Method {
+			case http.MethodGet:
+				handleGetSkill(w, r, skillRegistry, path)
+			case http.MethodPut:
+				if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+					return
+				}
+				handleUpdateSkill(w, r, hub, skillStore, skillRegistry, path)
+			case http.MethodDelete:
+				if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+					return
+				}
+				handleDeleteSkill(w, r, hub, skillStore, skillRegistry, path)
+			default:
+				writeJSONError(w, "GET, PUT, or DELETE only", http.StatusMethodNotAllowed)
+			}
 	})
 }
 
@@ -106,6 +128,16 @@ func registerSkillRoutes(mux *http.ServeMux, hub eventBroadcaster, skillStore *s
 // 用接口形式也方便单测中传入伪实现。
 type eventBroadcaster interface {
 	SendEvent(evt event.Event)
+}
+
+// skillEventBusAdapter 将 eventBroadcaster 适配为 skill.SkillEventBroadcaster，
+// 让 skill Agent Tools 在内部通过 bus 广播事件，而不直接依赖 ws / cmd/server 包。
+type skillEventBusAdapter struct {
+	hub eventBroadcaster
+}
+
+func (a *skillEventBusAdapter) BroadcastSkillEvent(eventType, skillID string, data map[string]any) {
+	broadcastSkillEvent(a.hub, eventType, skillID, data)
 }
 
 // handleListSkills 处理 GET /api/skills，返回 registry 中的全部 skill。

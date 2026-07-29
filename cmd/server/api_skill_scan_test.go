@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anmingwei/multi-agent-platform/internal/auth"
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
@@ -29,7 +30,13 @@ func newFileSkillTestHarness(t *testing.T, globalDir string) (*httptest.Server, 
 
 	mux := http.NewServeMux()
 	registerSkillRoutes(mux, nil, store, registry, loader, &dbSkillSettingStore{})
-	ts := httptest.NewServer(mux)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.WithContext(auth.WithRole(r.Context(), auth.RoleAdmin))
+		mux.ServeHTTP(w, next)
+	})
+
+	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts, registry
 }

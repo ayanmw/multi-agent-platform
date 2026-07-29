@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/auth"
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 	_ "modernc.org/sqlite"
@@ -45,7 +47,13 @@ func newSkillTestHarness(t *testing.T) (*httptest.Server, *skill.Registry, *skil
 
 	mux := http.NewServeMux()
 	registerSkillRoutes(mux, nil, store, registry, loader, &dbSkillSettingStore{})
-	ts := httptest.NewServer(mux)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.WithContext(auth.WithRole(r.Context(), auth.RoleAdmin))
+		mux.ServeHTTP(w, next)
+	})
+
+	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts, registry, store
 }
@@ -434,6 +442,93 @@ func readBody(t *testing.T, resp *http.Response) string {
 	}
 	return buf.String()
 }
+
+// TestSkillWriteRoutesRequireAdmin 验证 M5：registerSkillRoutes 的写操作
+// 需要 RoleAdmin。这里构造一个**未注入 admin role** 的 mux（请求 context 无 role，
+// RequireRoleFunc 兜底为 RoleViewer），所有写操作应返回 403，GET 仍公开 200。
+func TestSkillWriteRoutesRequireAdmin(t *testing.T) {
+	setupSkillTestDB(t)
+	registry := skill.NewRegistry()
+	store := skill.NewStore(db.DB)
+	loader := skill.NewLoader(store, registry)
+	fl := skill.NewFileLoader(registry, store, &dbSkillSettingStore{}, nil)
+	loader.SetFileLoader(fl, t.TempDir())
+	if err := loader.LoadAll(); err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	// 预置一条 local_db skill 作为 enable/put/delete 目标。
+	preset := skill.Skill{
+		ID:              "user/preset",
+		DisplayName:     "Preset",
+		Source:          skill.SkillSourceLocalDB,
+		IsLocalEditable: true,
+		State:           skill.SkillStateEnabled,
+		Scope:           skill.SkillScopeGlobal,
+		CreatedAt:       time.Now().Unix(),
+		UpdatedAt:       time.Now().Unix(),
+	}
+	registry.Register(preset)
+	if store != nil {
+		_ = store.Save(&preset)
+	}
+
+	// 关键：不包装 admin role middleware，请求 context 无 role → 兜底 RoleViewer。
+	mux := http.NewServeMux()
+	registerSkillRoutes(mux, nil, store, registry, loader, &dbSkillSettingStore{})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	client := ts.Client()
+
+	// GET 列表保持公开。
+	resp, err := client.Get(ts.URL + "/api/skills")
+	if err != nil {
+		t.Fatalf("GET list: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/skills should be public (200), got %d", resp.StatusCode)
+	}
+
+	// 各写操作均应 403。
+	check403 := func(method, path string, body io.Reader) {
+		t.Helper()
+		req, _ := http.NewRequest(method, ts.URL+path, body)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s %s should be 403 without admin role, got %d", method, path, resp.StatusCode)
+		}
+	}
+
+	createBody := bytes.NewReader([]byte(`{"id":"user/x","display_name":"X","content":"c"}`))
+	updateBody := bytes.NewReader([]byte(`{"display_name":"Y"}`))
+	scanCfgBody := bytes.NewReader([]byte(`{"enabled_dirs":[".claude/skills"]}`))
+
+	check403(http.MethodPost, "/api/skills", createBody)
+	check403(http.MethodPut, "/api/skills/user/preset", updateBody)
+	check403(http.MethodDelete, "/api/skills/user/preset", nil)
+	check403(http.MethodPost, "/api/skills/user/preset/enable", nil)
+	check403(http.MethodPost, "/api/skills/user/preset/disable", nil)
+	check403(http.MethodPost, "/api/skills/scan", nil)
+	check403(http.MethodPost, "/api/skills/scan-config", scanCfgBody)
+
+	// GET scan-config 仍公开。
+	resp, err = client.Get(ts.URL + "/api/skills/scan-config")
+	if err != nil {
+		t.Fatalf("GET scan-config: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/skills/scan-config should be public (200), got %d", resp.StatusCode)
+	}
+}
+
 
 // TestEnableDisableLocalFileRejected 验证 source=local_file 的 skill
 // 不允许通过 REST API 的 enable/disable 修改状态，防止污染 DB 写入影子记录。

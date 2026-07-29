@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anmingwei/multi-agent-platform/internal/auth"
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
 	"github.com/anmingwei/multi-agent-platform/internal/config"
 	"github.com/anmingwei/multi-agent-platform/internal/cost"
@@ -224,7 +225,13 @@ func TestSkillPromptInjectedE2E(t *testing.T) {
 	// 但 RootTraceCtx fallback 依赖 tracer.StartRoot——用默认 Tracer 即可。
 	_ = observability.NewTracer(2000)
 
-	ts := httptest.NewServer(mux)
+	// skill enable 等写操作需要 RoleAdmin，用 middleware 注入 admin role。
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.WithContext(auth.WithRole(r.Context(), auth.RoleAdmin))
+		mux.ServeHTTP(w, next)
+	})
+
+	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	client := ts.Client()
 
