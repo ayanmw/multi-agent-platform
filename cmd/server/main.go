@@ -980,6 +980,9 @@ func main() {
 	// 等入口可以直接读取当前已启用的 skill 列表或触发文件系统刷新。
 	globalSkillRegistry = skillRegistry
 	globalSkillLoader = skillLoader
+	// Phase skill: 把 skill registry 注入 orchestrator，使其子 agent 能复用
+	// root agent 的 skill 注入模式（ResolveActiveSkills + SkillVariables）。
+	globalOrchestrator.SetSkillRegistry(skillRegistry)
 
 	// Phase 7: 初始化 Todo 子系统。
 	// Todo 属于 session，跨 task 共享，需尽早创建 service 以便将 LLM 工具

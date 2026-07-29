@@ -784,6 +784,10 @@ func (s *appServer) handleMultiAgent(w http.ResponseWriter, r *http.Request) {
 		// globalWorkspaceMgr 为 nil 时 orchestrator 跳过 worktree 注入，子 agent
 		// 沿用普通 WorkspaceDir。
 		orch.SetWorkspace(globalWorkspaceMgr, sessionID)
+		// Phase skill: 将 skill registry 注入 orchestrator，使子 agent 能复用
+		// root agent 的 ResolveActiveSkills + SkillVariables 注入模式。
+		// globalSkillRegistry 为 nil 时 skill 注入关闭，与 root agent nil-safe 处理对齐。
+		orch.SetSkillRegistry(globalSkillRegistry)
 		if strategy == "dag" && workflow != nil {
 			orch.RunBlockingDAG(ctx, taskID, workflow)
 		} else {

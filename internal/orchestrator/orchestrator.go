@@ -47,6 +47,7 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
 	"github.com/anmingwei/multi-agent-platform/internal/observability"
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
+	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/internal/workspace"
 	"github.com/anmingwei/multi-agent-platform/internal/ws"
@@ -204,6 +205,12 @@ type Orchestrator struct {
 	// workspaceSessionID 是当前 orchestration 绑定的 session，用于子 agent
 	// 读取/共享父 session 的 active worktree 绑定。
 	workspaceSessionID string
+
+	// Phase skill 的子 agent 注入: 可选的 skill registry。非 nil 时，子 agent
+	// 通过 ResolveActiveSkills 从该 registry 中选出当前 project/workspace 下
+	// 启用的 skill，并注入到 Engine system prompt（与 root agent 的注入模式对齐）。
+	// nil 时跳过 skill 注入，保留旧行为。
+	skillRegistry *skill.Registry
 }
 
 // New 创建一个新的 Orchestrator。
@@ -262,6 +269,14 @@ func (o *Orchestrator) SetTracer(tracer interface {
 func (o *Orchestrator) SetWorkspace(mgr *workspace.Manager, sessionID string) {
 	o.workspaceMgr = mgr
 	o.workspaceSessionID = sessionID
+}
+
+// SetSkillRegistry 设置 skill registry，使子 agent 能复用 root agent 的 skill
+// 注入模式（ResolveActiveSkills + SkillVariables）。设置后，每个子 agent 的
+// EngineConfig 会根据当前 project/workspace 解析出应激活的 skill 列表并注入
+// system prompt。reg 为 nil 时 skill 注入关闭，保留旧行为。
+func (o *Orchestrator) SetSkillRegistry(reg *skill.Registry) {
+	o.skillRegistry = reg
 }
 
 // RunBlocking 启动所有 agent 并阻塞直到全部完成。
@@ -974,12 +989,24 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		sessionID = o.persist.QueryTaskSessionID(rootTaskID)
 	}
 
-	// 解析 session 的 workspace_dir，这样 run_shell 之类的 tool 就能在
-	// 正确的 CWD 下执行，而无需 LLM 每次都显式传入。
+	// 解析 session 的 workspace_dir 与 project_id，以便 run_shell 之类的 tool
+	// 在正确的 CWD 下执行，并让 Skill Variables 带上项目上下文（与 root agent
+	// 的 skill 注入模式对齐：ResolveActiveSkills + SkillVariables）。
 	workspaceDir := ""
+	projectID := ""
+	projectName := ""
 	if sessionID != "" {
-		if sess, err := db.QuerySessionByID(sessionID); err == nil && sess.WorkspaceDir != "" {
+		if sess, err := db.QuerySessionByID(sessionID); err == nil {
 			workspaceDir = sess.WorkspaceDir
+			projectID = sess.ProjectID
+			if projectID != "" {
+				if proj, projErr := db.QueryProjectByID(projectID); projErr == nil && proj != nil {
+					projectName = proj.Name
+					if workspaceDir == "" && proj.WorkingDirectory != "" {
+						workspaceDir = proj.WorkingDirectory
+					}
+				}
+			}
 		}
 	}
 
@@ -1047,6 +1074,27 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		CheckpointManager: o.checkpointMgr,    // Phase 5: 崩溃恢复
 		WorkspaceDir:      workspaceDir,       // Session-level workspace directory
 		OnLLMUsage:        onUsage,
+		// Phase skill: 子 agent skill 注入。skillRegistry 非 nil 时，根据 projectID
+		// 与 workspaceDir 解析应激活的 skill 列表，并注入 SkillVariables 供模板渲染。
+		// nil 时整个块为空（保留旧行为），与 root agent nil-safe 处理对齐。
+		SkillRegistry: o.skillRegistry,
+		ActiveSkills: func() []string {
+			if o.skillRegistry == nil {
+				return nil
+			}
+			return skill.ResolveActiveSkills(o.skillRegistry, projectID, workspaceDir)
+		}(),
+		SkillVariables: func() map[string]any {
+			if o.skillRegistry == nil {
+				return nil
+			}
+			return map[string]any{
+				"project_id":    projectID,
+				"project_name":  projectName,
+				"session_id":    sessionID,
+				"workspace_dir": workspaceDir,
+			}
+		}(),
 		// Phase 6 Router: 透传共享的 Router/Registry/Providers，使子 agent
 		// 参与动态 model 选择。modelRouter 为 nil 时 Engine 退回到单 model
 		// 路径（legacy 行为）。
