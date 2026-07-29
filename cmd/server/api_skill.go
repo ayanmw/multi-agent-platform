@@ -483,6 +483,10 @@ func handleEnableSkill(w http.ResponseWriter, r *http.Request, hub eventBroadcas
 		writeJSONError(w, "skill not found", http.StatusNotFound)
 		return
 	}
+	if s.Source == skill.SkillSourceLocalFile {
+		writeJSONError(w, "local_file skill is read-only; edit the file directly", http.StatusForbidden)
+		return
+	}
 	if s.State == skill.SkillStateEnabled {
 		// 幂等：已经是启用状态，直接返回当前值。
 		w.Header().Set("Content-Type", "application/json")
@@ -514,6 +518,10 @@ func handleDisableSkill(w http.ResponseWriter, r *http.Request, hub eventBroadca
 	s, ok := registry.Get(id)
 	if !ok {
 		writeJSONError(w, "skill not found", http.StatusNotFound)
+		return
+	}
+	if s.Source == skill.SkillSourceLocalFile {
+		writeJSONError(w, "local_file skill is read-only; edit the file directly", http.StatusForbidden)
 		return
 	}
 	if s.State == skill.SkillStateDisabled {

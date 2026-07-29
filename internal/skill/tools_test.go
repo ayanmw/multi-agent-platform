@@ -377,3 +377,96 @@ func TestSkillSearchFilters(t *testing.T) {
 		t.Fatalf("expected at least 2 global scope skills, got %d", len(res.([]map[string]any)))
 	}
 }
+
+// TestSkillUpdateLocalCrossProjectRejected 验证 project scope 越权防护生效：
+// Engine 在 executeToolCall 中从 SkillVariables 注入 _project_id，
+// skillUpdateLocalTool 读取它对 scope=project 的 skill 做 callerProjectID 校验。
+func TestSkillUpdateLocalCrossProjectRejected(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	create := NewSkillCreateLocalTool(store, registry)
+	createRes, err := create.Execute(map[string]any{
+		"id":           "proj-scoped/skill",
+		"display_name": "Proj Scoped",
+		"description":  "project scope skill",
+		"content":      "topic={{topic}}",
+		"scope":        "project",
+		"project_id":   "proj-X",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if createRes.(map[string]any)["forked_from"] != false {
+		t.Fatal("create local skill should not fork")
+	}
+
+	updateTool := NewSkillUpdateLocalTool(store, registry)
+
+	// 跨 project 调用应被拒。
+	_, err = updateTool.Execute(map[string]any{
+		"id":         "proj-scoped/skill",
+		"_project_id": "proj-Y",
+		"updates":    map[string]any{"display_name": "Hacked"},
+	})
+	if err == nil {
+		t.Fatal("expected cross-project update rejected")
+	}
+
+	// 同 project 应成功。
+	res, err := updateTool.Execute(map[string]any{
+		"id":         "proj-scoped/skill",
+		"_project_id": "proj-X",
+		"updates":    map[string]any{"display_name": "Updated Name"},
+	})
+	if err != nil {
+		t.Fatalf("same-project update should succeed: %v", err)
+	}
+	if res.(map[string]any)["updated"] != true {
+		t.Fatal("expected updated=true")
+	}
+
+	// 未传 _project_id 回退放行。
+	_, err = updateTool.Execute(map[string]any{
+		"id":      "proj-scoped/skill",
+		"updates": map[string]any{"display_name": "Plain Update"},
+	})
+	if err != nil {
+		t.Fatalf("update without _project_id should be allowed: %v", err)
+	}
+}
+
+// TestSkillToggleCrossProjectRejected 验证 enable/disable 同样受 project scope 保护（L11）。
+func TestSkillToggleCrossProjectRejected(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	registry.Register(Skill{
+		ID:          "proj-scoped/toggle",
+		DisplayName: "Toggle Test",
+		Source:      SkillSourceLocalDB,
+		State:       SkillStateEnabled,
+		Scope:       SkillScopeProject,
+		ProjectID:   "proj-X",
+	})
+
+	// 同 project disable 成功。
+	_, err := toggleSkill(map[string]any{
+		"id":         "proj-scoped/toggle",
+		"_project_id": "proj-X",
+	}, "disable", store, registry)
+	if err != nil {
+		t.Fatalf("same-project disable succeeded: %v", err)
+	}
+	s, _ := registry.Get("proj-scoped/toggle")
+	if s.State != SkillStateDisabled {
+		t.Fatalf("expected disabled, got %s", s.State)
+	}
+
+	// 不同 project toggle 应被拒绝。
+	_, err = toggleSkill(map[string]any{
+		"id":         "proj-scoped/toggle",
+		"_project_id": "proj-Y",
+	}, "enable", store, registry)
+	if err == nil {
+		t.Fatal("expected cross-project toggle rejected")
+	}
+}

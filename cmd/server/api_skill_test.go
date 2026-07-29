@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/skill"
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
@@ -396,4 +397,63 @@ func readBody(t *testing.T, resp *http.Response) string {
 		t.Fatalf("read body: %v", err)
 	}
 	return buf.String()
+}
+
+// TestEnableDisableLocalFileRejected 验证 source=local_file 的 skill
+// 不允许通过 REST API 的 enable/disable 修改状态，防止污染 DB 写入影子记录。
+func TestEnableDisableLocalFileRejected(t *testing.T) {
+	ts, registry, _ := newSkillTestHarness(t)
+	client := ts.Client()
+
+	// 手动注入一条 source=local_file 的 skill 到 registry，模拟文件系统加载结果。
+	localSkill := skill.Skill{
+		ID:          "local/test-skill",
+		DisplayName: "Local File Skill",
+		Description: "Loaded from local file system",
+		Source:      skill.SkillSourceLocalFile,
+		State:       skill.SkillStateLoaded,
+		IsLocalEditable: false,
+		CreatedAt:   time.Now().Unix(),
+		UpdatedAt:   time.Now().Unix(),
+	}
+	registry.Register(localSkill)
+
+	// 确认 skill 已在 registry 中。
+	if _, ok := registry.Get("local/test-skill"); !ok {
+		t.Fatalf("local skill not registered")
+	}
+
+	// 1. POST enable 对 local_file skill 应返回 403，且不写入 store。
+	resp, err := client.Post(ts.URL+"/api/skills/local/test-skill/enable", "application/json", nil)
+	if err != nil {
+		t.Fatalf("enable local_file skill: %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 enabling local_file skill, got %d: %s", resp.StatusCode, body)
+	}
+
+	// 2. POST disable 对 local_file skill 应返回 403，且不写入 store。
+	resp, err = client.Post(ts.URL+"/api/skills/local/test-skill/disable", "application/json", nil)
+	if err != nil {
+		t.Fatalf("disable local_file skill: %v", err)
+	}
+	body = readBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 disabling local_file skill, got %d: %s", resp.StatusCode, body)
+	}
+
+	// 3. 验证 store 中无这条 local_file skill 的影子记录（防止 INSERT OR REPLACE 污染）。
+	rows, err := db.DB.Query("SELECT id, source FROM skills WHERE id = ?", "local/test-skill")
+	if err != nil {
+		t.Fatalf("query skills: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var sid, src string
+		if err := rows.Scan(&sid, &src); err != nil {
+			t.Fatalf("scan skill row: %v", err)
+		}
+		t.Fatalf("local_file skill should not be persisted to store, got id=%s source=%s", sid, src)
+	}
 }

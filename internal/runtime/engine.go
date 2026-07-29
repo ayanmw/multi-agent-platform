@@ -2056,17 +2056,20 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		}
 	}
 
-	// Phase 7 TODO 修复：session_id 与 task_id 对 LLM 不公开（它们是平台内部
-	// 路由标识，从未出现在 system prompt 中），因此 LLM 调用 todo/* 这类需要
-	// session_id 的工具时无法正确传参——它会硬编码 "test-session" 之类占位值，
-	// 导致 todo 写入错误 session。这里在 tool 执行前自动用 Engine 持有的真实
-	// session_id / task_id 覆盖 LLM 传入的值。覆盖是无条件的：这些标识属于
-	// 平台路由层，LLM 没有也不应有权威性，始终以 Engine 的真实值为准。
+	// 透传平台内部标识（session_id / task_id），防止 LLM 伪造路由层标识写入错误 session。
+	// 同时透传 EngineConfig.SkillVariables["project_id"] 供 skill/* 工具做 project scope
+	// 越权检查（见 internal/skill skillUpdateLocalTool）；Engine 是唯一权威注入点，LLM
+	// 无法在 input 中伪造 _project_id 逃逸到其它 project。
 	if e.cfg.SessionID != "" {
 		args["session_id"] = e.cfg.SessionID
 	}
 	if e.taskID != "" {
 		args["task_id"] = e.taskID
+	}
+	if e.cfg.SkillVariables != nil {
+		if pid, ok := e.cfg.SkillVariables["project_id"].(string); ok && pid != "" {
+			args["_project_id"] = pid
+		}
 	}
 
 	// 发出 step 和 tool call 生命周期事件。UI 用这些事件展示：

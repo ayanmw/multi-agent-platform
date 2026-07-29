@@ -202,6 +202,8 @@ func (t *skillCreateLocalTool) Execute(input map[string]any) (any, error) {
 		Source:          SkillSourceLocalDB,
 		IsLocalEditable: true,
 		State:           SkillStateEnabled,
+		Scope:           SkillScope(getString(input, "scope", string(SkillScopeGlobal))),
+		ProjectID:       getString(input, "project_id", ""),
 		Templates: []SkillTemplate{
 			{
 				Name:       "system_prompt",
@@ -225,8 +227,9 @@ func (t *skillCreateLocalTool) Execute(input map[string]any) (any, error) {
 	}
 
 	return map[string]any{
-		"id":      s.ID,
-		"created": true,
+		"id":          s.ID,
+		"created":     true,
+		"forked_from": false,
 	}, nil
 }
 
@@ -624,6 +627,16 @@ func toggleSkill(input map[string]any, action string, store *Store, registry *Re
 	}
 	if s.Source == SkillSourceLocalFile {
 		return nil, fmt.Errorf("skill %q is loaded from local file and can only be changed by editing the file", id)
+	}
+
+	// L11：project scope 越权检查。scope=project 且已绑定 project_id 的 skill 只能被同
+	// project 的会话操作；_project_id 由 Engine 在 executeToolCall 时从 SkillVariables 注入。
+	if s.Scope == SkillScopeProject && s.ProjectID != "" {
+		if callerProjectID, ok := input["_project_id"].(string); ok && callerProjectID != "" {
+			if callerProjectID != s.ProjectID {
+				return nil, fmt.Errorf("skill %q belongs to project %q, cannot enable/disable from project %q", id, s.ProjectID, callerProjectID)
+			}
+		}
 	}
 
 	var target SkillState
