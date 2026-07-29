@@ -346,9 +346,9 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 		},
 		WorkspaceDir:  workspaceDir,
 		OnLLMUsage:    onUsage,
-		SkillRegistry: globalSkillRegistry,
+		SkillRegistry: r.Deps.SkillRegistry,
 		// recover 路径无 temporary_skill_ids、仍走普通 ResolveActiveSkills（extraIDs 为空）。
-		ActiveSkills: skill.ResolveActiveSkillsWithExtra(globalSkillRegistry, projectID, workspaceDir, nil),
+		ActiveSkills: skill.ResolveActiveSkillsWithExtra(r.Deps.SkillRegistry, projectID, workspaceDir, nil),
 		SkillVariables: map[string]any{
 			"project_id":    projectID,
 			"project_name":  projectName,
@@ -1006,8 +1006,8 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		// Phase skill: 注入 Skill 子系统。ActiveSkills 按 session/project/workdir
 		// 解析实际应激活的 skill；TemporarySkillIDs 由 chat/task 请求体透传，runner
 		// 在构建 ActiveSkills 时经 extraIDs 强制纳入当前 run，不污染其它 run。
-		SkillRegistry: globalSkillRegistry,
-		ActiveSkills: skill.ResolveActiveSkillsWithExtra(globalSkillRegistry, projectID, workspaceDir, spec.TemporarySkillIDs),
+		SkillRegistry: r.Deps.SkillRegistry,
+		ActiveSkills: skill.ResolveActiveSkillsWithExtra(r.Deps.SkillRegistry, projectID, workspaceDir, spec.TemporarySkillIDs),
 		SkillVariables: map[string]any{
 			"project_id":    projectID,
 			"project_name":  projectName,
