@@ -45,4 +45,10 @@ const (
 
 	// EventSkillCommandChanged 表示 SkillCommand 发生了新增、更新或卸载等变化。
 	EventSkillCommandChanged = "skill_command_changed"
+
+	// EventSkillCreated 表示一个新的 local_db skill 已被创建。
+	EventSkillCreated = "skill_created"
+
+	// EventSkillDeleted 表示一个 local_db skill 已被删除。
+	EventSkillDeleted = "skill_deleted"
 )

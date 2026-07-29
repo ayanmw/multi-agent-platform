@@ -9,17 +9,26 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 )
 
-// skillCreateLocalTool 实现 skill/create_local Tool（别名 skill_create_local）。
-type skillCreateLocalTool struct {
-	store    *Store
-	registry *Registry
+// SkillEventBroadcaster 是 skill 工具的事件广播抽象。
+// 由 cmd/server 在注册工具时注入适配器，避免 internal/skill 直接依赖 ws / cmd/server 包。
+// nil 值表示跳过广播，现有单测和旧调用方无需改动。
+type SkillEventBroadcaster interface {
+	BroadcastSkillEvent(eventType, skillID string, data map[string]any)
 }
 
-// skillDeleteLocalTool 实现 skill/delete_local Tool（别名 skill_delete_local）。
-// 支持删除 local_db skill；对 built_in 的 shadow，删除后恢复内置版本。
-type skillDeleteLocalTool struct {
+// SkillCreateLocalTool 实现 skill/create_local Tool（别名 skill_create_local）。
+type SkillCreateLocalTool struct {
 	store    *Store
 	registry *Registry
+	bus      SkillEventBroadcaster
+}
+
+// SkillDeleteLocalTool 实现 skill/delete_local Tool（别名 skill_delete_local）。
+// 支持删除 local_db skill；对 built_in 的 shadow，删除后恢复内置版本。
+type SkillDeleteLocalTool struct {
+	store    *Store
+	registry *Registry
+	bus      SkillEventBroadcaster
 }
 
 // skillListTool 实现 skill/list Tool（别名 skill_list）。
@@ -33,23 +42,26 @@ type skillGetTool struct {
 	registry *Registry
 }
 
-// skillUpdateLocalTool 实现 skill/update_local Tool（别名 skill_update_local）。
+// SkillUpdateLocalTool 实现 skill/update_local Tool（别名 skill_update_local）。
 // 可更新 local_db skill；若目标是 built_in，自动 fork 为 local_db shadow 后修改。
-type skillUpdateLocalTool struct {
+type SkillUpdateLocalTool struct {
 	store    *Store
 	registry *Registry
+	bus      SkillEventBroadcaster
 }
 
-// skillEnableTool 实现 skill/enable Tool（别名 skill_enable）。
-type skillEnableTool struct {
+// SkillEnableTool 实现 skill/enable Tool（别名 skill_enable）。
+type SkillEnableTool struct {
 	store    *Store
 	registry *Registry
+	bus      SkillEventBroadcaster
 }
 
-// skillDisableTool 实现 skill/disable Tool（别名 skill_disable）。
-type skillDisableTool struct {
+// SkillDisableTool 实现 skill/disable Tool（别名 skill_disable）。
+type SkillDisableTool struct {
 	store    *Store
 	registry *Registry
+	bus      SkillEventBroadcaster
 }
 
 // skillSearchTool 实现 skill/search Tool（别名 skill_search）。
@@ -60,12 +72,25 @@ type skillSearchTool struct {
 
 // NewSkillCreateLocalTool 创建 skill/create_local 工具。
 func NewSkillCreateLocalTool(store *Store, registry *Registry) tool.Tool {
-	return &skillCreateLocalTool{store: store, registry: registry}
+	return &SkillCreateLocalTool{store: store, registry: registry}
+}
+
+// WithBus 为 SkillCreateLocalTool 注入事件广播器，不含则跳过广播。
+// 返回值实现了 tool.Tool，调用方可在注册时链式调用。
+func (t *SkillCreateLocalTool) WithBus(b SkillEventBroadcaster) tool.Tool {
+	t.bus = b
+	return t
 }
 
 // NewSkillDeleteLocalTool 创建 skill/delete_local 工具。
 func NewSkillDeleteLocalTool(store *Store, registry *Registry) tool.Tool {
-	return &skillDeleteLocalTool{store: store, registry: registry}
+	return &SkillDeleteLocalTool{store: store, registry: registry}
+}
+
+// WithBus 为 SkillDeleteLocalTool 注入事件广播器，不含则跳过广播。
+func (t *SkillDeleteLocalTool) WithBus(b SkillEventBroadcaster) tool.Tool {
+	t.bus = b
+	return t
 }
 
 // NewSkillListTool 创建 skill/list 工具。
@@ -80,17 +105,35 @@ func NewSkillGetTool(registry *Registry) tool.Tool {
 
 // NewSkillUpdateLocalTool 创建 skill/update_local 工具。
 func NewSkillUpdateLocalTool(store *Store, registry *Registry) tool.Tool {
-	return &skillUpdateLocalTool{store: store, registry: registry}
+	return &SkillUpdateLocalTool{store: store, registry: registry}
+}
+
+// WithBus 为 SkillUpdateLocalTool 注入事件广播器，不含则跳过广播。
+func (t *SkillUpdateLocalTool) WithBus(b SkillEventBroadcaster) tool.Tool {
+	t.bus = b
+	return t
 }
 
 // NewSkillEnableTool 创建 skill/enable 工具。
 func NewSkillEnableTool(store *Store, registry *Registry) tool.Tool {
-	return &skillEnableTool{store: store, registry: registry}
+	return &SkillEnableTool{store: store, registry: registry}
+}
+
+// WithBus 为 SkillEnableTool 注入事件广播器，不含则跳过广播。
+func (t *SkillEnableTool) WithBus(b SkillEventBroadcaster) tool.Tool {
+	t.bus = b
+	return t
 }
 
 // NewSkillDisableTool 创建 skill/disable 工具。
 func NewSkillDisableTool(store *Store, registry *Registry) tool.Tool {
-	return &skillDisableTool{store: store, registry: registry}
+	return &SkillDisableTool{store: store, registry: registry}
+}
+
+// WithBus 为 SkillDisableTool 注入事件广播器，不含则跳过广播。
+func (t *SkillDisableTool) WithBus(b SkillEventBroadcaster) tool.Tool {
+	t.bus = b
+	return t
 }
 
 // NewSkillSearchTool 创建 skill/search 工具。
@@ -98,29 +141,29 @@ func NewSkillSearchTool(registry *Registry) tool.Tool {
 	return &skillSearchTool{registry: registry}
 }
 
-func (t *skillCreateLocalTool) Namespace() string { return "skill" }
-func (t *skillCreateLocalTool) Name() string      { return "create_local" }
-func (t *skillCreateLocalTool) FullName() string  { return "skill/create_local" }
-func (t *skillCreateLocalTool) Aliases() []string { return []string{"skill_create_local"} }
-func (t *skillCreateLocalTool) Description() string {
+func (t *SkillCreateLocalTool) Namespace() string { return "skill" }
+func (t *SkillCreateLocalTool) Name() string      { return "create_local" }
+func (t *SkillCreateLocalTool) FullName() string  { return "skill/create_local" }
+func (t *SkillCreateLocalTool) Aliases() []string { return []string{"skill_create_local"} }
+func (t *SkillCreateLocalTool) Description() string {
 	return "Create a new local editable skill with a system_prompt template. The skill is persisted to the database and registered in memory."
 }
-func (t *skillCreateLocalTool) Tags() []string { return []string{"skill", "management"} }
+func (t *SkillCreateLocalTool) Tags() []string { return []string{"skill", "management"} }
 
 // Version 返回 skill 工具的版本标识符。skill 工具默认无版本。
-func (t *skillCreateLocalTool) Version() string { return "" }
+func (t *SkillCreateLocalTool) Version() string { return "" }
 
 // Source 返回 skill 工具的来源。skill 工具由本地代码实现，返回 "builtin"。
-func (t *skillCreateLocalTool) Source() string { return "builtin" }
+func (t *SkillCreateLocalTool) Source() string { return "builtin" }
 
 // CanonicalName 返回 Registry 使用的唯一键。无版本时等于 FullName()。
-func (t *skillCreateLocalTool) CanonicalName() string {
+func (t *SkillCreateLocalTool) CanonicalName() string {
 	if v := t.Version(); v != "" {
 		return fmt.Sprintf("%s@%s", t.FullName(), v)
 	}
 	return t.FullName()
 }
-func (t *skillCreateLocalTool) Parameters() map[string]any {
+func (t *SkillCreateLocalTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -159,7 +202,7 @@ func (t *skillCreateLocalTool) Parameters() map[string]any {
 	}
 }
 
-func (t *skillCreateLocalTool) Execute(input map[string]any) (any, error) {
+func (t *SkillCreateLocalTool) Execute(input map[string]any) (any, error) {
 	id := getString(input, "id", "")
 	if id == "" {
 		return nil, fmt.Errorf("id is required")
@@ -226,6 +269,15 @@ func (t *skillCreateLocalTool) Execute(input map[string]any) (any, error) {
 		t.registry.Register(s)
 	}
 
+	if t.bus != nil {
+		t.bus.BroadcastSkillEvent(EventSkillCreated, s.ID, map[string]any{
+			"id":     s.ID,
+			"source": string(s.Source),
+			"state":  string(s.State),
+			"scope":  string(s.Scope),
+		})
+	}
+
 	return map[string]any{
 		"id":          s.ID,
 		"created":     true,
@@ -277,23 +329,23 @@ func (t *skillGetTool) Execute(input map[string]any) (any, error) {
 	return data, nil
 }
 
-func (t *skillUpdateLocalTool) Namespace() string { return "skill" }
-func (t *skillUpdateLocalTool) Name() string      { return "update_local" }
-func (t *skillUpdateLocalTool) FullName() string  { return "skill/update_local" }
-func (t *skillUpdateLocalTool) Aliases() []string { return []string{"skill_update_local"} }
-func (t *skillUpdateLocalTool) Description() string {
+func (t *SkillUpdateLocalTool) Namespace() string { return "skill" }
+func (t *SkillUpdateLocalTool) Name() string      { return "update_local" }
+func (t *SkillUpdateLocalTool) FullName() string  { return "skill/update_local" }
+func (t *SkillUpdateLocalTool) Aliases() []string { return []string{"skill_update_local"} }
+func (t *SkillUpdateLocalTool) Description() string {
 	return "Update a local editable skill. If the target is a built-in skill, it is automatically forked into a local_db shadow with the same id before applying changes."
 }
-func (t *skillUpdateLocalTool) Tags() []string  { return []string{"skill", "management"} }
-func (t *skillUpdateLocalTool) Version() string { return "" }
-func (t *skillUpdateLocalTool) Source() string  { return "builtin" }
-func (t *skillUpdateLocalTool) CanonicalName() string {
+func (t *SkillUpdateLocalTool) Tags() []string  { return []string{"skill", "management"} }
+func (t *SkillUpdateLocalTool) Version() string { return "" }
+func (t *SkillUpdateLocalTool) Source() string  { return "builtin" }
+func (t *SkillUpdateLocalTool) CanonicalName() string {
 	if v := t.Version(); v != "" {
 		return fmt.Sprintf("%s@%s", t.FullName(), v)
 	}
 	return t.FullName()
 }
-func (t *skillUpdateLocalTool) Parameters() map[string]any {
+func (t *SkillUpdateLocalTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -309,7 +361,7 @@ func (t *skillUpdateLocalTool) Parameters() map[string]any {
 		"required": []string{"id", "updates"},
 	}
 }
-func (t *skillUpdateLocalTool) Execute(input map[string]any) (any, error) {
+func (t *SkillUpdateLocalTool) Execute(input map[string]any) (any, error) {
 	id := getString(input, "id", "")
 	if id == "" {
 		return nil, fmt.Errorf("id is required")
@@ -365,6 +417,15 @@ func (t *skillUpdateLocalTool) Execute(input map[string]any) (any, error) {
 		t.registry.Register(updated)
 	}
 
+	if t.bus != nil {
+		t.bus.BroadcastSkillEvent(EventSkillChanged, id, map[string]any{
+			"id":          id,
+			"source":      string(updated.Source),
+			"scope":       string(updated.Scope),
+			"forked_from": existing.Source == SkillSourceBuiltIn,
+		})
+	}
+
 	return map[string]any{
 		"id":          id,
 		"updated":     true,
@@ -373,23 +434,23 @@ func (t *skillUpdateLocalTool) Execute(input map[string]any) (any, error) {
 	}, nil
 }
 
-func (t *skillEnableTool) Namespace() string { return "skill" }
-func (t *skillEnableTool) Name() string      { return "enable" }
-func (t *skillEnableTool) FullName() string  { return "skill/enable" }
-func (t *skillEnableTool) Aliases() []string { return []string{"skill_enable"} }
-func (t *skillEnableTool) Description() string {
+func (t *SkillEnableTool) Namespace() string { return "skill" }
+func (t *SkillEnableTool) Name() string      { return "enable" }
+func (t *SkillEnableTool) FullName() string  { return "skill/enable" }
+func (t *SkillEnableTool) Aliases() []string { return []string{"skill_enable"} }
+func (t *SkillEnableTool) Description() string {
 	return "Enable a skill by id. Built-in and local_db skills can be enabled; local_file skills cannot be changed through this tool."
 }
-func (t *skillEnableTool) Tags() []string     { return []string{"skill", "management"} }
-func (t *skillEnableTool) Version() string    { return "" }
-func (t *skillEnableTool) Source() string     { return "builtin" }
-func (t *skillEnableTool) CanonicalName() string {
+func (t *SkillEnableTool) Tags() []string     { return []string{"skill", "management"} }
+func (t *SkillEnableTool) Version() string    { return "" }
+func (t *SkillEnableTool) Source() string     { return "builtin" }
+func (t *SkillEnableTool) CanonicalName() string {
 	if v := t.Version(); v != "" {
 		return fmt.Sprintf("%s@%s", t.FullName(), v)
 	}
 	return t.FullName()
 }
-func (t *skillEnableTool) Parameters() map[string]any {
+func (t *SkillEnableTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -401,27 +462,27 @@ func (t *skillEnableTool) Parameters() map[string]any {
 		"required": []string{"id"},
 	}
 }
-func (t *skillEnableTool) Execute(input map[string]any) (any, error) {
-	return toggleSkill(input, "enable", t.store, t.registry)
+func (t *SkillEnableTool) Execute(input map[string]any) (any, error) {
+	return toggleSkill(input, "enable", t.store, t.registry, t.bus)
 }
 
-func (t *skillDisableTool) Namespace() string { return "skill" }
-func (t *skillDisableTool) Name() string      { return "disable" }
-func (t *skillDisableTool) FullName() string  { return "skill/disable" }
-func (t *skillDisableTool) Aliases() []string { return []string{"skill_disable"} }
-func (t *skillDisableTool) Description() string {
+func (t *SkillDisableTool) Namespace() string { return "skill" }
+func (t *SkillDisableTool) Name() string      { return "disable" }
+func (t *SkillDisableTool) FullName() string  { return "skill/disable" }
+func (t *SkillDisableTool) Aliases() []string { return []string{"skill_disable"} }
+func (t *SkillDisableTool) Description() string {
 	return "Disable a skill by id. Built-in and local_db skills can be disabled; local_file skills cannot be changed through this tool."
 }
-func (t *skillDisableTool) Tags() []string     { return []string{"skill", "management"} }
-func (t *skillDisableTool) Version() string    { return "" }
-func (t *skillDisableTool) Source() string     { return "builtin" }
-func (t *skillDisableTool) CanonicalName() string {
+func (t *SkillDisableTool) Tags() []string     { return []string{"skill", "management"} }
+func (t *SkillDisableTool) Version() string    { return "" }
+func (t *SkillDisableTool) Source() string     { return "builtin" }
+func (t *SkillDisableTool) CanonicalName() string {
 	if v := t.Version(); v != "" {
 		return fmt.Sprintf("%s@%s", t.FullName(), v)
 	}
 	return t.FullName()
 }
-func (t *skillDisableTool) Parameters() map[string]any {
+func (t *SkillDisableTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -433,8 +494,8 @@ func (t *skillDisableTool) Parameters() map[string]any {
 		"required": []string{"id"},
 	}
 }
-func (t *skillDisableTool) Execute(input map[string]any) (any, error) {
-	return toggleSkill(input, "disable", t.store, t.registry)
+func (t *SkillDisableTool) Execute(input map[string]any) (any, error) {
+	return toggleSkill(input, "disable", t.store, t.registry, t.bus)
 }
 
 func (t *skillSearchTool) Namespace() string { return "skill" }
@@ -494,23 +555,23 @@ func (t *skillSearchTool) Execute(input map[string]any) (any, error) {
 	return result, nil
 }
 
-func (t *skillDeleteLocalTool) Namespace() string { return "skill" }
-func (t *skillDeleteLocalTool) Name() string      { return "delete_local" }
-func (t *skillDeleteLocalTool) FullName() string  { return "skill/delete_local" }
-func (t *skillDeleteLocalTool) Aliases() []string { return []string{"skill_delete_local"} }
-func (t *skillDeleteLocalTool) Description() string {
+func (t *SkillDeleteLocalTool) Namespace() string { return "skill" }
+func (t *SkillDeleteLocalTool) Name() string      { return "delete_local" }
+func (t *SkillDeleteLocalTool) FullName() string  { return "skill/delete_local" }
+func (t *SkillDeleteLocalTool) Aliases() []string { return []string{"skill_delete_local"} }
+func (t *SkillDeleteLocalTool) Description() string {
 	return "Delete a local editable skill by id. Built-in skills cannot be deleted; deleting a built-in shadow restores the built-in version."
 }
-func (t *skillDeleteLocalTool) Tags() []string { return []string{"skill", "management"} }
-func (t *skillDeleteLocalTool) Version() string { return "" }
-func (t *skillDeleteLocalTool) Source() string  { return "builtin" }
-func (t *skillDeleteLocalTool) CanonicalName() string {
+func (t *SkillDeleteLocalTool) Tags() []string { return []string{"skill", "management"} }
+func (t *SkillDeleteLocalTool) Version() string { return "" }
+func (t *SkillDeleteLocalTool) Source() string  { return "builtin" }
+func (t *SkillDeleteLocalTool) CanonicalName() string {
 	if v := t.Version(); v != "" {
 		return fmt.Sprintf("%s@%s", t.FullName(), v)
 	}
 	return t.FullName()
 }
-func (t *skillDeleteLocalTool) Parameters() map[string]any {
+func (t *SkillDeleteLocalTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -523,7 +584,7 @@ func (t *skillDeleteLocalTool) Parameters() map[string]any {
 	}
 }
 
-func (t *skillDeleteLocalTool) Execute(input map[string]any) (any, error) {
+func (t *SkillDeleteLocalTool) Execute(input map[string]any) (any, error) {
 	id := getString(input, "id", "")
 	if id == "" {
 		return nil, fmt.Errorf("id is required")
@@ -546,6 +607,7 @@ func (t *skillDeleteLocalTool) Execute(input map[string]any) (any, error) {
 			return nil, fmt.Errorf("delete skill from store: %w", err)
 		}
 	}
+	var restoredBuiltinID string
 	if t.registry != nil {
 		t.registry.Unregister(id)
 		// 从 store 删除后，若该 ID 原本是 built_in 的 shadow，需要恢复 built_in。
@@ -553,9 +615,21 @@ func (t *skillDeleteLocalTool) Execute(input map[string]any) (any, error) {
 			for _, builtin := range DefaultBuiltins() {
 				if builtin.ID == id {
 					t.registry.Register(*builtin)
+					restoredBuiltinID = builtin.ID
 					break
 				}
 			}
+		}
+	}
+
+	if t.bus != nil {
+		t.bus.BroadcastSkillEvent(EventSkillDeleted, id, map[string]any{
+			"id": id,
+		})
+		if restoredBuiltinID != "" {
+			t.bus.BroadcastSkillEvent(EventSkillLoaded, restoredBuiltinID, map[string]any{
+				"id": restoredBuiltinID,
+			})
 		}
 	}
 
@@ -615,7 +689,7 @@ func (t *skillListTool) Execute(input map[string]any) (any, error) {
 
 // toggleSkill 是 enable/disable 的公共实现。
 // 对 built_in 仅改内存状态（不保存到 store）；对 local_db 同步 store。
-func toggleSkill(input map[string]any, action string, store *Store, registry *Registry) (any, error) {
+func toggleSkill(input map[string]any, action string, store *Store, registry *Registry, bus SkillEventBroadcaster) (any, error) {
 	id := getString(input, "id", "")
 	if id == "" {
 		return nil, fmt.Errorf("id is required")
@@ -648,6 +722,12 @@ func toggleSkill(input map[string]any, action string, store *Store, registry *Re
 		target = SkillStateEnabled
 	}
 	if s.State == target {
+		if bus != nil {
+			bus.BroadcastSkillEvent(eventType, id, map[string]any{
+				"id":    id,
+				"state": string(target),
+			})
+		}
 		return map[string]any{
 			"id":      id,
 			"action":  action,
@@ -668,7 +748,12 @@ func toggleSkill(input map[string]any, action string, store *Store, registry *Re
 		}
 	}
 
-	_ = eventType // skill tool 内部不直接持有 hub，事件由调用方/REST 广播；工具结果已足够。
+	if bus != nil {
+		bus.BroadcastSkillEvent(eventType, id, map[string]any{
+			"id":    id,
+			"state": string(target),
+		})
+	}
 
 	return map[string]any{
 		"id":      id,

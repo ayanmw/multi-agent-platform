@@ -961,13 +961,15 @@ func main() {
 			log.Printf("Skill subsystem: loaded %d skill(s) into registry", len(skillRegistry.List(nil)))
 		}
 		// 注册 skill 管理工具（create_local / delete_local / list / get / update_local / enable / disable / search），让 Agent 也能操作 skill。
-		toolRegistry.Register(skill.NewSkillCreateLocalTool(skillStore, skillRegistry))
-		toolRegistry.Register(skill.NewSkillDeleteLocalTool(skillStore, skillRegistry))
+		// 有改写的工具通过 WithBus 注入广播适配器，确保 tool 执行后在 event bus 上广播 skill_* 事件。
+		skillBus := &skillEventBusAdapter{hub: hub}
+		toolRegistry.Register(skill.NewSkillCreateLocalTool(skillStore, skillRegistry).(*skill.SkillCreateLocalTool).WithBus(skillBus))
+		toolRegistry.Register(skill.NewSkillDeleteLocalTool(skillStore, skillRegistry).(*skill.SkillDeleteLocalTool).WithBus(skillBus))
 		toolRegistry.Register(skill.NewSkillListTool(skillRegistry))
 		toolRegistry.Register(skill.NewSkillGetTool(skillRegistry))
-		toolRegistry.Register(skill.NewSkillUpdateLocalTool(skillStore, skillRegistry))
-		toolRegistry.Register(skill.NewSkillEnableTool(skillStore, skillRegistry))
-		toolRegistry.Register(skill.NewSkillDisableTool(skillStore, skillRegistry))
+		toolRegistry.Register(skill.NewSkillUpdateLocalTool(skillStore, skillRegistry).(*skill.SkillUpdateLocalTool).WithBus(skillBus))
+		toolRegistry.Register(skill.NewSkillEnableTool(skillStore, skillRegistry).(*skill.SkillEnableTool).WithBus(skillBus))
+		toolRegistry.Register(skill.NewSkillDisableTool(skillStore, skillRegistry).(*skill.SkillDisableTool).WithBus(skillBus))
 		toolRegistry.Register(skill.NewSkillSearchTool(skillRegistry))
 	} else {
 		// DB 未初始化时仍提供一个空 registry，避免后续 nil 解引用。

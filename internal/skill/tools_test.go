@@ -452,7 +452,7 @@ func TestSkillToggleCrossProjectRejected(t *testing.T) {
 	_, err := toggleSkill(map[string]any{
 		"id":         "proj-scoped/toggle",
 		"_project_id": "proj-X",
-	}, "disable", store, registry)
+	}, "disable", store, registry, nil)
 	if err != nil {
 		t.Fatalf("same-project disable succeeded: %v", err)
 	}
@@ -465,8 +465,63 @@ func TestSkillToggleCrossProjectRejected(t *testing.T) {
 	_, err = toggleSkill(map[string]any{
 		"id":         "proj-scoped/toggle",
 		"_project_id": "proj-Y",
-	}, "enable", store, registry)
+	}, "enable", store, registry, nil)
 	if err == nil {
 		t.Fatal("expected cross-project toggle rejected")
+	}
+}
+
+// fakeSkillEventBus 测试用广播器，记录所有收到的调用。
+type fakeSkillEventBus struct {
+	calls []skillEventCall
+}
+
+type skillEventCall struct {
+	eventType string
+	skillID   string
+	data      map[string]any
+}
+
+func (f *fakeSkillEventBus) BroadcastSkillEvent(eventType, skillID string, data map[string]any) {
+	f.calls = append(f.calls, skillEventCall{eventType: eventType, skillID: skillID, data: data})
+}
+
+// TestSkillToolBroadcastsEvents 验证 skill Agent Tools 在成功变更后会通过 bus 广播事件。
+func TestSkillToolBroadcastsEvents(t *testing.T) {
+	store, registry := newSkillToolRegistry(t)
+
+	bus := &fakeSkillEventBus{}
+
+	// create_local 应广播 EventSkillCreated。
+	create := NewSkillCreateLocalTool(store, registry).(*SkillCreateLocalTool)
+	create.WithBus(bus)
+	res, err := create.Execute(map[string]any{
+		"id":           "broadcast-created",
+		"display_name": "Broadcast Create",
+		"content":      "Hello {{name}}.",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.(map[string]any)["id"] != "broadcast-created" {
+		t.Fatal("create failed")
+	}
+	if len(bus.calls) != 1 || bus.calls[0].eventType != EventSkillCreated || bus.calls[0].skillID != "broadcast-created" {
+		t.Fatalf("expected EventSkillCreated for broadcast-created, got %+v", bus.calls)
+	}
+
+	// enable built_in 应广播 EventSkillEnabled。
+	bus.calls = nil
+	enable := NewSkillEnableTool(store, registry).(*SkillEnableTool)
+	enable.WithBus(bus)
+	_, err = enable.Execute(map[string]any{"id": "builtin-code-helper"})
+	if err != nil {
+		t.Fatalf("enable builtin: %v", err)
+	}
+	if len(bus.calls) != 1 || bus.calls[0].eventType != EventSkillEnabled || bus.calls[0].skillID != "builtin-code-helper" {
+		t.Fatalf("expected EventSkillEnabled for builtin-code-helper, got %+v", bus.calls)
+	}
+	if bus.calls[0].data["state"] != string(SkillStateEnabled) {
+		t.Fatalf("expected enabled state in data, got %v", bus.calls[0].data)
 	}
 }
