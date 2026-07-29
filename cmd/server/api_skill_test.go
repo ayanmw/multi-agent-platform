@@ -388,6 +388,42 @@ func TestSkillAPIEndToEnd(t *testing.T) {
 	}
 }
 
+// TestCreateSkillSessionScopeAllowed 验证 H6：POST /api/skills 放行 scope=session。
+// spec.md:94 明确 "local_db 可设置 scope=project 或 session"，旧实现把 session 拒为 400。
+func TestCreateSkillSessionScopeAllowed(t *testing.T) {
+	ts, registry, _ := newSkillTestHarness(t)
+	client := ts.Client()
+
+	payload, _ := json.Marshal(map[string]any{
+		"id":           "user/session-skill",
+		"display_name": "Session Skill",
+		"content":      "You are a session-only skill.",
+		"scope":        "session",
+	})
+	resp, err := client.Post(ts.URL+"/api/skills", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("create session skill: %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating session scope skill, got %d: %s", resp.StatusCode, body)
+	}
+	var created skill.Skill
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.Scope != skill.SkillScopeSession {
+		t.Fatalf("expected scope session, got %s", created.Scope)
+	}
+	// session scope 不应被普通 ResolveActiveSkills 注入（仅经 extraIDs 注入当前 run）。
+	ids := skill.ResolveActiveSkills(registry, "", "")
+	for _, id := range ids {
+		if id == "user/session-skill" {
+			t.Fatalf("session scope skill should NOT be injected by ResolveActiveSkills")
+		}
+	}
+}
+
 // readBody 读取并关闭 resp.Body，返回字符串体；测试中简化样板代码。
 func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
