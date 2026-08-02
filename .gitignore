@@ -8,9 +8,14 @@
 # Build output
 bin/
 dist/
+bin/server
+cmd_server.exe
 
 # Go
 # *.test
+*.test
+coverage.out
+coverage.txt
 
 # IDE
 .idea/
@@ -63,6 +68,7 @@ web/v2/tsconfig.tsbuildinfo
 # Tooling / agent local config
 .claude/
 .codebuddy/
+.workbuddy/
 
 # Personal notes / scratch files
 note.txt

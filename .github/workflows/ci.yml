@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 并发控制：同一 ref 只保留最新一次运行
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 快门禁：每次 push/PR 都跑，无前端、无网络、无需 API key。
+  # gofmt 当前为 warn-only（internal/cmd/pkg 有 125 个存量文件未格式化），
+  # 待团队执行一次 `make fmt` 并提交后，可把 format 步骤改为阻断（去掉 continue-on-error）。
+  go-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Format check (report only)
+        continue-on-error: true
+        run: |
+          unformatted=$(gofmt -l internal cmd pkg)
+          if [ -n "$unformatted" ]; then
+            echo "::warning::以下文件未通过 gofmt（共 $(echo "$unformatted" | wc -l | tr -d ' ') 个），建议本地执行 make fmt："
+            echo "$unformatted"
+          else
+            echo "gofmt clean ✓"
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: go build
+        run: go build -o bin/server ./cmd/server
+
+  # 确定性 21 case 回归（mock，无需 API key）。
+  # 复用现有 scripts/cases-regression.sh；需要 Go + Node(WS 订阅) + Python(JSON 解析)。
+  regression-mock:
+    runs-on: ubuntu-latest
+    needs: go-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run case regression (mock)
+        run: |
+          PYTHONUTF8=1 LLM_USE_MOCK=true bash scripts/cases-regression.sh
+
+  # 前端 embed 校验：构建 v1 + v2，确保 go:embed 不会因前端破坏而失败。
+  # 独立 gate，Go 改动不必触发。
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build web (v1)
+        run: |
+          cd web && npm ci && npm run build
+
+      - name: Build web/v2 (default UI)
+        run: |
+          cd web/v2 && npm ci && npm run build
