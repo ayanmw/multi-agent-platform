@@ -7,7 +7,7 @@ import (
     "testing"
     "time"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool"
+    "github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // fakeTransport 是仅用于测试的 Transport，会回放一个脚本化的 MCP server。

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // recordingBusWithFilter 是支持按事件类型捕获的 recordingBus 扩展。

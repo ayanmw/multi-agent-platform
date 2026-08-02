@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // ProviderManager 编排 LLM Provider 的模型发现与持久化。

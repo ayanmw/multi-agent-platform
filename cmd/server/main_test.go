@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
-	"github.com/anmingwei/multi-agent-platform/internal/orchestrator"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/orchestrator"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 func TestIsAllowedScope(t *testing.T) {

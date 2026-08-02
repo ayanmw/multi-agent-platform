@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // --- 辅助 --------------------------------------------------------------------

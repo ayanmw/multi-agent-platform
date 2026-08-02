@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cases"
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/cases"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // recordingBus 是一个测试用 EventBus，捕获每一条发送的事件。

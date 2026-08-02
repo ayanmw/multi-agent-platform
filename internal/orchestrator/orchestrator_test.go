@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/ws"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // TestAgentBus_DeliversToRegisteredHandler 验证 SendMessage 会同步调用

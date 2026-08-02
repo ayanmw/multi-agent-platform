@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // fakeBus 记录所有发送的事件，供断言。

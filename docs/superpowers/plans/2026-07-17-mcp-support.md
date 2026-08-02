@@ -858,7 +858,7 @@ package mcp
 import (
     "testing"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool"
+    "github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 type stubClient struct {
@@ -916,7 +916,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool"
+    "github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // client is the internal client abstraction used by Loader so tests can inject a
@@ -1077,7 +1077,7 @@ Expected: FAIL with `Config` no field `MCPServers`.
 在 imports 中加入：
 
 ```go
-"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 ```
 
 在 `Config` 结构体中新增：
@@ -1135,7 +1135,7 @@ Expected: 当前代码未引用 mcp，需要先集成才能报错，这里用“
 1. imports 加入：
 
 ```go
-"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 ```
 
 2. 在 `tool.RegisterBuiltins(toolRegistry)` 之后、`log.Printf("Registered %d built-in tools"...)` 之前插入：
@@ -1719,7 +1719,7 @@ import (
     "testing"
     "time"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool"
+    "github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 func TestIntegrationWithCalcServer(t *testing.T) {
@@ -1890,7 +1890,7 @@ import (
     "encoding/json"
     "fmt"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+    "github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 )
 
 // InsertMCPServer persists a single MCP server configuration.
@@ -1954,7 +1954,7 @@ package db
 import (
     "testing"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+    "github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 )
 
 func TestMCPServerPersistence(t *testing.T) {

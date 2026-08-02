@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cron"
+	"github.com/ayanmw/multi-agent-platform/internal/cron"
 )
 
 // init 注册 crons / cron_executions 表的 schema 迁移（v26）。

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
 )
 
 func setupSkillCommandTestServer(t *testing.T, files map[string]string) (*httptest.Server, *skill.Loader, string) {

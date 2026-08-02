@@ -65,7 +65,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config/dotenv"
+	"github.com/ayanmw/multi-agent-platform/internal/config/dotenv"
 )
 
 func TestWebSearchGeminiInteractions(t *testing.T) {

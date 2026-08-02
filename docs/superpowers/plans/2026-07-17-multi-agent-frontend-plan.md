@@ -340,7 +340,7 @@ import (
     "sync"
     "time"
 
-    "github.com/anmingwei/multi-agent-platform/internal/runtime"
+    "github.com/ayanmw/multi-agent-platform/internal/runtime"
 )
 
 type PersistentAgentBus struct {
@@ -434,8 +434,8 @@ import (
     "encoding/json"
     "fmt"
 
-    "github.com/anmingwei/multi-agent-platform/internal/config"
-    "github.com/anmingwei/multi-agent-platform/internal/llm"
+    "github.com/ayanmw/multi-agent-platform/internal/config"
+    "github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 type LLMDecomposer struct {

@@ -41,17 +41,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
-	"github.com/anmingwei/multi-agent-platform/internal/runtime"
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/runtime"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/internal/ws"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // AgentSpec 定义由 orchestrator 启动的单个 agent。

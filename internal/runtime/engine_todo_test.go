@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 func TestEngineActiveTodosInjection(t *testing.T) {

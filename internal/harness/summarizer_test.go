@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // ============================================================================

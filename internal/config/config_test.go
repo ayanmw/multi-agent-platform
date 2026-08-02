@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // TestShouldMockPriority 使用表驱动子测试验证三层 mock 开关的优先级。

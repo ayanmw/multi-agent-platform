@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // fakeStoreWithUpdateError 是一个在 UpdateExecution/UpdateCronScheduleMeta 上

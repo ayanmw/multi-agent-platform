@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // Config 持有从环境变量与 .env 加载的应用配置。

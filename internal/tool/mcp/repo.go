@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // SqliteRepository 将 ManagedServer 记录持久化到 mcp_servers 表中。

@@ -91,13 +91,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cases"
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/cases"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // log 是 observability.DefaultLogger 的包级别别名，避免在各处重复书写长前缀。

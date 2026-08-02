@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // toolCounter 用于为未显式提供 name 的动态 tool 生成唯一 name。

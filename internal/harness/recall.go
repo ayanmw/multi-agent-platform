@@ -34,9 +34,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/memory"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // WorkingMemory 是注入到新任务 system prompt 的 context。它包含来自 session、project、

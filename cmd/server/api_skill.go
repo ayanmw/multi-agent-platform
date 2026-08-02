@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/auth"
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/auth"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // registerSkillRoutes 把 Skill 管理 REST API 路由挂载到 mux。

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // TaskStarter 是 start_task action 用来启动一个 Agent task 的回调。

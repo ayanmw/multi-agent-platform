@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 )
 
 // log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。

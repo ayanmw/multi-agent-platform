@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
 )
 
 // TestSkillProjectScopeAPI 验证 project scope skill 的创建、查询过滤与运行期解析逻辑。

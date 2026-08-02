@@ -1,6 +1,6 @@
 package runtime
 
-import "github.com/anmingwei/multi-agent-platform/internal/llm"
+import "github.com/ayanmw/multi-agent-platform/internal/llm"
 
 // llmProviderAdapter 把 engine 侧真实的 llm.Provider 适配为 tool 包的
 // tool.LLMProvider 小接口，避免 tool 包直接依赖 llm 包造成循环引用。

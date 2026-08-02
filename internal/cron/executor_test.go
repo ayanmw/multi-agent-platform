@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // mockRunner 是 ActionRunner mock，可配置返回结果/错误。

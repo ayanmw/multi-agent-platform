@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/auth"
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/auth"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 	_ "modernc.org/sqlite"
 )
 

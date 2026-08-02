@@ -33,7 +33,7 @@
 //	})
 package llm
 
-import "github.com/anmingwei/multi-agent-platform/internal/config"
+import "github.com/ayanmw/multi-agent-platform/internal/config"
 
 // ProviderConfig 持有创建 Provider 实例所需的配置参数。
 // 它对齐所有 provider 构造器所需字段，无论底层 provider 类型如何，

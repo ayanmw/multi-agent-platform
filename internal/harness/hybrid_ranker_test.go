@@ -3,7 +3,7 @@ package harness
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
+	"github.com/ayanmw/multi-agent-platform/internal/memory"
 )
 
 type stubEmbed struct{}

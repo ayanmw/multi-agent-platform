@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // PromotionGate 评估 consolidated 候选 memory 并将符合条件者提升到 semantic tier。

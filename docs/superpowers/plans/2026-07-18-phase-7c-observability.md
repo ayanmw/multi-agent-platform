@@ -796,7 +796,7 @@ Edit `internal/runtime/engine.go` in the `EngineConfig` struct:
 	ToolLatencyRecorder func(latency time.Duration)
 ```
 
-Add imports for `time` and `github.com/anmingwei/multi-agent-platform/internal/observability`.
+Add imports for `time` and `github.com/ayanmw/multi-agent-platform/internal/observability`.
 
 - [x] **Step 2: Wrap think(), tool execution, and LLM call with spans**
 
@@ -924,7 +924,7 @@ Create `internal/observability/audit_sqlite.go`:
 ```go
 package observability
 
-import "github.com/anmingwei/multi-agent-platform/pkg/db"
+import "github.com/ayanmw/multi-agent-platform/pkg/db"
 
 // SQLiteAuditor wraps an Auditor and also persists to SQLite.
 type SQLiteAuditor struct {

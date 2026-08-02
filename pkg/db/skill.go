@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
 )
 
 // ErrSkillNotFound 表示指定的 Skill 不存在。

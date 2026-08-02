@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 )
 
 // newTestMCPManager 返回一个带空 repo 的 Manager，供 handler 测试使用。

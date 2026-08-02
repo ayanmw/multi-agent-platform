@@ -26,11 +26,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/internal/ws"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // repoRoot 推断主仓库根目录，供 worktree Manager 锚定 git 命令的 CWD。

@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // KeywordSummarizer 是旧的关键词摘要接口。保留为 LLMSummarizerImpl 的回退目标 ——

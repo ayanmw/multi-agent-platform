@@ -5,7 +5,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // MemoryIndexerOptions 用于配置增量索引的行为。

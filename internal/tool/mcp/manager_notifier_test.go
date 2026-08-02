@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // TestManagerChangeNotifier 验证 connect/disconnect/enable/disable 操作会以

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 func TestSeedMetricsFromDB(t *testing.T) {

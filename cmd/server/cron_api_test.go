@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cron"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/cron"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 	_ "modernc.org/sqlite"
 )
 

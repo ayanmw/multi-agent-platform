@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/auth"
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/auth"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // newFileSkillTestHarness 构造一个独立的 skill 测试服务器，允许显式指定全局扫描目录 globalDir。

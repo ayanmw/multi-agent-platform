@@ -45,8 +45,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // SqliteVectorStore 是基于 SQLite 的持久化 VectorStore。

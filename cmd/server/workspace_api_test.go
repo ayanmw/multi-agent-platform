@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/internal/ws"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 	_ "modernc.org/sqlite"
 )
 

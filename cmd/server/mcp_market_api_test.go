@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 func setupMarketTestManager() *mcp.Manager {

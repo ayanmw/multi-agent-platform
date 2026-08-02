@@ -2,7 +2,7 @@
 
 ## Context
 
-当前 `internal/config/env.go` 实现了 `.env` 文件的内存缓存、优先级读取与 `.env → os` 写入功能。它作为 `internal/config` 包的一部分，与配置模型 `Config` 强耦合。任何希望复用 `.env` 读取能力的包，如果尝试 `import "github.com/anmingwei/multi-agent-platform/internal/config"`，都必须连带引入大量无关类型（`Config`、MCP 配置等），并可能触发循环依赖。
+当前 `internal/config/env.go` 实现了 `.env` 文件的内存缓存、优先级读取与 `.env → os` 写入功能。它作为 `internal/config` 包的一部分，与配置模型 `Config` 强耦合。任何希望复用 `.env` 读取能力的包，如果尝试 `import "github.com/ayanmw/multi-agent-platform/internal/config"`，都必须连带引入大量无关类型（`Config`、MCP 配置等），并可能触发循环依赖。
 
 同时，手写 `.env` 解析器只做了最简单的 `KEY=VALUE` 分 trim，不支持：
 - 单/双引号值（含转义）

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
 )
 
 func TestSkillCRUD(t *testing.T) {

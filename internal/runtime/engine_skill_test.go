@@ -3,8 +3,8 @@ package runtime
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 func TestEngineSkillPromptInjection(t *testing.T) {

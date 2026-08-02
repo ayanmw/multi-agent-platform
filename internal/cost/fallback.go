@@ -14,7 +14,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // ResolveFallbackChain 从主 model profile 起解析 fallback chain。它沿 registry 中的

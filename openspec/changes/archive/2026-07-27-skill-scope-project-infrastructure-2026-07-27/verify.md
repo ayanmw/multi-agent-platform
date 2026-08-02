@@ -10,9 +10,9 @@ go test ./internal/skill ./internal/runtime ./cmd/server
 结果：全部 PASS，无 race。
 
 ```
-ok  	github.com/anmingwei/multi-agent-platform/internal/skill	0.251s
-ok  	github.com/anmingwei/multi-agent-platform/internal/runtime	0.603s
-ok  	github.com/anmingwei/multi-agent-platform/cmd/server	12.988s
+ok  	github.com/ayanmw/multi-agent-platform/internal/skill	0.251s
+ok  	github.com/ayanmw/multi-agent-platform/internal/runtime	0.603s
+ok  	github.com/ayanmw/multi-agent-platform/cmd/server	12.988s
 ```
 
 ## 编译检查

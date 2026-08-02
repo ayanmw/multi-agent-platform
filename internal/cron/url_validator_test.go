@@ -3,7 +3,7 @@ package cron_test
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cron"
+	"github.com/ayanmw/multi-agent-platform/internal/cron"
 )
 
 // 测试 cron.URLValidator 对 webhook URL 的 scheme 与私有地址校验。

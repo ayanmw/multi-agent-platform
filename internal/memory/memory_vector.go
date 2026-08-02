@@ -24,7 +24,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // vector store 操作的哨兵错误。

@@ -5,7 +5,7 @@
 package cron
 
 import (
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // newCronEvent 构造一个 cron 事件。taskID 填 cron_id，agentID 填触发者。

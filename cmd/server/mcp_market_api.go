@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp"
 )
 
 // registerMCPMarketRoutes 把 MCP marketplace endpoint 挂载到 mux。

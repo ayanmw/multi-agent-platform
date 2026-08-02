@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // fakeJudgeProvider 实现了 judgeChatClient（与 llm.Provider），返回脚本化的响应。

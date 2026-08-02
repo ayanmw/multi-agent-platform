@@ -1,4 +1,4 @@
-module github.com/anmingwei/multi-agent-platform
+module github.com/ayanmw/multi-agent-platform
 
 go 1.25.4
 

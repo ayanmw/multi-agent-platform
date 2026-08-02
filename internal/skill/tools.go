@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // SkillEventBroadcaster 是 skill 工具的事件广播抽象。

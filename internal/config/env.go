@@ -2,10 +2,10 @@ package config
 
 // 本文件是 internal/config/dotenv 包向 internal/config 的薄封装，
 // 用于保持向后兼容：现有调用 config.Getenv / config.LookupEnv 的代码继续工作。
-// 新代码建议直接 import "github.com/anmingwei/multi-agent-platform/internal/config/dotenv"。
+// 新代码建议直接 import "github.com/ayanmw/multi-agent-platform/internal/config/dotenv"。
 
 import (
-	"github.com/anmingwei/multi-agent-platform/internal/config/dotenv"
+	"github.com/ayanmw/multi-agent-platform/internal/config/dotenv"
 )
 
 // LookupEnvResult 是 dotenv.LookupEnvResult 的别名，保持现有类型引用有效。

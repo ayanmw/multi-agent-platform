@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 
 	_ "modernc.org/sqlite"
 )

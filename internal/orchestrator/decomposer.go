@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // LLMDecomposer 使用 LLM 把用户请求动态分解为多个 AgentSpec。

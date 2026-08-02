@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // ModelService 负责启动期模型种子写入与 DB→Registry 加载。

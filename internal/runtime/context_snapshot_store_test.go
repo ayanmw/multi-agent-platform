@@ -3,7 +3,7 @@ package runtime
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 func TestRecordAndGetSnapshot(t *testing.T) {

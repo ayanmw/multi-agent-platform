@@ -592,7 +592,7 @@ package memory
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 type mockEmbeddingProvider struct {
@@ -663,7 +663,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 )
 
 // MemoryIndexerOptions configures the incremental indexing behavior.
@@ -853,8 +853,8 @@ package harness
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/memory"
 )
 
 type stubEmbed struct{}
@@ -908,8 +908,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/memory"
 )
 
 // HybridWeights configures the linear combination of keyword, BM25, and vector

@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // Heartbeat 周期性扫描已完成任务、生成 episode summary 并写入 consolidated memory 记录。

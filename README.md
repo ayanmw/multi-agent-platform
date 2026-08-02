@@ -1,6 +1,8 @@
 # 多 Agent 平台
 
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
+> **仓库地址：** https://github.com/ayanmw/multi-agent-platform
+> **模块路径：** `github.com/ayanmw/multi-agent-platform`
 > **当前版本：v0.13.0 Alpha**
 > **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 与 UI-v2、7-H2 编排闭环已落地**
 

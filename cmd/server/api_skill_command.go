@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/skill"
+	"github.com/ayanmw/multi-agent-platform/internal/skill"
 )
 
 // registerSkillCommandRoutes 挂载 SkillCommand REST API。

@@ -5,7 +5,7 @@ import (
     "fmt"
     "sync"
 
-    "github.com/anmingwei/multi-agent-platform/internal/tool"
+    "github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // Loader 将外部 MCP Server 与共享的 tool.Registry 桥接起来。

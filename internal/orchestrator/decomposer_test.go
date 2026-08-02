@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
 )
 
 func TestLLMDecomposerMockFallback(t *testing.T) {

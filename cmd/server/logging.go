@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
-	"github.com/anmingwei/multi-agent-platform/internal/observability"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 )
 
 // 日志与可观测性相关的默认值。

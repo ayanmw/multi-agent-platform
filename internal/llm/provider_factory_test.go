@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
 )
 
 // TestNewProvider_OpenAI 验证工厂为 "openai" provider 创建 OpenAIProvider。

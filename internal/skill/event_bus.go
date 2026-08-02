@@ -1,7 +1,7 @@
 package skill
 
 import (
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // eventBroadcaster 是 EventBus 所需的最小发送接口。

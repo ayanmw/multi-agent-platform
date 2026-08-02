@@ -209,9 +209,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
-	"github.com/anmingwei/multi-agent-platform/internal/ws"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/ws"
 )
 
 // mockHub 用于捕获控制 handler 发出的事件。

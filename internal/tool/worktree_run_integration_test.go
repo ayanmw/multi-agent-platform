@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
 )
 
 // setupRunIntegration 构造 runner 接线所需的全部组件：

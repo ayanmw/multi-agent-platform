@@ -3,7 +3,7 @@
 //
 // 用法：
 //
-//	import "github.com/anmingwei/multi-agent-platform/internal/version"
+//	import "github.com/ayanmw/multi-agent-platform/internal/version"
 //	fmt.Println(version.Version) // "v0.4 Alpha"
 //
 // 版本字符串通过 go:embed 在编译时嵌入。

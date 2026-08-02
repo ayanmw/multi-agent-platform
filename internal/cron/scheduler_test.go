@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // fakeStore 是测试用的 DBStore mock。

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/todo"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/todo"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // mockTodoService 是 *todo.Service 的测试替身。

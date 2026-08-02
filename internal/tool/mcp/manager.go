@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
-	"github.com/anmingwei/multi-agent-platform/internal/tool/mcp/marketplace"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool/mcp/marketplace"
 )
 
 // ChangeNotifier 会在已加载 MCP server 集合（因而也是已注册 proxy tool 集合）

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/tool"
+	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
 // findNode 返回 node 可执行文件的绝对路径，若未安装 Node 则跳过测试。

@@ -4,7 +4,7 @@ package llm
 import (
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
 )
 
 func TestProfileResolver_ResolveTier(t *testing.T) {

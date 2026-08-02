@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/cron"
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/internal/cron"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // startChatTaskOpts 是 startChatTask 的参数。

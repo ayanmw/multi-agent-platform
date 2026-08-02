@@ -23,8 +23,8 @@ package tool
 import (
 	"fmt"
 
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // WorktreeSessionStore 是 worktree 工具所需的 session↔worktree 绑定读写接口。

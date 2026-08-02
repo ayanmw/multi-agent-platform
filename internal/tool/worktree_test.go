@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/workspace"
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/internal/workspace"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // wtTestRepo 用临时 git 仓库构造一个 Manager + holder，供 worktree 工具测试。

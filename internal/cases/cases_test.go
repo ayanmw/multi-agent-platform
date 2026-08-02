@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
 
 	_ "modernc.org/sqlite"
 )

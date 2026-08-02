@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/anmingwei/multi-agent-platform/internal/llm"
-	"github.com/anmingwei/multi-agent-platform/internal/memory"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/memory"
 )
 
 // HybridWeights 配置 keyword、BM25 与 vector 分数的线性组合。所有权重应求和为 1.0

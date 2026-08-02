@@ -6,7 +6,7 @@
 
 一个从零构建的**白盒多 Agent 协作平台** —— 后端 Go + 前端 Vue 3 / Vite / TypeScript。每一个 LLM token、每一次工具调用、每一次 step 状态流转都会产生事件并实时推送到前端。设计哲学是"不做黑盒 Agent"：代码即文档，一切皆可观测。
 
-- 模块路径：`github.com/anmingwei/multi-agent-platform`（Go 1.25）
+- 模块路径：`github.com/ayanmw/multi-agent-platform`（Go 1.25）
 - 数据库：`modernc.org/sqlite`（纯 Go，单文件，28 张表）
 - LLM：OpenAI 兼容的 SSE 流式接口（`.env` 中的 `LLM_ENDPOINT`，默认 `deepseek-v4-flash`）
 - 前端有两个版本，均内嵌进 Go 二进制：`web/v2`（可观测控制室，默认在 `/` 提供）和 `web`（v1，在 `/ui/v1/` 提供）

@@ -3,7 +3,7 @@ package observability
 import (
 	"log/slog"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/db"
+	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
 // SQLiteAuditor 包装一个 Auditor，并同时持久化到 SQLite。

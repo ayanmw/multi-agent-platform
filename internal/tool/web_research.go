@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/ayanmw/multi-agent-platform/pkg/event"
 )
 
 // NewWebResearchTool 创建名为 "core/web_research" 的深度研究工具。

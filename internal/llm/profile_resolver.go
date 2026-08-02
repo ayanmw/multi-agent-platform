@@ -11,7 +11,7 @@ package llm
 import (
 	"strings"
 
-	"github.com/anmingwei/multi-agent-platform/internal/config"
+	"github.com/ayanmw/multi-agent-platform/internal/config"
 )
 
 // ProfileResolver 提供模型画像与 Provider 配置的解析能力。

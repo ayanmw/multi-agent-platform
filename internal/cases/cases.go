@@ -26,7 +26,7 @@ package cases
 import (
 	"time"
 
-	"github.com/anmingwei/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/harness"
 )
 
 // Case 表示用户可一键启动的预设 task 配置。
