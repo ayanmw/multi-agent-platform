@@ -1,6 +1,6 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-07-27
+> **最近更新**: 2026-08-02
 > **当前版本**: v0.15.1 Alpha
 > **更新规则**: 每个 Phase 任务完成后，更新本文件并提交 Git。
 
@@ -15,8 +15,8 @@ Phase 0 ✅ → Phase 1 ✅ → Phase 2 ✅ → Phase 3 ✅ → Phase 4 ✅ → 
 Phase skill ✅ → Phase TODO ✅ → Phase 7-cron ✅ → Phase UI-v2 ✅ → Phase 7-H2 ✅
   (Skill 系统)    (TODO 子系统)   (定时器)          (控制室 UI)      (编排闭环)
 
-Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅
-  (架构演进)    (架构收尾)      (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)
+Phase 8-A ✅ → Phase 8-B ✅ → Phase worktree ✅ → web-search-china ✅ → smoke-fix ✅ → logging-upgrade(8-1/8-2/8-3) ✅
+  (架构演进)    (架构收尾)      (worktree 隔离)   (国内搜索+深度研究)  (冒烟测试修复)   (log/slog 全量迁移 + V14 达标)
 
 multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-provider ✅ → dotenv-package ✅
   (多模型分层路由 P1-P3)   (LLM Provider 与模型持久化)      (Gemini 搜索 provider)   (.env 独立 dotenv 子包)
@@ -49,6 +49,9 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 | Phase multi-model-routing: 多模型分层路由 | 2026-07-25 | 5-tier Router、RateLimiter、预算治理、fallback、前端路由面板 |
 | Phase llm-provider-model-management: Provider 与模型持久化 | 2026-07-26 | Provider `ListModels`、DB 持久化、ProfileResolver、前端 Model Manager |
 | Phase gemini-search-provider: Gemini 搜索 provider | 2026-07-27 | `core/web_search` 新增 gemini provider，走 generateContent google_search 工具 |
+| Phase 8-1: log/slog 替换日志库 | 2026-08-02 | `internal/observability` 封装 `log/slog`，多 sink（控制台 Text + 文件 JSON）+ lumberjack 轮转 + 7 级 |
+| Phase 8-2: log/slog 接线 + 修复 + 验收 | 2026-08-02 | env 配置、审计/trace 路由鉴权、tool span、10 处缺陷修复、13 项 logger 测试 |
+| Phase 8-3: 全量日志埋点迁移（S15–S23） | 2026-08-02 | 包级 `log` 别名替换标准库 log；internal 各包 + cmd/server + scripts 全量迁移；V14 达标（0 残留） |
 
 ---
 
