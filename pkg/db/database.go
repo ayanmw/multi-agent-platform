@@ -3,11 +3,11 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
 	_ "modernc.org/sqlite"
+	"log/slog"
 )
 
 var DB *sql.DB
@@ -55,7 +55,7 @@ func Init(dataPath string) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	log.Println("Database initialized successfully")
+	slog.Info("Database initialized successfully")
 	return nil
 }
 

@@ -24,7 +24,11 @@ package orchestrator
 
 import (
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // AgentBusAdapter 包装 orchestrator 的 AgentBus，用于实现 runtime.AgentBus
 // interface。它在两种 message 类型之间做转换：把 runtime.AgentMessage 映射到

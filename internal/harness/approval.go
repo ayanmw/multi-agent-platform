@@ -28,7 +28,11 @@ import (
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // ============================================================================
 // ErrApprovalRequired — 审批请求错误类型

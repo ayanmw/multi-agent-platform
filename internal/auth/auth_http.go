@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -191,7 +190,7 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		// 受保护路由 — 校验 API key。
 		userID, err := authenticateRequest(r, store)
 		if err != nil {
-			log.Printf("[Auth] authentication failed: %v (path=%s, method=%s)", err, r.URL.Path, r.Method)
+			log.Errorf("auth", "[Auth] authentication failed: %v (path=%s, method=%s)", err, r.URL.Path, r.Method)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})

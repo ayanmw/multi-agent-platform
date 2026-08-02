@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/anmingwei/multi-agent-platform/internal/config"
@@ -46,7 +45,7 @@ func (d *LLMDecomposer) Decompose(input, requestedStrategy string) (*DecomposeRe
 		Context:     context.Background(),
 	})
 	if err != nil {
-		log.Printf("[LLMDecomposer] LLM call failed, falling back: %v", err)
+		log.Errorf("orchestrator", "[LLMDecomposer] LLM call failed, falling back: %v", err)
 		return (&TaskDecomposer{}).Decompose(input, requestedStrategy)
 	}
 	if resp == nil || len(resp.Choices) == 0 {
@@ -55,7 +54,7 @@ func (d *LLMDecomposer) Decompose(input, requestedStrategy string) (*DecomposeRe
 
 	result, parseErr := parseDecomposeResponse(resp.Choices[0].Message.Content, input, requestedStrategy)
 	if parseErr != nil {
-		log.Printf("[LLMDecomposer] parse failed, falling back: %v", parseErr)
+		log.Errorf("orchestrator", "[LLMDecomposer] parse failed, falling back: %v", parseErr)
 		return (&TaskDecomposer{}).Decompose(input, requestedStrategy)
 	}
 	return result, nil

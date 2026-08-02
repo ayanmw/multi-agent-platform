@@ -18,7 +18,6 @@ package llm
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +59,7 @@ func NewProviderManager(cfg *config.Config) (*ProviderManager, error) {
 
 	for _, pc := range cfg.LLMProviders {
 		if pc.Name == "" {
-			log.Printf("[ProviderManager] skip provider with empty name")
+			log.Warnf("llm", "[ProviderManager] skip provider with empty name")
 			continue
 		}
 
@@ -72,7 +71,7 @@ func NewProviderManager(cfg *config.Config) (*ProviderManager, error) {
 			Model:    "",
 		})
 		if err != nil {
-			log.Printf("[ProviderManager] failed to create provider %q: %v", pc.Name, err)
+			log.Errorf("llm", "[ProviderManager] failed to create provider %q: %v", pc.Name, err)
 			// 仍保存配置快照，但 provider 为 nil，同步会失败并记录 healthy=false。
 		} else {
 			pm.providers[pc.Name] = provider
@@ -168,14 +167,14 @@ func (pm *ProviderManager) SyncProvider(ctx context.Context, name string) error 
 		seenIDs = append(seenIDs, id)
 
 		if err := pm.upsertDiscoveredModel(name, id, now); err != nil {
-			log.Printf("[ProviderManager] failed to upsert model %s/%s: %v", name, id, err)
+			log.Errorf("llm", "[ProviderManager] failed to upsert model %s/%s: %v", name, id, err)
 			// 单个模型写入失败不中断整体同步。
 		}
 	}
 
 	// 4. 标记 missing：把本次未上报的已有模型设为 missing=true。
 	if err := db.MarkModelsMissingForProvider(name, seenIDs, true); err != nil {
-		log.Printf("[ProviderManager] failed to mark missing models for provider %q: %v", name, err)
+		log.Errorf("llm", "[ProviderManager] failed to mark missing models for provider %q: %v", name, err)
 	}
 
 	return pm.finishSync(name, true, now, "")

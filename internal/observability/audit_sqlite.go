@@ -1,7 +1,7 @@
 package observability
 
 import (
-	"log"
+	"log/slog"
 
 	"github.com/anmingwei/multi-agent-platform/pkg/db"
 )
@@ -31,8 +31,9 @@ func (a *SQLiteAuditor) Record(rec AuditRecord) {
 		Reason:    rec.Reason,
 		IP:        rec.IP,
 	}); err != nil {
-		log.Printf("[AUDIT] CRITICAL: failed to persist audit record id=%s action=%s target=%s error=%v",
-			rec.ID, rec.Action, rec.Target, err)
+		// V12：审计持久化失败必须保留 [AUDIT] CRITICAL 标记，便于告警与复盘检索。
+		slog.Error("[AUDIT] CRITICAL: failed to persist audit record",
+			"id", rec.ID, "action", rec.Action, "target", rec.Target, "error", err)
 	}
 }
 

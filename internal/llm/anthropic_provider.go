@@ -24,12 +24,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // ---------------------------------------------------------------------------
 // Anthropic 专用的请求/响应类型（未导出 —— 仅用于内部转换）
@@ -527,7 +530,7 @@ func (p *AnthropicProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk
 // Anthropic 当前未提供公开模型发现端点，因此返回空列表。
 func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	_ = ctx
-	log.Printf("[AnthropicProvider] ListModels not supported for provider %q", p.name)
+	log.Infof("llm", "[AnthropicProvider] ListModels not supported for provider %q", p.name)
 	return []ModelInfo{}, nil
 }
 

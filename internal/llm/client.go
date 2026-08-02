@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -348,13 +347,13 @@ func (c *Client) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (s
 		case "length":
 			// 触及 max_tokens 上限。响应被截断；记录日志，因为这可能产生
 			// 不完整的 tool 参数，导致后续 json.Unmarshal 失败。
-			log.Printf("[Client] ChatStream finished due to length limit (model=%s)", req.Model)
+			log.Infof("llm", "[Client] ChatStream finished due to length limit (model=%s)", req.Model)
 		case "content_filter":
-			log.Printf("[Client] ChatStream finished due to content filter (model=%s)", req.Model)
+			log.Infof("llm", "[Client] ChatStream finished due to content filter (model=%s)", req.Model)
 		default:
 			// 未知 finish_reason —— 高亮记录，便于发现 provider 新引入的
 			// 枚举值（例如旧版的 "function_call"）。
-			log.Printf("[Client] ChatStream finished with unexpected reason %q (model=%s)",
+			log.Infof("llm", "[Client] ChatStream finished with unexpected reason %q (model=%s)",
 				choice.FinishReason, req.Model)
 		}
 
