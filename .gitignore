@@ -59,3 +59,16 @@ web/v2/tsconfig.tsbuildinfo
 /web/v2/pnpm-lock.yaml
 /web/v2/pnpm-workspace.yaml
 /logs
+
+# Tooling / agent local config
+.claude/
+.codebuddy/
+
+# Personal notes / scratch files
+note.txt
+note-todo2.txt
+Claude-Code-MultiAgent$f.txt
+Snipaste_*.jpg
+
+# Sensitive: contains cloud account credentials, never commit
+curl-bailian-aliyun.txt
