@@ -139,6 +139,11 @@ func DefaultProtectedRoutes() []string {
 		"POST /api/cases",
 		"PUT /api/cases/",
 		"DELETE /api/cases/",
+		// 可观测性敏感读端点：审计日志与全量 trace 含内部关联信息，
+		// 需 Bearer token（REQUIRE_AUTH 启用时），与 /api/agents 同级保护。
+		// 不在此列表时会被当作非受保护路由、注入兜底 seed 用户而绕过鉴权。
+		"GET /api/audit",
+		"GET /api/traces",
 	}
 }
 

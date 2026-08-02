@@ -219,8 +219,20 @@ func (s *appServer) registerRoutes() {
 	})
 
 	// Phase 7-C: 可观测性 REST endpoint。
-	http.HandleFunc("/api/audit", s.handleAudit)
-	http.HandleFunc("/api/traces", s.handleTraces)
+	// /api/audit 与 /api/traces 暴露审计与全量 trace 数据（含 trace_id 关联），
+	// 属敏感运维面，按 P1 项要求限制为 admin 角色（对齐 /api/agents 的处理方式）。
+	http.HandleFunc("/api/audit", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
+		s.handleAudit(w, r)
+	})
+	http.HandleFunc("/api/traces", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			return
+		}
+		s.handleTraces(w, r)
+	})
 	http.HandleFunc("/api/replay/tasks/", s.handleReplay)
 	http.HandleFunc("/api/replay/events", s.handleReplayEvents)
 
@@ -364,7 +376,16 @@ func (s *appServer) registerRoutes() {
 	})
 
 	// Phase 6-D: Prometheus 文本格式的 Metrics endpoint。
+	// /metrics 不做 admin 强制（Prometheus 抓取通常不携带 API key），但支持可选的
+	// METRICS_TOKEN Bearer 鉴权：设值后必须携带 `Authorization: Bearer <token>`，
+	// 留空则保持向后兼容、不鉴权（供本地 / 内网 Prometheus 直接抓取）。
 	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		if metricsToken := config.Getenv("METRICS_TOKEN"); metricsToken != "" {
+			if r.Header.Get("Authorization") != "Bearer "+metricsToken {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		fmt.Fprint(w, observability.DefaultMetrics.PrometheusText())
 	})

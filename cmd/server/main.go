@@ -243,17 +243,10 @@ func main() {
 		cfg.ServerPort = *port
 	}
 
-	// Phase 6-D: 根据配置初始化结构化日志级别。
-	observability.DefaultLogger.SetLevel(observability.ParseLogLevel(config.Getenv("LOG_LEVEL")))
-
-	// 配置双日志：一份持久化的结构化日志文件用于详细追踪，控制台用于简洁
-	// 可读的启动/运行时信息。文件日志使用 JSON (StructuredLogger)；
-	// 控制台使用 Go 默认 log 包输出纯文本。LOG_LEVEL 仍然过滤 JSON 文件日志。
-	if logPath := config.Getenv("LOG_FILE"); logPath != "" {
-		if err := initDualLogging(logPath); err != nil {
-			log.Printf("Warning: failed to open log file %s: %v (continuing with console only)", logPath, err)
-		}
-	}
+	// Phase 8-1 (S10/S11)：用 log/slog 多 sink Logger 替换旧的
+	// SetLevel + initDualLogging 组合。控制台走 Text、文件走 JSON + 轮转，
+	// 两个 sink 级别独立，全部由 LOG_* 环境变量驱动（见 logging.go）。
+	appLogger := initLogging()
 
 	// 初始化 WebSocket Hub
 	hub := ws.NewHub()
@@ -261,6 +254,10 @@ func main() {
 	go hub.Run()
 	// 初始化全局关闭管理器。
 	shutdown := newShutdownManager()
+
+	// Phase 8-1：可观测性缓冲上限改为可配置，避免高频 trace 打爆内存
+	// 或者缓冲太小导致 /api/traces 查不到刚发生的 span。
+	tracer.SetLimit(envInt("TRACE_BUFFER_LIMIT", defaultTraceBufferLimit))
 
 	approvalHandler := harness.NewWebSocketApprovalHandler(hub)
 
@@ -386,7 +383,9 @@ func main() {
 	} else {
 		observability.DefaultLogger.Info("database", "initialized", map[string]any{"path": cfg.DBPath})
 		// Phase 7-C: DB 就绪后，把默认 auditor 切换为 SQLite 持久化实现。
-		observability.DefaultAuditor = observability.NewSQLiteAuditor(observability.NewMemoryAuditor(10000))
+		// Phase 8-1: 内存镜像缓冲上限由 AUDIT_BUFFER_LIMIT 控制。
+		observability.DefaultAuditor = observability.NewSQLiteAuditor(
+			observability.NewMemoryAuditor(envInt("AUDIT_BUFFER_LIMIT", defaultAuditBufferLimit)))
 
 		var repoErr error
 		costRepo, repoErr = cost.NewSqliteCostRepository(db.DB)
@@ -1219,6 +1218,16 @@ func main() {
 	shutdown.Register("websocket-hub", func(ctx context.Context) error {
 		return hub.Shutdown(ctx)
 	})
+	// tracer 的 onSpan 消费者依赖 hub 广播，必须排在 hub 之后关闭，
+	// 否则残留 span 会往已关闭的 hub 投递。
+	shutdown.Register("tracer", func(ctx context.Context) error {
+		tracer.Close()
+		return nil
+	})
+	// logger 放在最后：前面所有 closer 的日志都还需要它。
+	shutdown.Register("logger", func(ctx context.Context) error {
+		return appLogger.Close()
+	})
 
 	// 信号 goroutine 只负责触发 shutdownManager；关闭顺序与超时由 manager 统一管理。
 	go func() {
@@ -1421,23 +1430,6 @@ func seedDefaultAdminIfNeeded(store auth.APIKeyStore) {
 	log.Printf("DEFAULT ADMIN API KEY: %s", rawKey)
 	log.Printf("  (save this key — it will not be shown again)")
 	log.Printf("========================================")
-}
-
-// initDualLogging 以追加方式打开 logPath，并把结构化 logger 同时写到
-// 文件与 os.Stdout。纯文本控制台 logger 故意保持不动，启动横幅仍可读。
-func initDualLogging(logPath string) error {
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		return err
-	}
-	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	// StructuredLogger 把 JSON 行同时写到 stdout 与文件。
-	observability.DefaultLogger.SetOutput(io.MultiWriter(os.Stdout, logFile))
-	// 非结构化的控制台 logger 保持不变；控制台仍会显示启动横幅与
-	// 包级 log.Printf 调用。
-	return nil
 }
 
 // handleSessionWorkspaceBrowse 返回 session workspace 目录的 JSON 元信息，

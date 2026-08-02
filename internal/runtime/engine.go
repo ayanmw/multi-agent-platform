@@ -1992,11 +1992,35 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 // 捕获该错误并交给 handleApprovalRequired 处理。该方法向前端发出
 // system_info 事件，等待用户批准或拒绝该高风险操作。若批准，直接执行
 // tool（绕过 PolicyGate）。若拒绝，任务以 approval_denied 错误失败。
-func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
+func (e *Engine) executeTool(tc llm.ToolCall) (out string, retErr error) {
 	// 递增 stepIdx——每次 tool 执行都是一个新 step。放在这里（而不是
 	// 调用方）是为了让 step_started 和 tool_call_started 事件携带正确的
 	// step 序号。
 	e.stepIdx++
+
+	// S14：为本次 tool 执行开启一个派生的 trace span（operation 名
+	// "tool:<tool name>"）。span 随 root trace ctx 派生，使 /api/traces
+	// 能展示 think 与 tool 的父子关系；结束时使用 FinishWithAttributes
+	// 携带 tool / duration_ms / error，便于性能与失败分析。
+	// 用 defer + 具名返回值 retErr，保证所有返回路径（解析失败 / 审批 /
+	// 策略拦截 / 执行失败 / 成功）都能正确关闭 span。
+	var traceCtx *observability.TraceContext
+	if e.cfg.Tracer != nil && e.rootTraceCtx != nil {
+		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, e.cfg.AgentID, "tool:"+tc.Function.Name)
+	}
+	var toolDurationMs int64
+	defer func() {
+		if e.cfg.Tracer != nil && traceCtx != nil {
+			attrs := map[string]any{
+				"tool":        tc.Function.Name,
+				"duration_ms": toolDurationMs,
+			}
+			if retErr != nil {
+				attrs["error"] = retErr.Error()
+			}
+			e.cfg.Tracer.FinishWithAttributes(traceCtx, retErr, attrs)
+		}
+	}()
 
 	// 从 JSON 解析 tool call arguments。LLM 以 JSON 字符串（而非对象）
 	// 形式返回 arguments，因为它以增量方式流式产出。
@@ -2137,6 +2161,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		result, execErr = e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	}
 	duration := time.Since(start).Milliseconds()
+	toolDurationMs = duration
 	if e.cfg.ToolLatencyRecorder != nil {
 		e.cfg.ToolLatencyRecorder(time.Since(start))
 	}
