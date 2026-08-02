@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,7 +13,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // === 颜色输出 ===
 const (
@@ -62,7 +65,7 @@ func main() {
 
 	// 检查服务器健康状态
 	if !healthCheck(*serverURL) {
-		log.Fatal(cRed + "❌ Server is not running! Please start it first: go run ./cmd/server/" + cReset)
+		log.Fatalf("%v", cRed + "❌ Server is not running! Please start it first: go run ./cmd/server/" + cReset)
 	}
 	fmt.Println(cGreen + "✅ Server is healthy" + cReset)
 
@@ -142,7 +145,7 @@ func runTest(serverURL, wsURL string, test TestCase) {
 	// 连接 WebSocket
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		log.Printf("%s❌ WebSocket 连接失败: %v%s\n", cRed, err, cReset)
+		log.Infof("e2e", "%s❌ WebSocket 连接失败: %v%s\n", cRed, err, cReset)
 		return
 	}
 	defer conn.Close()
@@ -166,7 +169,7 @@ func runTest(serverURL, wsURL string, test TestCase) {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-					log.Printf("%s⚠ WebSocket 读取错误: %v%s\n", cYellow, err, cReset)
+					log.Infof("e2e", "%s⚠ WebSocket 读取错误: %v%s\n", cYellow, err, cReset)
 				}
 				return
 			}
