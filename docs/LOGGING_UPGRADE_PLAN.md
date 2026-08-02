@@ -1,8 +1,12 @@
 # 日志系统替换升级 + 可观测性改进方案
 
-> 状态：设计稿，待实施
+> 状态：**已实施完成**（S1–S25 全部落地，V1–V16 全部达标）
 > 版本：v0.14.0 规划
 > 基于当前代码库实际审计结果编写
+>
+> 实施记录：Phase 8-1（S1–S14）、Phase 8-2（S15 试点 + S24）、
+> Phase 8-3（S16–S23 全量迁移 + S25 Metrics 回填）。
+> V14 实测：非测试代码中标准库 `log.Print*` 残留 **0 处**（目标 ≤5）。
 
 ---
 
@@ -656,29 +660,28 @@ func (m *MetricsCollector) PrometheusText() string {
 
 需要给 `HistogramCollector` 增加 `snapshot()` 方法返回值拷贝。
 
-### 5.7 P7：Metrics 启动回填（可选，Phase 2）
+### 5.7 P7：Metrics 启动回填（已实施）
 
-**文件**：`cmd/server/main.go`，DB 初始化后
+**动机**：`MetricsCollector` 是纯内存实现，进程重启即归零。Prometheus 把 counter
+突降解释为 counter reset，导致 `rate()` / `increase()` 在重启点断档。
 
-```go
-// 启动时从 DB 回填 counter 初值，避免重启后 counter 突降
-if err := db.Init(cfg.DBPath); err == nil {
-    observability.DefaultAuditor = observability.NewSQLiteAuditor(
-        observability.NewMemoryAuditor(10000))
+**实现**（3 部分）：
 
-    // 新增：回填 metrics
-    if counts, err := db.AggregateTaskCounts(); err == nil {
-        observability.DefaultMetrics.SeedTaskCounts(
-            counts.Started, counts.Completed, counts.Failed)
-    }
-    if usage, err := db.AggregateLLMUsage(); err == nil {
-        observability.DefaultMetrics.SeedLLMUsage(
-            usage.Calls, usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CostCents)
-    }
-}
-```
+1. **`pkg/db/metrics.go`（新增）**——聚合查询，返回 `TaskCounts` / `LLMUsage`：
+   - `AggregateTaskCounts()`：单条 SQL 统计 tasks 表，`Started` = 全部行、
+     `Completed` = `status='completed'`、`Failed` = `status IN ('failed','cancelled')`
+     （与 `IncrTasksFailed` 覆盖"失败或被取消"的语义对齐）。
+   - `AggregateLLMUsage()`：聚合 cost_records 的 `COUNT(*)` 与 token/`cost_cents`
+     整数列求和，避免浮点累加漂移。
+   - 该文件**刻意不引入 `internal/observability`**：observability 的
+     `audit_sqlite.go` 依赖 `pkg/db`，pkg/db 必须保持叶子包，否则形成 import 环。
 
-需要 `pkg/db` 新增聚合查询 + `MetricsCollector` 新增 `Seed*` 方法。
+2. **`internal/observability/obs.go`**——`SeedTaskCounts` / `SeedLLMUsage`（已有）。
+
+3. **`cmd/server/main.go`**——新增 `seedMetricsFromDB()`，在 DB 初始化分支内调用。
+   **顺序约束**：必须排在 `repairStaleRunningTasks()` 之后，因为后者会把遗留
+   running task 改判为 failed；先回填会漏计这批任务，导致 `/metrics` 与 DB 口径不一致。
+   任一聚合失败只告警不阻断启动（全新 DB / 无持久化模式下需正常降级）。
 
 ---
 
@@ -842,7 +845,7 @@ lumberjack 是 Go 生态最成熟的日志轮转库，单文件、零依赖、~5
 | S22 | `cmd/server/runner.go` | 16 处 `log.Printf` 迁移到 `DefaultLogger` | 迁移 |
 | S23 | 其余文件 | 散布的 `log.Printf` 迁移 | 迁移 |
 | S24 | `.env.example` | 更新所有新增配置项 | 配置 |
-| S25 | `cmd/server/main.go` | Metrics 启动回填（可选） | P7 |
+| S25 | `cmd/server/main.go` + `pkg/db/metrics.go` | Metrics 启动回填 ✅ | P7 |
 
 ### 验收标准
 
@@ -864,6 +867,7 @@ lumberjack 是 Go 生态最成熟的日志轮转库，单文件、零依赖、~5
 | V14 | `log.Printf` 残留 ≤5 处（仅启动横幅） | `grep -r "log\.Printf" cmd/ internal/ pkg/ \| wc -l` |
 | V15 | 现有测试全部通过 | `go test ./internal/observability/...` |
 | V16 | 新增 logger 测试通过 | `go test ./internal/observability/... -run TestLogger` |
+| V17 | Metrics 启动回填生效（P7/S25） | `go test ./cmd/server/ -run TestSeedMetrics`；重启后 `/metrics` 的 `agent_tasks_total` 不归零 |
 
 ---
 

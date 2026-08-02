@@ -52,6 +52,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 | Phase 8-1: log/slog 替换日志库 | 2026-08-02 | `internal/observability` 封装 `log/slog`，多 sink（控制台 Text + 文件 JSON）+ lumberjack 轮转 + 7 级 |
 | Phase 8-2: log/slog 接线 + 修复 + 验收 | 2026-08-02 | env 配置、审计/trace 路由鉴权、tool span、10 处缺陷修复、13 项 logger 测试 |
 | Phase 8-3: 全量日志埋点迁移（S15–S23） | 2026-08-02 | 包级 `log` 别名替换标准库 log；internal 各包 + cmd/server + scripts 全量迁移；V14 达标（0 残留） |
+| Phase 8-3 收尾: Metrics 启动回填（S25/P7） | 2026-08-02 | `pkg/db` 新增 tasks/cost_records 聚合查询，启动时 Seed 回 `DefaultMetrics`，counter 跨重启保持单调；日志升级方案 S1–S25 全部完成 |
 
 ---
 

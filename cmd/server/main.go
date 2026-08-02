@@ -423,6 +423,11 @@ func main() {
 		// 消失，前端取消按钮无法定位它们；若不修复，session 状态将持续为
 		// running 并禁用 CommandBar 输入框。
 		repairStaleRunningTasks()
+
+		// Phase 8-3 (P7)：回填 metrics counter 初值。必须排在
+		// repairStaleRunningTasks 之后——后者会把遗留 running task 改判为
+		// failed，先回填会漏计这批任务，导致 /metrics 与 DB 口径不一致。
+		seedMetricsFromDB()
 	}
 
 	// 初始化 Memory 基础设施 —— Heartbeat 负责事件片段汇总
@@ -1402,6 +1407,34 @@ func repairStaleRunningTasks() {
 	}
 
 	log.Infof("server", "[repair] 共发现 %d 个 running task，已修复 %d 个，影响 %d 个 session", len(tasks), repaired, len(affected))
+}
+
+// seedMetricsFromDB 用已持久化的历史数据回填内存 metrics counter（Phase 8-3 / P7）。
+//
+// MetricsCollector 是纯内存实现，进程重启即归零。Prometheus 把 counter 突降
+// 解释为 counter reset，会让 rate()/increase() 在重启点出现断档。这里在 DB
+// 就绪后把 tasks 与 cost_records 的累计值 Seed 回内存，使 /metrics 暴露的
+// counter 跨重启保持单调。
+//
+// 任一聚合失败都只告警、不阻断启动：metrics 回填属于可观测性增强，
+// 不应影响服务可用性（例如全新 DB、migration 未完成等场景）。
+func seedMetricsFromDB() {
+	if counts, err := db.AggregateTaskCounts(); err != nil {
+		log.Warnf("metrics", "task counter 回填跳过: %v", err)
+	} else {
+		observability.DefaultMetrics.SeedTaskCounts(counts.Started, counts.Completed, counts.Failed)
+		log.Infof("metrics", "task counter 已回填: started=%d completed=%d failed=%d",
+			counts.Started, counts.Completed, counts.Failed)
+	}
+
+	if usage, err := db.AggregateLLMUsage(); err != nil {
+		log.Warnf("metrics", "LLM usage 回填跳过: %v", err)
+	} else {
+		observability.DefaultMetrics.SeedLLMUsage(
+			usage.Calls, usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CostCents)
+		log.Infof("metrics", "LLM usage 已回填: calls=%d tokens=%d cost_cents=%d",
+			usage.Calls, usage.TotalTokens, usage.CostCents)
+	}
 }
 
 // seedDefaultAdminIfNeeded 在数据库中不存在任何用户时创建一个默认 admin
