@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -444,7 +443,7 @@ func main() {
 	}
 	heartbeat := harness.NewHeartbeat(memDB, summarizer)
 	go heartbeat.Start(context.Background())
-	log.Println("Memory Heartbeat started (5min interval, adaptive)")
+	log.Infof("server", "%v", "Memory Heartbeat started (5min interval, adaptive)")
 	shutdown.Register("heartbeat", func(ctx context.Context) error {
 		heartbeat.Stop()
 		return nil
@@ -510,7 +509,7 @@ func main() {
 	// 从现有 memory 构建向量索引（尽力而为 —— 失败只会降低召回质量，
 	// 不会阻断启动）。
 	if err := memRecall.BuildVectorIndex(); err != nil {
-		log.Printf("MemoryRecall: failed to build vector index: %v", err)
+		log.Errorf("server", "MemoryRecall: failed to build vector index: %v", err)
 	}
 
 	// 初始化持久化 adapter
@@ -582,7 +581,7 @@ func main() {
 		}()
 	}
 
-	log.Printf("ModelService: seeded and loaded models from persistent storage")
+	log.Infof("server", "ModelService: seeded and loaded models from persistent storage")
 
 	// Phase 6 Router: 构建 model router + provider 查找 map。
 	//
@@ -604,7 +603,7 @@ func main() {
 	// 调用其非流式 Chat。
 	routerClassifier, errClassifier := llm.CreateProviderFromConfig(cfg, cfg.LLMModel, "router-classifier")
 	if errClassifier != nil {
-		log.Printf("[Router] failed to create classifier provider (Router will be disabled): %v", errClassifier)
+		log.Errorf("server", "[Router] failed to create classifier provider (Router will be disabled): %v", errClassifier)
 		routerClassifier = nil
 	}
 	var modelRouter *llm.Router
@@ -719,9 +718,9 @@ func main() {
 			_, _ = llm.DefaultMockStore.Save(clsScript)
 		}
 		modelRouter = llm.NewRouter(modelRegistry, routerClassifier, rateLimiter, configuredProviders)
-		log.Printf("[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
+		log.Infof("server", "[Router] enabled (classifier=%s, mock=%t)", routerClassifier.Name(), cfg.LLMUseMock)
 	} else {
-		log.Printf("[Router] disabled (no classifier provider)")
+		log.Warnf("server", "[Router] disabled (no classifier provider)")
 	}
 
 	// 在创建 dispatcher / tool registry 之前初始化 multi-agent orchestrator，
@@ -753,7 +752,7 @@ func main() {
 					continue
 				}
 				if t, _ := tr.ExecutionConfig["type"].(string); t == "" {
-					log.Printf("[tool] skipping dynamic tool %q with missing execution type", tr.Name)
+					log.Warnf("server", "[tool] skipping dynamic tool %q with missing execution type", tr.Name)
 					continue
 				}
 				maps = append(maps, map[string]any{
@@ -770,7 +769,7 @@ func main() {
 		})
 		loaded, err := loader.Load(context.Background())
 		if err != nil {
-			log.Printf("[tool] failed to load dynamic tools: %v", err)
+			log.Errorf("server", "[tool] failed to load dynamic tools: %v", err)
 		} else {
 			registered := 0
 			for _, t := range loaded {
@@ -779,7 +778,7 @@ func main() {
 					registered++
 				}
 			}
-			log.Printf("[tool] loaded %d dynamic tool(s) from DB", registered)
+			log.Infof("server", "[tool] loaded %d dynamic tool(s) from DB", registered)
 		}
 	}
 
@@ -851,13 +850,13 @@ func main() {
 	// 让 ResolveConfig 把相对路径解析为绝对路径，从根上消除 cwd 依赖。
 	if root := marketplace.DetectProjectRoot(); root != "" {
 		marketplace.SetProjectRoot(root)
-		log.Printf("MCP marketplace: project root = %s", root)
+		log.Infof("server", "MCP marketplace: project root = %s", root)
 	} else {
 		observability.DefaultLogger.Warn("mcp", "could not detect project root; built-in stdio servers may fail if launched from a different cwd", nil)
 	}
 	if defaultMarket, err := marketplace.DefaultStaticProvider(); err == nil {
 		mcpManager.RegisterMarket(defaultMarket)
-		log.Printf("MCP marketplace: registered %s (%s)", defaultMarket.Name(), defaultMarket.DisplayName())
+		log.Infof("server", "MCP marketplace: registered %s (%s)", defaultMarket.Name(), defaultMarket.DisplayName())
 	} else {
 		observability.DefaultLogger.Warn("mcp", "failed to load default static market", map[string]any{"error": err.Error()})
 	}
@@ -874,7 +873,7 @@ func main() {
 			continue
 		}
 		mcpManager.RegisterMarket(provider)
-		log.Printf("MCP marketplace: registered remote %s (%s) from %s", provider.Name(), provider.DisplayName(), m.URL)
+		log.Infof("server", "MCP marketplace: registered remote %s (%s) from %s", provider.Name(), provider.DisplayName(), m.URL)
 	}
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mcpCancel()
@@ -899,13 +898,13 @@ func main() {
 			continue
 		}
 		if installed {
-			log.Printf("MCP preinstall: installed %s", entry.String())
+			log.Infof("server", "MCP preinstall: installed %s", entry.String())
 		} else {
-			log.Printf("MCP preinstall: %s already present, skipped", entry.String())
+			log.Warnf("server", "MCP preinstall: %s already present, skipped", entry.String())
 		}
 	}
 
-	log.Printf("MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
+	log.Infof("server", "MCP: %d server(s) configured, %d tool(s) available", len(mcpManager.ListServers()), len(toolRegistry.List()))
 	defer mcpManager.Close()
 	shutdown.Register("mcp-manager", func(ctx context.Context) error {
 		return mcpManager.Close()
@@ -917,7 +916,7 @@ func main() {
 	sandboxCfg := tool.DefaultSandboxConfig()
 	sandbox := tool.NewSandboxExecutor(sandboxCfg)
 	if sandbox.IsAvailable() {
-		log.Println("Docker sandbox: enabled — run_shell executes in isolated containers")
+		log.Infof("server", "%v", "Docker sandbox: enabled — run_shell executes in isolated containers")
 		// 用沙箱版本替换内置 run_shell。
 		// 先反注册原始 run_shell tool。
 		toolRegistry.Unregister("run_shell")
@@ -925,18 +924,18 @@ func main() {
 		sandboxedShell := tool.NewSandboxedShellTool(sandbox, tool.NewRunShellTool())
 		toolRegistry.Register(sandboxedShell)
 	} else {
-		log.Println("Docker sandbox: disabled — Docker not available, using direct execution")
+		log.Infof("server", "%v", "Docker sandbox: disabled — Docker not available, using direct execution")
 	}
 	// Phase 5 预览：按配置为 execute_program 启用沙箱执行。
 	// 默认仍是本地执行，以免影响既有部署。
 	if cfg.EnableSandbox {
 		tool.SetDefaultRunner(tool.NewDockerRunner(cfg.SandboxImage))
-		log.Printf("execute_program: sandbox enabled (image=%s)", cfg.SandboxImage)
+		log.Infof("server", "execute_program: sandbox enabled (image=%s)", cfg.SandboxImage)
 	} else {
-		log.Println("execute_program: local execution")
+		log.Infof("server", "%v", "execute_program: local execution")
 	}
 
-	log.Printf("Registered %d built-in tools (dispatch_sub_agent enabled per-leader)", len(toolRegistry.List()))
+	log.Infof("server", "Registered %d built-in tools (dispatch_sub_agent enabled per-leader)", len(toolRegistry.List()))
 
 	// Phase skill: 初始化 Skill 子系统。
 	// 三件套：Registry（内存）、Store（SQLite 持久化）、Loader（启动期加载）。
@@ -957,7 +956,7 @@ func main() {
 		if err := skillLoader.LoadAll(); err != nil {
 			observability.DefaultLogger.Warn("skill", "failed to load skills", map[string]any{"error": err.Error()})
 		} else {
-			log.Printf("Skill subsystem: loaded %d skill(s) into registry", len(skillRegistry.List(nil)))
+			log.Infof("server", "Skill subsystem: loaded %d skill(s) into registry", len(skillRegistry.List(nil)))
 		}
 		// L12: 启动时若 skill_scan_dirs 为空，写入默认值，使配置可被后续 REST 读取/修改。
 		if val, _ := db.GetSetting("skill_scan_dirs"); val == "" {
@@ -981,7 +980,7 @@ func main() {
 		skillRegistry = skill.NewRegistry()
 		skillLoader = skill.NewLoader(nil, skillRegistry)
 		_ = skillLoader.LoadAll()
-		log.Printf("Skill subsystem: disabled (no database)")
+		log.Warnf("server", "Skill subsystem: disabled (no database)")
 	}
 	// 把 registry 与 loader 提升为包级变量，让 AgentRunner、session handler、scan API
 	// 等入口可以直接读取当前已启用的 skill 列表或触发文件系统刷新。
@@ -999,9 +998,9 @@ func main() {
 	if db.DB != nil {
 		todoSvc = todo.NewService(&dbStoreAdapter{}, &hubAdapter{hub: hub})
 		tool.RegisterTodoTools(toolRegistry, todoSvc)
-		log.Printf("Todo subsystem: service initialized with %d todo tool(s)", 6)
+		log.Infof("server", "Todo subsystem: service initialized with %d todo tool(s)", 6)
 	} else {
-		log.Println("Todo subsystem: disabled (no database)")
+		log.Infof("server", "%v", "Todo subsystem: disabled (no database)")
 	}
 
 	// Todo REST API 注册移至 appServer.registerRoutes（Phase 8-A）。
@@ -1043,16 +1042,16 @@ func main() {
 			if err := cronSched.Start(context.Background()); err != nil {
 				observability.DefaultLogger.Warn("cron", "scheduler start failed, auto-trigger disabled", map[string]any{"error": err.Error()})
 			} else {
-				log.Printf("Cron subsystem: scheduler started")
+				log.Infof("server", "Cron subsystem: scheduler started")
 			}
 		} else {
-			log.Println("Cron subsystem: scheduler disabled (CRON_ENABLED=false)")
+			log.Infof("server", "%v", "Cron subsystem: scheduler disabled (CRON_ENABLED=false)")
 		}
 		cronService = cron.NewService(cronStore, cronSched, execAdapter, bus)
 		cron.RegisterCronTools(toolRegistry, cronService)
 		// Cron REST API 注册移至 appServer.registerRoutes（Phase 8-A），
 		// 通过 appServer.cronService 字段引用。
-		log.Printf("Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
+		log.Infof("server", "Cron subsystem: service initialized (scheduler=%v)", cronSched != nil)
 		if cronSched != nil {
 			shutdown.Register("cron-scheduler", func(ctx context.Context) error {
 				cronSched.Stop()
@@ -1060,7 +1059,7 @@ func main() {
 			})
 		}
 	} else {
-		log.Println("Cron subsystem: disabled (no database)")
+		log.Infof("server", "%v", "Cron subsystem: disabled (no database)")
 	}
 
 	// Phase worktree: 初始化 workspace worktree 隔离 Manager。
@@ -1090,9 +1089,9 @@ func main() {
 		// 启动孤儿扫描：对比 git worktree list 与 DB 全表 active_worktree_id，
 		// 清理 DB 不认得的 crash 残留 worktree，广播 worktree_orphan_removed。
 		reclaimOrphanWorktrees(mgr, hub)
-		log.Printf("Workspace subsystem: worktree manager initialized at %s (repo=%s)", wtRoot, root)
+		log.Infof("server", "Workspace subsystem: worktree manager initialized at %s (repo=%s)", wtRoot, root)
 	} else {
-		log.Println("Workspace subsystem: worktree disabled (no database or WORKTREE_ENABLED=false)")
+		log.Infof("server", "%v", "Workspace subsystem: worktree disabled (no database or WORKTREE_ENABLED=false)")
 	}
 
 	// AgentBus 在所有 agent 之间共享，允许 agent 在执行期间互相发送消息。
@@ -1115,13 +1114,13 @@ func main() {
 				Metadata:      msg.Metadata,
 			})
 		})
-		log.Println("AgentBus: persistence enabled (agent_messages table)")
+		log.Infof("server", "%v", "AgentBus: persistence enabled (agent_messages table)")
 	}
 
 	// Phase 5: 用于崩溃后任务恢复的 CheckpointManager。
 	// 每次 ReAct loop 迭代结束都会保存 checkpoint。
 	checkpointMgr := runtime.NewCheckpointManager("data/checkpoints")
-	log.Println("CheckpointManager: initialized (data/checkpoints)")
+	log.Infof("server", "%v", "CheckpointManager: initialized (data/checkpoints)")
 
 	// 把共享依赖回填给 orchestrator，确保子 agent 能使用同一套工具、AgentBus 与持久化。
 	orch.SetTools(toolRegistry)
@@ -1182,17 +1181,17 @@ func main() {
 		fallbackUserID = authAPI.SeedUserID()
 	}
 
-	log.Printf("========================================")
-	log.Printf("Multi-Agent Platform %s", version.Version)
-	log.Printf("========================================")
-	log.Printf("Server:      http://localhost:%s", cfg.ServerPort)
-	log.Printf("WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
-	log.Printf("API:         http://localhost:%s/api/tasks", cfg.ServerPort)
-	log.Printf("Health:      http://localhost:%s/health", cfg.ServerPort)
-	log.Printf("LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
-	log.Printf("Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
-	log.Printf("Tools:       %d built-in", len(toolRegistry.List()))
-	log.Printf("========================================")
+	log.Infof("server", "========================================")
+	log.Infof("server", "Multi-Agent Platform %s", version.Version)
+	log.Infof("server", "========================================")
+	log.Infof("server", "Server:      http://localhost:%s", cfg.ServerPort)
+	log.Infof("server", "WebSocket:   ws://localhost:%s/ws", cfg.ServerPort)
+	log.Infof("server", "API:         http://localhost:%s/api/tasks", cfg.ServerPort)
+	log.Infof("server", "Health:      http://localhost:%s/health", cfg.ServerPort)
+	log.Infof("server", "LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
+	log.Infof("server", "Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
+	log.Infof("server", "Tools:       %d built-in", len(toolRegistry.List()))
+	log.Infof("server", "========================================")
 
 	// 用 auth middleware 包装默认 mux。REQUIRE_AUTH 为 true 时，它保护
 	// 改状态的路由和敏感读 endpoint，而公开路由 (/healthz、/metrics、
@@ -1236,9 +1235,9 @@ func main() {
 	}()
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		log.Fatalf("%v", err)
 	}
-	log.Println("Server exited")
+	log.Infof("server", "%v", "Server exited")
 }
 
 // defaultEndpointAndKeyForProvider 返回指定 provider 在全局配置中的默认
@@ -1373,11 +1372,11 @@ func truncate(s string, maxLen int) string {
 func repairStaleRunningTasks() {
 	tasks, err := db.QueryTasksByStatus("running")
 	if err != nil {
-		log.Printf("[repair] 查询 running task 失败: %v", err)
+		log.Infof("server", "[repair] 查询 running task 失败: %v", err)
 		return
 	}
 	if len(tasks) == 0 {
-		log.Println("[repair] 无遗留 running task")
+		log.Infof("server", "%v", "[repair] 无遗留 running task")
 		return
 	}
 
@@ -1385,7 +1384,7 @@ func repairStaleRunningTasks() {
 	repaired := 0
 	for _, t := range tasks {
 		if err := db.UpdateTask(t.ID, "failed", "server_restarted", 0); err != nil {
-			log.Printf("[repair] 修复 task %s 失败: %v", t.ID, err)
+			log.Infof("server", "[repair] 修复 task %s 失败: %v", t.ID, err)
 			continue
 		}
 		repaired++
@@ -1398,11 +1397,11 @@ func repairStaleRunningTasks() {
 	for sessionID := range affected {
 		newStatus := deriveSessionStatus(sessionID)
 		if err := db.UpdateSessionStatus(sessionID, newStatus); err != nil {
-			log.Printf("[repair] 更新 session %s 状态失败: %v", sessionID, err)
+			log.Infof("server", "[repair] 更新 session %s 状态失败: %v", sessionID, err)
 		}
 	}
 
-	log.Printf("[repair] 共发现 %d 个 running task，已修复 %d 个，影响 %d 个 session", len(tasks), repaired, len(affected))
+	log.Infof("server", "[repair] 共发现 %d 个 running task，已修复 %d 个，影响 %d 个 session", len(tasks), repaired, len(affected))
 }
 
 // seedDefaultAdminIfNeeded 在数据库中不存在任何用户时创建一个默认 admin
@@ -1418,18 +1417,18 @@ func seedDefaultAdminIfNeeded(store auth.APIKeyStore) {
 	}
 	admin, err := sqliteStore.AddUser("Admin", auth.RoleAdmin)
 	if err != nil {
-		log.Printf("Auth: failed to create default admin user: %v", err)
+		log.Errorf("server", "Auth: failed to create default admin user: %v", err)
 		return
 	}
 	_, rawKey, err := sqliteStore.Create(admin.ID, "default")
 	if err != nil {
-		log.Printf("Auth: failed to create default API key: %v", err)
+		log.Errorf("server", "Auth: failed to create default API key: %v", err)
 		return
 	}
-	log.Printf("========================================")
-	log.Printf("DEFAULT ADMIN API KEY: %s", rawKey)
-	log.Printf("  (save this key — it will not be shown again)")
-	log.Printf("========================================")
+	log.Infof("server", "========================================")
+	log.Infof("server", "DEFAULT ADMIN API KEY: %s", rawKey)
+	log.Infof("server", "  (save this key — it will not be shown again)")
+	log.Infof("server", "========================================")
 }
 
 // handleSessionWorkspaceBrowse 返回 session workspace 目录的 JSON 元信息，
@@ -1601,24 +1600,24 @@ func serveVersionedUI() {
 	for version, info := range web.UIVersionsRegistry {
 		distFS, err := fs.Sub(info.FS, info.SubDir)
 		if err != nil {
-			log.Printf("Warning: embedded frontend dist not found (version=%s): %v", version, err)
+			log.Warnf("server", "Warning: embedded frontend dist not found (version=%s): %v", version, err)
 			continue
 		}
 
 		prefix := "/ui/" + version + "/"
 		http.Handle(prefix, http.StripPrefix(prefix, newVersionFileServer(distFS, prefix)))
-		log.Printf("Frontend embedded: serving version %s at %s", version, prefix)
+		log.Infof("server", "Frontend embedded: serving version %s at %s", version, prefix)
 	}
 
 	// 默认最新版本路由：/
 	defaultInfo := web.UIVersionsRegistry[web.DefaultUIVersion]
 	distFS, err := fs.Sub(defaultInfo.FS, defaultInfo.SubDir)
 	if err != nil {
-		log.Printf("Warning: embedded frontend dist not found for default version %s: %v", web.DefaultUIVersion, err)
+		log.Warnf("server", "Warning: embedded frontend dist not found for default version %s: %v", web.DefaultUIVersion, err)
 		return
 	}
 	http.Handle("/", newVersionFileServer(distFS, "/"))
-	log.Printf("Frontend embedded: serving default version %s at /", web.DefaultUIVersion)
+	log.Infof("server", "Frontend embedded: serving default version %s at /", web.DefaultUIVersion)
 }
 
 // newVersionFileServer 为某个版本的 dist 创建 FileServer，并处理 SPA fallback。

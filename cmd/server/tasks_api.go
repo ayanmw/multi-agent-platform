@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/anmingwei/multi-agent-platform/internal/cases"
@@ -213,7 +212,7 @@ func (s *appServer) actionMultiAgent(w http.ResponseWriter, r *http.Request, req
 		removeCancel(taskID, "leader")
 		removeEngine(taskID, "leader")
 		db.UpdateSessionStatus(sessionID, deriveSessionStatus(sessionID))
-		log.Printf("[Multi-Agent] Leader task %s completed", taskID)
+		log.Infof("server", "[Multi-Agent] Leader task %s completed", taskID)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

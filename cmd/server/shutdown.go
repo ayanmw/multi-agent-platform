@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"sync"
 	"time"
 )
@@ -44,10 +43,10 @@ func (sm *shutdownManager) Register(name string, closer closerFunc) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.closers = append(sm.closers, func(ctx context.Context) error {
-		log.Printf("[shutdown] closing %s", name)
+		log.Infof("server", "[shutdown] closing %s", name)
 		err := closer(ctx)
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			log.Printf("[shutdown] %s close error: %v", name, err)
+			log.Errorf("server", "[shutdown] %s close error: %v", name, err)
 		}
 		return err
 	})
@@ -64,16 +63,16 @@ func (sm *shutdownManager) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), sm.totalTimeout)
 	defer cancel()
 
-	log.Println("[shutdown] starting graceful shutdown")
+	log.Infof("server", "%v", "[shutdown] starting graceful shutdown")
 	for _, closer := range closers {
 		// 每个 closer 都在同一个总超时 context 下运行；如果总时间已到，直接退出。
 		select {
 		case <-ctx.Done():
-			log.Printf("[shutdown] total timeout (%v) exceeded, aborting remaining closers", sm.totalTimeout)
+			log.Warnf("server", "[shutdown] total timeout (%v) exceeded, aborting remaining closers", sm.totalTimeout)
 			return
 		default:
 		}
 		_ = closer(ctx)
 	}
-	log.Println("[shutdown] graceful shutdown complete")
+	log.Infof("server", "%v", "[shutdown] graceful shutdown complete")
 }

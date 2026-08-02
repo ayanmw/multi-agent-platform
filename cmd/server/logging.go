@@ -7,7 +7,6 @@ package main
 // 集中可读：新增一个 LOG_* 环境变量时只需要改这一处。
 
 import (
-	"log"
 	"strconv"
 	"strings"
 
@@ -37,7 +36,7 @@ func envInt(key string, def int) int {
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("Config: %s=%q is not a valid integer, using default %d", key, raw, def)
+		log.Infof("server", "Config: %s=%q is not a valid integer, using default %d", key, raw, def)
 		return def
 	}
 	return v
@@ -54,7 +53,7 @@ func envBool(key string, def bool) bool {
 	case "0", "f", "false", "n", "no", "off":
 		return false
 	default:
-		log.Printf("Config: %s=%q is not a valid boolean, using default %v", key, raw, def)
+		log.Infof("server", "Config: %s=%q is not a valid boolean, using default %v", key, raw, def)
 		return def
 	}
 }
@@ -110,7 +109,7 @@ func initLogging() *observability.Logger {
 	logger := observability.NewLogger(cfg)
 	observability.DefaultLogger.Replace(logger)
 
-	log.Printf("Logging: console=%s file=%s path=%q rotate=%dMB/%d/%dd compress=%v caller=%v",
+	log.Infof("server", "Logging: console=%s file=%s path=%q rotate=%dMB/%d/%dd compress=%v caller=%v",
 		cfg.ConsoleLevel, cfg.FileLevel, cfg.FilePath,
 		cfg.MaxSizeMB, cfg.MaxBackups, cfg.MaxAgeDays, cfg.Compress, cfg.AddSource)
 	return logger
