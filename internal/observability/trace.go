@@ -47,11 +47,17 @@ type SpanRecord struct {
 
 // Tracer 是一个简单的内存 span 生成器。它用有界 ring buffer 保存已完成
 // 的 span，运维方无需外部 collector 即可查询最近的 trace。
+//
+// Phase 8 (P5)：onSpan 回调改为有界 channel + 单消费者 goroutine，
+// 避免每个 span 无限制地 spawn goroutine 导致 OOM。
 type Tracer struct {
-	mu     sync.Mutex
-	spans  []SpanRecord
-	limit  int
-	onSpan func(SpanRecord) // Phase 7-H2: 新 span 完成时的异步回调入口
+	mu             sync.Mutex
+	spans          []SpanRecord
+	limit          int
+	onSpanCh       chan SpanRecord // 有界 channel，背压上限 256
+	onSpan         func(SpanRecord)
+	wg             sync.WaitGroup
+	droppedSpans   uint64 // 因 channel 满而丢弃的 span 计数
 }
 
 // NewTracer 创建一个带界 span 缓冲的 tracer。
@@ -62,12 +68,31 @@ func NewTracer(limit int) *Tracer {
 	return &Tracer{limit: limit}
 }
 
-// SetOnSpan 注册一个回调，每次 span 完成时被异步调用。
+// SetOnSpan 注册一个回调，每次 span 完成时被调用。
 // 用于把 trace span 转成 `trace_span` WebSocket 事件广播到前端。
+// Phase 8 (P5)：回调通过有界 channel 异步执行，避免无限制 goroutine。
 func (t *Tracer) SetOnSpan(fn func(SpanRecord)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// 先关闭旧 channel
+	if t.onSpanCh != nil {
+		close(t.onSpanCh)
+		t.wg.Wait()
+		t.onSpanCh = nil
+	}
+	if fn == nil {
+		t.onSpan = nil
+		return
+	}
 	t.onSpan = fn
+	t.onSpanCh = make(chan SpanRecord, 256)
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		for rec := range t.onSpanCh {
+			fn(rec)
+		}
+	}()
 }
 
 func generateTraceID() string {
@@ -162,9 +187,21 @@ func (t *Tracer) push(rec SpanRecord) {
 	if len(t.spans) > t.limit {
 		t.spans = t.spans[len(t.spans)-t.limit:]
 	}
-	if t.onSpan != nil {
-		go t.onSpan(rec)
+	if t.onSpanCh != nil {
+		select {
+		case t.onSpanCh <- rec:
+		default:
+			// channel 满，丢弃事件（优于无限堆积 goroutine）
+			t.droppedSpans++
+		}
 	}
+}
+
+// DroppedSpans 返回因 channel 满而被丢弃的 span 数量。
+func (t *Tracer) DroppedSpans() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.droppedSpans
 }
 
 // Flush 返回所有已缓冲 span 的副本并清空缓冲。

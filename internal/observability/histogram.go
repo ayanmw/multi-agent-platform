@@ -83,6 +83,16 @@ func (h *HistogramCollector) Quantile(q float64) float64 {
 	return h.buckets[len(h.buckets)-1]
 }
 
+// snapshot 返回 histogram 的值拷贝，供 PrometheusText 在锁外格式化（P9）。
+// 调用方必须已持有外层 MetricsCollector 的 RLock。
+func (h *HistogramCollector) snapshot() (buckets []float64, counts []uint64, total uint64, sum float64) {
+	buckets = make([]float64, len(h.buckets))
+	copy(buckets, h.buckets)
+	counts = make([]uint64, len(h.counts))
+	copy(counts, h.counts)
+	return buckets, counts, h.total, h.sum
+}
+
 // PrometheusHistogram 返回 Prometheus 格式的 bucket 行。
 func (h *HistogramCollector) PrometheusHistogram(name, help string) string {
 	h.mu.RLock()
