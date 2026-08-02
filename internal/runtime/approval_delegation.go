@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -208,7 +207,7 @@ func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *Approval
 
 	// 持久化审批记录。
 	if err := e.insertApprovalRecord(req); err != nil {
-		log.Printf("[Engine] 插入审批记录失败: %v", err)
+		log.Errorf("engine", "插入审批记录失败: %v", err)
 	}
 
 	// 同时通过 AgentBus 把请求以 approval_request 类型发送给 leader。
@@ -252,7 +251,7 @@ func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *Approval
 	}
 
 	// leader 批准：直接执行原工具。
-	log.Printf("[Engine] leader 审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
+	log.Infof("engine", "leader 审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
 	e.bus.SendEvent(eventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":                 EventApprovalDecidedByLeader,
 		"approval_id":          req.ApprovalID,

@@ -100,6 +100,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
 
+// log 是 observability.DefaultLogger 的包级别别名，避免在各处重复书写长前缀。
+// 它指向 DefaultLogger 的 *StructuredLogger 实例；main 启动时通过 Replace()
+// 替换其内部 *Logger，别名仍随之生效（方法调用经 l.inner 转发）。
+// 本包不再使用标准库 log 包——所有日志统一走 observability（底层为 log/slog）。
+var log = observability.DefaultLogger
+
 // regexpRequestID 匹配嵌入在错误信息中的 OpenAI 风格 request id token，例如
 // "request id: 20260714033318937918881aclHY4az" 或
 // "request_id: req_abc123"。前缀 "request" / "request_id" / "request-id"
@@ -829,7 +835,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	if e.progress != nil {
 		tp, err := e.progress.Init(e.taskID, e.cfg.Contract)
 		if err != nil {
-			observability.DefaultLogger.Warnf("engine", "Progress init failed: %v (continuing)", err)
+			log.Warnf("engine", "Progress init failed: %v (continuing)", err)
 		} else {
 			e.taskProgress = tp
 		}
@@ -1125,7 +1131,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						observability.DefaultLogger.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, usage)
@@ -1140,7 +1146,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.runningCostUSD += calculateCallCost(profile, usage)
 		}
 
-		observability.DefaultLogger.Debugf("engine", "Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
+		log.Debugf("engine", "Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), reportModel, usage)
 
 		// =====================================================================
@@ -1356,7 +1362,7 @@ func (e *Engine) saveConversation(role, content string) {
 	if err := e.persist.SaveConversation(ConversationRecord{
 		TaskID: e.taskID, Role: role, Content: content,
 	}); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to save conversation: %v", err)
+		log.Errorf("engine", "Failed to save conversation: %v", err)
 	}
 }
 
@@ -1380,7 +1386,7 @@ func (e *Engine) writeSessionMessage(role, content string, toolCallID string, to
 		ToolCalls:  toolCallsJSON,
 		TokenCount: tokenCount,
 	}); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to write session message: %v", err)
+		log.Errorf("engine", "Failed to write session message: %v", err)
 	}
 }
 
@@ -1397,7 +1403,7 @@ func (e *Engine) saveStep(s StepRecord) {
 		return
 	}
 	if err := e.persist.SaveStep(s); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to save step: %v", err)
+		log.Errorf("engine", "Failed to save step: %v", err)
 	}
 }
 
@@ -1412,7 +1418,7 @@ func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
 		return
 	}
 	if err := e.persist.UpdateTask(e.taskID, status, finalResult, totalTokens); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to update task: %v", err)
+		log.Errorf("engine", "Failed to update task: %v", err)
 	}
 }
 
@@ -1421,7 +1427,7 @@ func (e *Engine) updateTaskDuration() {
 		return
 	}
 	if err := e.persist.UpdateTaskDuration(e.taskID, int(e.durationMs)); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to update task duration: %v", err)
+		log.Errorf("engine", "Failed to update task duration: %v", err)
 	}
 }
 
@@ -1479,7 +1485,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	reason := ""
 	if err != nil {
 		reason = fmt.Sprintf("Evaluation failed: %v", err)
-		observability.DefaultLogger.Errorf("engine", "Case evaluation failed for task=%s case=%s: %v", e.taskID, e.caseID, err)
+		log.Errorf("engine", "Case evaluation failed for task=%s case=%s: %v", e.taskID, e.caseID, err)
 	} else {
 		passed = report.AllPassed
 		reason = report.Summary
@@ -1531,7 +1537,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 			Reason: reason,
 		})
 		if saveErr != nil {
-			observability.DefaultLogger.Errorf("engine", "Failed to save case evaluation: %v", saveErr)
+			log.Errorf("engine", "Failed to save case evaluation: %v", saveErr)
 		}
 	}
 
@@ -1728,7 +1734,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 		if errRoute != nil {
 			// Router 失败（候选池为空或分类器异常）：回退到固定模型，不阻断任务。
-			observability.DefaultLogger.Warnf("engine", "Router failed: %v; falling back to %s (single_model behavior)", errRoute, selectedModel)
+			log.Warnf("engine", "Router failed: %v; falling back to %s (single_model behavior)", errRoute, selectedModel)
 			e.bus.SendEvent(event.NewEventWithSubTask(event.EventRouterFallbackDefault, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":        selectedModel,
 				"model_mode":   e.cfg.ModelMode,
@@ -1777,7 +1783,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				"reason": "pre-call RPM limit exceeded in sliding window",
 			}))
 			if routeDecision.Fallback != nil {
-				observability.DefaultLogger.Warnf("engine", "Primary model %s rate-limited, using fallback %s",
+				log.Warnf("engine", "Primary model %s rate-limited, using fallback %s",
 					routeDecision.Primary.Name, routeDecision.Fallback.Name)
 				selectedModel = routeDecision.Fallback.Name
 				e.selectedModel = selectedModel
@@ -1801,7 +1807,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			"provider": routeDecision.Primary.Provider,
 			"fallback": routeDecision.Fallback,
 		}))
-		observability.DefaultLogger.Infof("router", "Selected model: %s (intent=%s, tier=%s, reason=%s)",
+		log.Infof("router", "Selected model: %s (intent=%s, tier=%s, reason=%s)",
 			selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
 	}
 
@@ -1871,7 +1877,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	primaryErr := err // 保留主模型失败原因，fallback 失败后合并诊断
 	// Fallback 重试：若主模型失败且配置了 fallback，则重试。
 	if err != nil && routeDecision != nil && routeDecision.Fallback != nil {
-		observability.DefaultLogger.Warnf("engine", "Primary model %s failed (%v), trying fallback %s",
+		log.Warnf("engine", "Primary model %s failed (%v), trying fallback %s",
 			selectedModel, err, routeDecision.Fallback.Name)
 
 		var fallbackProvider llm.Provider
@@ -1908,9 +1914,9 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			return nil
 		})
 		if err == nil {
-			observability.DefaultLogger.Infof("engine", "Fallback model %s succeeded", routeDecision.Fallback.Name)
+			log.Infof("engine", "Fallback model %s succeeded", routeDecision.Fallback.Name)
 		} else {
-			observability.DefaultLogger.Errorf("engine", "Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
+			log.Errorf("engine", "Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
 			// fallback 也失败：保留主模型失败原因，并把 fallback 失败原因合并，
 			// 让上层错误处理拿到完整诊断信息。
 			err = fmt.Errorf("primary %s failed: %v; fallback %s failed: %w",
@@ -2032,12 +2038,12 @@ func (e *Engine) executeTool(tc llm.ToolCall) (out string, retErr error) {
 	if parseErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); parseErr != nil {
 		repaired, repairErr := repairToolArgumentsJSON(tc.Function.Arguments)
 		if repairErr == nil {
-			observability.DefaultLogger.Warnf("engine", "Repaired malformed arguments JSON for %s (orig error: %v)", tc.Function.Name, parseErr)
+			log.Warnf("engine", "Repaired malformed arguments JSON for %s (orig error: %v)", tc.Function.Name, parseErr)
 			args = repaired
 		} else {
 			errMsg := fmt.Sprintf("invalid arguments JSON for %s: %v (raw: %q, repair failed: %v)",
 				tc.Function.Name, parseErr, tc.Function.Arguments, repairErr)
-			observability.DefaultLogger.Errorf("engine", "%s", errMsg)
+			log.Errorf("engine", "%s", errMsg)
 			e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"tool":        tc.Function.Name,
 				"error":       errMsg,
@@ -2242,7 +2248,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (out string, retErr error) {
 	}
 
 	// DEBUG
-	observability.DefaultLogger.Debugf("engine", "executeTool %s succeeded, result type=%T", tc.Function.Name, result)
+	log.Debugf("engine", "executeTool %s succeeded, result type=%T", tc.Function.Name, result)
 
 	// 把 tool result 序列化为 JSON 以供 LLM 对话。LLM 期望 tool result 是
 	// JSON 字符串以便解析结构化数据。若序列化失败（行为良好的 tool 极少
@@ -2286,7 +2292,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (out string, retErr error) {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						observability.DefaultLogger.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, *toolUsage)
@@ -2391,7 +2397,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	// 向前端发起审批请求
 	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input, approvalErr.RuleName, approvalErr.Namespace, approvalErr.Tags); err != nil {
-		observability.DefaultLogger.Errorf("engine", "审批请求发送失败: %v", err)
+		log.Errorf("engine", "审批请求发送失败: %v", err)
 		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批请求发送失败: %v", err),
@@ -2408,7 +2414,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	approved, waitErr := e.approvalHandler.WaitForDecision(approvalErr.ApprovalID, 30*time.Second)
 	if waitErr != nil {
 		// 超时或等待错误 — 视为拒绝
-		observability.DefaultLogger.Errorf("engine", "审批等待失败: %v", waitErr)
+		log.Errorf("engine", "审批等待失败: %v", waitErr)
 		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_timeout",
 			"approval_id": approvalErr.ApprovalID,
@@ -2429,7 +2435,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	if !approved {
 		// 用户拒绝了审批请求
-		observability.DefaultLogger.Warnf("engine", "审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
+		log.Warnf("engine", "审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
 		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_denied",
 			"approval_id": approvalErr.ApprovalID,
@@ -2449,7 +2455,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}
 
 	// 用户批准 — 绕过 PolicyGate 直接执行工具调用
-	observability.DefaultLogger.Infof("engine", "审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
+	log.Infof("engine", "审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":        "approval_granted",
 		"approval_id": approvalErr.ApprovalID,
@@ -2529,7 +2535,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						observability.DefaultLogger.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, *approvedUsage)
@@ -2586,12 +2592,12 @@ func extractToolLLMUsage(result any) *llm.Usage {
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
-		observability.DefaultLogger.Errorf("engine", "failed to marshal _llm_usage: %v", err)
+		log.Errorf("engine", "failed to marshal _llm_usage: %v", err)
 		return nil
 	}
 	var usage llm.Usage
 	if err := json.Unmarshal(data, &usage); err != nil {
-		observability.DefaultLogger.Errorf("engine", "failed to unmarshal _llm_usage: %v", err)
+		log.Errorf("engine", "failed to unmarshal _llm_usage: %v", err)
 		return nil
 	}
 	return &usage
@@ -2749,7 +2755,7 @@ func (e *Engine) saveCheckpoint() {
 	}
 
 	if err := e.checkpoint.Save(e.taskID, e.cfg.AgentID, e.stepIdx, e.totalTokens, e.messages, e.taskProgress); err != nil {
-		observability.DefaultLogger.Errorf("engine", "Failed to save checkpoint: %v", err)
+		log.Errorf("engine", "Failed to save checkpoint: %v", err)
 	}
 }
 
