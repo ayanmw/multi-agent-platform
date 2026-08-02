@@ -84,7 +84,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"regexp"
 	"runtime/debug"
 	"strings"
@@ -100,6 +99,12 @@ import (
 	"github.com/anmingwei/multi-agent-platform/internal/tool"
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，避免在各处重复书写长前缀。
+// 它指向 DefaultLogger 的 *StructuredLogger 实例；main 启动时通过 Replace()
+// 替换其内部 *Logger，别名仍随之生效（方法调用经 l.inner 转发）。
+// 本包不再使用标准库 log 包——所有日志统一走 observability（底层为 log/slog）。
+var log = observability.DefaultLogger
 
 // regexpRequestID 匹配嵌入在错误信息中的 OpenAI 风格 request id token，例如
 // "request id: 20260714033318937918881aclHY4az" 或
@@ -830,7 +835,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	if e.progress != nil {
 		tp, err := e.progress.Init(e.taskID, e.cfg.Contract)
 		if err != nil {
-			log.Printf("[Engine] Progress init failed: %v (continuing)", err)
+			log.Warnf("engine", "Progress init failed: %v (continuing)", err)
 		} else {
 			e.taskProgress = tp
 		}
@@ -1126,7 +1131,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, usage)
@@ -1141,7 +1146,7 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 			e.runningCostUSD += calculateCallCost(profile, usage)
 		}
 
-		log.Printf("[Engine] Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
+		log.Debugf("engine", "Step %d: content=%d chars, toolCalls=%d, selectedModel=%s, usage=%+v",
 			e.stepIdx, len(content), len(toolCalls), reportModel, usage)
 
 		// =====================================================================
@@ -1357,7 +1362,7 @@ func (e *Engine) saveConversation(role, content string) {
 	if err := e.persist.SaveConversation(ConversationRecord{
 		TaskID: e.taskID, Role: role, Content: content,
 	}); err != nil {
-		log.Printf("[Engine] Failed to save conversation: %v", err)
+		log.Errorf("engine", "Failed to save conversation: %v", err)
 	}
 }
 
@@ -1381,7 +1386,7 @@ func (e *Engine) writeSessionMessage(role, content string, toolCallID string, to
 		ToolCalls:  toolCallsJSON,
 		TokenCount: tokenCount,
 	}); err != nil {
-		log.Printf("[Engine] Failed to write session message: %v", err)
+		log.Errorf("engine", "Failed to write session message: %v", err)
 	}
 }
 
@@ -1398,7 +1403,7 @@ func (e *Engine) saveStep(s StepRecord) {
 		return
 	}
 	if err := e.persist.SaveStep(s); err != nil {
-		log.Printf("[Engine] Failed to save step: %v", err)
+		log.Errorf("engine", "Failed to save step: %v", err)
 	}
 }
 
@@ -1413,7 +1418,7 @@ func (e *Engine) updateTask(status, finalResult string, totalTokens int) {
 		return
 	}
 	if err := e.persist.UpdateTask(e.taskID, status, finalResult, totalTokens); err != nil {
-		log.Printf("[Engine] Failed to update task: %v", err)
+		log.Errorf("engine", "Failed to update task: %v", err)
 	}
 }
 
@@ -1422,7 +1427,7 @@ func (e *Engine) updateTaskDuration() {
 		return
 	}
 	if err := e.persist.UpdateTaskDuration(e.taskID, int(e.durationMs)); err != nil {
-		log.Printf("[Engine] Failed to update task duration: %v", err)
+		log.Errorf("engine", "Failed to update task duration: %v", err)
 	}
 }
 
@@ -1480,7 +1485,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 	reason := ""
 	if err != nil {
 		reason = fmt.Sprintf("Evaluation failed: %v", err)
-		log.Printf("[Engine] Case evaluation failed for task=%s case=%s: %v", e.taskID, e.caseID, err)
+		log.Errorf("engine", "Case evaluation failed for task=%s case=%s: %v", e.taskID, e.caseID, err)
 	} else {
 		passed = report.AllPassed
 		reason = report.Summary
@@ -1532,7 +1537,7 @@ func (e *Engine) evaluateAndBroadcast(userInput, finalAnswer string) {
 			Reason: reason,
 		})
 		if saveErr != nil {
-			log.Printf("[Engine] Failed to save case evaluation: %v", saveErr)
+			log.Errorf("engine", "Failed to save case evaluation: %v", saveErr)
 		}
 	}
 
@@ -1729,7 +1734,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 
 		if errRoute != nil {
 			// Router 失败（候选池为空或分类器异常）：回退到固定模型，不阻断任务。
-			log.Printf("[Engine] Router failed: %v; falling back to %s (single_model behavior)", errRoute, selectedModel)
+			log.Warnf("engine", "Router failed: %v; falling back to %s (single_model behavior)", errRoute, selectedModel)
 			e.bus.SendEvent(event.NewEventWithSubTask(event.EventRouterFallbackDefault, e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"model":        selectedModel,
 				"model_mode":   e.cfg.ModelMode,
@@ -1778,7 +1783,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 				"reason": "pre-call RPM limit exceeded in sliding window",
 			}))
 			if routeDecision.Fallback != nil {
-				log.Printf("[Engine] Primary model %s rate-limited, using fallback %s",
+				log.Warnf("engine", "Primary model %s rate-limited, using fallback %s",
 					routeDecision.Primary.Name, routeDecision.Fallback.Name)
 				selectedModel = routeDecision.Fallback.Name
 				e.selectedModel = selectedModel
@@ -1802,7 +1807,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			"provider": routeDecision.Primary.Provider,
 			"fallback": routeDecision.Fallback,
 		}))
-		log.Printf("[Router] Selected model: %s (intent=%s, tier=%s, reason=%s)",
+		log.Infof("router", "Selected model: %s (intent=%s, tier=%s, reason=%s)",
 			selectedModel, routeDecision.Intent, routeDecision.Tier, routeDecision.Reason)
 	}
 
@@ -1872,7 +1877,7 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 	primaryErr := err // 保留主模型失败原因，fallback 失败后合并诊断
 	// Fallback 重试：若主模型失败且配置了 fallback，则重试。
 	if err != nil && routeDecision != nil && routeDecision.Fallback != nil {
-		log.Printf("[Engine] Primary model %s failed (%v), trying fallback %s",
+		log.Warnf("engine", "Primary model %s failed (%v), trying fallback %s",
 			selectedModel, err, routeDecision.Fallback.Name)
 
 		var fallbackProvider llm.Provider
@@ -1909,9 +1914,9 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 			return nil
 		})
 		if err == nil {
-			log.Printf("[Engine] Fallback model %s succeeded", routeDecision.Fallback.Name)
+			log.Infof("engine", "Fallback model %s succeeded", routeDecision.Fallback.Name)
 		} else {
-			log.Printf("[Engine] Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
+			log.Errorf("engine", "Fallback model %s also failed: %v", routeDecision.Fallback.Name, err)
 			// fallback 也失败：保留主模型失败原因，并把 fallback 失败原因合并，
 			// 让上层错误处理拿到完整诊断信息。
 			err = fmt.Errorf("primary %s failed: %v; fallback %s failed: %w",
@@ -1992,11 +1997,35 @@ func (e *Engine) think(ctx context.Context) (string, llm.Usage, []llm.ToolCall, 
 // 捕获该错误并交给 handleApprovalRequired 处理。该方法向前端发出
 // system_info 事件，等待用户批准或拒绝该高风险操作。若批准，直接执行
 // tool（绕过 PolicyGate）。若拒绝，任务以 approval_denied 错误失败。
-func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
+func (e *Engine) executeTool(tc llm.ToolCall) (out string, retErr error) {
 	// 递增 stepIdx——每次 tool 执行都是一个新 step。放在这里（而不是
 	// 调用方）是为了让 step_started 和 tool_call_started 事件携带正确的
 	// step 序号。
 	e.stepIdx++
+
+	// S14：为本次 tool 执行开启一个派生的 trace span（operation 名
+	// "tool:<tool name>"）。span 随 root trace ctx 派生，使 /api/traces
+	// 能展示 think 与 tool 的父子关系；结束时使用 FinishWithAttributes
+	// 携带 tool / duration_ms / error，便于性能与失败分析。
+	// 用 defer + 具名返回值 retErr，保证所有返回路径（解析失败 / 审批 /
+	// 策略拦截 / 执行失败 / 成功）都能正确关闭 span。
+	var traceCtx *observability.TraceContext
+	if e.cfg.Tracer != nil && e.rootTraceCtx != nil {
+		traceCtx = e.cfg.Tracer.StartChild(e.rootTraceCtx, e.cfg.AgentID, "tool:"+tc.Function.Name)
+	}
+	var toolDurationMs int64
+	defer func() {
+		if e.cfg.Tracer != nil && traceCtx != nil {
+			attrs := map[string]any{
+				"tool":        tc.Function.Name,
+				"duration_ms": toolDurationMs,
+			}
+			if retErr != nil {
+				attrs["error"] = retErr.Error()
+			}
+			e.cfg.Tracer.FinishWithAttributes(traceCtx, retErr, attrs)
+		}
+	}()
 
 	// 从 JSON 解析 tool call arguments。LLM 以 JSON 字符串（而非对象）
 	// 形式返回 arguments，因为它以增量方式流式产出。
@@ -2009,12 +2038,12 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	if parseErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); parseErr != nil {
 		repaired, repairErr := repairToolArgumentsJSON(tc.Function.Arguments)
 		if repairErr == nil {
-			log.Printf("[Engine] Repaired malformed arguments JSON for %s (orig error: %v)", tc.Function.Name, parseErr)
+			log.Warnf("engine", "Repaired malformed arguments JSON for %s (orig error: %v)", tc.Function.Name, parseErr)
 			args = repaired
 		} else {
 			errMsg := fmt.Sprintf("invalid arguments JSON for %s: %v (raw: %q, repair failed: %v)",
 				tc.Function.Name, parseErr, tc.Function.Arguments, repairErr)
-			log.Printf("[Engine] %s", errMsg)
+			log.Errorf("engine", "%s", errMsg)
 			e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 				"tool":        tc.Function.Name,
 				"error":       errMsg,
@@ -2104,7 +2133,6 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 
 	// 执行 tool 并测量耗时。duration 用于性能监控和调试——慢 tool 是
 	// 影响用户体验的瓶颈。
-	// DEBUG log.Printf("[Engine] executeTool %s with parsed args: %+v", tc.Function.Name, args)
 	start := time.Now()
 	// 若配置了 PolicyGate 则经由它；否则直接执行。PolicyGate 在允许
 	// tool 执行前会按 policy chain（FileScopeRule、PathTraversalRule 等）
@@ -2137,6 +2165,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 		result, execErr = e.tools.ExecuteWithCtx(tc.Function.Name, workdirCtx, args)
 	}
 	duration := time.Since(start).Milliseconds()
+	toolDurationMs = duration
 	if e.cfg.ToolLatencyRecorder != nil {
 		e.cfg.ToolLatencyRecorder(time.Since(start))
 	}
@@ -2219,7 +2248,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 	}
 
 	// DEBUG
-	log.Printf("[Engine] executeTool %s succeeded, result type=%T", tc.Function.Name, result)
+	log.Debugf("engine", "executeTool %s succeeded, result type=%T", tc.Function.Name, result)
 
 	// 把 tool result 序列化为 JSON 以供 LLM 对话。LLM 期望 tool result 是
 	// JSON 字符串以便解析结构化数据。若序列化失败（行为良好的 tool 极少
@@ -2263,7 +2292,7 @@ func (e *Engine) executeTool(tc llm.ToolCall) (string, error) {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, *toolUsage)
@@ -2368,7 +2397,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	// 向前端发起审批请求
 	if err := e.approvalHandler.RequestApproval(approvalErr.ApprovalID, approvalErr.Tool, approvalErr.Reason, approvalErr.Input, approvalErr.RuleName, approvalErr.Namespace, approvalErr.Tags); err != nil {
-		log.Printf("[Engine] 审批请求发送失败: %v", err)
+		log.Errorf("engine", "审批请求发送失败: %v", err)
 		e.bus.SendEvent(event.NewEventWithSubTask("tool_call_failed", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"tool":        tc.Function.Name,
 			"error":       fmt.Sprintf("审批请求发送失败: %v", err),
@@ -2385,7 +2414,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	approved, waitErr := e.approvalHandler.WaitForDecision(approvalErr.ApprovalID, 30*time.Second)
 	if waitErr != nil {
 		// 超时或等待错误 — 视为拒绝
-		log.Printf("[Engine] 审批等待失败: %v", waitErr)
+		log.Errorf("engine", "审批等待失败: %v", waitErr)
 		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_timeout",
 			"approval_id": approvalErr.ApprovalID,
@@ -2406,7 +2435,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 
 	if !approved {
 		// 用户拒绝了审批请求
-		log.Printf("[Engine] 审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
+		log.Warnf("engine", "审批被拒绝: %s (%s)", approvalErr.Tool, approvalErr.ApprovalID)
 		e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 			"type":        "approval_denied",
 			"approval_id": approvalErr.ApprovalID,
@@ -2426,7 +2455,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 	}
 
 	// 用户批准 — 绕过 PolicyGate 直接执行工具调用
-	log.Printf("[Engine] 审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
+	log.Infof("engine", "审批通过: %s (%s), 执行工具调用", approvalErr.Tool, approvalErr.ApprovalID)
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":        "approval_granted",
 		"approval_id": approvalErr.ApprovalID,
@@ -2506,7 +2535,7 @@ func (e *Engine) handleApprovalRequired(tc llm.ToolCall, approvalErr *harness.Er
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[Engine] OnLLMUsage callback panicked: %v", r)
+						log.Errorf("engine", "OnLLMUsage callback panicked: %v", r)
 					}
 				}()
 				e.cfg.OnLLMUsage(reportModel, profile, *approvedUsage)
@@ -2563,12 +2592,12 @@ func extractToolLLMUsage(result any) *llm.Usage {
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
-		log.Printf("[Engine] failed to marshal _llm_usage: %v", err)
+		log.Errorf("engine", "failed to marshal _llm_usage: %v", err)
 		return nil
 	}
 	var usage llm.Usage
 	if err := json.Unmarshal(data, &usage); err != nil {
-		log.Printf("[Engine] failed to unmarshal _llm_usage: %v", err)
+		log.Errorf("engine", "failed to unmarshal _llm_usage: %v", err)
 		return nil
 	}
 	return &usage
@@ -2726,7 +2755,7 @@ func (e *Engine) saveCheckpoint() {
 	}
 
 	if err := e.checkpoint.Save(e.taskID, e.cfg.AgentID, e.stepIdx, e.totalTokens, e.messages, e.taskProgress); err != nil {
-		log.Printf("[Engine] Failed to save checkpoint: %v", err)
+		log.Errorf("engine", "Failed to save checkpoint: %v", err)
 	}
 }
 

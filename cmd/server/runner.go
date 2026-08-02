@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -213,7 +212,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	// 复用 chat 路径的 provider 解析逻辑；失败时回退 nil，Engine 会再创建默认 provider。
 	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
-		log.Printf("[AgentRunner.Recover] failed to create provider for task=%s: %v", spec.TaskID, err)
+		log.Errorf("server", "[AgentRunner.Recover] failed to create provider for task=%s: %v", spec.TaskID, err)
 		provider = nil
 	}
 
@@ -370,7 +369,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 	// 与旧行为保持一致：启动 engine 后删除 checkpoint（避免重复恢复）。
 	// 失败只记日志，不阻断恢复。
 	if err := cm.Delete(spec.TaskID); err != nil {
-		log.Printf("[AgentRunner.Recover] failed to delete checkpoint %s: %v", spec.TaskID, err)
+		log.Errorf("server", "[AgentRunner.Recover] failed to delete checkpoint %s: %v", spec.TaskID, err)
 	}
 
 	hub.SendEvent(event.NewEvent("task_started", spec.TaskID, cp.AgentID, cp.StepIdx, map[string]any{
@@ -393,7 +392,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 
 		result, totalTokens, err := engine.Run(ctx, "")
 		if err != nil {
-			log.Printf("[Recovery %s] Agent loop failed: %v", spec.TaskID, err)
+			log.Errorf("server", "[Recovery %s] Agent loop failed: %v", spec.TaskID, err)
 			failureReason := err.Error()
 			if errors.Is(err, context.DeadlineExceeded) {
 				failureReason = "task_timeout"
@@ -403,7 +402,7 @@ func (r *AgentRunner) Recover(ctx context.Context, spec RecoverSpec) (string, er
 			}))
 			return
 		}
-		log.Printf("[Recovery %s] Completed. Tokens: %d, Result: %s", spec.TaskID, totalTokens, truncate(result, 100))
+		log.Infof("server", "[Recovery %s] Completed. Tokens: %d, Result: %s", spec.TaskID, totalTokens, truncate(result, 100))
 	}()
 
 	return cp.AgentID, nil
@@ -428,7 +427,7 @@ func (h *leaderApprovalHandler) RequestDelegatedApproval(req runtime.DelegatedAp
 	// 在 engineRegistry 中按 subTaskID 精确查找 supervisor Engine。
 	v, ok := engineRegistry.Load(req.SupervisorSubTaskID)
 	if !ok {
-		log.Printf("[leaderApprovalHandler] supervisor engine not found: %s", req.SupervisorSubTaskID)
+		log.Warnf("server", "[leaderApprovalHandler] supervisor engine not found: %s", req.SupervisorSubTaskID)
 		return false, false, fmt.Errorf("supervisor engine not found")
 	}
 	leaderEngine, ok := v.(*runtime.Engine)
@@ -447,7 +446,7 @@ func (h *leaderApprovalHandler) RequestDelegatedApproval(req runtime.DelegatedAp
 	// 等待 leader 审批决定，带超时回退。
 	decision, err := runtime.WaitForDelegatedApproval(req.ApprovalID, 30*time.Second)
 	if err != nil {
-		log.Printf("[leaderApprovalHandler] 等待 leader 审批超时: %v", err)
+		log.Infof("server", "[leaderApprovalHandler] 等待 leader 审批超时: %v", err)
 		return false, false, err
 	}
 	return decision.Approved, true, nil
@@ -517,7 +516,7 @@ func resolveSessionWorkspace(sessionID string) (workspaceDir, projectID, project
 		if cwd, err := os.Getwd(); err == nil {
 			workspaceDir = filepath.Join(cwd, "workspace")
 			_ = os.MkdirAll(workspaceDir, 0755)
-			log.Printf("[resolveSessionWorkspace] session=%q 无 workspace_dir，兜底到 %s", sessionID, workspaceDir)
+			log.Infof("server", "[resolveSessionWorkspace] session=%q 无 workspace_dir，兜底到 %s", sessionID, workspaceDir)
 		}
 	}
 	return
@@ -585,12 +584,12 @@ func applyAgentPermissions(contract *harness.TaskContract, cfg map[string]any) {
 	// 统一序列化后反序列化，避免 map[string]any 类型断言的繁琐。
 	data, err := json.Marshal(permsRaw)
 	if err != nil {
-		log.Printf("[applyAgentPermissions] marshal permissions failed: %v", err)
+		log.Errorf("server", "[applyAgentPermissions] marshal permissions failed: %v", err)
 		return
 	}
 	var perms agent.TaskPermissions
 	if err := json.Unmarshal(data, &perms); err != nil {
-		log.Printf("[applyAgentPermissions] unmarshal permissions failed: %v", err)
+		log.Errorf("server", "[applyAgentPermissions] unmarshal permissions failed: %v", err)
 		return
 	}
 	if perms.AllowNetwork {
@@ -713,15 +712,15 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		persist.SaveTaskMeta(taskID, sessionID, parentTaskID, isRoot)
 		// 把 root task 绑定到 session，让前端刷新后仍能加载
 		if sessionID != "" && isRoot {
-			log.Printf("[runAgentLoopWithTurn] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
+			log.Infof("server", "[runAgentLoopWithTurn] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
 			sess, err := db.QuerySessionByID(sessionID)
 			if err != nil {
-				log.Printf("[runAgentLoopWithTurn] QuerySessionByID error: %v", err)
+				log.Errorf("server", "[runAgentLoopWithTurn] QuerySessionByID error: %v", err)
 			} else if sess.RootTaskID == "" {
-				log.Printf("[runAgentLoopWithTurn] Setting session %s root_task_id = %s", sessionID, taskID)
+				log.Infof("server", "[runAgentLoopWithTurn] Setting session %s root_task_id = %s", sessionID, taskID)
 				db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
 			} else {
-				log.Printf("[runAgentLoopWithTurn] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
+				log.Warnf("server", "[runAgentLoopWithTurn] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
 			}
 		}
 	}
@@ -757,7 +756,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	effectiveModel := resolveEffectiveModel(spec, agentRecord, cfg)
 	provider, err := llm.CreateProviderFromConfig(cfg, effectiveModel, caseID)
 	if err != nil {
-		log.Printf("[runAgentLoopWithTurn] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
+		log.Errorf("server", "[runAgentLoopWithTurn] Failed to create provider for case=%q (falling back to default): %v", caseID, err)
 		provider = nil
 	}
 
@@ -1071,7 +1070,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	result, totalTokens, err := engine.Run(ctx, userInput)
 	if err != nil {
 		observability.DefaultMetrics.IncrTasksFailed()
-		log.Printf("[Task %s] Agent loop failed: %v", taskID, err)
+		log.Errorf("server", "[Task %s] Agent loop failed: %v", taskID, err)
 		if sessionID != "" {
 			// 失败后同样聚合所有任务 token 与 duration 并同步 session 状态，避免失败前
 			// 的 token 消耗在第二次刷新 UI 时消失。
@@ -1119,7 +1118,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		}))
 	}
 
-	log.Printf("[Task %s] Completed successfully. Tokens: %d, Result: %s", taskID, totalTokens, truncate(result, 100))
+	log.Infof("server", "[Task %s] Completed successfully. Tokens: %d, Result: %s", taskID, totalTokens, truncate(result, 100))
 }
 
 // hubAdapter 把 ws.Hub 适配为 runtime.EventBus 接口。

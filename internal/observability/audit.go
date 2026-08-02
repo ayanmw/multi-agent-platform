@@ -12,9 +12,9 @@ import (
 type AuditRecord struct {
 	ID        string         `json:"id"`
 	Timestamp time.Time      `json:"timestamp"`
-	Actor     string         `json:"actor"`            // user/api_key/agent id
-	Action    string         `json:"action"`           // 例如 delete_session、write_file
-	Target    string         `json:"target"`           // 资源 id / 路径
+	Actor     string         `json:"actor"`  // user/api_key/agent id
+	Action    string         `json:"action"` // 例如 delete_session、write_file
+	Target    string         `json:"target"` // 资源 id / 路径
 	Before    map[string]any `json:"before,omitempty"`
 	After     map[string]any `json:"after,omitempty"`
 	Reason    string         `json:"reason,omitempty"`

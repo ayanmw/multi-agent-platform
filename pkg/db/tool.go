@@ -14,8 +14,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
+	"log/slog"
 )
 
 // init 注册 v27 tools 表迁移：DROP 重建前打印旧记录。
@@ -36,18 +36,18 @@ func init() {
 				return nil // 旧表不存在或 schema 不符，忽略
 			}
 			defer rows.Close()
-			log.Printf("[migration v27] backing up old tools records before DROP:")
+			slog.Info(fmt.Sprintf("[migration v27] backing up old tools records before DROP:"))
 			count := 0
 			for rows.Next() {
 				var name, description, schema, createdAt string
 				var enabled bool
 				if err := rows.Scan(&name, &description, &schema, &enabled, &createdAt); err == nil {
-					log.Printf("[migration v27] OLD_TOOL: name=%q description=%q schema=%q enabled=%v created_at=%s",
-						name, description, schema, enabled, createdAt)
+					slog.Info(fmt.Sprintf("[migration v27] OLD_TOOL: name=%q description=%q schema=%q enabled=%v created_at=%s",
+						name, description, schema, enabled, createdAt))
 					count++
 				}
 			}
-			log.Printf("[migration v27] backed up %d old tool record(s); they will be lost after DROP — re-add manually if needed", count)
+			slog.Info(fmt.Sprintf("[migration v27] backed up %d old tool record(s); they will be lost after DROP — re-add manually if needed", count))
 			return rows.Err()
 		},
 		SQL: `DROP TABLE IF EXISTS tools;

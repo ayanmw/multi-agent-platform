@@ -26,7 +26,6 @@ package harness
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -106,7 +105,7 @@ func (pg *PromotionGate) PromoteCandidates(projectID string) (*PromotionReport, 
 
 		// 提升到 semantic tier
 		if err := pg.db.UpdateMemoryTier(mem.ID, "semantic", reason); err != nil {
-			log.Printf("[PromotionGate] Failed to promote memory %s: %v", mem.ID, err)
+			log.Errorf("harness", "[PromotionGate] Failed to promote memory %s: %v", mem.ID, err)
 			report.SkippedCount++
 			continue
 		}
@@ -120,7 +119,7 @@ func (pg *PromotionGate) PromoteCandidates(projectID string) (*PromotionReport, 
 			Channel:         channel,
 		})
 
-		log.Printf("[PromotionGate] Promoted %s to semantic: %s (channel=%s)", mem.ID, reason, channel)
+		log.Infof("harness", "[PromotionGate] Promoted %s to semantic: %s (channel=%s)", mem.ID, reason, channel)
 	}
 
 	report.Duration = time.Since(start)

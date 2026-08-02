@@ -13,8 +13,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"strings"
+	"log/slog"
 )
 
 // Migration 表示一次单一的 schema 变更。
@@ -625,8 +625,8 @@ func RunMigrations() error {
 		if err := baselineMigrations(uniqueMigrations); err != nil {
 			return fmt.Errorf("baseline migrations: %w", err)
 		}
-		log.Printf("[Migration] baseline to v%d; %d historical migrations pre-recorded",
-			uniqueMigrations[len(uniqueMigrations)-1].Version, len(uniqueMigrations))
+		slog.Info(fmt.Sprintf("[Migration] baseline to v%d; %d historical migrations pre-recorded",
+			uniqueMigrations[len(uniqueMigrations)-1].Version, len(uniqueMigrations)))
 		return nil
 	}
 
@@ -635,14 +635,14 @@ func RunMigrations() error {
 			continue // 已应用
 		}
 
-		log.Printf("[Migration] v%d: %s", m.Version, m.Description)
+		slog.Info(fmt.Sprintf("[Migration] v%d: %s", m.Version, m.Description))
 
 		// 执行可选的 Pre 钩子（DROP 重建前打印旧数据等副作用）。
 		// Pre 失败只记录日志，不阻断迁移——数据备份是尽力而为，
 		// 不应让 schema 演进因打印日志失败而卡住。
 		if m.Pre != nil {
 			if err := m.Pre(DB); err != nil {
-				log.Printf("[Migration] v%d: pre-hook failed (continuing): %v", m.Version, err)
+				slog.Error(fmt.Sprintf("[Migration] v%d: pre-hook failed (continuing): %v", m.Version, err))
 			}
 		}
 
@@ -670,7 +670,7 @@ func RunMigrations() error {
 				if strings.Contains(err.Error(), "duplicate column name") {
 					continue
 				}
-				log.Printf("[Migration] v%d: statement failed (may already exist): %v", m.Version, err)
+				slog.Error(fmt.Sprintf("[Migration] v%d: statement failed (may already exist): %v", m.Version, err))
 				continue
 			}
 		}
@@ -684,7 +684,7 @@ func RunMigrations() error {
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
 		}
 
-		log.Printf("[Migration] v%d: applied successfully", m.Version)
+		slog.Info(fmt.Sprintf("[Migration] v%d: applied successfully", m.Version))
 	}
 
 	return nil

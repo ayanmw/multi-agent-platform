@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -139,6 +138,11 @@ func DefaultProtectedRoutes() []string {
 		"POST /api/cases",
 		"PUT /api/cases/",
 		"DELETE /api/cases/",
+		// 可观测性敏感读端点：审计日志与全量 trace 含内部关联信息，
+		// 需 Bearer token（REQUIRE_AUTH 启用时），与 /api/agents 同级保护。
+		// 不在此列表时会被当作非受保护路由、注入兜底 seed 用户而绕过鉴权。
+		"GET /api/audit",
+		"GET /api/traces",
 	}
 }
 
@@ -186,7 +190,7 @@ func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth boo
 		// 受保护路由 — 校验 API key。
 		userID, err := authenticateRequest(r, store)
 		if err != nil {
-			log.Printf("[Auth] authentication failed: %v (path=%s, method=%s)", err, r.URL.Path, r.Method)
+			log.Errorf("auth", "[Auth] authentication failed: %v (path=%s, method=%s)", err, r.URL.Path, r.Method)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})

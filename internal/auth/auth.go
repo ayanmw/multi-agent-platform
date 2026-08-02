@@ -18,7 +18,11 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // --- 模型类型 ----------------------------------------------------------
 

@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,7 +37,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // Event 镜像 pkg/event.Event 结构，用于在本脚本中反序列化 WS 消息。
 // 字段定义与后端 pkg/event/event.go 保持一致。
@@ -105,7 +109,6 @@ var knownExtras = map[string]bool{
 }
 
 func main() {
-	log.SetFlags(log.Ltime)
 	fmt.Println("=== WebSocket 事件流专项评测 (维度 A) ===")
 	fmt.Println()
 

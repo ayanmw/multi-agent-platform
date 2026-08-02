@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -170,7 +169,7 @@ func (p *GeminiProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 // ListModels 当前返回空列表；Gemini 模型列表通过本地配置与缺省画像管理。
 // 后续可接入 GET /v1beta/models 发现端点。
 func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	log.Printf("[GeminiProvider] ListModels not yet implemented for provider %q", p.name)
+	log.Infof("llm", "[GeminiProvider] ListModels not yet implemented for provider %q", p.name)
 	return []ModelInfo{}, nil
 }
 

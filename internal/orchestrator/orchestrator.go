@@ -37,7 +37,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -457,7 +456,7 @@ func (o *Orchestrator) runBlockingCommon(rootTaskID, strategy string, results []
 	}
 	if o.persist != nil {
 		if err := o.persist.UpdateTask(rootTaskID, rootStatus, rootResult, rootTokens); err != nil {
-			log.Printf("[Orchestrator] Failed to update root task %s status: %v", rootTaskID, err)
+			log.Errorf("orchestrator", "[Orchestrator] Failed to update root task %s status: %v", rootTaskID, err)
 		}
 	}
 	if status := rootStatus; status == "completed" {
@@ -501,7 +500,7 @@ func evaluateWorkflowCondition(expr string, resultsByID map[string]AgentResult) 
 
 	postfix, err := shuntingYard(tokens)
 	if err != nil {
-		log.Printf("[Orchestrator] condition parse error '%s': %v", expr, err)
+		log.Errorf("orchestrator", "[Orchestrator] condition parse error '%s': %v", expr, err)
 		return false
 	}
 	return evalPostfix(postfix)
@@ -977,7 +976,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	// 默认的 OpenAIProvider。
 	provider, err := llm.CreateProviderFromConfig(o.cfg, effectiveModel, "")
 	if err != nil {
-		log.Printf("[Orchestrator] Failed to create provider for agent=%s (falling back to default): %v", spec.AgentID, err)
+		log.Errorf("orchestrator", "[Orchestrator] Failed to create provider for agent=%s (falling back to default): %v", spec.AgentID, err)
 		provider = nil
 	}
 
@@ -1145,9 +1144,9 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	// 返回该子任务的关键。
 	if o.persist != nil {
 		if err := o.persist.SaveTask(subTaskID, spec.Input, []string{spec.AgentID}); err != nil {
-			log.Printf("[Orchestrator] Failed to save child task %s: %v", subTaskID, err)
+			log.Errorf("orchestrator", "[Orchestrator] Failed to save child task %s: %v", subTaskID, err)
 		} else if err := o.persist.SaveTaskMeta(subTaskID, sessionID, rootTaskID, false); err != nil {
-			log.Printf("[Orchestrator] Failed to bind child task %s to root %s: %v", subTaskID, rootTaskID, err)
+			log.Errorf("orchestrator", "[Orchestrator] Failed to bind child task %s to root %s: %v", subTaskID, rootTaskID, err)
 		}
 	}
 
@@ -1157,7 +1156,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 	duration := time.Since(start).Milliseconds()
 
 	if err != nil {
-		log.Printf("[Orchestrator] Agent %s (%s) failed: %v", spec.AgentID, spec.Name, err)
+		log.Errorf("orchestrator", "[Orchestrator] Agent %s (%s) failed: %v", spec.AgentID, spec.Name, err)
 		o.hub.SendEvent(event.NewEvent("task_failed", subTaskID, spec.AgentID, 0, map[string]any{
 			"reason":       err.Error(),
 			"agent_name":   spec.Name,
@@ -1166,7 +1165,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		}))
 		if o.persist != nil {
 			if uerr := o.persist.UpdateTask(subTaskID, "failed", result, totalTokens); uerr != nil {
-				log.Printf("[Orchestrator] Failed to update child task %s status: %v", subTaskID, uerr)
+				log.Errorf("orchestrator", "[Orchestrator] Failed to update child task %s status: %v", subTaskID, uerr)
 			}
 		}
 		return AgentResult{
@@ -1180,14 +1179,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		}
 	}
 
-	log.Printf("[Orchestrator] Agent %s (%s) completed: %d tokens, %dms",
+	log.Infof("orchestrator", "[Orchestrator] Agent %s (%s) completed: %d tokens, %dms",
 		spec.AgentID, spec.Name, totalTokens, duration)
 
 	// 持久化子任务的终态，这样对 subTaskID 调 QueryTaskByID 时能正确反映
 	// completed/failed，便于回放和调试。
 	if o.persist != nil {
 		if err := o.persist.UpdateTask(subTaskID, "completed", result, totalTokens); err != nil {
-			log.Printf("[Orchestrator] Failed to update child task %s status: %v", subTaskID, err)
+			log.Errorf("orchestrator", "[Orchestrator] Failed to update child task %s status: %v", subTaskID, err)
 		}
 	}
 
@@ -1422,7 +1421,7 @@ func (b *AgentBus) SendMessage(msg AgentMessage) {
 	if persist != nil {
 		go func(m AgentMessage) {
 			if err := persist(m); err != nil {
-				log.Printf("[AgentBus] persist message failed: %v", err)
+				log.Errorf("orchestrator", "[AgentBus] persist message failed: %v", err)
 			}
 		}(msg)
 	}

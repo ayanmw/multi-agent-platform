@@ -33,14 +33,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 const (
 	abusPort    = "18104"
@@ -265,14 +268,14 @@ func pollTaskStatus(taskID string, maxSeconds int) string {
 func getTaskDetail(taskID string) taskResponse {
 	resp, err := http.Get(abusBaseURL + "/api/tasks?id=" + taskID)
 	if err != nil {
-		log.Printf("[WARN] GET /api/tasks?id=%s failed: %v", taskID, err)
+		log.Errorf("smoke", "[WARN] GET /api/tasks?id=%s failed: %v", taskID, err)
 		return taskResponse{}
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	var out taskResponse
 	if err := json.Unmarshal(b, &out); err != nil {
-		log.Printf("[WARN] parse task detail failed: %v body=%s", err, string(b))
+		log.Errorf("smoke", "[WARN] parse task detail failed: %v body=%s", err, string(b))
 	}
 	return out
 }

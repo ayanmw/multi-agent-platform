@@ -34,7 +34,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -184,7 +183,7 @@ func NewHeartbeat(database MemoryDB, summarizer LLMSummarizer) *Heartbeat {
 // 上运行 Beat()。调用 Stop() 可优雅停止 heartbeat，并等待后台 goroutine 退出。
 func (hb *Heartbeat) Start(ctx context.Context) {
 	ctx, hb.cancel = context.WithCancel(ctx)
-	log.Printf("[Heartbeat] Started with interval %v", hb.interval)
+	log.Infof("harness", "[Heartbeat] Started with interval %v", hb.interval)
 
 	hb.wg.Add(1)
 	// 启动时立即运行一次，然后按 tick 运行
@@ -193,9 +192,9 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 		// 初始 beat
 		report, err := hb.Beat(ctx)
 		if err != nil {
-			log.Printf("[Heartbeat] Initial beat failed: %v", err)
+			log.Errorf("harness", "[Heartbeat] Initial beat failed: %v", err)
 		} else {
-			log.Printf("[Heartbeat] Initial beat: %d tasks, %d memories, took %v",
+			log.Infof("harness", "[Heartbeat] Initial beat: %d tasks, %d memories, took %v",
 				report.NewTasksFound, report.MemoriesWritten, report.Duration)
 		}
 
@@ -205,7 +204,7 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Println("[Heartbeat] Stopped")
+				log.Infof("harness", "%v", "[Heartbeat] Stopped")
 				return
 			case <-ticker.C:
 				// 根据上次 report 的 NextInterval 调整 ticker 间隔
@@ -216,10 +215,10 @@ func (hb *Heartbeat) Start(ctx context.Context) {
 
 				report, err = hb.Beat(ctx)
 				if err != nil {
-					log.Printf("[Heartbeat] Beat failed: %v", err)
+					log.Errorf("harness", "[Heartbeat] Beat failed: %v", err)
 					continue
 				}
-				log.Printf("[Heartbeat] Beat: %d tasks, %d memories, took %v",
+				log.Infof("harness", "[Heartbeat] Beat: %d tasks, %d memories, took %v",
 					report.NewTasksFound, report.MemoriesWritten, report.Duration)
 			}
 		}
@@ -281,10 +280,10 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		convs, convErr := hb.db.QueryConversationsByTask(taskID)
 		steps, stepErr := hb.db.QueryStepsByTaskForMemory(taskID)
 		if convErr != nil {
-			log.Printf("[Heartbeat] Warning: failed to query conversations for task %s: %v", taskID, convErr)
+			log.Errorf("harness", "[Heartbeat] Warning: failed to query conversations for task %s: %v", taskID, convErr)
 		}
 		if stepErr != nil {
-			log.Printf("[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, stepErr)
+			log.Errorf("harness", "[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, stepErr)
 		}
 		// Phase 6-F：优先使用 LLMSummarizer（内部会回退到关键词）；若未配置 summarizer，
 		// 则直接走旧的关键词路径。
@@ -297,7 +296,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 			summary, err = hb.generateEpisodeSummary(ctx, taskID)
 		}
 		if err != nil {
-			log.Printf("[Heartbeat] Failed to summarize task %s: %v", taskID, err)
+			log.Errorf("harness", "[Heartbeat] Failed to summarize task %s: %v", taskID, err)
 			report.Errors++
 			continue
 		}
@@ -322,7 +321,7 @@ func (hb *Heartbeat) Beat(ctx context.Context) (*HeartbeatReport, error) {
 		}
 
 		if err := hb.db.InsertMemory(memRecord); err != nil {
-			log.Printf("[Heartbeat] Failed to write memory for task %s: %v", taskID, err)
+			log.Errorf("harness", "[Heartbeat] Failed to write memory for task %s: %v", taskID, err)
 			report.Errors++
 			continue
 		}
@@ -378,7 +377,7 @@ func (hb *Heartbeat) generateEpisodeSummary(ctx context.Context, taskID string) 
 	steps, err := hb.db.QueryStepsByTaskForMemory(taskID)
 	if err != nil {
 		// steps 是可选的 —— 记录日志并继续
-		log.Printf("[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, err)
+		log.Errorf("harness", "[Heartbeat] Warning: failed to query steps for task %s: %v", taskID, err)
 	}
 
 	var sb strings.Builder

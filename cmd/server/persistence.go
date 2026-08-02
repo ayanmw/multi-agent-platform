@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/runtime"
@@ -193,14 +192,14 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 		// nil-safe：globalSkillLoader 未初始化（如 db 不可用）时跳过。
 		if globalSkillLoader != nil && workspaceDir != "" {
 			if err := globalSkillLoader.LoadForWorkdir(workspaceDir, ""); err != nil {
-				log.Printf("[resolveSession] LoadForWorkdir failed for %s: %v", workspaceDir, err)
+				log.Errorf("server", "[resolveSession] LoadForWorkdir failed for %s: %v", workspaceDir, err)
 			}
 		}
 
 		if workspaceDir != "" {
-			log.Printf("[resolveSession] 新建 session=%s 绑定默认 workspace=%s", newID, workspaceDir)
+			log.Infof("server", "[resolveSession] 新建 session=%s 绑定默认 workspace=%s", newID, workspaceDir)
 		} else {
-			log.Printf("[resolveSession] 新建 session=%s workspace 创建失败，产物将落在 server CWD", newID)
+			log.Infof("server", "[resolveSession] 新建 session=%s workspace 创建失败，产物将落在 server CWD", newID)
 		}
 		sessionID = newID
 	}
@@ -216,15 +215,15 @@ func resolveSession(sessionID, userInput string, persist runtime.Persistence) (s
 	}
 	// 把 root task 绑定到 session，让前端刷新后仍能加载
 	if sessionID != "" {
-		log.Printf("[resolveSession] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
+		log.Infof("server", "[resolveSession] sessionID=%s taskID=%s — checking root_task_id", sessionID, taskID)
 		sess, err := db.QuerySessionByID(sessionID)
 		if err != nil {
-			log.Printf("[resolveSession] QuerySessionByID error: %v", err)
+			log.Errorf("server", "[resolveSession] QuerySessionByID error: %v", err)
 		} else if sess.RootTaskID == "" {
-			log.Printf("[resolveSession] Setting session %s root_task_id = %s", sessionID, taskID)
+			log.Infof("server", "[resolveSession] Setting session %s root_task_id = %s", sessionID, taskID)
 			db.UpdateSession(sessionID, taskID, sess.Status, sess.UserInput)
 		} else {
-			log.Printf("[resolveSession] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
+			log.Warnf("server", "[resolveSession] Session %s already has root_task_id=%s (skip)", sessionID, sess.RootTaskID)
 		}
 	}
 

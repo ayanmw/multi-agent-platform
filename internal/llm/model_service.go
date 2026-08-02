@@ -24,7 +24,6 @@ package llm
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/config"
@@ -91,7 +90,7 @@ func (s *ModelService) LoadModelsToRegistry(registry *ModelRegistry) error {
 		}
 	}
 
-	log.Printf("ModelRegistry: loaded %d model(s) from persistent storage", len(records))
+	log.Infof("llm", "ModelRegistry: loaded %d model(s) from persistent storage", len(records))
 	return nil
 }
 
@@ -104,7 +103,7 @@ func (s *ModelService) seedStaticModels(now time.Time) error {
 	if cfg.LLMModel != "" {
 		providerName := s.resolver.ResolveProviderNameForModel(cfg.LLMModel)
 		if err := s.upsertModel(providerName, cfg.LLMModel, true, now); err != nil {
-			log.Printf("[ModelService] failed to seed legacy model %s/%s: %v", providerName, cfg.LLMModel, err)
+			log.Errorf("llm", "[ModelService] failed to seed legacy model %s/%s: %v", providerName, cfg.LLMModel, err)
 		}
 	}
 
@@ -121,7 +120,7 @@ func (s *ModelService) seedStaticModels(now time.Time) error {
 			providerName = "default"
 		}
 		if err := s.upsertModel(providerName, mc.Name, true, now); err != nil {
-			log.Printf("[ModelService] failed to seed static model %s/%s: %v", providerName, mc.Name, err)
+			log.Errorf("llm", "[ModelService] failed to seed static model %s/%s: %v", providerName, mc.Name, err)
 		}
 	}
 
@@ -142,7 +141,7 @@ func (s *ModelService) seedDefaultProfiles(now time.Time) error {
 
 		existing, found, err := db.GetModel(providerName, p.Name)
 		if err != nil {
-			log.Printf("[ModelService] failed to query model %s/%s: %v", providerName, p.Name, err)
+			log.Errorf("llm", "[ModelService] failed to query model %s/%s: %v", providerName, p.Name, err)
 			continue
 		}
 		if found {
@@ -150,7 +149,7 @@ func (s *ModelService) seedDefaultProfiles(now time.Time) error {
 			merged := mergeDefaultIntoExisting(existing, p)
 			merged.UpdatedAt = now
 			if err := db.InsertOrReplaceModel(merged); err != nil {
-				log.Printf("[ModelService] failed to merge default profile %s/%s: %v", providerName, p.Name, err)
+				log.Errorf("llm", "[ModelService] failed to merge default profile %s/%s: %v", providerName, p.Name, err)
 			}
 			continue
 		}
@@ -159,7 +158,7 @@ func (s *ModelService) seedDefaultProfiles(now time.Time) error {
 		// 只有对应 provider 实际配置后，Router 才会把它们纳入候选池。
 		rec := defaultProfileToDBRecord(providerName, p, now)
 		if err := db.InsertOrReplaceModel(rec); err != nil {
-			log.Printf("[ModelService] failed to seed default profile %s/%s: %v", providerName, p.Name, err)
+			log.Errorf("llm", "[ModelService] failed to seed default profile %s/%s: %v", providerName, p.Name, err)
 		}
 	}
 	return nil

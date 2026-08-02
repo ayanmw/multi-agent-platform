@@ -17,12 +17,15 @@ package pool
 import (
 	"container/heap"
 	"context"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/anmingwei/multi-agent-platform/internal/llm"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // PoolTask 表示提交到 Worker Pool 的单个任务。
 type PoolTask struct {
@@ -109,7 +112,7 @@ func (p *WorkerPool) Start() {
 		return
 	}
 	p.started = true
-	log.Printf("[Pool] Starting %d workers", p.workers)
+	log.Infof("pool", "[Pool] Starting %d workers", p.workers)
 	// 在本简化实现中，worker 会在每次 Submit 时单独启动。
 }
 
@@ -134,7 +137,7 @@ func (p *WorkerPool) Submit(task PoolTask) error {
 	p.mu.Lock()
 	heap.Push(p.taskQueue, item)
 	p.mu.Unlock()
-	log.Printf("[Pool] Task %s queued (priority=%d)", task.ID, task.Priority)
+	log.Infof("pool", "[Pool] Task %s queued (priority=%d)", task.ID, task.Priority)
 	go p.dispatch()
 	return nil
 }
@@ -159,13 +162,13 @@ func (p *WorkerPool) dispatch() {
 		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
 	}
 	p.running.Store(task.ID, cancel)
-	log.Printf("[Pool] Task %s started (priority=%d)", task.ID, task.Priority)
+	log.Infof("pool", "[Pool] Task %s started (priority=%d)", task.ID, task.Priority)
 
 	// 执行任务（占位实现 —— 完整的 Engine 集成将在后续 phase 完成）
 	_ = ctx
 	_ = cancel
 	p.running.Delete(task.ID)
-	log.Printf("[Pool] Task %s completed", task.ID)
+	log.Infof("pool", "[Pool] Task %s completed", task.ID)
 	<-p.semaphore
 }
 

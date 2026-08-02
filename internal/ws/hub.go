@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -12,7 +11,11 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 
 	"github.com/gorilla/websocket"
+	"github.com/anmingwei/multi-agent-platform/internal/observability"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -223,7 +226,7 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-			log.Printf("Client connected: %s (total: %d)", client.ID, len(h.clients))
+			log.Infof("ws", "Client connected: %s (total: %d)", client.ID, len(h.clients))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -232,7 +235,7 @@ func (h *Hub) Run() {
 				close(client.Send)
 			}
 			h.mu.Unlock()
-			log.Printf("Client disconnected: %s (total: %d)", client.ID, len(h.clients))
+			log.Infof("ws", "Client disconnected: %s (total: %d)", client.ID, len(h.clients))
 
 		case evt := <-h.broadcast:
 			// 先把事件写入环形缓冲区，再广播；这样重连 replay 能拿到完整缓存。
@@ -287,7 +290,7 @@ func ServeWS(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("WebSocket upgrade error: %v", err)
+			log.Errorf("ws", "WebSocket upgrade error: %v", err)
 			return
 		}
 
@@ -319,7 +322,7 @@ func (c *Client) readPump() {
 		// 尝试解析为 control message
 		var msg ClientControlMsg
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("Client %s: unparseable message: %s", c.ID, string(message))
+			log.Infof("ws", "Client %s: unparseable message: %s", c.ID, string(message))
 			continue
 		}
 
@@ -355,11 +358,11 @@ func (c *Client) writePump() {
 			// 将 event 序列化为 JSON 并发送
 			data, err := json.Marshal(message)
 			if err != nil {
-				log.Printf("writePump: marshal error: %v", err)
+				log.Errorf("ws", "writePump: marshal error: %v", err)
 				continue
 			}
 			if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
-				log.Printf("writePump: write error: %v", err)
+				log.Errorf("ws", "writePump: write error: %v", err)
 				return
 			}
 

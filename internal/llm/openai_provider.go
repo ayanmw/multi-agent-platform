@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -220,13 +219,13 @@ func (p *OpenAIProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) e
 		case "length":
 			// 触及 max_tokens 上限。响应被截断；记录日志，因为这可能产生
 			// 不完整的 tool 参数，导致后续 json.Unmarshal 失败。
-			log.Printf("[OpenAIProvider] ChatStream finished due to length limit (model=%s)", req.Model)
+			log.Infof("llm", "[OpenAIProvider] ChatStream finished due to length limit (model=%s)", req.Model)
 		case "content_filter":
-			log.Printf("[OpenAIProvider] ChatStream finished due to content filter (model=%s)", req.Model)
+			log.Infof("llm", "[OpenAIProvider] ChatStream finished due to content filter (model=%s)", req.Model)
 		default:
 			// 未知 finish_reason —— 高亮记录，便于发现 provider 新引入的
 			// 枚举值（例如旧版的 "function_call"）。
-			log.Printf("[OpenAIProvider] ChatStream finished with unexpected reason %q (model=%s)",
+			log.Infof("llm", "[OpenAIProvider] ChatStream finished with unexpected reason %q (model=%s)",
 				choice.FinishReason, req.Model)
 		}
 

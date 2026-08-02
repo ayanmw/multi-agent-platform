@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"os"
@@ -28,6 +27,9 @@ import (
 	"github.com/anmingwei/multi-agent-platform/pkg/event"
 	"github.com/google/uuid"
 )
+
+// log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
+var log = observability.DefaultLogger
 
 // handleGetTaskContextWindow returns the current context-window snapshot for a
 // task or a specific sub-task (GET /api/tasks/:id/context_window[?sub_task_id=xxx]).
@@ -53,11 +55,11 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 	}
 	isSubTask := subTaskID != ""
 
-	log.Printf("[ContextWindow] request task=%s sub_task_id=%s", id, subTaskID)
+	log.Infof("server", "[ContextWindow] request task=%s sub_task_id=%s", id, subTaskID)
 
 	// 1. Prefer the live in-memory snapshot when the engine is thinking.
 	if snapshot, ok := runtime.GetTaskContextSnapshot(targetID); ok {
-		log.Printf("[ContextWindow] task=%s sub_task_id=%s served from live runtime store", id, subTaskID)
+		log.Infof("server", "[ContextWindow] task=%s sub_task_id=%s served from live runtime store", id, subTaskID)
 		encodeContextWindowSnapshot(w, snapshot)
 		return
 	}
@@ -71,20 +73,20 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 	task, err := db.QueryTaskByID(queryID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			log.Printf("[ContextWindow] task=%s not found", queryID)
+			log.Warnf("server", "[ContextWindow] task=%s not found", queryID)
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("[ContextWindow] task=%s db error: %v", queryID, err)
+		log.Errorf("server", "[ContextWindow] task=%s db error: %v", queryID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if task == nil {
-		log.Printf("[ContextWindow] task=%s not found (nil)", queryID)
+		log.Warnf("server", "[ContextWindow] task=%s not found (nil)", queryID)
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("[ContextWindow] task=%s found, session_id=%s agent_ids=%v", queryID, task.SessionID, task.AgentIDs)
+	log.Infof("server", "[ContextWindow] task=%s found, session_id=%s agent_ids=%v", queryID, task.SessionID, task.AgentIDs)
 
 	var messages []llm.Message
 
@@ -96,9 +98,9 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 		if agent, err := db.QueryAgentByID(task.AgentIDs[0]); err == nil && agent != nil {
 			systemPrompt = agent.SystemPrompt
 			model = agent.Model
-			log.Printf("[ContextWindow] task=%s resolved model=%s from agent=%s", queryID, model, task.AgentIDs[0])
+			log.Infof("server", "[ContextWindow] task=%s resolved model=%s from agent=%s", queryID, model, task.AgentIDs[0])
 		} else if err != nil {
-			log.Printf("[ContextWindow] task=%s QueryAgentByID failed: %v", queryID, err)
+			log.Errorf("server", "[ContextWindow] task=%s QueryAgentByID failed: %v", queryID, err)
 		}
 	}
 	if systemPrompt == "" {
@@ -107,11 +109,11 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 		systemPrompt = "[system prompt unavailable for historical task]"
 		if task.SessionID != "" {
 			if s, err := db.QuerySessionByID(task.SessionID); err != nil {
-				log.Printf("[ContextWindow] task=%s 查询 session 失败，无法作为 system prompt fallback: %v", queryID, err)
+				log.Warnf("server", "[ContextWindow] task=%s 查询 session 失败，无法作为 system prompt fallback: %v", queryID, err)
 			} else if s == nil || s.Name == "" {
-				log.Printf("[ContextWindow] task=%s session 不存在或名称为空，system prompt 使用占位符", queryID)
+				log.Infof("server", "[ContextWindow] task=%s session 不存在或名称为空，system prompt 使用占位符", queryID)
 			} else {
-				log.Printf("[ContextWindow] task=%s 原始系统提示不可用，已用占位符代替；可归属 session=%s", queryID, s.Name)
+				log.Infof("server", "[ContextWindow] task=%s 原始系统提示不可用，已用占位符代替；可归属 session=%s", queryID, s.Name)
 			}
 		}
 	}
@@ -121,11 +123,11 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 	//    the child task's own messages; for the root task we look up root.
 	msgs, err := db.QuerySessionMessagesByTask(queryID)
 	if err != nil {
-		log.Printf("[ContextWindow] task=%s QuerySessionMessagesByTask failed: %v", queryID, err)
+		log.Errorf("server", "[ContextWindow] task=%s QuerySessionMessagesByTask failed: %v", queryID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[ContextWindow] task=%s loaded session_messages count=%d", queryID, len(msgs))
+	log.Infof("server", "[ContextWindow] task=%s loaded session_messages count=%d", queryID, len(msgs))
 
 	if len(msgs) > 0 {
 		// 第一条持久化 message 通常是 system prompt。如果 DB 已包含
@@ -147,7 +149,7 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 			if m.ToolCalls != "" {
 				if err := json.Unmarshal([]byte(m.ToolCalls), &toolCalls); err != nil {
 					// ToolCalls 损坏时记录日志但继续返回其他字段，保持 API 可用。
-					log.Printf("[ContextWindow] task=%s 解析 ToolCalls 失败: %v", queryID, err)
+					log.Infof("server", "[ContextWindow] task=%s 解析 ToolCalls 失败: %v", queryID, err)
 				}
 			}
 			messages = append(messages, llm.Message{
@@ -163,7 +165,7 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 		// so the UI is not stuck on 404.
 		messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 	} else {
-		log.Printf("[ContextWindow] task=%s no snapshot and no reconstructable messages", queryID)
+		log.Infof("server", "[ContextWindow] task=%s no snapshot and no reconstructable messages", queryID)
 		http.Error(w, "context window snapshot not available", http.StatusNotFound)
 		return
 	}
@@ -179,7 +181,7 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 
 	maxTokens := llm.EstimateModelContextWindow(nil, model)
 	snapshot := llm.BuildContextWindowSnapshot(model, maxTokens, messages, []llm.SkillBlock{})
-	log.Printf("[ContextWindow] task=%s reconstructed snapshot model=%s messages=%d tokens=%d ratio=%.4f",
+	log.Infof("server", "[ContextWindow] task=%s reconstructed snapshot model=%s messages=%d tokens=%d ratio=%.4f",
 		queryID, snapshot.Model, len(snapshot.Messages), snapshot.EstimatedTotalTokens, snapshot.EstimatedUsageRatio)
 	encodeContextWindowSnapshot(w, snapshot)
 }
@@ -190,7 +192,7 @@ func (s *appServer) handleGetTaskContextWindow(w http.ResponseWriter, r *http.Re
 func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWindowSnapshot) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
-		log.Printf("[ContextWindow] 编码快照响应失败: %v", err)
+		log.Infof("server", "[ContextWindow] 编码快照响应失败: %v", err)
 	}
 }
 
@@ -201,7 +203,7 @@ func encodeContextWindowSnapshot(w http.ResponseWriter, snapshot llm.ContextWind
 func (s *appServer) handleGetAgentMessages(w http.ResponseWriter, r *http.Request, taskID string) {
 	msgs, err := db.QueryAgentMessages(taskID)
 	if err != nil {
-		log.Printf("[AgentMessages] query failed for task=%s: %v", taskID, err)
+		log.Errorf("server", "[AgentMessages] query failed for task=%s: %v", taskID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -213,7 +215,7 @@ func (s *appServer) handleGetAgentMessages(w http.ResponseWriter, r *http.Reques
 		"task_id":  taskID,
 		"messages": msgs,
 	}); err != nil {
-		log.Printf("[AgentMessages] encode response failed: %v", err)
+		log.Errorf("server", "[AgentMessages] encode response failed: %v", err)
 	}
 }
 
@@ -246,7 +248,7 @@ type ChildTaskDetail struct {
 // 让前端在刷新/历史回放时能把子 agent 的步骤回填到对应 worker lane。
 func (s *appServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("id")
-	log.Printf("[API] GET /api/tasks?id=%s", taskID)
+	log.Infof("server", "[API] GET /api/tasks?id=%s", taskID)
 	if taskID == "" {
 		http.Error(w, "id query parameter required", http.StatusBadRequest)
 		return
@@ -254,14 +256,14 @@ func (s *appServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 
 	task, err := db.QueryTaskByID(taskID)
 	if err != nil {
-		log.Printf("[API] GET /api/tasks?id=%s: task not found: %v", taskID, err)
+		log.Warnf("server", "[API] GET /api/tasks?id=%s: task not found: %v", taskID, err)
 		http.Error(w, "task not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
 
 	steps, err := db.QueryStepsByTask(taskID)
 	if err != nil {
-		log.Printf("[API] GET /api/tasks?id=%s: steps query error: %v", taskID, err)
+		log.Errorf("server", "[API] GET /api/tasks?id=%s: steps query error: %v", taskID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -291,7 +293,7 @@ func (s *appServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	for _, ct := range childTasks {
 		childSteps, cErr := db.QueryStepsByTask(ct.ID)
 		if cErr != nil {
-			log.Printf("[API] GET /api/tasks?id=%s: child steps query error for %s: %v", taskID, ct.ID, cErr)
+			log.Errorf("server", "[API] GET /api/tasks?id=%s: child steps query error for %s: %v", taskID, ct.ID, cErr)
 			childSteps = []db.StepRecord{}
 		}
 		for _, cs := range childSteps {
@@ -313,7 +315,7 @@ func (s *appServer) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	// 让 API 对所有任务都可用。
 	eval, evalErr := queryLatestCaseEvaluation(taskID)
 	if evalErr != nil {
-		log.Printf("[API] GET /api/tasks?id=%s: evaluation query error: %v", taskID, evalErr)
+		log.Errorf("server", "[API] GET /api/tasks?id=%s: evaluation query error: %v", taskID, evalErr)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -531,7 +533,7 @@ func (s *appServer) handleGetCaseEvaluation(w http.ResponseWriter, r *http.Reque
 			json.NewEncoder(w).Encode(map[string]any{"evaluation": nil})
 			return
 		}
-		log.Printf("[API] GET /api/cases/%s/evaluations/%s: db error: %v", id, taskID, err)
+		log.Errorf("server", "[API] GET /api/cases/%s/evaluations/%s: db error: %v", id, taskID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -567,7 +569,7 @@ func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 		projectID := r.URL.Query().Get("project_id")
 		sessions, err := db.QuerySessions(50, projectID)
 		if err != nil {
-			log.Printf("[API] GET /api/sessions error: %v", err)
+			log.Errorf("server", "[API] GET /api/sessions error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -589,16 +591,16 @@ func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 							sessions[i].RootTaskID = t.ID
 							// 把发现的 root_task_id 持久化，避免下次再重新发现
 							db.UpdateSession(sessions[i].ID, t.ID, sessions[i].Status, sessions[i].UserInput)
-							log.Printf("[API] GET /api/sessions: auto-discovered root_task_id=%s for session %s", t.ID, sessions[i].ID)
+							log.Infof("server", "[API] GET /api/sessions: auto-discovered root_task_id=%s for session %s", t.ID, sessions[i].ID)
 							break
 						}
 					}
 				}
 			}
 		}
-		log.Printf("[API] GET /api/sessions: returning %d sessions", len(sessions))
+		log.Infof("server", "[API] GET /api/sessions: returning %d sessions", len(sessions))
 		for _, s := range sessions {
-			log.Printf("[API]   session: id=%s name=%s root_task_id=%q status=%s", s.ID, s.Name, s.RootTaskID, s.Status)
+			log.Infof("server", "[API]   session: id=%s name=%s root_task_id=%q status=%s", s.ID, s.Name, s.RootTaskID, s.Status)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessions)
@@ -643,7 +645,7 @@ func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// session 创建成功后，为 workdir 加载文件系统 skill 与 commands。
 		if globalSkillLoader != nil && workspaceDir != "" {
 			if err := globalSkillLoader.LoadForWorkdir(workspaceDir, req.ProjectID); err != nil {
-				log.Printf("[skill] LoadForWorkdir failed for %s: %v", workspaceDir, err)
+				log.Errorf("server", "[skill] LoadForWorkdir failed for %s: %v", workspaceDir, err)
 			}
 		}
 
@@ -762,7 +764,7 @@ func (s *appServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 				runtime.DeleteTaskContextSnapshot(t.ID)
 			}
 		} else {
-			log.Printf("[API] DELETE /api/sessions/%s: 查询 tasks 失败，无法清理上下文快照: %v", id, err)
+			log.Infof("server", "[API] DELETE /api/sessions/%s: 查询 tasks 失败，无法清理上下文快照: %v", id, err)
 		}
 
 		if err := db.DeleteSession(id); err != nil {
@@ -780,7 +782,7 @@ func (s *appServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		// DB 删除后再清理 workspace 目录
 		if sessToDelete.WorkspaceDir != "" {
 			if rmErr := os.RemoveAll(sessToDelete.WorkspaceDir); rmErr != nil {
-				log.Printf("[API] DELETE /api/sessions/%s: workspace cleanup failed: %v", id, rmErr)
+				log.Errorf("server", "[API] DELETE /api/sessions/%s: workspace cleanup failed: %v", id, rmErr)
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1180,7 +1182,7 @@ func (s *appServer) handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id
 	if err != nil {
 		// 优雅降级：memory 存在但其 embedding 无法计算。返回 422 让前端
 		// 注意到而不触发重试风暴。
-		log.Printf("[API] embed memory %s failed: %v", id, err)
+		log.Errorf("server", "[API] embed memory %s failed: %v", id, err)
 		http.Error(w, "embedding failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
@@ -1193,17 +1195,17 @@ func (s *appServer) handleMemoryEmbed(w http.ResponseWriter, r *http.Request, id
 		"scope":     record.Scope,
 	}
 	if err := s.vectorStore.Upsert(id, vec, metadata); err != nil {
-		log.Printf("[API] vector store upsert for memory %s failed: %v", id, err)
+		log.Errorf("server", "[API] vector store upsert for memory %s failed: %v", id, err)
 		http.Error(w, "vector store upsert failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	encoded, err := encodeFloat32ToBytes(vec)
 	if err != nil {
-		log.Printf("[API] encode embedding for memory %s failed: %v", id, err)
+		log.Errorf("server", "[API] encode embedding for memory %s failed: %v", id, err)
 	} else {
 		if err := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, dims); err != nil {
-			log.Printf("[API] persist embedding for memory %s failed: %v", id, err)
+			log.Errorf("server", "[API] persist embedding for memory %s failed: %v", id, err)
 			// Embedding 已在 VectorStore 中；DB 持久化是尽力而为。
 		}
 	}
@@ -1398,16 +1400,16 @@ func (s *appServer) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 				"scope":     record.Scope,
 			}
 			if upsertErr := s.vectorStore.Upsert(id, vec, metadata); upsertErr != nil {
-				log.Printf("[API] vector upsert for new memory %s failed: %v", id, upsertErr)
+				log.Errorf("server", "[API] vector upsert for new memory %s failed: %v", id, upsertErr)
 			}
 			if encoded, encErr := encodeFloat32ToBytes(vec); encErr == nil {
 				model := s.resolveProviderNameForAPI()
 				if dbErr := db.InsertOrReplaceMemoryEmbedding(db.DB, id, encoded, model, len(vec)); dbErr != nil {
-					log.Printf("[API] persist embedding for new memory %s failed: %v", id, dbErr)
+					log.Errorf("server", "[API] persist embedding for new memory %s failed: %v", id, dbErr)
 				}
 			}
 		} else {
-			log.Printf("[API] embed new memory %s failed: %v", id, err)
+			log.Errorf("server", "[API] embed new memory %s failed: %v", id, err)
 		}
 	}
 	if s.hub != nil {
@@ -1628,7 +1630,7 @@ func (s *appServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		projects, err := db.QueryProjects()
 		if err != nil {
-			log.Printf("[API] GET /api/projects error: %v", err)
+			log.Errorf("server", "[API] GET /api/projects error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1690,7 +1692,7 @@ func (s *appServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:        now,
 		}
 		if err := db.InsertProject(proj); err != nil {
-			log.Printf("[API] POST /api/projects error: %v", err)
+			log.Errorf("server", "[API] POST /api/projects error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1924,16 +1926,16 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 	// nil summarizer 会让 Compressor 回退到关键词路径。
 	compressor := harness.NewContextCompressor(s.memDB, nil)
 	if result, err := compressor.CompressIfNeeded(id); err != nil {
-		log.Printf("[SessionChat] Compression failed: %v", err)
+		log.Errorf("server", "[SessionChat] Compression failed: %v", err)
 	} else if result.Compressed {
-		log.Printf("[SessionChat] Compressed %d turns for session %s, kept %d messages",
+		log.Infof("server", "[SessionChat] Compressed %d turns for session %s, kept %d messages",
 			result.TurnsCompressed, id, result.MessagesKept)
 	}
 
 	// 加载历史消息
 	historyMessages, err := db.QuerySessionMessages(id)
 	if err != nil {
-		log.Printf("[SessionChat] Failed to load history messages: %v", err)
+		log.Errorf("server", "[SessionChat] Failed to load history messages: %v", err)
 		historyMessages = nil
 	}
 
@@ -2293,9 +2295,9 @@ func (s *appServer) handleRunCase(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:     time.Now(),
 		}
 		if err := db.InsertSession(anonSess); err != nil {
-			log.Printf("[run-case] 创建匿名 session 失败 (case=%q): %v — 退回无 session 路径，产物将落在 server CWD", caseID, err)
+			log.Infof("server", "[run-case] 创建匿名 session 失败 (case=%q): %v — 退回无 session 路径，产物将落在 server CWD", caseID, err)
 		} else {
-			log.Printf("[run-case] 无 session_id，已自动创建匿名 session=%s (workspace=%s) 绑定 case=%q task=%s",
+			log.Infof("server", "[run-case] 无 session_id，已自动创建匿名 session=%s (workspace=%s) 绑定 case=%q task=%s",
 				anonID, anonWS, caseID, taskID)
 			req.SessionID = anonID
 		}
