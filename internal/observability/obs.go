@@ -570,6 +570,11 @@ func (l *StructuredLogger) Errorf(component, format string, args ...any) {
 	l.inner.emit(LevelError, fmt.Sprintf(format, args...), structAttrs(component, nil)...)
 }
 
+// Debugf 以 fmt 风格格式化输出一条 debug 日志（旧签名）。
+func (l *StructuredLogger) Debugf(component, format string, args ...any) {
+	l.inner.emit(LevelDebug, fmt.Sprintf(format, args...), structAttrs(component, nil)...)
+}
+
 // --- 新级别方法 ---
 
 // Trace 输出 trace 级别日志。
@@ -813,3 +818,30 @@ var DefaultLogger = NewStructuredLogger()
 
 // DefaultAuditor 是 package 级别共享的 auditor。
 var DefaultAuditor Auditor = NewMemoryAuditor(10000)
+
+// --- 附录 A：slog Attr 便捷构造（为减少 S15–S23 迁移工作量）---
+// 这些函数返回 slog.Attr，配合 inner Logger 的 InfoMsg/CtxLog/Trace 等
+// 接受 ...slog.Attr 的接口使用；StructuredLogger 的 map 风格方法另走 structAttrs。
+
+// F 构造任意类型的 Attr。
+func F(key string, val any) slog.Attr { return slog.Any(key, val) }
+
+// S 构造字符串 Attr。
+func S(key, val string) slog.Attr { return slog.String(key, val) }
+
+// I 构造 int Attr。
+func I(key string, val int) slog.Attr { return slog.Int(key, val) }
+
+// I64 构造 int64 Attr。
+func I64(key string, val int64) slog.Attr { return slog.Int64(key, val) }
+
+// D 构造 duration Attr（以人类可读字符串呈现）。
+func D(key string, val time.Duration) slog.Attr { return slog.String(key, val.String()) }
+
+// Err 构造 error Attr（err 为 nil 时安全降级为 "<nil>"）。
+func Err(err error) slog.Attr {
+	if err == nil {
+		return slog.String("error", "<nil>")
+	}
+	return slog.String("error", err.Error())
+}
