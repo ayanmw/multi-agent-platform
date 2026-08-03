@@ -27,7 +27,7 @@
 
 **验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -count=1 ./...` ✅ 全绿（无失败包）；`go test ./internal/runtime/... ./internal/orchestrator/...` ✅。
 
-**Commit**：`fabc678`（前置：网络测试确定性守卫归档）、`4c08b52`（N0-01 本体）
+**Commit**：`fabc678`（前置：网络测试确定性守卫归档）、`0c4ce7e`（N0-01 本体）
 
 **下一步**：N0-02 修复多轮历史自复制（`engine.go:823` system prompt 回写 session_messages）。
 
