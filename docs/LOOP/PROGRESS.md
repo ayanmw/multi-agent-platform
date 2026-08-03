@@ -303,14 +303,34 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 03:33 | 轮次 13 | N2-04 | ✅ 真实 Gemini 流式通道落地（SSE + factory 接线）
+
+**目标**：把 Gemini 的 `ChatStream` 从 stub（`return ..., fmt.Errorf("...not implemented")`）落地为真实 SSE 流式实现，使非 OpenAI-compatible 的 provider 也能真实流式对话；并补上 provider 工厂的 `gemini` 分支（此前 `gemini` 名无对应 case，会错误回退到 `OpenAIProvider`，用错协议）。
+
+**改动**：
+- `internal/llm/gemini_provider.go`：新增统一 `geminiResponse` / `geminiUsageMetadata` 类型（流式与非流式解析共用）；`Chat` 改用该类型并**移除本地 token 估算**（严格只用 API `usageMetadata`，符合硬规则「绝不本地估算」）；用真实 SSE 重写 `ChatStream`——POST `/v1beta/models/{model}:streamGenerateContent?alt=sse&key=`，逐行解析 `data:` 为 `geminiResponse`，文本增量累积、functionCall 直接收集为完整 `ToolCall`、`usage` 取自 `usageMetadata`；支持 context 取消、流内错误 chunk（`error` 字段）、坏 chunk 容错跳过；nil context 回退 `context.Background()`。
+- `internal/llm/provider_factory.go`：新增 `case "gemini"` → `NewGeminiProvider`（修复此前默认分支误用 `OpenAIProvider` 的接线 bug）。
+
+**测试**：`internal/llm/gemini_provider_test.go`（**新建 4 例**：文本+functionCall 累积与 usage / 纯文本 / 非 200 错误 / 流内错误 chunk）；`internal/llm/provider_factory_test.go` 的 `TestNewProvider_Gemini` 由仅断言 `Name()` 加强为断言 `*GeminiProvider` 具体类型（暴露此前误回退 bug）。
+
+**验证**：`go build/vet/test -short ./...` 全绿（0 FAIL）；`go test ./internal/llm/...` 全绿；`cases-regression.sh` **21/21**；`smoke-test.sh` **63 PASS / 0 FAIL / 1 SKIP**。未动 `engine.go` 的 `Run()`，N1-01/N1-02 共享临界区无回归。
+
+**说明**：Anthropic 的 `ChatStream` 已于更早实现（双层 SSE + tool_use 累积 + usage 提取均真实），故 N2-04 的实际缺口仅为 Gemini；本任务顺带修正 gemini 工厂接线（使 `model_profile.go` 中 `Provider: "gemini"` 的两个模型真正走 Gemini 协议）。Token 统计全程只用 API usage，无本地估算。
+
+**Commit**：（本轮收尾，见末）
+
+**下一步**：N0/N1/N2 全部 ✅（PLAN.md 已无 ○）→ 下一轮进入 **Phase R（评审-重规划）**：全量验证 + 企业级 10 维度验收 + 生成 N3 新里程碑。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        12
-phase:             N2 (质量与可观测加固)
+loop_round:        13
+phase:             N2 (质量与可观测加固) — N2-04 完成
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N2-04
+next_milestone:    Phase R (评审-重规划)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍被调度，继续推进)
 ```

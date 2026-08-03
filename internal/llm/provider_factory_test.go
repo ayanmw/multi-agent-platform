@@ -55,7 +55,8 @@ func TestNewProvider_Anthropic(t *testing.T) {
 	}
 }
 
-// TestNewProvider_Gemini 验证工厂为 "gemini" 创建 GeminiProvider。
+// TestNewProvider_Gemini 验证工厂为 "gemini" 创建真实的 *GeminiProvider 实例，
+// 而非错误地回退到 OpenAIProvider（N2-04 前 gemini 名无对应分支，会误用 OpenAI 实现）。
 func TestNewProvider_Gemini(t *testing.T) {
 	p, err := NewProvider(ProviderConfig{
 		Name:     "gemini",
@@ -65,6 +66,9 @@ func TestNewProvider_Gemini(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("NewProvider(gemini) failed: %v", err)
+	}
+	if _, ok := p.(*GeminiProvider); !ok {
+		t.Fatalf("expected *GeminiProvider for gemini, got %T", p)
 	}
 	if p.Name() != "gemini" {
 		t.Fatalf("expected provider name gemini, got %q", p.Name())

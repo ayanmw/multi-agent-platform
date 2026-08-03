@@ -95,6 +95,12 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 		//（system prompt、input_schema、x-api-key header 等）。
 		return NewAnthropicProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
 
+	case "gemini":
+		// GeminiProvider 实现 Google Gemini 的 generateContent / streamGenerateContent
+		// 端点，含完整格式转换（?key= 认证、model/role 映射、functionCall 收集）
+		//与真实 SSE 流式解析。此前 ChatStream 为 stub，N2-04 已落地为真实实现。
+		return NewGeminiProvider(cfg.Name, cfg.Endpoint, cfg.APIKey, cfg.Model), nil
+
 	default:
 		// 安全回退：多数 LLM provider（Groq、Together、Fireworks 等）
 		// 都实现 OpenAI 的 Chat Completions API，故默认走 OpenAIProvider。

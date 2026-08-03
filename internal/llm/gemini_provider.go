@@ -13,6 +13,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -37,6 +38,48 @@ type GeminiProvider struct {
 	apiKey   string       // API key，通过 query 参数传递
 	model    string       // 默认 model 名
 	http     *http.Client // goroutine 安全
+}
+
+// geminiResponse 是 Gemini generateContent / streamGenerateContent 的统一
+// 响应结构 —— 两种端点返回相同 JSON 形状，故流式与非流式解析共用。
+type geminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+				// FunctionCall 是 Gemini 的 tool_use 表示（对应统一 ToolCall）。
+				FunctionCall *struct {
+					Name string                 `json:"name"`
+					Args map[string]interface{} `json:"args"`
+				} `json:"functionCall"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata geminiUsageMetadata `json:"usageMetadata"`
+	// Error 是 Gemini 在 200 响应体内以 SSE chunk 形式下发的错误（如 content filter）。
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+}
+
+// geminiUsageMetadata 携带 Gemini 的 token 计数。
+// Token 统计严格来自 API 返回的 usageMetadata，绝不本地估算。
+type geminiUsageMetadata struct {
+	PromptTokenCount     int `json:"promptTokenCount"`
+	CandidatesTokenCount int `json:"candidatesTokenCount"`
+	TotalTokenCount      int `json:"totalTokenCount"`
+}
+
+// mapGeminiUsage 将 Gemini 的 usageMetadata 转换为统一的 Usage 类型。
+func mapGeminiUsage(u geminiUsageMetadata) Usage {
+	return Usage{
+		PromptTokens:     u.PromptTokenCount,
+		CompletionTokens: u.CandidatesTokenCount,
+		TotalTokens:      u.TotalTokenCount,
+	}
 }
 
 // NewGeminiProvider 创建一个新的 GeminiProvider。
@@ -88,25 +131,7 @@ func (p *GeminiProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					FunctionCall *struct {
-						Name string                 `json:"name"`
-						Args map[string]interface{} `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
-		UsageMetadata struct {
-			PromptTokenCount     int `json:"promptTokenCount"`
-			CandidatesTokenCount int `json:"candidatesTokenCount"`
-			TotalTokenCount      int `json:"totalTokenCount"`
-		} `json:"usageMetadata"`
-	}
+	var geminiResp geminiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -152,18 +177,163 @@ func (p *GeminiProvider) Chat(req ChatRequest) (*ChatResponse, error) {
 			CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
 		}
-	} else if len(chatResp.Choices) > 0 {
-		// 部分本地/代理 Gemini 部署不返回 usage，保守估算避免后续除零。
-		chatResp.Usage.TotalTokens = len(chatResp.Choices[0].Message.Content)
 	}
 
 	return chatResp, nil
 }
 
-// ChatStream 当前尚未实现；返回错误以明确告知调用方。
-// 后续 Phase 将补齐流式解析（streamGenerateContent 及 SSE-style 响应）。
+// ChatStream 向 Gemini API 发送 streaming chat 请求，并对每个 SSE 事件调用 onChunk。
+//
+// Gemini 使用专用端点 /v1beta/models/{model}:streamGenerateContent，并通过
+// ?alt=sse 获取标准 SSE 流（每行 "data: {...}" 是一个完整的
+// GenerateContentResponse JSON）。与 OpenAI/Anthropic 的差异：
+//   - Auth：API key 经 query 参数 ?key= 传递（不是 header）。
+//   - 角色：assistant 在请求侧映射为 "model"；响应侧无需回写。
+//   - tool call：functionCall part（非 tool_calls 数组）；finish reason 为 "STOP"
+//     （不是 "tool_calls"）—— Engine 按 toolCalls 长度判定是否执行工具
+//     （见 internal/runtime/engine.go），故无需改写 finish reason。
+//   - usage：在最后一个 chunk 的 usageMetadata 中上报，直接采用，绝不本地估算。
+//
+// 解析策略（复用 client.go 的 SSE 纪律：逐行扫描、跳过空行/注释、容错坏 chunk）：
+//  1. 逐行扫描响应体。
+//  2. 每行 "data: {...}" 解析为 geminiResponse。
+//  3. 文本增量累积进 contentBuilder，并经 onChunk 实时转发（白盒）。
+//  4. functionCall part 直接收集为完整 ToolCall（Gemini 不跨 chunk 拆分参数）。
+//  5. 从最后一个含 usageMetadata 的 chunk 提取 Usage。
 func (p *GeminiProvider) ChatStream(req ChatRequest, onChunk func(StreamChunk) error) (string, Usage, []ToolCall, error) {
-	return "", Usage{}, nil, fmt.Errorf("GeminiProvider.ChatStream not implemented")
+	model := firstNonEmpty(req.Model, p.model)
+	// 从 request 派生 context（nil 回退 Background），用于 HTTP 取消与 SSE 期间提前停止。
+	ctx := req.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	gReq, err := p.buildGeminiRequest(req)
+	if err != nil {
+		return "", Usage{}, nil, fmt.Errorf("build gemini request: %w", err)
+	}
+
+	body, err := json.Marshal(gReq)
+	if err != nil {
+		return "", Usage{}, nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	// Gemini streaming 端点 + SSE 格式（alt=sse）。
+	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", p.endpoint, model, p.apiKey)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", Usage{}, nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.http.Do(httpReq)
+	if err != nil {
+		return "", Usage{}, nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", Usage{}, nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// 从 request 派生 context，便于在 SSE 期间响应取消信号，让被取消的
+	// task 能快速停下而非继续读完整个 stream（ctx 已在函数开头派生，nil 已回退 Background）。
+
+	var (
+		contentBuilder strings.Builder
+		usage          Usage
+		toolCalls      []ToolCall
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		// 在 SSE chunk 之间检查 context cancellation。
+		select {
+		case <-ctx.Done():
+			return contentBuilder.String(), usage, toolCalls, ctx.Err()
+		default:
+		}
+
+		line := scanner.Text()
+
+		// SSE 协议：空行是事件分隔，":" 行是注释。
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+
+		// 将 SSE data 解析为 Gemini 响应；坏 chunk 容错跳过。
+		var gr geminiResponse
+		if err := json.Unmarshal([]byte(data), &gr); err != nil {
+			continue
+		}
+
+		// 流内错误（200 响应体内以 chunk 形式下发）。
+		if gr.Error != nil && gr.Error.Message != "" {
+			return contentBuilder.String(), usage, toolCalls,
+				fmt.Errorf("gemini error (%s): %s", gr.Error.Status, gr.Error.Message)
+		}
+
+		// 用量上报（无候选的 chunk 也可能携带 usageMetadata，确保不漏）。
+		if gr.UsageMetadata.TotalTokenCount > 0 {
+			usage = mapGeminiUsage(gr.UsageMetadata)
+		}
+
+		if len(gr.Candidates) == 0 {
+			continue
+		}
+		cand := gr.Candidates[0]
+
+		// 累积本 chunk 的文本增量与 tool call。
+		var chunkContent strings.Builder
+		for _, part := range cand.Content.Parts {
+			if part.Text != "" {
+				contentBuilder.WriteString(part.Text)
+				chunkContent.WriteString(part.Text)
+			}
+			if part.FunctionCall != nil {
+				// Gemini 的 functionCall 为完整对象（name + args 一次到位），
+				// 故直接收集为统一 ToolCall，无需跨 chunk 增量合并。
+				argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+				toolCalls = append(toolCalls, ToolCall{
+					Type: "function",
+					Function: FunctionCall{
+						Name:      part.FunctionCall.Name,
+						Arguments: string(argsJSON),
+					},
+				})
+			}
+		}
+
+		if cand.FinishReason != "" && strings.EqualFold(cand.FinishReason, "max_tokens") {
+			log.Infof("llm", "[GeminiProvider] ChatStream finished due to length limit (model=%s)", model)
+		}
+
+		// 通过回调把本 chunk 的增量实时转发给 Engine（白盒闭合）。
+		if onChunk != nil {
+			sc := StreamChunk{
+				Delta:        Delta{Content: chunkContent.String()},
+				FinishReason: mapGeminiFinishReason(cand.FinishReason),
+			}
+			sc.Usage = usage
+			if err := onChunk(sc); err != nil {
+				return contentBuilder.String(), usage, toolCalls, err
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return contentBuilder.String(), usage, toolCalls, fmt.Errorf("scan stream: %w", err)
+	}
+
+	// 返回累积结果。Token 统计来自 API usageMetadata，无本地估算。
+	return contentBuilder.String(), usage, toolCalls, nil
 }
 
 // ListModels 当前返回空列表；Gemini 模型列表通过本地配置与缺省画像管理。
