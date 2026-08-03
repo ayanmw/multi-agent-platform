@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -644,17 +645,32 @@ type MetricsCollector struct {
 	costCents       int64
 	llmLatencyHist  *HistogramCollector
 	toolLatencyHist *HistogramCollector
+
+	// N2-01 维度化指标：按 agent / session / step 维度下钻，支撑「白盒」可观测。
+	// 这些维度基数有界（agent 数、step 类型枚举、活跃 session 数），对 Prometheus 安全；
+	// 其中 session 维度仅记录当前活跃/近期 session，长生命周期部署应改用 trace/event 层检索。
+	agentTasks  map[string]map[string]uint64 // agent -> state(started|completed|failed) -> count
+	agentSteps  map[string]map[string]uint64 // agent -> step_type(think|tool_call|...) -> count
+	sessionTasks map[string]map[string]uint64 // session -> state -> count
+	llmLatByAgent  map[string]*HistogramCollector // agent -> LLM 延迟 histogram
+	toolLatByAgent map[string]*HistogramCollector // agent -> Tool 延迟 histogram
+	eventsTotal     uint64 // 经事件总线广播的事件总数
+	malformedEvents uint64 // 事件完整性校验未通过的事件数
 }
+
+// llmLatencyBuckets / toolLatencyBuckets 是 LLM / Tool 延迟 histogram 的 bucket 上界。
+// Phase 8 (P8)：LLM 与 Tool 使用不同的 bucket 上界，LLM 扩展到 120s 以覆盖长尾延迟。
+// 提取为包级变量，供「按 agent 维度」的 per-agent latency histogram 复用（N2-01）。
+var llmLatencyBuckets = []float64{50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000}
+var toolLatencyBuckets = []float64{10, 50, 100, 250, 500, 1000, 5000, 10000}
 
 // NewMetricsCollector 返回一个零值的 metric 收集器。
 // Phase 8 (P8)：LLM 和 Tool 使用不同的 bucket 上界，
 // LLM bucket 扩展到 120s 以覆盖长尾延迟。
 func NewMetricsCollector() *MetricsCollector {
-	llmBuckets := []float64{50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000}
-	toolBuckets := []float64{10, 50, 100, 250, 500, 1000, 5000, 10000}
 	return &MetricsCollector{
-		llmLatencyHist:  NewHistogramCollector(llmBuckets),
-		toolLatencyHist: NewHistogramCollector(toolBuckets),
+		llmLatencyHist:  NewHistogramCollector(llmLatencyBuckets),
+		toolLatencyHist: NewHistogramCollector(toolLatencyBuckets),
 	}
 }
 
@@ -710,6 +726,131 @@ func (m *MetricsCollector) RecordToolLatency(d time.Duration) {
 	m.mu.Unlock()
 }
 
+// ===========================================================================
+// N2-01 维度化指标：agent / session / step 维度
+// ===========================================================================
+//
+// 设计要点：维度基数受控。
+//   - agent：平台配置的 agent 数量（通常个位数到几十），安全。
+//   - step_type：固定枚举（think / tool_call / observe / agent_message_input / ...），安全。
+//   - session：仅记录当前活跃/近期 session，避免无限基数膨胀；长生命周期部署
+//     的 session 级下钻应走 trace/event 层（tracer 有界 ring buffer）。
+// 空维度值统一归一为 "unknown"，避免 Prometheus 把空 label 当缺失。
+
+// RecordAgentTask 按 agent + 终态维度记录一次任务状态变更。
+// state 取值：started / completed / failed。
+func (m *MetricsCollector) RecordAgentTask(agent, state string) {
+	if agent == "" {
+		agent = "unknown"
+	}
+	if state == "" {
+		state = "unknown"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.agentTasks == nil {
+		m.agentTasks = map[string]map[string]uint64{}
+	}
+	s := m.agentTasks[agent]
+	if s == nil {
+		s = map[string]uint64{}
+		m.agentTasks[agent] = s
+	}
+	s[state]++
+}
+
+// RecordSessionTask 按 session + 终态维度记录一次会话状态变更。
+// state 取值：started / completed / failed。
+func (m *MetricsCollector) RecordSessionTask(session, state string) {
+	if session == "" || state == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessionTasks == nil {
+		m.sessionTasks = map[string]map[string]uint64{}
+	}
+	s := m.sessionTasks[session]
+	if s == nil {
+		s = map[string]uint64{}
+		m.sessionTasks[session] = s
+	}
+	s[state]++
+}
+
+// RecordAgentStep 按 agent + step 类型维度记录一次 step 执行。
+// stepType 来自事件 data["type"]（think / tool_call / observe / agent_message_input / ...）。
+func (m *MetricsCollector) RecordAgentStep(agent, stepType string) {
+	if agent == "" {
+		agent = "unknown"
+	}
+	if stepType == "" {
+		stepType = "unknown"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.agentSteps == nil {
+		m.agentSteps = map[string]map[string]uint64{}
+	}
+	s := m.agentSteps[agent]
+	if s == nil {
+		s = map[string]uint64{}
+		m.agentSteps[agent] = s
+	}
+	s[stepType]++
+}
+
+// RecordLLMLatencyForAgent 记录某 agent 的一次 LLM 调用延迟（per-agent histogram）。
+func (m *MetricsCollector) RecordLLMLatencyForAgent(agent string, d time.Duration) {
+	if agent == "" {
+		agent = "unknown"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.llmLatByAgent == nil {
+		m.llmLatByAgent = map[string]*HistogramCollector{}
+	}
+	h := m.llmLatByAgent[agent]
+	if h == nil {
+		h = NewHistogramCollector(llmLatencyBuckets)
+		m.llmLatByAgent[agent] = h
+	}
+	h.Record(d)
+}
+
+// RecordToolLatencyForAgent 记录某 agent 的一次 tool 执行延迟（per-agent histogram）。
+func (m *MetricsCollector) RecordToolLatencyForAgent(agent string, d time.Duration) {
+	if agent == "" {
+		agent = "unknown"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.toolLatByAgent == nil {
+		m.toolLatByAgent = map[string]*HistogramCollector{}
+	}
+	h := m.toolLatByAgent[agent]
+	if h == nil {
+		h = NewHistogramCollector(toolLatencyBuckets)
+		m.toolLatByAgent[agent] = h
+	}
+	h.Record(d)
+}
+
+// IncrEventsTotal 递增经事件总线广播的事件总数。
+func (m *MetricsCollector) IncrEventsTotal() {
+	m.mu.Lock()
+	m.eventsTotal++
+	m.mu.Unlock()
+}
+
+// IncrMalformedEvents 递增事件完整性校验未通过（含缺失必填字段）的事件数。
+// 这是「白盒闭合」的哨兵：任何非法事件都不应静默广播。
+func (m *MetricsCollector) IncrMalformedEvents() {
+	m.mu.Lock()
+	m.malformedEvents++
+	m.mu.Unlock()
+}
+
 // SeedTaskCounts 设置 counter 初值（用于启动时从 DB 回填，P7）。
 func (m *MetricsCollector) SeedTaskCounts(started, completed, failed uint64) {
 	m.mu.Lock()
@@ -730,7 +871,16 @@ func (m *MetricsCollector) SeedLLMUsage(calls, inputTokens, outputTokens, totalT
 	m.mu.Unlock()
 }
 
+// labeledHistSnapshot 是「按维度」的 histogram 快照，便于在锁外格式化。
+type labeledHistSnapshot struct {
+	buckets []float64
+	counts  []uint64
+	total   uint64
+	sum     float64
+}
+
 // metricSnapshot 是 PrometheusText 锁内快照的结构（P9）。
+// N2-01：额外包含维度化指标的拷贝，使锁外格式化无需再持锁。
 type metricSnapshot struct {
 	tasksStarted    uint64
 	tasksCompleted  uint64
@@ -740,10 +890,18 @@ type metricSnapshot struct {
 	llmOutputTokens uint64
 	llmTotalTokens  uint64
 	costCents       int64
+	agentTasks      map[string]map[string]uint64
+	agentSteps      map[string]map[string]uint64
+	sessionTasks    map[string]map[string]uint64
+	llmLatByAgent   map[string]labeledHistSnapshot
+	toolLatByAgent  map[string]labeledHistSnapshot
+	eventsTotal     uint64
+	malformedEvents uint64
 }
 
 // PrometheusText 以 Prometheus exposition 格式返回当前 metric。
 // Phase 8 (P9)：先在锁内快照所有数值，再在锁外格式化，减少锁持有时间。
+// N2-01：快照并输出 agent / session / step 维度指标 + 事件完整性哨兵。
 func (m *MetricsCollector) PrometheusText() string {
 	// 1. 锁内快照
 	m.mu.RLock()
@@ -756,6 +914,13 @@ func (m *MetricsCollector) PrometheusText() string {
 		llmOutputTokens: m.llmOutputTokens,
 		llmTotalTokens:  m.llmTotalTokens,
 		costCents:       m.costCents,
+		agentTasks:      copyLabeledMap(m.agentTasks),
+		agentSteps:      copyLabeledMap(m.agentSteps),
+		sessionTasks:    copyLabeledMap(m.sessionTasks),
+		llmLatByAgent:   copyLabeledHists(m.llmLatByAgent),
+		toolLatByAgent:  copyLabeledHists(m.toolLatByAgent),
+		eventsTotal:     m.eventsTotal,
+		malformedEvents: m.malformedEvents,
 	}
 	llmHistBuckets, llmHistCounts, llmHistTotal, llmHistSum := m.llmLatencyHist.snapshot()
 	toolHistBuckets, toolHistCounts, toolHistTotal, toolHistSum := m.toolLatencyHist.snapshot()
@@ -789,11 +954,116 @@ cost_cents_total %d %d
 		snap.llmTotalTokens, ts,
 		snap.costCents, ts,
 	)
+	// N2-01：维度化指标（agent / session / step）
+	out += formatLabeledCounters("agent_tasks_total",
+		"Total number of agent tasks by agent and final state.",
+		"agent", "state", snap.agentTasks, ts)
+	out += formatLabeledCounters("agent_steps_total",
+		"Total number of agent execution steps by agent and step type.",
+		"agent", "step_type", snap.agentSteps, ts)
+	out += formatLabeledCounters("session_tasks_total",
+		"Total number of session tasks by session and final state.",
+		"session", "state", snap.sessionTasks, ts)
+	out += formatLabeledHistogram("llm_latency_ms",
+		"LLM call latency in milliseconds by agent.", "agent", snap.llmLatByAgent)
+	out += formatLabeledHistogram("tool_latency_ms",
+		"Tool execution latency in milliseconds by agent.", "agent", snap.toolLatByAgent)
+	out += fmt.Sprintf(`# HELP events_total Total number of events broadcast over the event bus.
+# TYPE events_total counter
+events_total %d %d
+# HELP malformed_events_total Total number of events that failed integrity validation.
+# TYPE malformed_events_total counter
+malformed_events_total %d %d
+`,
+		snap.eventsTotal, ts,
+		snap.malformedEvents, ts,
+	)
 	out += formatHistogram("llm_latency_ms", "LLM call latency in milliseconds.",
 		llmHistBuckets, llmHistCounts, llmHistTotal, llmHistSum)
 	out += formatHistogram("tool_latency_ms", "Tool execution latency in milliseconds.",
 		toolHistBuckets, toolHistCounts, toolHistTotal, toolHistSum)
 	return out
+}
+
+// copyLabeledMap 深拷贝「维度 -> 二级维度 -> count」的计数器 map（锁外格式化用）。
+func copyLabeledMap(src map[string]map[string]uint64) map[string]map[string]uint64 {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]map[string]uint64, len(src))
+	for k, inner := range src {
+		ci := make(map[string]uint64, len(inner))
+		for kk, v := range inner {
+			ci[kk] = v
+		}
+		dst[k] = ci
+	}
+	return dst
+}
+
+// copyLabeledHists 快照「维度 -> histogram」为锁外格式化的结构化数据。
+func copyLabeledHists(src map[string]*HistogramCollector) map[string]labeledHistSnapshot {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]labeledHistSnapshot, len(src))
+	for k, h := range src {
+		if h == nil {
+			continue
+		}
+		b, c, t, s := h.snapshot()
+		dst[k] = labeledHistSnapshot{buckets: b, counts: c, total: t, sum: s}
+	}
+	return dst
+}
+
+// formatLabeledCounters 生成带两级 label 的 Prometheus counter 文本（锁外调用）。
+// labelKey1/labelKey2 是 Prometheus label 名（如 "agent" / "state"）。
+func formatLabeledCounters(name, help, labelKey1, labelKey2 string, m map[string]map[string]uint64, ts uint64) string {
+	if len(m) == 0 {
+		return ""
+	}
+	out := fmt.Sprintf("# HELP %s %s\n# TYPE %s counter\n", name, help, name)
+	// 按一级维度排序，保证输出稳定（便于测试断言与 diff）。
+	keys := sortedKeys(m)
+	for _, k := range keys {
+		inner := m[k]
+		for _, kk := range sortedKeys(inner) {
+			out += fmt.Sprintf("%s{%s=%q,%s=%q} %d %d\n",
+				name, labelKey1, k, labelKey2, kk, inner[kk], ts)
+		}
+	}
+	return out
+}
+
+// formatLabeledHistogram 生成带单 label 的 Prometheus histogram 文本（锁外调用）。
+func formatLabeledHistogram(name, help, labelKey string, m map[string]labeledHistSnapshot) string {
+	if len(m) == 0 {
+		return ""
+	}
+	out := fmt.Sprintf("# HELP %s %s\n# TYPE %s histogram\n", name, help, name)
+	for _, k := range sortedKeys(m) {
+		hs := m[k]
+		var cumulative uint64
+		for i, upper := range hs.buckets {
+			cumulative += hs.counts[i]
+			out += fmt.Sprintf("%s_bucket{%s=%q,le=%q} %d\n", name, labelKey, k, fmt.Sprintf("%.3f", upper), cumulative)
+		}
+		out += fmt.Sprintf("%s_bucket{%s=%q,le=%q} %d\n", name, labelKey, k, "+Inf", hs.total)
+		out += fmt.Sprintf("%s_sum{%s=%q} %.3f\n", name, labelKey, k, hs.sum)
+		out += fmt.Sprintf("%s_count{%s=%q} %d\n", name, labelKey, k, hs.total)
+	}
+	return out
+}
+
+// sortedKeys 返回 map 的 key 升序切片（稳定输出）。
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // formatHistogram 从快照数据生成 Prometheus histogram 文本（锁外调用）。

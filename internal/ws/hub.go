@@ -253,7 +253,50 @@ func (h *Hub) Run() {
 }
 
 func (h *Hub) SendEvent(evt event.Event) {
+	// N2-01：白盒闭合哨兵——任何事件广播前先过完整性校验。
+	// 校验未通过的事件仍照常广播（不丢数据），但必须计入 malformed 哨兵并告警，
+	// 便于排障；绝不能让非法事件静默下发到前端或写库。
+	observability.DefaultMetrics.IncrEventsTotal()
+	if issues := event.Validate(evt); len(issues) > 0 {
+		observability.DefaultMetrics.IncrMalformedEvents()
+		log.Warnf("ws", "malformed event passed validation gate type=%s event_id=%s issues=%v",
+			evt.Type, evt.EventID, issues)
+	}
+	// N2-01：按 agent / session / step 维度累加指标（单一漏斗，覆盖全部事件源）。
+	recordEventMetrics(evt)
 	h.broadcast <- evt
+}
+
+// recordEventMetrics 从事件中抽取 agent / session / step 维度并累加到指标收集器。
+// 仅在事件类型映射到受控维度时计数，避免无意义的基数膨胀。
+func recordEventMetrics(evt event.Event) {
+	switch evt.Type {
+	case "task_started":
+		observability.DefaultMetrics.RecordAgentTask(evt.AgentID, "started")
+		if sid, ok := evt.Data["session_id"].(string); ok && sid != "" {
+			observability.DefaultMetrics.RecordSessionTask(sid, "started")
+		}
+	case "task_completed":
+		observability.DefaultMetrics.RecordAgentTask(evt.AgentID, "completed")
+	case "task_failed":
+		observability.DefaultMetrics.RecordAgentTask(evt.AgentID, "failed")
+	case "session_status":
+		// runner.go 在会话终态时广播 session_status{status}；仅记录终态以不重复计数。
+		if sid, ok := evt.Data["session_id"].(string); ok && sid != "" {
+			if st, ok := evt.Data["status"].(string); ok {
+				switch st {
+				case "completed":
+					observability.DefaultMetrics.RecordSessionTask(sid, "completed")
+				case "failed":
+					observability.DefaultMetrics.RecordSessionTask(sid, "failed")
+				}
+			}
+		}
+	case "step_started":
+		if st, ok := evt.Data["type"].(string); ok && st != "" {
+			observability.DefaultMetrics.RecordAgentStep(evt.AgentID, st)
+		}
+	}
 }
 
 // ReplayEvents 返回 sinceEventID 严格之后的缓存事件。

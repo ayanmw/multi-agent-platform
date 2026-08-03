@@ -1045,9 +1045,13 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		}(),
 		LLMLatencyRecorder: func(latency time.Duration) {
 			observability.DefaultMetrics.RecordLLMLatency(latency)
+			// N2-01：按 agent 维度记录 LLM 延迟，支撑「白盒」下钻。
+			observability.DefaultMetrics.RecordLLMLatencyForAgent(agentID, latency)
 		},
 		ToolLatencyRecorder: func(latency time.Duration) {
 			observability.DefaultMetrics.RecordToolLatency(latency)
+			// N2-01：按 agent 维度记录 tool 延迟，支撑「白盒」下钻。
+			observability.DefaultMetrics.RecordToolLatencyForAgent(agentID, latency)
 		},
 		// Phase skill: 注入 Skill 子系统。ActiveSkills 按 session/project/workdir
 		// 解析实际应激活的 skill；TemporarySkillIDs 由 chat/task 请求体透传，runner

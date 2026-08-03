@@ -129,3 +129,35 @@ func generateID() string {
 	}
 	return hex.EncodeToString(bytes)
 }
+
+// Validate 对一条事件做完整性校验，返回所有发现的问题（空切片表示通过）。
+// 这是「白盒闭合」的哨兵：任何经事件总线广播的事件都必须满足结构性约束，
+// 缺失必填字段的事件不应静默下发到前端或写库。
+//
+// 校验项：
+//   - EventID 必须非空（用于幂等去重与 replay 游标）
+//   - Type 必须非空（前端据此路由渲染）
+//   - Timestamp 必须为正（毫秒 epoch，0 表示未初始化）
+//   - 至少存在一个路由键（TaskID / SubTaskID / AgentID 之一非空），
+//     否则事件无法被定位到具体任务/会话/agent。
+func Validate(e Event) []string {
+	var issues []string
+	if e.EventID == "" {
+		issues = append(issues, "event_id is empty")
+	}
+	if e.Type == "" {
+		issues = append(issues, "type is empty")
+	}
+	if e.Timestamp <= 0 {
+		issues = append(issues, "timestamp must be a positive unix millisecond")
+	}
+	if e.TaskID == "" && e.SubTaskID == "" && e.AgentID == "" {
+		issues = append(issues, "no routing key (task_id, sub_task_id, agent_id all empty)")
+	}
+	return issues
+}
+
+// Valid 返回事件是否通过完整性校验。
+func Valid(e Event) bool {
+	return len(Validate(e)) == 0
+}

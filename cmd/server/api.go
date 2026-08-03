@@ -2487,11 +2487,53 @@ func auditRecordToMap(rec observability.AuditRecord) map[string]any {
 }
 
 // handleTraces 返回进程级 tracer 中所有缓存的 trace span。
-// GET /api/traces
+// GET /api/traces[?task_id=<id>&agent_id=<id>&limit=<n>]
+//
+// N2-01：支持按 task_id / agent_id 过滤，使「一次 run 的 tracing 链路」可被
+// 精确检索；响应携带 dropped_spans / buffer_limit，便于运维评估 trace 缓冲健康度。
 func (s *appServer) handleTraces(w http.ResponseWriter, r *http.Request) {
-	data, _ := tracer.JSON()
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	taskID := q.Get("task_id")
+	agentID := q.Get("agent_id")
+	limit := 0
+	if limStr := q.Get("limit"); limStr != "" {
+		if n, err := strconv.Atoi(limStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	spans := tracer.Peek()
+	if taskID != "" || agentID != "" {
+		var filtered []observability.SpanRecord
+		for _, sp := range spans {
+			if taskID != "" && sp.TaskID != taskID {
+				continue
+			}
+			if agentID != "" && sp.AgentID != agentID {
+				continue
+			}
+			filtered = append(filtered, sp)
+		}
+		spans = filtered
+	}
+	// Peek 按时间升序，保留最近 limit 条。
+	if limit > 0 && len(spans) > limit {
+		spans = spans[len(spans)-limit:]
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	json.NewEncoder(w).Encode(map[string]any{
+		"spans":         spans,
+		"count":         len(spans),
+		"dropped_spans": tracer.DroppedSpans(),
+		"buffer_limit":  tracer.Limit(),
+		"task_id":       taskID,
+		"agent_id":      agentID,
+	})
 }
 
 // handleReplayEvents 返回给定 event_id 之后的缓存 WebSocket 事件。

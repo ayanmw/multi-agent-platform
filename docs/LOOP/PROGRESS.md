@@ -233,14 +233,36 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 23:41 | 轮次 10 | N2-01 | ✅ 可观测性补全（维度化 /metrics + 事件完整性校验 + tracing 串联）
+
+**目标**：把「白盒」可观测从「进程级聚合计数」下钻为「agent / session / step 维度」，并补齐事件完整性哨兵与一次 run 的 tracing 检索链路，确保状态变更全经 EventBus、无非法事件静默下发。
+
+**改动**（接手上一轮已落盘但未提交的 N2-01 半成品，本轮完成验证 + 收尾提交）：
+- `internal/observability/obs.go`：新增维度化指标 `RecordAgentTask`(agent×state)、`RecordAgentStep`(agent×step_type)、`RecordSessionTask`(session×state)、`RecordLLMLatencyForAgent`/`RecordToolLatencyForAgent`(per-agent histogram)、`IncrEventsTotal`/`IncrMalformedEvents`；`PrometheusText` 快照并输出 `agent_tasks_total` / `agent_steps_total` / `session_tasks_total` / `llm_latency_ms{agent}` / `tool_latency_ms{agent}` / `events_total` / `malformed_events_total`；空维度归一 `unknown`；`formatLabeledCounters`/`formatLabeledHistogram`/`sortedKeys` 锁外格式化（延续 P9 快照-格式化分离）。
+- `pkg/event/event.go`：新增 `Validate`（EventID/Type/Timestamp>0/至少一路由键 TaskID|SubTaskID|AgentID）+ `Valid` ——「白盒闭合」哨兵。
+- `internal/ws/hub.go`：`SendEvent` 收敛为单一漏斗，广播前先 `event.Validate`：total 必增、非法事件计入 `malformed_events_total` 并 Warn（不丢数据），并按事件类型经 `recordEventMetrics` 累加 agent/session/step 维度（覆盖全部事件源，避免散落计数）。
+- `cmd/server/runner.go`：`LLMLatencyRecorder`/`ToolLatencyRecorder` 同时调 per-agent 维度记录。
+- `cmd/server/api.go`：`handleTraces` 由裸 `tracer.JSON()` 升级为支持 `?task_id=&agent_id=&limit=` 过滤 + 返回 `dropped_spans`/`buffer_limit` 健康度，使「一次 run 的 tracing 链路」可精确检索（tracing 串联）。
+- **测试**：新增 `internal/observability/metrics_test.go`（`TestMetricsDimensionRecording`/`TestMetricsDimensionCounterStable`）、`pkg/event/event_validate_test.go`（`TestValidate`/`TestValidateMultipleIssues`）、`internal/ws/hub_metrics_test.go`（`TestSendEventRecordsMalformedAndDimensions` —— SendEvent 漏斗同步校验 + 维度累加，无 sleep 竞态，改为 channel 同步屏障）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok）/ `bash scripts/cases-regression.sh` ✅ **21/21** / `bash scripts/smoke-test.sh` ✅ 全部端点通过（含 /api/traces 与 /metrics 维度）。
+
+**提交范围说明**：仅暂存 N2-01 相关文件（`internal/observability/obs.go`+`metrics_test.go`、`pkg/event/event.go`+`event_validate_test.go`、`internal/ws/hub.go`+`hub_metrics_test.go`、`cmd/server/api.go`、`cmd/server/runner.go`）+ `docs/LOOP/PLAN.md`+`PROGRESS.md` 记账。工作区另有与 N2-01 无关的 `internal/llm/provider_manager.go` 小幅改动（provider 实例 `Name: pc.Name` 修正）保持未暂存，不纳入本次提交，遵循「每轮只做一件事」。
+
+**Commit**：（本轮收尾，见末）
+
+**下一步**：N2-02 —— 测试覆盖扩展（E2E 多轮记忆 / RBAC 403 / 审计；cases 稳定 21/21；multi-agent-smoke 通过）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        9
+loop_round:        10
 phase:             N2 (质量与可观测加固)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N2-01
+next_milestone:    N2-02
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```
