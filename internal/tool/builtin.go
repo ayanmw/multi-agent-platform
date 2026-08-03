@@ -723,6 +723,98 @@ func NewLeaderTools(
 	}
 }
 
+// AgentMessageSender 是 agent 经 AgentBus 主动向其它的 agent 发送消息的抽象。
+// 工具层只依赖该接口，具体实现由 cmd/server 注入（包装 engine.SendAgentMessageTo），
+// 避免 tool 包直接依赖 runtime 包形成双向依赖。N1-02 引入，作为 send_agent_message
+// 工具的发送能力来源。
+type AgentMessageSender interface {
+	// SendAgentMessageTo 向 (toAgentID, toSubTaskID) 发送一条 agent 间消息。
+	// msgType 描述消息语义（request/response/observation/error）。
+	// 返回 true 表示消息已交给 AgentBus 路由；false 表示被拒绝
+	// （AgentBus 未启用或目标 agent 为空）——调用方可据此向 LLM 反馈投递结果。
+	SendAgentMessageTo(toAgentID, toSubTaskID, msgType, content string) bool
+}
+
+// NewSendAgentMessageTool 创建 send_agent_message 工具实例，补全 AgentBus ↔
+// ReAct Loop 的「发闭环」：在此之前 LLM 只能通过系统内部路径（审批委托等）被动
+// 触发消息，无法经 AgentBus 主动与其它 agent 协作；现在任何持有 AgentBus 的
+// agent 都可调用该工具主动发送结构化消息（请求/回应/观察/错误）。
+//
+// 工具的发送能力完全由注入的 AgentMessageSender 提供，工具本身不感知 runtime
+// 包，保持依赖单向。sender 通常包装 engine.SendAgentMessageTo，由 cmd/server
+// 在构造 Engine 后注入（注入点见 cmd/server/runner.go 的 N1-02 片段）。
+//
+// 经工具发出的消息会被目标 agent 的 AgentBus handler 接收，并（由 Engine.Run()
+// 的 listener goroutine）作为 user message 注入目标 agent 的对话，从而实现
+// agent 之间的双向消息驱动协作。
+func NewSendAgentMessageTool(sender AgentMessageSender) *BuiltinTool {
+	return NewBuiltinTool(
+		"send_agent_message",
+		"",
+		"Send a structured message to another agent through the AgentBus. Use this to collaborate with peer agents (e.g. the leader, a worker, or the supervisor) by sending a request, response, observation, or error. The receiving agent's ReAct loop will treat your message as a new input and can reply in turn. Only use this when an AgentBus is active in a multi-agent session.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"to_agent_id": map[string]any{
+					"type":        "string",
+					"description": "Target agent ID that should receive the message (e.g. \"leader\", \"agent_writer\"). Required.",
+				},
+				"sub_task_id": map[string]any{
+					"type":        "string",
+					"description": "Optional target sub-task ID for sub-task-scoped routing. Omit to target the agent's default handler.",
+				},
+				"msg_type": map[string]any{
+					"type":        "string",
+					"enum":        []string{"request", "response", "observation", "error"},
+					"description": "Message semantics: request (ask something), response (reply to a request), observation (context/information), error (report a failure).",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The message body sent to the target agent.",
+				},
+			},
+			"required": []string{"to_agent_id", "content"},
+		},
+		func(_ ExecuteContext, input map[string]any) (any, error) {
+			toAgentID := getString(input, "to_agent_id", "")
+			if toAgentID == "" {
+				return nil, fmt.Errorf("to_agent_id is required")
+			}
+			content := getString(input, "content", "")
+			if content == "" {
+				return nil, fmt.Errorf("content is required")
+			}
+			msgType := getString(input, "msg_type", "request")
+			switch msgType {
+			case "request", "response", "observation", "error":
+			default:
+				return nil, fmt.Errorf("msg_type must be one of request, response, observation, error")
+			}
+			subTaskID := getString(input, "sub_task_id", "")
+
+			if sender == nil {
+				return nil, fmt.Errorf("this agent has no AgentBus sender; agent-to-agent messaging is disabled")
+			}
+			delivered := sender.SendAgentMessageTo(toAgentID, subTaskID, msgType, content)
+			if !delivered {
+				return map[string]any{
+					"delivered":      false,
+					"to_agent_id":    toAgentID,
+					"to_sub_task_id": subTaskID,
+					"msg_type":       msgType,
+					"reason":         "message was not accepted by AgentBus (target agent not reachable, or bus disabled)",
+				}, nil
+			}
+			return map[string]any{
+				"delivered":      true,
+				"to_agent_id":    toAgentID,
+				"to_sub_task_id": subTaskID,
+				"msg_type":       msgType,
+			}, nil
+		},
+	).WithTags("communication")
+}
+
 // NewDispatchSubAgentTool 创建 dispatch_sub_agent 工具实例。
 // 工具位于全局命名空间，仅注册在 leader 的 registry 中，因此天然只有
 // leader 可调。leaderSubTaskID 是本次调度对应的 root task ID，直接传入，

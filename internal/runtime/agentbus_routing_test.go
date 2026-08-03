@@ -175,3 +175,107 @@ func TestSendAgentMessageNoBusIsNoop(t *testing.T) {
 		t.Fatalf("AgentBus 为 nil 时应返回 false")
 	}
 }
+
+// deliveringAgentBus 是一个测试用功能型 AgentBus：它既记录所有经 SendMessage
+// 发出的消息，又会在消息到达时同步投递给已注册的 (ToAgentID) handler，从而模拟
+// 生产 orchestrator.AgentBus 的「发送即投递」语义，用于断言 Engine.SendAgentMessageTo
+// 发出的消息确实能被目标 agent 的 handler 收到（N1-02 的「发闭环」端到端验证）。
+type deliveringAgentBus struct {
+	mu      sync.Mutex
+	handlers map[string]func(AgentMessage)
+	received []AgentMessage
+}
+
+func newDeliveringAgentBus() *deliveringAgentBus {
+	return &deliveringAgentBus{handlers: map[string]func(AgentMessage){}}
+}
+
+func (b *deliveringAgentBus) RegisterHandler(agentID string, handler func(AgentMessage)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.handlers[agentID] = handler
+}
+
+func (b *deliveringAgentBus) RegisterHandlerBySubTask(agentID, subTaskID string, handler func(AgentMessage)) {
+	b.RegisterHandler(agentID, handler)
+}
+
+func (b *deliveringAgentBus) UnregisterHandler(agentID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.handlers, agentID)
+}
+
+func (b *deliveringAgentBus) UnregisterHandlerBySubTask(agentID, subTaskID string) {
+	b.UnregisterHandler(agentID)
+}
+
+func (b *deliveringAgentBus) SendMessage(msg AgentMessage) {
+	b.mu.Lock()
+	b.received = append(b.received, msg)
+	h, ok := b.handlers[msg.ToAgentID]
+	b.mu.Unlock()
+	if ok {
+		h(msg)
+	}
+}
+
+// TestEngineSendAgentMessageToDeliversToHandler 是 N1-02 的核心端到端验证：
+// Engine.SendAgentMessageTo（send_agent_message 工具的发送能力来源）发出的消息
+// 必须被目标 agent 注册的 handler 收到，且携带正确的收发方身份与内容。
+func TestEngineSendAgentMessageToDeliversToHandler(t *testing.T) {
+	bus := newDeliveringAgentBus()
+	var (
+		got   AgentMessage
+		gotMu sync.Mutex
+	)
+	bus.RegisterHandler("leader", func(m AgentMessage) {
+		gotMu.Lock()
+		got = m
+		gotMu.Unlock()
+	})
+
+	engine := NewEngine(EngineConfig{
+		AgentID:   "agent_writer",
+		SubTaskID: "root_agent_writer",
+		Model:     "fake-model",
+		Provider:  &fakeJudgeProvider{resp: "ack"},
+		Contract:  harness.TaskContract{Goal: "routing test", Scope: "."},
+		AgentBus:  bus,
+	}, tool.NewRegistry(), &recordingBus{}, "task-x")
+
+	if ok := engine.SendAgentMessageTo("leader", "root", "request", "请审阅这段代码"); !ok {
+		t.Fatalf("SendAgentMessageTo 返回 false，期望投递成功")
+	}
+
+	gotMu.Lock()
+	defer gotMu.Unlock()
+	if got.Content != "请审阅这段代码" {
+		t.Errorf("handler 收到的 Content = %q", got.Content)
+	}
+	if got.FromAgentID != "agent_writer" || got.FromSubTaskID != "root_agent_writer" {
+		t.Errorf("handler 收到的发送方身份错误: from=%q from_sub=%q", got.FromAgentID, got.FromSubTaskID)
+	}
+	if got.ToAgentID != "leader" || got.SubTaskID != "root" {
+		t.Errorf("handler 收到的目标身份错误: to=%q sub=%q", got.ToAgentID, got.SubTaskID)
+	}
+	if got.Type != "request" {
+		t.Errorf("handler 收到的 Type = %q，期望 request", got.Type)
+	}
+}
+
+// TestEngineSendAgentMessageToNoBus 验证公开入口在未启用 AgentBus 时同样返回 false，
+// 与私有 sendAgentMessageTo 行为一致（N1-02 注入点的 nil-safety 兜底）。
+func TestEngineSendAgentMessageToNoBus(t *testing.T) {
+	engine := NewEngine(EngineConfig{
+		AgentID:   "agent_writer",
+		SubTaskID: "root_agent_writer",
+		Model:     "fake-model",
+		Provider:  &fakeJudgeProvider{resp: "ack"},
+		Contract:  harness.TaskContract{Goal: "routing test", Scope: "."},
+	}, tool.NewRegistry(), &recordingBus{}, "task-x")
+
+	if engine.SendAgentMessageTo("leader", "", "request", "无 bus") {
+		t.Fatalf("AgentBus 为 nil 时 SendAgentMessageTo 应返回 false")
+	}
+}

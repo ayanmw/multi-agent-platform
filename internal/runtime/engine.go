@@ -2820,6 +2820,16 @@ func (e *Engine) sendAgentMessageTo(toAgentID, toSubTaskID, msgType, content str
 	return true
 }
 
+// SendAgentMessageTo 是给外部调用方（工具的 sender 实现、cmd/server 注入点）
+// 使用的公开入口，用于通过 AgentBus 向 (toAgentID, toSubTaskID) 主动发送一条
+// agent 间消息。它内部委托 sendAgentMessageTo，语义与该私有方法完全一致
+// （见其文档）：返回 true 表示消息已交给 AgentBus 路由；false 表示被拒绝
+// （AgentBus 未启用，或目标 agent 为空）。N1-02 引入，作为 send_agent_message
+// 工具发送能力的唯一实现来源，使 LLM 能在 ReAct Loop 中主动向其它 agent 协作。
+func (e *Engine) SendAgentMessageTo(toAgentID, toSubTaskID, msgType, content string) bool {
+	return e.sendAgentMessageTo(toAgentID, toSubTaskID, msgType, content)
+}
+
 // repairToolArgumentsJSON 尝试对 LLM 产出的 malformed tool arguments 做
 // best-effort 修复。生产环境中最常见的失败模式是长内容 payload 末尾的
 // JSON string 或 object 未终止（例如 write_file 流式输出一个大 HTML 文件

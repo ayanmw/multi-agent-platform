@@ -431,6 +431,28 @@ type leaderApprovalHandler struct {
 	leaderSubTaskID string
 }
 
+// agentMessageSender 是 tool.AgentMessageSender 的 cmd/server 实现，把发送能力
+// 委托给本 Engine 的 SendAgentMessageTo。N1-02：使 send_agent_message 工具能在
+// ReAct Loop 中主动向其它 agent 经 AgentBus 发送消息，补全 AgentBus ↔ ReAct Loop
+// 的「发闭环」。
+//
+// 采用 holder 模式：构造 Engine 之前无法拿到 *runtime.Engine 指针（NewEngine 是
+// 单条赋值语句，engine 变量在其返回后才可用），因此先构造空 holder 并注册工具，
+// 待 Engine 创建后再把 engine 注入 holder。工具在 Run() 期间执行时 holder.engine
+// 必然已就绪；且 Engine 按指针持有与注册时相同的 registry，工具对引擎可见。
+type agentMessageSender struct {
+	engine *runtime.Engine
+}
+
+// SendAgentMessageTo 实现 tool.AgentMessageSender。engine 未就绪（构造期异常）
+// 时安全返回 false，避免 nil 解引用。
+func (s *agentMessageSender) SendAgentMessageTo(toAgentID, toSubTaskID, msgType, content string) bool {
+	if s.engine == nil {
+		return false
+	}
+	return s.engine.SendAgentMessageTo(toAgentID, toSubTaskID, msgType, content)
+}
+
 // RequestDelegatedApproval 在 cmd/server 层实现 runtime.ApprovalDelegationHandler。
 // 它通过全局 engineRegistry 查找 supervisor leader 的 Engine，在注册表中登记等待
 // channel，然后往 leader 发送 AgentBus 审批请求消息，最后等待 leader 调用
@@ -932,6 +954,20 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		})
 	}
 
+	// N1-02：注入 send_agent_message 工具，补全 AgentBus ↔ ReAct Loop 的「发闭环」。
+	// 仅当本 agent 持有 AgentBus 时注册——单 agent（无 bus）会话无需该工具，
+	// 否则 LLM 会误调用一个恒失败的通信工具。为避免污染共享的 base registry，
+	// 若 engineTools 仍指向共享 tools（非 leader / 非 worktree 克隆）则先克隆。
+	// holder 此刻 engine 尚为空，待下方 NewEngine 返回后再注入 engine 指针。
+	var agentMsgSender *agentMessageSender
+	if agentBus != nil {
+		if engineTools == tools {
+			engineTools = tools.Clone()
+		}
+		agentMsgSender = &agentMessageSender{}
+		engineTools.Register(tool.NewSendAgentMessageTool(agentMsgSender))
+	}
+
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:           agentID,
 		SystemPrompt:      systemPrompt,
@@ -1056,6 +1092,12 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		AllowFallback:  allowFallback,
 		MaxCostUSD:     maxCostUSD,
 	}, engineTools, &hubAdapter{hub: hub}, taskID)
+
+	// N1-02：把刚创建的 Engine 注入 holder，使 send_agent_message 工具可执行发送。
+	// Engine 按指针持有与注册时相同的 registry，因此工具对引擎可见且可用。
+	if agentMsgSender != nil {
+		agentMsgSender.engine = engine
+	}
 
 	hub.SendEvent(event.NewEvent("task_started", taskID, agentID, 0, map[string]any{
 		"task_id":    taskID,

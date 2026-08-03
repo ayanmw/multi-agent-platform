@@ -129,10 +129,30 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 12:22 | 轮次 5 | N1-02 | ✅ AgentBus ↔ ReAct Loop「发闭环」（send_agent_message 工具）
+
+**目标**：补全 AgentBus 与 ReAct Loop 的「发闭环」——此前 LLM 只能通过系统内部路径（审批委托 `approval_delegation.go` / `runner.go` 兜底）被动触发消息，无法经 AgentBus 主动与其它 agent 协作；「收闭环」（`Run()` 的 listener goroutine 把到达消息注入为 user message）早已就绪。N1-02 让任意持有 AgentBus 的 agent 能在工具调用中主动发送结构化消息（request/response/observation/error），从而形成双向消息驱动协作协议。
+
+**改动**：
+- `internal/runtime/engine.go`：新增公开方法 `Engine.SendAgentMessageTo(toAgentID, toSubTaskID, msgType, content) bool`，内部委托既有私有 `sendAgentMessageTo`（N0-01 修正后的路由/空目标拒绝语义完全复用）。它是 `send_agent_message` 工具发送能力的唯一实现来源。
+- `internal/tool/builtin.go`：新增 `AgentMessageSender` 接口（避免 tool 包直接依赖 runtime 包，保持依赖单向）+ 工厂 `NewSendAgentMessageTool(sender)`。工具 schema：`to_agent_id`(必填)/`sub_task_id`(可选)/`msg_type`(enum request/response/observation/error，缺省 request)/`content`(必填)；含字段校验（缺 to_agent_id/content 或非法 msg_type 报错）、sender 返回 false 时回传 `delivered:false + reason`、sender 为 nil 时明确报错。标签 `communication`。
+- `cmd/server/runner.go`：新增 `agentMessageSender` holder（实现 `tool.AgentMessageSender`，委托 `engine.SendAgentMessageTo`）。采用 holder 模式：因 `engine := runtime.NewEngine(...)` 是单条赋值语句、`engine` 变量在返回后才可用，故先克隆 `engineTools`（若仍指向共享 base registry，避免污染）并注册工具（holder 此刻 engine 为空），待 `NewEngine` 返回后再把 `engine` 注入 holder。仅当 `agentBus != nil`（即多 agent 会话）时注入该工具——单 agent 无 bus 时 LLM 不会误调用恒失败的通信工具。Engine 按指针持有同一 registry，工具对引擎可见。
+- **测试**：`internal/tool/send_agent_message_test.go`（6 例：合法转发断言参数/返回 delivered、缺省字段回退、sender 拒收回传 delivered:false+reason、字段校验报错、nil sender 报错）；`internal/runtime/agentbus_routing_test.go` 新增功能型 `deliveringAgentBus`（发送即投递到 handler）+ `TestEngineSendAgentMessageToDeliversToHandler`（N1-02 核心端到端：Engine.SendAgentMessageTo 发出的消息被目标 handler 收到且身份/内容正确）+ `TestEngineSendAgentMessageToNoBus`（nil bus 返回 false）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（全量 short）/`go test ./internal/runtime/... ./internal/orchestrator/...` ✅（N1-01/N1-02 共享 `Run()` 临界区并发重跑绿）/ `bash scripts/cases-regression.sh` ✅ **21/21** / `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**（SKIP=/ws 握手）。
+
+**过程发现**：`NewEngine` 按指针持有 `tools` registry 并惰性解析工具，因此「引擎创建后注册工具」对引擎可见——但 `engine` 变量在其赋值语句返回前不可用，故必须用 holder 模式（先注册空 holder，后注入 engine），不能直接在 NewEngine 之前把 `engine` 当 sender 传入。该约束已写入本任务改动注释，供后续同类注入参考。
+
+**遗留（非阻塞）**：C1-2 通信权限矩阵（Child→Leader/ Leader→Child/ Child→Child 按 OutputTo 授权）未做——当前任何持有 AgentBus 的 agent 均可向任意已注册 agent 发消息，靠 AgentBus 路由天然可达性约束；可作为后续增强（归入 N2 或新里程碑）。C-P2 阻塞等待（`wait_for_agent_message`）为可选高风险项，按 LOOP 协议留待后续评估。
+
+**下一步**：N1-03 —— RBAC 落地（`middleware.RequirePermission` 接入敏感路由 + viewer/developer/admin 角色）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        4
+loop_round:        5
 phase:             N1 (企业级核心能力)
 quality_gate_pass: false
 done:              false
