@@ -51,7 +51,7 @@
 
 **验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -count=1 ./...` ✅ 全绿（无失败包）；N0-01 回归 `go test ./internal/runtime/... ./internal/orchestrator/...` ✅；`gofmt` 经 LF 归一后干净（CRLF 伪影已记入 LEARNINGS）。
 
-**Commit**：`5c681ff`
+**Commit**：`e6f530e`
 
 **下一步**：N0-03 —— N0 回归验证与结项（cases-regression 21/21 + smoke-test + 结项报告）。
 
