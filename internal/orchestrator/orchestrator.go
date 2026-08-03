@@ -1122,7 +1122,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		CanDispatchSubAgents: false,
 		CanDefineWorkflow:    false,
 		SupervisorSubTaskID:  rootTaskID,
-		ApproverMode:         "leader",
+		// N0-01：显式指明监督 agent 的 ID。root/leader Engine 以
+		// (leader, rootTaskID) 注册 AgentBus handler（见 AgentMessage 的
+		// Phase 7-J 注释与 OutputTo 转发逻辑），worker 必须以同一对键为目标，
+		// 否则消息匹配不到 handler，只会滞留在 AgentBus 队列里。
+		SupervisorAgentID: runtime.DefaultSupervisorAgentID,
+		ApproverMode:      "leader",
 	}, engineTools, &hubAdapter{hub: o.hub}, subTaskID)
 
 	// Phase 7-A: 注意 —— 每个 agent 的 Engine/cancel 注册被刻意保留在

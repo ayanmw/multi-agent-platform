@@ -439,9 +439,16 @@ func (h *leaderApprovalHandler) RequestDelegatedApproval(req runtime.DelegatedAp
 	runtime.RegisterDelegatedApproval(req.ApprovalID, ch)
 	defer runtime.UnregisterDelegatedApproval(req.ApprovalID)
 
-	// 通过 leader Engine 的 AgentBus listener 把审批请求作为 user message 注入。
-	content, _ := runtime.BuildApprovalDelegationContent(req)
-	leaderEngine.SendAgentMessage("approval_request", req.SupervisorSubTaskID, content)
+	// 兜底通道：worker 侧未能经 AgentBus 投递（AgentBus 未启用等）时，
+	// 直接向 leader Engine 自投递，把审批请求作为 user message 注入其 listener。
+	//
+	// N0-01：worker 侧的 AgentBus 路由修复后（ToAgentID 不再为空），正常路径
+	// 已经能送达 leader；此处若无条件重发会让 leader 收到两份相同请求。
+	// 因此仅在 req.BusNotified == false 时才补发，保证「恰好一次」。
+	if !req.BusNotified {
+		content, _ := runtime.BuildApprovalDelegationContent(req)
+		leaderEngine.SendAgentMessage("approval_request", req.SupervisorSubTaskID, content)
+	}
 
 	// 等待 leader 审批决定，带超时回退。
 	decision, err := runtime.WaitForDelegatedApproval(req.ApprovalID, 30*time.Second)

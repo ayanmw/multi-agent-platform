@@ -393,3 +393,61 @@ assertModel:
 		t.Fatalf("agent_ready model = %q, want %q", seenModel, agentModel)
 	}
 }
+
+// TestAgentBus_WorkerToLeaderRouting 是 N0-01 的投递侧回归：
+// worker 以 (ToAgentID="leader", SubTaskID=rootTaskID) 为目标发送时，消息必须
+// 立即进入 leader Engine 注册的精确 handler；而 ToAgentID 为空的旧行为只会
+// 让消息滞留在待投递队列中（永远匹配不到任何 handler），这正是修复前
+// approval_request 送不达 leader 的根因。
+func TestAgentBus_WorkerToLeaderRouting(t *testing.T) {
+	bus := NewAgentBus()
+	const rootTaskID = "task-root"
+
+	delivered := make(chan AgentMessage, 2)
+	// leader Engine 按 (leader, rootTaskID) 注册（见 runtime.Engine.Run）。
+	bus.RegisterHandlerBySubTask("leader", rootTaskID, func(msg AgentMessage) {
+		delivered <- msg
+	})
+
+	// 修复后的发送目标：精确命中 leader handler。
+	bus.SendMessage(AgentMessage{
+		FromAgentID:   "agent_writer",
+		FromSubTaskID: rootTaskID + "_agent_writer",
+		ToAgentID:     "leader",
+		SubTaskID:     rootTaskID,
+		Type:          "approval_request",
+		Content:       "请审批 run_shell",
+	})
+
+	select {
+	case msg := <-delivered:
+		if msg.Type != "approval_request" || msg.FromAgentID != "agent_writer" {
+			t.Fatalf("投递到 leader 的消息不符: type=%q from=%q", msg.Type, msg.FromAgentID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker → leader 的消息未被投递")
+	}
+
+	// 修复前的发送目标（空 ToAgentID）：匹配不到任何 handler，只会入队滞留。
+	bus.SendMessage(AgentMessage{
+		FromAgentID: "agent_writer",
+		ToAgentID:   "",
+		SubTaskID:   rootTaskID,
+		Type:        "approval_request",
+		Content:     "空目标消息",
+	})
+
+	select {
+	case msg := <-delivered:
+		t.Fatalf("空目标消息不应被投递，却收到: %q", msg.Content)
+	case <-time.After(100 * time.Millisecond):
+		// 预期：未投递。
+	}
+
+	bus.mu.RLock()
+	queued := len(bus.queue)
+	bus.mu.RUnlock()
+	if queued != 1 {
+		t.Fatalf("待投递队列长度 = %d，期望 1（空目标消息滞留其中）", queued)
+	}
+}

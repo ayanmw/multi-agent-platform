@@ -37,8 +37,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # -short 跳过依赖真实外网/真实 API key 的测试（见 internal/tool/
+      # network_test_guard_test.go）。这类测试在 CI runner 上不具确定性：
+      # 受第三方站点可用性、地域网络策略与反爬策略影响。
+      # 本地手动验证：RUN_NETWORK_TESTS=1 go test ./internal/tool/ -run TestReal -v
       - name: go test
-        run: go test ./...
+        run: go test -short ./...
 
       - name: go build
         run: go build -o bin/server ./cmd/server

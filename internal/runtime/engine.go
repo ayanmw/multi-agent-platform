@@ -161,6 +161,17 @@ const (
 	AgentRoleWorker AgentRole = "worker"
 )
 
+// DefaultSupervisorAgentID 是 worker 未显式配置 SupervisorAgentID 时使用的
+// 默认监督 agent ID。
+//
+// 设计理由（N0-01）：AgentBus 先按 (ToAgentID, SubTaskID) 精确路由，再回退到
+// 仅 ToAgentID 的 handler。ToAgentID 为空的消息永远匹配不到任何 handler，
+// 只会在 maxQueue 队列中滞留并挤掉真实消息。root/leader Engine 在 cmd/server
+// 与 orchestrator 中统一以 AgentID = "leader"、SubTaskID = rootTaskID 注册
+// handler（见 orchestrator.AgentMessage 的 Phase 7-J 注释），因此以 "leader"
+// 作为兜底目标，保证 worker → supervisor 的消息总能被投递。
+const DefaultSupervisorAgentID = "leader"
+
 // EngineConfig 持有创建并运行一个 Engine 所需的全部配置。
 // 它是 agent 身份、模型设置、安全限制和持久化后端的唯一真理来源。
 //
@@ -365,6 +376,14 @@ type EngineConfig struct {
 	// worker 由 orchestrator 指向 root task；leader 留空。
 	// Phase 7-H 引入。
 	SupervisorSubTaskID string
+
+	// SupervisorAgentID 是父级/监督 agent 的 agent ID，与 SupervisorSubTaskID
+	// 一起构成 AgentBus 的精确路由目标 (ToAgentID, SubTaskID)。
+	//
+	// 为空时回退到 DefaultSupervisorAgentID（"leader"）。leader 自身留空。
+	// N0-01 引入：此前 worker → supervisor 的消息把 ToAgentID 置空，
+	// AgentBus 无法匹配任何 handler，消息在队列中滞留。
+	SupervisorAgentID string
 
 	// ApproverMode 决定高风险审批由谁处理："user" 或 "leader"。
 	// Phase 7-H 占位用，Phase I 详细实现。
@@ -2603,7 +2622,21 @@ func extractToolLLMUsage(result any) *llm.Usage {
 	return &usage
 }
 
-// sendAgentMessage 通过 AgentBus 向另一个 agent 发送消息。
+// supervisorAgentID 返回本 Engine 的监督 agent 的 AgentBus 路由目标。
+//
+// 优先使用显式配置的 SupervisorAgentID；为空时回退到
+// DefaultSupervisorAgentID（"leader"），与 cmd/server / orchestrator 中
+// root Engine 的注册 ID 保持一致（N0-01）。
+func (e *Engine) supervisorAgentID() string {
+	if e.cfg.SupervisorAgentID != "" {
+		return e.cfg.SupervisorAgentID
+	}
+	return DefaultSupervisorAgentID
+}
+
+// sendAgentMessage 通过 AgentBus 向另一个 agent 的默认 handler 发送消息
+// （不指定目标 subTaskID）。
+//
 // 它用当前 agent 的信息构造 runtime.AgentMessage，通过 AgentBus 发出，
 // 并发出 system_info 事件让前端展示 agent 间通信。
 //
@@ -2612,13 +2645,15 @@ func extractToolLLMUsage(result any) *llm.Usage {
 // 表中正确的行。
 //
 // AgentBus 为 nil 时为 no-op——agent 间通信被禁用。
-func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) {
-	e.sendAgentMessageWithSubTask(toAgentID, msgType, content)
+// 返回值表示消息是否真正交付给了 AgentBus（见 sendAgentMessageTo）。
+func (e *Engine) sendAgentMessage(toAgentID, msgType, content string) bool {
+	return e.sendAgentMessageTo(toAgentID, "", msgType, content)
 }
 
-// SendAgentMessage 是 sendAgentMessage 的公开变体，供外部调用方
-// （cmd/server）把 AgentBus 消息注入到本 Engine 的 listener。
-// toSubTaskID 参数可选；为空时消息路由给 agentID handler。
+// SendAgentMessage 供外部调用方（cmd/server）把 AgentBus 消息注入到
+// **本 Engine 自己**的 listener —— 目标固定为 e.cfg.AgentID，属于
+// 自投递（self-injection）语义，而非发给其它 agent。
+// toSubTaskID 参数可选；为空时使用本 Engine 的 SubTaskID。
 // 于 Phase 7-I 引入。
 func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
 	if e.agentBus == nil {
@@ -2643,18 +2678,33 @@ func (e *Engine) SendAgentMessage(msgType, toSubTaskID, content string) {
 	e.agentBus.SendMessage(msg)
 }
 
-// sendAgentMessageWithSubTask 通过 AgentBus 向另一个 agent 发送消息，可选
-// 指定目标 subTaskID。subTaskID 为空时，消息路由给 agent 的默认 handler。
-// 于 Phase 7-I 引入。
-func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content string) {
+// sendAgentMessageTo 通过 AgentBus 向 (toAgentID, toSubTaskID) 发送消息。
+// toSubTaskID 为空时，消息路由给该 agent 的默认（agentID-only）handler。
+//
+// 返回值语义：true 表示消息已交给 AgentBus 路由；false 表示被拒绝发送
+// （AgentBus 未启用，或目标 agent 为空）。调用方可据此决定是否走兜底通道，
+// 避免同一内容被重复投递。
+//
+// N0-01：这里必须拒绝 toAgentID 为空的发送。AgentBus 的 handler 以
+// (agentID, subTaskID) / agentID 为键注册，目标为空的消息匹配不到任何
+// handler，只会被塞进 maxQueue=100 的待投递队列中滞留，并把真正等待
+// handler 注册的消息挤出队列（丢最旧）——即「污染共享空间」。若确实需要
+// 广播语义，应由上层显式遍历目标列表逐个发送，而不是把空目标当广播。
+// 于 Phase 7-I 引入，N0-01 修正路由。
+func (e *Engine) sendAgentMessageTo(toAgentID, toSubTaskID, msgType, content string) bool {
 	if e.agentBus == nil {
-		return
+		return false
+	}
+	if toAgentID == "" {
+		// 防御性拒绝：宁可不发，也不让空目标消息污染 AgentBus 队列。
+		log.Warnf("engine", "拒绝发送目标为空的 AgentBus 消息: type=%s from=%s sub_task=%s", msgType, e.cfg.AgentID, toSubTaskID)
+		return false
 	}
 
 	msg := AgentMessage{
 		FromAgentID:   e.cfg.AgentID,
 		FromSubTaskID: e.cfg.SubTaskID,
-		ToAgentID:     "",
+		ToAgentID:     toAgentID,
 		SubTaskID:     toSubTaskID,
 		Type:          msgType,
 		Content:       content,
@@ -2671,11 +2721,12 @@ func (e *Engine) sendAgentMessageWithSubTask(toSubTaskID, msgType, content strin
 	e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 		"type":           "agent_message_sent",
 		"from_agent":     e.cfg.AgentID,
-		"to_agent":       "",
+		"to_agent":       toAgentID,
 		"to_sub_task_id": toSubTaskID,
 		"msg_type":       msgType,
 		"content":        content,
 	}))
+	return true
 }
 
 // repairToolArgumentsJSON 尝试对 LLM 产出的 malformed tool arguments 做

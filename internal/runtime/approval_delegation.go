@@ -45,6 +45,19 @@ type DelegatedApprovalRequest struct {
 
 	// SupervisorSubTaskID 是负责审批的 leader 的子任务 ID。
 	SupervisorSubTaskID string `json:"supervisor_sub_task_id"`
+
+	// SupervisorAgentID 是负责审批的 leader 的 agent ID，与
+	// SupervisorSubTaskID 共同构成 AgentBus 的精确路由目标。N0-01 引入。
+	SupervisorAgentID string `json:"supervisor_agent_id,omitempty"`
+
+	// BusNotified 表示 worker 侧是否已通过 AgentBus 成功把该审批请求
+	// 投递给 supervisor。
+	//
+	// 设计理由（N0-01）：修复路由前 worker 侧的 AgentBus 消息因 ToAgentID
+	// 为空而永远送不达，cmd/server 的委托处理器只能再向 leader Engine 重发
+	// 一份同样内容兜底。路由修好后两条通道都会送达，leader 会收到重复消息。
+	// 由 worker 侧告知是否已投递，兜底通道据此跳过重发，保证「恰好一次」。
+	BusNotified bool `json:"bus_notified,omitempty"`
 }
 
 // DelegatedApprovalDecision 记录 supervisor leader 对委托审批请求的决定。
@@ -194,6 +207,9 @@ func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *Approval
 		WorkerSubTaskID:     e.cfg.SubTaskID,
 		WorkerAgentID:       e.cfg.AgentID,
 		SupervisorSubTaskID: e.cfg.SupervisorSubTaskID,
+		// N0-01：显式携带 supervisor 的 agent ID，使 AgentBus 能按
+		// (ToAgentID, SubTaskID) 精确路由到 leader Engine 的 handler。
+		SupervisorAgentID: e.supervisorAgentID(),
 	}
 
 	// 在 worker 时间轴上发射委托事件。
@@ -213,9 +229,13 @@ func (e *Engine) handleApprovalDelegation(tc llm.ToolCall, approvalErr *Approval
 	// 同时通过 AgentBus 把请求以 approval_request 类型发送给 leader。
 	// leader 的 AgentBus listener 会把它当作 user message 追加到对话，
 	// 触发 leader 在下一轮 think 时调用 approve/reject 工具。
+	//
+	// N0-01：目标必须是 (supervisorAgentID, SupervisorSubTaskID)。投递结果
+	// 回写到 req.BusNotified，cmd/server 的委托处理器据此决定是否还需要
+	// 走自投递兜底通道，避免 leader 收到两份相同的审批请求。
 	content, err := BuildApprovalDelegationContent(req)
 	if err == nil {
-		e.sendAgentMessageWithSubTask(e.cfg.SupervisorSubTaskID, "approval_request", content)
+		req.BusNotified = e.sendAgentMessageTo(req.SupervisorAgentID, req.SupervisorSubTaskID, "approval_request", content)
 	}
 
 	// 调用注册在 cmd/server 层的委托处理器，等待 leader 决定。
