@@ -3,8 +3,8 @@
 > Go + Vue 3 多 Agent 实时协作平台。从零构建，完全可观测的白盒 Agent。
 > **仓库地址：** https://github.com/ayanmw/multi-agent-platform
 > **模块路径：** `github.com/ayanmw/multi-agent-platform`
-> **当前版本：v0.13.0 Alpha**
-> **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 与 UI-v2、7-H2 编排闭环已落地**
+> **当前版本：v0.16.0 Alpha**
+> **Phase 状态：0–6 已完成，Skill / TODO / Cron / Case 矩阵(21 个 L1-L5) 与 UI-v2、7-H2 编排闭环已落地；N0 缺陷修复（AgentBus 路由 + 多轮历史自复制）+ N1 企业级核心（多轮历史回读 / AgentBus 双向闭环 / RBAC / Shell 沙箱安全降级 / Agent CRUD 前端 / 全资源审计）+ N2 质量加固（维度化 /metrics + 事件完整性校验 + tracing 串联 + 测试覆盖）均已落地**
 
 ## 快速开始
 
@@ -266,7 +266,7 @@ internal/
   version/                 # 版本信息 + go:embed
   ws/                      # WebSocket Hub
 pkg/
-  db/                      # SQLite Schema（26+ 表）、迁移、CRUD
+  db/                      # SQLite Schema（28 张表）、迁移 v35、CRUD
   event/                   # 统一事件结构 + 序列化
 web/                       # Vue 3 + Vite + TypeScript 前端（v1）
 web/v2/                    # Observable Control Room 前端（v2，默认根路径服务）
@@ -297,7 +297,7 @@ examples/mcp/              # MCP Server 示例（time / calc）
 
 ## 当前状态
 
-**v0.13.0 Alpha** — Phases 0–6 已完成，Skill / TODO / Cron 子系统、21 个 L1–L5 Case 矩阵、UI-v2 控制室与 multi-agent 编排闭环均已落地。
+**v0.16.0 Alpha** — Phases 0–6 已完成，Skill / TODO / Cron 子系统、21 个 L1–L5 Case 矩阵、UI-v2 控制室与 multi-agent 编排闭环均已落地；N0 缺陷修复 + N1 企业级核心（多轮历史回读 / AgentBus 双向闭环 / RBAC / Shell 沙箱安全降级 / Agent CRUD 前端 / 全资源审计）+ N2 质量加固（维度化 /metrics + 事件完整性校验 + tracing 串联 + 测试覆盖）均已落地。
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
@@ -305,15 +305,15 @@ examples/mcp/              # MCP Server 示例（time / calc）
 | ReAct Loop 引擎 | ✅ | think → tool_call → observe，支持 max_steps / timeout |
 | 内置工具 | ✅ | run_shell、write_file、read_file + 运行时注册 |
 | MCP 工具扩展 | ✅ | stdio / SSE transport + Manager 生命周期 + 动态 API + 远程 marketplace |
-| 工具沙箱 | ✅ | Docker 安全隔离 run_shell |
-| DB 持久化 | ✅ | modernc.org/sqlite，26+ 表，迁移 v26+ |
+| 工具沙箱 | ✅ | Docker 安全隔离 run_shell；无 Docker 环境启用安全降级（危险命令黑名单 + allow/ask/deny 默认 deny + 审计，防御纵深，N1-04） |
+| DB 持久化 | ✅ | modernc.org/sqlite，28 张表，迁移至 v35 |
 | Vue 3 + Vite 前端 | ✅ | TypeScript、useTaskStore、useWebSocket；`web/v2/` 控制室风格 UI 为默认（根路径 `/`），`/ui/v1/` 保留旧版 |
 | Session / Project | ✅ | multi-turn chat，Project 分组，Session 历史 |
-| 多 Agent 并发 | ✅ | 并行派发，前端多树渲染；leader-driven dispatch_sub_agent 主链路（Phase 7-H2） |
+| 多 Agent 并发 | ✅ | 并行派发，前端多树渲染；leader-driven dispatch_sub_agent 主链路（Phase 7-H2）+ AgentBus 双向闭环（LLM 经 send_agent_message 工具主动收发 agent message，N1-02） |
 | Memory | ✅ | scope=session/project/global，向量召回，上下文压缩 |
-| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH，RBAC enforcement |
+| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH；RBAC 资源-动作矩阵（viewer / developer / admin 三角色，fail-closed，N1-03） |
 | RAG | ✅ | LocalEmbeddingProvider + InMemoryVectorStore + `/api/memories/recall` |
-| 成本 / 可观测性 | ✅ | CostTracker、/metrics、/healthz、结构化日志、OpenTelemetry trace |
+| 成本 / 可观测性 | ✅ | CostTracker、维度化 /metrics（agent/session/step + per-agent LLM/Tool 延迟直方图）、/healthz、结构化日志、tracing 串联（?task_id/agent_id/limit 过滤）、事件完整性校验（非法事件计入 malformed 不丢数据，N2-01） |
 | Checkpoint / Recovery | ✅ | 任务检查点 + 崩溃恢复 |
 | Skill 系统 | ✅ | 可复用 prompt 包 + Renderer + Registry + REST API + 前端 SkillPicker |
 | TODO 子系统 | ✅ | session 级 TODO + 6 个 Agent Tools + `/api/todos` + 前端拖拽/嵌套 |

@@ -1,7 +1,7 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-08-02
-> **当前版本**: v0.15.1 Alpha
+> **最近更新**: 2026-08-04
+> **当前版本**: v0.16.0 Alpha
 > **更新规则**: 每个 Phase 任务完成后，更新本文件并提交 Git。
 
 ---
@@ -70,17 +70,20 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 | v0.15.1 Alpha | 2026-07-27 | Gemini 搜索 provider 接入 `core/web_search` |
 | v0.15.2 Alpha | 2026-07-27 | 提取 `.env` 层到独立 `internal/config/dotenv` 子包，引入 `godotenv` 解析 |
 | v0.15.3 Alpha | 2026-07-27 | 修复 real-LLM 长任务结束后 Pause/Cancel 失效、UI 状态滞留与"Server unknown"伪 lane 问题 |
+| v0.16.0 Alpha | 2026-08-04 | LOOP 自主推进里程碑：N0 缺陷修复（AgentBus 路由 + 多轮历史自复制）+ N1 企业级核心（多轮历史回读 / AgentBus 双向闭环 / RBAC / Shell 沙箱安全降级 / Agent CRUD 前端 / 全资源审计）+ N2 质量加固（维度化 /metrics + 事件完整性校验 + tracing 串联 + 测试覆盖） |
 
 ---
 
 ## 下一步 / 未做清单
 
-**核心未做能力**
+**核心能力现状**
 
-- [ ] Shell 沙箱：当前 `run_shell`/`execute_program` 可选 Docker；长期需完善 Firecracker/gVisor 或无 Docker 环境的安全降级方案。
-- [ ] Agent CRUD 前端页面（v1/v2）：后端 API 已完整，缺独立管理页面（目前仅 AgentConfig 在选择 Agent 时使用）。
-- [ ] Conversation 历史回读用于多轮对话：当前每个 task 独立上下文，session 级多轮记忆尚未接入 Engine。
-- [ ] AgentBus 接入 Engine ReAct Loop：AgentBus listener 已存在，但 LLM 主动收发 agent message 的协议未完全闭环。
+> 以下能力中，标 ✅ 的已在 LOOP 自主推进里程碑（N0/N1/N2）完成，标 ⬜ 的仍为待做。
+
+- [x] Shell 沙箱安全降级（N1-04 ✅）：无 Docker 环境启用危险命令黑名单 + allow/ask/deny 默认 deny + 审计；Docker 路径保留为防御纵深。
+- [x] Agent CRUD 前端页面（N1-05 ✅）：v1/v2 后端 API 完整，web/v2 Manage 面板 Agents tab 已支持分页 / 搜索 / role 列 / 启停（enabled 持久化至迁移 v35）。
+- [x] Conversation 历史回读（N1-01 ✅）：session 多轮历史以原生 `[]llm.Message` 数组下沉 Engine ReAct Loop，修复「接错层」与历史自复制（N0-02）。
+- [x] AgentBus 双向闭环（N1-02 ✅）：新增 `send_agent_message` 工具，LLM 可经 AgentBus 主动向其它 agent 收发结构化消息（request/response/observation/error），与 Run() listener 收闭环形成双向协议。
 
 **模型与 Provider**
 
@@ -92,7 +95,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 **治理与基础设施**
 
 - [ ] Token 治理与 context 压缩：长任务上下文截断/摘要策略。
-- [ ] RBAC：用户/角色/权限体系（当前仅靠 API key 粗粒度鉴权）。
+- [x] RBAC：用户/角色/权限体系（N1-03 ✅ 已完成 —— API key + bcrypt + 资源-动作矩阵 viewer/developer/admin，fail-closed，接入所有敏感写路由）。
 - [ ] 部署文档与 K8s/容器化交付物。
 - [ ] Baidu 移动搜索反爬适配：验证码页 fallback（headless/API/cookie 池）。
 

@@ -67,10 +67,10 @@ curl http://localhost:8080/healthz
 - **gofmt 在本仓库的正确用法**：工作区是 CRLF，新插入的 LF 行会造成混合行尾，`gofmt -d` 会报出**看似真实但实为伪影**的对齐差异。判定方法：`tr -d '\r' < file.go > /tmp/x.go && gofmt -d /tmp/x.go`，输出为空即真正干净。不要据 `gofmt -l` 直接 `gofmt -w` 既有文件。
 - **多轮历史接错层（N0-02 后仍在）**：`handleSessionChat` 依然把历史压扁成 system prompt 文本塞入（而非原生 message 数组）。N0-02 只止住了「自复制」这个 bug，**接错层本身留给 N1-01** 下沉到 Engine 用原生 `[]llm.Message`。届时 `BaseSystemPrompt` 可退化为与 `SystemPrompt` 等价（历史不再进 prompt），但该字段应保留作为契约。
 - **Agent CRUD 页面已存在但被低估**：v1/v2 已有 `AgentConfig.vue`（v2 是 Manage 面板一级 tab），ROADMAP 称「缺管理页面」不准确；真实缺口是分页/搜索/role 列等增量（N1-05）。
-- **三子系统 ROADMAP 描述与代码不符**：Agent CRUD 页面其实存在；多轮历史已「能跑」但接错层且有自复制 bug；AgentBus 收已闭环、发是半双工。校正见 N2-03。
-- **文档版本不一致**：README 写 v0.13.0、ROADMAP 写 v0.15.1、git 最新提交可能更晚。统一见 N2-03。
+- ~~**三子系统 ROADMAP 描述与代码不符**~~ **（已于 N2-03 校正）**：Agent CRUD 页面 / 多轮历史 / AgentBus 在 ROADMAP「核心能力现状」中已从 `[ ]` 改为 `[x]` 并标注 N1-01/02/05 真实落点；README「当前状态」表同步更新（Shell 沙箱降级、DB v35/28 表、多 Agent 双向闭环、RBAC 三角色、维度化 /metrics）。
+- ~~**文档版本不一致**~~ **（已于 N2-03 对齐为 v0.16.0）**：运行时 `internal/version/version.txt` 与根 `version.txt` 由 v0.11.3/v0.12.1 提升至 **v0.16.0 Alpha**（在 ROADMAP 已记录的 v0.15.3 之后）；README / ROADMAP 同步。四源现一致，以运行时版本文件为权威。
 - **N0 结项基线（轮次 3 实测，后续回归以此为准）**：`go build/vet/test -count=1 ./...` 全绿（24 个有测试的包全 ok，0 FAIL）；`cases-regression.sh` = **21/21**；`smoke-test.sh` = **63 PASS / 0 FAIL / 1 SKIP**（SKIP 为 `/ws` 握手，curl 能力限制非缺陷）。**任何后续任务导致这三项指标下降即视为回归，必须修复后才能提交。**
-- **smoke 记录的 4 处 API↔文档差异（归 N2-03 处理）**：① `POST /api/projects` 返 201 而非 200；② `POST /api/tools` 必填 `type`(shell/http/inline) 及各 type 子字段(command/url/code)，文档 4.5 节未写；③ Memory 路由无顶层 `POST /api/memories`、无 `PUT /api/memories/{id}`，实际是 `/scope` 子路径 + `/promote` + `/recall`；④ `/ws` 握手需 wscat/Go 客户端专项测。
+- **smoke 记录的 4 处 API↔文档差异（N2-03 未覆盖，留后续 API 文档校正）**：① `POST /api/projects` 返 201 而非 200；② `POST /api/tools` 必填 `type`(shell/http/inline) 及各 type 子字段(command/url/code)，文档 4.5 节未写；③ Memory 路由无顶层 `POST /api/memories`、无 `PUT /api/memories/{id}`，实际是 `/scope` 子路径 + `/promote` + `/recall`；④ `/ws` 握手需 wscat/Go 客户端专项测。N2-03 仅覆盖版本号 + 三子系统描述，未改动 API 契约文档（CLAUDE.md / API_CHANGELOG）。
 
 ## ④ 企业级多 Agent 协作平台验收清单（Phase R 打分用）
 
