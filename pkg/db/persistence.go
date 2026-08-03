@@ -78,6 +78,7 @@ type AgentRecord struct {
 	Tools          []string       `json:"tools"`
 	Config         map[string]any `json:"config"`
 	IsDefault      bool           `json:"is_default"`
+	Enabled        bool           `json:"enabled"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
 }
@@ -574,6 +575,7 @@ type InsertAgentOptions struct {
 	MaxTokens      int
 	Tools          []string
 	IsDefault      bool
+	Enabled        bool
 	Config         map[string]any
 }
 
@@ -595,6 +597,7 @@ type UpdateAgentOptions struct {
 	Temperature    float64
 	MaxTokens      int
 	Tools          []string
+	Enabled        bool
 	Config         map[string]any
 }
 
@@ -615,12 +618,12 @@ func InsertAgent(opts InsertAgentOptions) error {
 		modelMode = "single_model"
 	}
 	_, err := DB.Exec(
-		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, model_mode, allow_fallback, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default, config)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, description, system_prompt, model, preferred_model, preferred_tier, model_mode, allow_fallback, max_cost_usd, temperature, max_tokens, api_endpoint, api_key, tools, is_default, enabled, config)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		opts.ID, opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
 		opts.PreferredModel, opts.PreferredTier, modelMode, opts.AllowFallback, opts.MaxCostUSD,
 		opts.Temperature, opts.MaxTokens, opts.Endpoint, opts.APIKey,
-		string(toolsJSON), opts.IsDefault, string(configJSON),
+		string(toolsJSON), opts.IsDefault, opts.Enabled, string(configJSON),
 	)
 	return err
 }
@@ -645,7 +648,7 @@ func QueryAgents() ([]AgentRecord, error) {
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
 		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(model_mode,'single_model'), COALESCE(allow_fallback,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
-		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), COALESCE(enabled,1), created_at, updated_at
 		 FROM agents ORDER BY is_default DESC, created_at ASC`,
 	)
 	if err != nil {
@@ -660,7 +663,7 @@ func QueryAgents() ([]AgentRecord, error) {
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
 			&a.PreferredModel, &a.PreferredTier, &a.ModelMode, &a.AllowFallback, &a.MaxCostUSD,
 			&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
-			&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&toolsJSON, &configJSON, &a.IsDefault, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(toolsJSON), &a.Tools)
@@ -681,12 +684,12 @@ func QueryAgentByID(id string) (*AgentRecord, error) {
 		`SELECT id, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(model,''),
 		        COALESCE(preferred_model,''), COALESCE(preferred_tier,''), COALESCE(model_mode,'single_model'), COALESCE(allow_fallback,1), COALESCE(max_cost_usd,0),
 		        COALESCE(temperature,0.7), COALESCE(max_tokens,4096), COALESCE(api_endpoint,''), COALESCE(api_key,''),
-		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), created_at, updated_at
+		        COALESCE(tools,'[]'), COALESCE(config,'{}'), COALESCE(is_default,0), COALESCE(enabled,1), created_at, updated_at
 		 FROM agents WHERE id=?`, id,
 	).Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Model,
 		&a.PreferredModel, &a.PreferredTier, &a.ModelMode, &a.AllowFallback, &a.MaxCostUSD,
 		&a.Temperature, &a.MaxTokens, &a.APIEndpoint, &a.APIKey,
-		&toolsJSON, &configJSON, &a.IsDefault, &a.CreatedAt, &a.UpdatedAt)
+		&toolsJSON, &configJSON, &a.IsDefault, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -712,11 +715,11 @@ func UpdateAgent(opts UpdateAgentOptions) error {
 	}
 	_, err := DB.Exec(
 		`UPDATE agents SET name=?, description=?, system_prompt=?, model=?, preferred_model=?, preferred_tier=?, model_mode=?, allow_fallback=?, max_cost_usd=?, temperature=?,
-		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, config=?, updated_at=CURRENT_TIMESTAMP
+		     max_tokens=?, api_endpoint=?, api_key=?, tools=?, config=?, enabled=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
 		opts.Name, opts.Description, opts.SystemPrompt, opts.Model,
 		opts.PreferredModel, opts.PreferredTier, modelMode, opts.AllowFallback, opts.MaxCostUSD, opts.Temperature,
-		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), string(configJSON), opts.ID,
+		opts.MaxTokens, opts.Endpoint, opts.APIKey, string(toolsJSON), string(configJSON), opts.Enabled, opts.ID,
 	)
 	return err
 }

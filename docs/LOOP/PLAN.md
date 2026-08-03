@@ -32,7 +32,7 @@
 | N1-02 | **AgentBus ↔ ReAct Loop 闭环**：新增 `send_agent_message` 工具，使 LLM 能主动向其它 agent 收发消息；补全 Engine 可被 AgentBus 驱动/回调的接口（注入消息、恢复），形成双向协议 | ✅ | LLM 经工具主动发送 agent message 被目标收到；编排事件经 WS 可达；`go test ./internal/orchestrator/... ./internal/runtime/...` 全绿 | N1-01 |
 | N1-03 | **RBAC 落地**：`middleware.RequirePermission(resource, action)` 接入所有敏感路由——Provider/Model 创建更新删除、Session 删除、APIKey 管理、Agent 配置写；角色 viewer/developer/admin；`main.go` 路由注册成链 | ✅ | viewer 调写接口 → 403；developer/admin 正常；新增权限矩阵单测（`internal/auth/rbac_test.go`） | N0 |
 | N1-04 | **Shell 沙箱安全降级**：无 Docker 环境下 `run_shell`/`execute_program` 的安全策略——危险命令前缀黑名单（rm -rf /、git push --force 等）+ 策略枚举 allow/ask/deny，无人值守默认 deny 并写审计；保留 Docker 路径 | ✅ | 命中黑名单命令被拒并写审计；正常命令在约束 cwd 内执行；单测覆盖 | N0 |
-| N1-05 | **Agent CRUD 前端管理页面**：在 web/v2 Manage 面板新增独立 Agent 管理 tab（v1/v2 后端 API 已完整，目前仅 AgentConfig 在选择 Agent 时使用），支持分页 / 搜索 / role 列 / 启停 | ○ | npm run build + vue-tsc --noEmit 全绿；前端能列/建/改/删 Agent 配置 | N0 |
+| N1-05 | **Agent CRUD 前端管理页面**：在 web/v2 Manage 面板新增独立 Agent 管理 tab（v1/v2 后端 API 已完整，目前仅 AgentConfig 在选择 Agent 时使用），支持分页 / 搜索 / role 列 / 启停 | ✅ | npm run build + vue-tsc --noEmit 全绿；前端能列/建/改/删 Agent 配置 | N0 |
 | N1-06 | **审计日志**：所有 mutation（Provider/Model/Session/Agent/APIKey/Todo/Cron 写操作）记录 actor + timestamp + scope，落审计表，提供查询接口 | ○ | 一次写操作后审计表出现对应记录；提供 `GET /api/audit` 或等价查询；单测覆盖 | N1-03 |
 
 ---

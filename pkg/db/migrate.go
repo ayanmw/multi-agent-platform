@@ -467,6 +467,16 @@ ALTER TABLE agents ADD COLUMN max_cost_usd REAL DEFAULT 0;`,
 	UPDATE agents SET model_mode = CASE WHEN COALESCE(allow_auto_route,1) = 1 THEN 'auto_route' ELSE 'single_model' END;
 	ALTER TABLE agents ADD COLUMN allow_fallback BOOLEAN DEFAULT 1;`,
 		},
+		// v35：为 agents 表新增 enabled 列，支撑 Agent 管理页的启停（enable/disable）。
+		// 默认 1（启用）；历史与新建 agent 默认启用。基线化与增量迁移均忽略
+		// "duplicate column name" 错误，故与 createTables() 是否预置该列无关。
+		// 注意：版本号必须大于 pkg/db/skill.go init() 已注册的 v33（skills scope），
+		// 否则会与 skills 的 v33 撞版本，导致去重/基线化异常、scope 列缺失。
+		{
+			Version:     35,
+			Description: "Add enabled BOOLEAN column to agents table",
+			SQL:         `ALTER TABLE agents ADD COLUMN enabled BOOLEAN DEFAULT 1`,
+		},
 	})
 
 // deduplicateMigrations 按 version 去重，保留第一次出现的条目。

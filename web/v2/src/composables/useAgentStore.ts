@@ -32,6 +32,7 @@ export interface AgentRecord {
   tools: string[]
   config: Record<string, unknown>
   is_default: boolean
+  enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -59,6 +60,7 @@ export interface AgentRequest {
     allow_fallback?: boolean
     max_cost_usd?: number
   }
+  enabled: boolean
 }
 
 // Default values for a new agent form
@@ -87,6 +89,7 @@ export function defaultAgentRequest(): AgentRequest {
         allow_shell_dangerous: false,
       },
     },
+    enabled: true,
   }
 }
 

@@ -194,14 +194,30 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 17:47 | 轮次 8 | N1-05 | ✅ Agent CRUD 前端管理页面补齐分页/搜索/role 列/启停
+
+**目标**：在 web/v2 Manage 面板的 Agents tab（AgentConfig.vue）补齐企业级 Agent 管理所需的交互能力——客户端分页、搜索、role 列、启停（enable/disable）。
+
+**改动**：
+- 后端（端到端真实持久化，非假开关）：`pkg/db/migrate.go` 追加 **v35** 迁移 `ALTER TABLE agents ADD COLUMN enabled BOOLEAN DEFAULT 1`（刻意避开 `pkg/db/skill.go` init() 已注册的 v33 skills scope 迁移——撞版本会导致去重/基线化异常、skills `scope` 列缺失，初版 v33 已踩坑并改 v35）；`pkg/db/persistence.go` 的 `AgentRecord`/`InsertAgentOptions`/`UpdateAgentOptions` 加 `Enabled`，`InsertAgent`/`UpdateAgent`/`QueryAgents`/`QueryAgentByID` 的 SQL 与 Scan 同步；`cmd/server/api.go` 的 `agentRequest` 加 `Enabled`，POST 固定 `Enabled: true`（避免旧版 v1 前端未携带该字段时把新 agent 建为禁用态），PUT 透传 `req.Enabled`。
+- 前端：`web/v2/src/composables/useAgentStore.ts` 的 `AgentRecord`/`AgentRequest` 加 `enabled`（默认 true）；`web/v2/src/components/AgentConfig.vue` 新增搜索框（按 name/description/model 模糊匹配）、客户端分页（页大小 5/10/20/50 + 翻页，页码越界夹紧）、Role 列（由真实持久化字段 `is_default` 派生 Default/Custom）、Status 启停 toggle（经 PUT 持久化 `enabled`，系统默认 agent 不可停用）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok；此前因 v33 撞版本报 `no such column: scope` 的 `TestSkillPromptInjectedE2E` 已恢复）/ `bash scripts/cases-regression.sh` ✅ **21/21** / `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP** / `cd web/v2 && npm run build`（`vue-tsc -b` 类型检查）✅。
+
+**Commit**：（本轮收尾，见末）
+
+**下一步**：N1-06 —— 审计日志（所有 mutation 记录 actor+timestamp+scope，落审计表并提供查询接口）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        7
+loop_round:        8
 phase:             N1 (企业级核心能力)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N1-05
+next_milestone:    N1-06
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```

@@ -11,6 +11,7 @@
 import { ref, computed, onMounted, watch, defineComponent, type PropType } from 'vue'
 import { useAgentStore, type AgentRecord, type AgentRequest, defaultAgentRequest, type ToolInfo } from '../composables/useAgentStore'
 import { useModelPrices, fullModelId } from '../composables/useModelPrices'
+import { useToast } from '@/composables/useToast'
 import type { LLMModel } from '../types/llm'
 
 /**
@@ -40,11 +41,11 @@ const ModelDropdown = defineComponent({
   },
   emits: ['update:modelValue'],
   setup(props, { emit }) {
-    const filter = ref(props.modelValue || '')
-
-    watch(() => props.modelValue, (val) => {
-      filter.value = val
-    })
+    // 过滤框初始为空 —— 默认展示全部可选模型，当前选中项通过列表高亮（active class）指示。
+    // 关键修复：不要把 filter 预填为当前 model 值，也不要在 modelValue 变化时回写 filter，
+    // 否则当模型标识是多级前缀（如 default/cbcn/deepseek-v4-flash）时，子串过滤只会命中自身一条，
+    // 下拉列表塌缩成单项，用户无法切换到其它模型。
+    const filter = ref('')
 
     const filteredModels = computed(() => {
       const q = filter.value.trim().toLowerCase()
@@ -159,6 +160,106 @@ const deleting = ref(false)
 const testing = ref(false)
 const testResult = ref<{ ok: boolean; message: string } | null>(null)
 
+// ---- Search & pagination (N1-05) ----
+const { showError, showInfo } = useToast()
+
+/** 搜索关键字：按 name / description / model 模糊匹配 */
+const searchText = ref('')
+
+/** 每页条数，默认 10 */
+const pageSize = ref(10)
+
+/** 当前页码（1-based） */
+const currentPage = ref(1)
+
+/**
+ * 由 is_default 派生的角色标签。
+ * 白盒哲学：is_default 是 agents 表中真实持久化的字段，这里只是把它翻译成
+ * 人类可读的「角色」分类（系统默认 / 自定义），不引入任何非持久化状态。
+ */
+function roleOf(agent: AgentRecord): string {
+  return agent.is_default ? 'Default' : 'Custom'
+}
+
+/** 客户端搜索：过滤 name / description / model 包含关键字的 agent */
+const filteredAgents = computed<AgentRecord[]>(() => {
+  const q = searchText.value.trim().toLowerCase()
+  if (!q) return agents.value
+  return agents.value.filter(a =>
+    (a.name || '').toLowerCase().includes(q) ||
+    (a.description || '').toLowerCase().includes(q) ||
+    (a.model || '').toLowerCase().includes(q),
+  )
+})
+
+/** 总页数（至少 1 页，避免除零） */
+const totalPages = computed(() => {
+  if (pageSize.value <= 0) return 1
+  return Math.max(1, Math.ceil(filteredAgents.value.length / pageSize.value))
+})
+
+/**
+ * 当前页切片。页码越界时夹紧到合法区间，保证翻页后不会出现空列表。
+ */
+const pagedAgents = computed<AgentRecord[]>(() => {
+  const tp = totalPages.value
+  if (currentPage.value > tp) currentPage.value = tp
+  if (currentPage.value < 1) currentPage.value = 1
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredAgents.value.slice(start, start + pageSize.value)
+})
+
+// 搜索关键字变化时回到第一页，避免停留在越界页
+watch(searchText, () => { currentPage.value = 1 })
+
+// ---- Enable / disable toggle (启停, N1-05) ----
+const togglingId = ref<string | null>(null)
+
+/**
+ * 切换 agent 的启用/禁用状态，经 PUT /api/agents/{id} 持久化 enabled 字段。
+ * 系统默认 agent（is_default）不可停用，避免破坏平台基本功能力。
+ */
+async function toggleEnabled(agent: AgentRecord) {
+  if (agent.is_default) return
+  togglingId.value = agent.id
+  try {
+    // PUT 整体覆盖 agent，需从 AgentRecord 重建完整 AgentRequest。
+    const req: AgentRequest = {
+      name: agent.name,
+      description: agent.description || '',
+      system_prompt: agent.system_prompt || '',
+      model: agent.model || '',
+      preferred_model: agent.preferred_model || '',
+      preferred_tier: agent.preferred_tier || 'standard',
+      model_mode: agent.model_mode || 'single_model',
+      allow_fallback: agent.allow_fallback ?? true,
+      max_cost_usd: agent.max_cost_usd ?? 0,
+      temperature: agent.temperature ?? 0.7,
+      max_tokens: agent.max_tokens ?? 4096,
+      api_endpoint: agent.api_endpoint || '',
+      api_key: agent.api_key || '',
+      tools: agent.tools ? [...agent.tools] : [],
+      config: (agent.config as unknown as AgentRequest['config']) || {
+        permissions: {
+          allow_network: false,
+          allow_file_write: false,
+          allow_file_delete: false,
+          allow_shell: false,
+          allow_shell_dangerous: false,
+        },
+      },
+      enabled: !agent.enabled,
+    }
+    await updateAgent(agent.id, req)
+    showInfo(`${agent.name} 已${req.enabled ? '启用' : '停用'}`)
+  } catch (err: unknown) {
+    console.error('[AgentConfig] toggle enabled failed:', err)
+    showError(`切换启用状态失败: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    togglingId.value = null
+  }
+}
+
 // Computed: is the form in edit mode?
 const isEditing = computed(() => editingId.value !== null)
 
@@ -226,6 +327,7 @@ function openEdit(agent: AgentRecord) {
     preferred_tier: agent.preferred_tier || 'standard',
     model_mode: agent.model_mode || 'single_model',
     allow_fallback: agent.allow_fallback ?? true,
+    enabled: agent.enabled ?? true,
     max_cost_usd: agent.max_cost_usd ?? 0,
     temperature: agent.temperature ?? 0.7,
     max_tokens: agent.max_tokens ?? 4096,
@@ -361,6 +463,27 @@ function formatDate(iso: string): string {
       <button class="btn-add" @click="openCreate">+ New Agent</button>
     </div>
 
+    <!-- Search & pagination toolbar (N1-05) -->
+    <div class="agent-toolbar">
+      <input
+        v-model="searchText"
+        type="text"
+        class="agent-search"
+        placeholder="Search by name / description / model..."
+        aria-label="Search agents"
+      />
+      <label class="page-size-label">
+        Per page
+        <select v-model.number="pageSize" class="page-size-select" aria-label="Agents per page">
+          <option :value="5">5</option>
+          <option :value="10">10</option>
+          <option :value="20">20</option>
+          <option :value="50">50</option>
+        </select>
+      </label>
+      <span class="agent-count">{{ filteredAgents.length }} agent(s)</span>
+    </div>
+
     <!-- Loading state -->
     <div v-if="loading" class="loading-area">
       <div class="loading-spinner"></div>
@@ -371,29 +494,34 @@ function formatDate(iso: string): string {
     <div v-if="error" class="error-banner">{{ error }}</div>
 
     <!-- Agent list table -->
-    <div v-if="!loading && agents.length === 0" class="empty-state">
+    <div v-if="!loading && !error && filteredAgents.length === 0" class="empty-state">
       <div class="empty-icon">🤖</div>
-      <h3>No agents configured</h3>
-      <p>Create your first agent to get started.</p>
+      <h3>{{ searchText.trim() ? 'No agents match your search' : 'No agents configured' }}</h3>
+      <p>{{ searchText.trim() ? 'Try a different keyword.' : 'Create your first agent to get started.' }}</p>
     </div>
 
-    <div v-else-if="!loading" class="agent-table-wrapper">
+    <div v-else-if="!loading && !error" class="agent-table-wrapper">
       <table class="agent-table">
         <thead>
           <tr>
             <th>Name</th>
+            <th>Role</th>
             <th>Model</th>
             <th>Temp</th>
             <th>Tools</th>
+            <th>Status</th>
             <th>Created</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="agent in agents" :key="agent.id" class="agent-row">
+          <tr v-for="agent in pagedAgents" :key="agent.id" class="agent-row">
             <td class="cell-name">
               <div class="agent-name">{{ agent.name }}</div>
               <div v-if="agent.description" class="agent-desc">{{ agent.description }}</div>
+            </td>
+            <td class="cell-role">
+              <span class="role-badge" :class="agent.is_default ? 'role-default' : 'role-custom'">{{ roleOf(agent) }}</span>
             </td>
             <td class="cell-model">{{ agent.model || '-' }}</td>
             <td class="cell-temp">{{ agent.temperature ?? '-' }}</td>
@@ -402,6 +530,18 @@ function formatDate(iso: string): string {
                 <span v-for="t in agent.tools" :key="t" class="tool-badge">{{ t }}</span>
               </span>
               <span v-else class="text-muted">-</span>
+            </td>
+            <td class="cell-status">
+              <button
+                class="status-toggle"
+                :class="agent.enabled ? 'status-on' : 'status-off'"
+                :disabled="agent.is_default || togglingId === agent.id"
+                :title="agent.is_default ? '系统默认 agent 不可停用' : (agent.enabled ? '点击停用' : '点击启用')"
+                @click="toggleEnabled(agent)"
+              >
+                <span class="status-dot" :class="{ 'dot-pulse': togglingId === agent.id }"></span>
+                {{ agent.enabled ? 'Enabled' : 'Disabled' }}
+              </button>
             </td>
             <td class="cell-date">{{ formatDate(agent.created_at) }}</td>
             <td class="cell-actions">
@@ -418,6 +558,23 @@ function formatDate(iso: string): string {
           </tr>
         </tbody>
       </table>
+
+      <!-- Pagination controls (N1-05) -->
+      <div v-if="totalPages > 1" class="pager">
+        <button
+          class="pager-btn"
+          :disabled="currentPage <= 1"
+          @click="currentPage--"
+          type="button"
+        >‹ Prev</button>
+        <span class="pager-info">Page {{ currentPage }} / {{ totalPages }}</span>
+        <button
+          class="pager-btn"
+          :disabled="currentPage >= totalPages"
+          @click="currentPage++"
+          type="button"
+        >Next ›</button>
+      </div>
     </div>
 
     <!-- Create/Edit form modal -->
@@ -936,6 +1093,175 @@ function formatDate(iso: string): string {
   cursor: not-allowed;
   background: transparent;
   border-color: transparent;
+}
+
+/* ---- Search & pagination toolbar (N1-05) ---- */
+.agent-toolbar {
+  display:flex;
+  align-items:center;
+  gap:0.625rem;
+  margin-bottom:1rem;
+  flex-wrap:wrap;
+}
+
+.agent-search {
+  flex:1;
+  min-width:12rem;
+  background:var(--bg-elevated);
+  border:1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color:var(--text-primary);
+  padding:0.438rem 0.625rem;
+  font-size:0.812rem;
+  font-family:var(--font-mono);
+  outline:none;
+  transition:border-color 0.2s;
+}
+
+.agent-search:focus {
+  border-color:var(--accent-running);
+}
+
+.page-size-label {
+  font-size:0.75rem;
+  color:var(--text-muted);
+  display:flex;
+  align-items:center;
+  gap:0.375rem;
+  white-space:nowrap;
+}
+
+.page-size-select {
+  background:var(--bg-elevated);
+  border:1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color:var(--text-primary);
+  padding:0.375rem 0.5rem;
+  font-size:0.812rem;
+  font-family:var(--font-mono);
+}
+
+.agent-count {
+  font-family: var(--font-mono);
+  font-size:0.7rem;
+  color:var(--text-muted);
+  background:var(--bg-elevated);
+  padding:0.25rem 0.625rem;
+  border-radius:10px;
+  white-space:nowrap;
+}
+
+/* ---- Role column ---- */
+.cell-role {
+  white-space:nowrap;
+}
+
+.role-badge {
+  display:inline-block;
+  font-size:0.625rem;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  padding:0.125rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border:1px solid var(--border-subtle);
+}
+
+.role-default {
+  color:var(--accent-running);
+  border-color:rgba(0, 229, 255, 0.25);
+  background:rgba(0, 229, 255, 0.08);
+}
+
+.role-custom {
+  color:var(--text-secondary);
+  border-color:var(--border-default);
+  background:var(--bg-elevated);
+}
+
+/* ---- Status (enable/disable) column ---- */
+.cell-status {
+  white-space:nowrap;
+}
+
+.status-toggle {
+  display:inline-flex;
+  align-items:center;
+  gap:0.375rem;
+  font-size:0.687rem;
+  font-weight:600;
+  padding:0.25rem 0.625rem;
+  border-radius: var(--radius-md);
+  cursor:pointer;
+  transition:background 0.15s, border-color 0.15s, color 0.15s;
+  border:1px solid var(--border-default);
+  background:var(--bg-elevated);
+}
+
+.status-toggle:disabled {
+  opacity:0.45;
+  cursor:not-allowed;
+}
+
+.status-on {
+  color:var(--accent-success);
+  border-color:rgba(57, 255, 20, 0.25);
+  background:rgba(57, 255, 20, 0.08);
+}
+
+.status-off {
+  color:var(--text-muted);
+  border-color:var(--border-subtle);
+  background:transparent;
+}
+
+.status-dot {
+  width:0.5rem;
+  height:0.5rem;
+  border-radius:50%;
+  background:currentColor;
+}
+
+.dot-pulse {
+  animation:spin 0.6s linear infinite;
+}
+
+/* ---- Pagination controls ---- */
+.pager {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:1rem;
+  margin-top:1rem;
+  padding-top:0.75rem;
+  border-top:1px solid var(--border-subtle);
+}
+
+.pager-btn {
+  background:var(--bg-elevated);
+  border:1px solid var(--border-default);
+  color:var(--text-secondary);
+  font-size:0.75rem;
+  padding:0.375rem 0.875rem;
+  border-radius: var(--radius-md);
+  cursor:pointer;
+  transition:background 0.15s, color 0.15s;
+}
+
+.pager-btn:hover:not(:disabled) {
+  background:var(--bg-hover);
+  color:var(--text-primary);
+}
+
+.pager-btn:disabled {
+  opacity:0.4;
+  cursor:not-allowed;
+}
+
+.pager-info {
+  font-family:var(--font-mono);
+  font-size:0.75rem;
+  color:var(--text-muted);
 }
 
 /* ---- Modal overlay ---- */

@@ -868,6 +868,7 @@ type agentRequest struct {
 	MaxTokens      int            `json:"max_tokens"`
 	Tools          []string       `json:"tools"`
 	Config         map[string]any `json:"config"`
+	Enabled        bool           `json:"enabled"`
 }
 
 // handleAgents 处理 GET/POST /api/agents
@@ -903,6 +904,9 @@ func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 			Config: req.Config,
+			// 新建 agent 默认启用：始终置 true，避免旧版（v1）前端未携带 enabled
+			// 字段时把新 agent 创建成禁用态。启停由列表行 toggle 经 PUT 控制。
+			Enabled: true,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -953,6 +957,7 @@ func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			Endpoint: req.Endpoint, APIKey: req.APIKey,
 			Temperature: req.Temperature, MaxTokens: req.MaxTokens, Tools: req.Tools,
 			Config: req.Config,
+			Enabled: req.Enabled,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
