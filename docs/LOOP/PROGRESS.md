@@ -57,14 +57,64 @@
 
 ---
 
+### 2026-08-03 10:12 | 轮次 3 | N0-03 | ✅ N0 回归验证与结项
+
+**目标**：对 N0-01 / N0-02 两项缺陷修复做全量回归，确认无回归、无带红提交，并出具 N0 结项报告，开放 N1 门槛。
+
+#### 一、验证矩阵（全部实测，非推断）
+
+| # | 验证项 | 命令 | 结果 | 证据 |
+|---|--------|------|------|------|
+| V1 | 编译 | `go build ./...` | ✅ PASS | exit 0，无输出 |
+| V2 | 静态检查 | `go vet ./...` | ✅ PASS | exit 0，无告警 |
+| V3 | 全量单测 | `go test -count=1 ./...` | ✅ PASS | 24 个有测试的包全部 `ok`，0 个 FAIL（含 `cmd/server` 10.3s、`internal/runtime` 0.53s、`internal/orchestrator` 0.69s、`internal/tool` 17.8s） |
+| V4 | Case mock 回归 | `bash scripts/cases-regression.sh` | ✅ **21/21 (100%)** | exit 0；L1 4/4、L2 5/5、L3 5/5、L4 4/4、L5 3/3 |
+| V5 | REST 冒烟 | `bash scripts/smoke-test.sh` | ✅ PASS | **63 PASS / 0 FAIL / 1 SKIP**（SKIP = `/ws` 握手，curl 能力限制，非缺陷） |
+
+#### 二、N0-01（AgentBus 路由）回归证据
+
+`cases-regression.sh` 的 L4/L5 共 7 个多 Agent case 全部 PASS，且编排事件三元组（`decompose_done` / `agent_dispatched` / `agent_completed`）**全部 ≥1 且单调递增累计**（1/1/1 → 7/14/14），`child_tasks[].steps` 回填 `child_steps=yes` 全绿。说明 leader↔worker 的消息路由与事件广播链路真实闭合，未出现空目标滞留。
+
+`multi-agent-fault-tolerance`（L5 容错场景）completed，证明修复后的「恰好一次」投递语义（`BusNotified` 抑制兜底重发）在故障回退路径下仍成立。
+
+#### 三、N0-02（多轮历史自复制）回归证据
+
+- `context-compression` case PASS（`TurnIndex==-1` 压缩摘要保留逻辑未被过滤规则误伤）。
+- `skill-code-helper` case PASS + `cmd/server` 包全绿（含 `TestSkillPromptInjectedE2E`），证明「运行时 prompt / 持久化基线共享同一套增强」的设计既修了自复制，又未丢失 skill 注入的可观测性。
+- `checkpoint-resume` PASS，说明 prompt 分离改动未破坏 checkpoint 恢复路径。
+
+#### 四、token/成本口径校验（顺带体检）
+
+21 个 case 的 `total_tokens` 全部 > 0（302 ~ 1099），`cost_records` 全部 ≥ 1，符合 LEARNINGS 硬规则「Token 统计只使用 API 返回的 usage 字段」——mock provider 同样走 usage 通道，未做本地估算。
+
+#### 五、环境适配说明（不改生产脚本）
+
+WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windows 二进制（`go build -o`、`curl -o`、`node`）解析 `/tmp` 为**当前盘根 `C:\tmp`**，两者视图不一致，导致 `SERVER_BIN="/tmp/..."` 的脚本在沙箱内 exec 失败。本轮采用「**只读副本 + 路径重写**」策略：`sed 's#/tmp/#C:/Users/Joker/.workbuddy/loop-tmp/#g'` 生成仓库外副本执行，**未修改 `scripts/` 下任何生产脚本**（它们在正规 Git Bash / Linux CI 下本就正确）。该方法已沉淀入 LEARNINGS。
+
+#### 六、结项结论
+
+> **N0 缺陷修复里程碑正式结项。** N0-01（P0 路由）、N0-02（P1 历史自复制）、N0-03（回归结项）全部 ✅。后端零编译错误、零 vet 告警、零测试失败；确定性回归 21/21；REST 冒烟 63/63。**N1 门槛开放**，下一轮起可开始 N1 企业级核心能力。
+
+**遗留（非阻塞，已在 LEARNINGS 记录，归属后续里程碑）**：
+1. 多轮历史仍压扁为 system prompt 文本（接错层）→ N1-01 下沉为原生 `[]llm.Message`。
+2. AgentBus 仍是「收闭环、发半双工」，LLM 无法主动发消息 → N1-02。
+3. `AgentRunSpec` 的 `Role/CanDispatchSubAgents/...` 是死配置（runner 只按 `isRoot` 推导，从不读 `spec.*`）→ 建议 N2 清理。
+4. smoke 记录的 4 处「API 与文档差异」（`POST /api/projects` 返 201、`POST /api/tools` 必填 type 子字段、Memory 路由与文档不符、`/ws` 需专项测）→ 归入 N2-03 文档一致性。
+
+**Commit**：见下方回填
+
+**下一步**：N1-01 —— 多轮对话历史回读（原生 message 数组下沉到 Engine ReAct Loop）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        2
-phase:             N0 (缺陷修复)
+loop_round:        3
+phase:             N1 (企业级核心能力)
 quality_gate_pass: false
 done:              false
-last_review:       (未执行)
-next_milestone:    N0
+last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
+next_milestone:    N1
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```

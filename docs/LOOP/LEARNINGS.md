@@ -39,6 +39,19 @@ curl http://localhost:8080/healthz
 
 > Windows 回归注意：mock case 经 Python 从 stdin 读 JSON，必须 `export PYTHONUTF8=1`，否则中文（`skill/list` 的 DisplayName）按 GBK 解码致 `/api/tasks` JSON 解析失败、误判超时。
 
+> **沙箱内跑 e2e 脚本的正确姿势（轮次 3 沉淀）**：受限沙箱里 Git Bash 的 `/tmp` = `AppData\Local\Temp`，但**原生 Windows 二进制**（`go build -o`、`curl -o`、`node` 的 argv 路径）把 `/tmp` 解析成**当前盘根 `C:\tmp`** —— 两者视图不一致，于是 `SERVER_BIN="/tmp/..."` 的脚本「编译成功但 exec 报 No such file」。
+> **禁止为此改动 `scripts/` 下的生产脚本**（它们在正规 Git Bash / Linux CI 下本就正确）。正确做法是「只读副本 + 路径重写」：
+> ```bash
+> LT="C:/Users/Joker/.workbuddy/loop-tmp"; mkdir -p "$LT"
+> sed "s#/tmp/#${LT}/#g" scripts/cases-regression.sh > "$LT/cases-regression.sh"
+> sed "s#/tmp/#${LT}/#g" scripts/smoke-test.sh > "$LT/smoke-test.sh"
+> # smoke 的 SERVER_BIN 无扩展名，补 .exe 更稳
+> cd <repo> && export PATH="/c/Program Files/Git/usr/bin:$PATH:/c/Program Files/Go/bin" \
+>   && export PYTHONUTF8=1 && bash "$LT/cases-regression.sh"
+> ```
+> 副本放**仓库外**（避免 `git add -A` 误提交）；cwd 仍须是仓库根（脚本用 `./cmd/server` 相对路径构建）。
+> 另：`sleep`/`seq` 缺失是沙箱 PATH shim 的假象，`export PATH="/c/Program Files/Git/usr/bin:$PATH"` 即可；**绝不能因沙箱缺命令而弱化生产代码或测试**。
+
 ## ③ 已知上下文 / 踩坑
 
 - ~~**N0-01 路由 bug**~~ **（已修复，轮次 1）**：原 `sendAgentMessageWithSubTask` 硬编码 `ToAgentID: ""`。现为 `sendAgentMessageTo(toAgentID, toSubTaskID, ...) bool`。**沉淀的硬规则**：
@@ -56,6 +69,8 @@ curl http://localhost:8080/healthz
 - **Agent CRUD 页面已存在但被低估**：v1/v2 已有 `AgentConfig.vue`（v2 是 Manage 面板一级 tab），ROADMAP 称「缺管理页面」不准确；真实缺口是分页/搜索/role 列等增量（N1-05）。
 - **三子系统 ROADMAP 描述与代码不符**：Agent CRUD 页面其实存在；多轮历史已「能跑」但接错层且有自复制 bug；AgentBus 收已闭环、发是半双工。校正见 N2-03。
 - **文档版本不一致**：README 写 v0.13.0、ROADMAP 写 v0.15.1、git 最新提交可能更晚。统一见 N2-03。
+- **N0 结项基线（轮次 3 实测，后续回归以此为准）**：`go build/vet/test -count=1 ./...` 全绿（24 个有测试的包全 ok，0 FAIL）；`cases-regression.sh` = **21/21**；`smoke-test.sh` = **63 PASS / 0 FAIL / 1 SKIP**（SKIP 为 `/ws` 握手，curl 能力限制非缺陷）。**任何后续任务导致这三项指标下降即视为回归，必须修复后才能提交。**
+- **smoke 记录的 4 处 API↔文档差异（归 N2-03 处理）**：① `POST /api/projects` 返 201 而非 200；② `POST /api/tools` 必填 `type`(shell/http/inline) 及各 type 子字段(command/url/code)，文档 4.5 节未写；③ Memory 路由无顶层 `POST /api/memories`、无 `PUT /api/memories/{id}`，实际是 `/scope` 子路径 + `/promote` + `/recall`；④ `/ws` 握手需 wscat/Go 客户端专项测。
 
 ## ④ 企业级多 Agent 协作平台验收清单（Phase R 打分用）
 
