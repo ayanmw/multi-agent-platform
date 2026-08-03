@@ -241,13 +241,13 @@ func (s *appServer) registerRoutes() {
 
 	// Agent CRUD API
 	http.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+		if r.Method != http.MethodGet && !auth.RequirePermissionFunc(w, r, auth.ResourceAgents, auth.ActionWrite) {
 			return
 		}
 		s.handleAgents(w, r)
 	})
 	http.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+		if !auth.RequirePermissionFunc(w, r, auth.ResourceAgents, auth.ActionWrite) {
 			return
 		}
 		s.handleAgentByID(w, r)
@@ -259,6 +259,12 @@ func (s *appServer) registerRoutes() {
 	})
 	http.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		// RBAC：删除 session 是写操作，仅 admin/developer 可执行（viewer 拒绝 403）。
+		if r.Method == http.MethodDelete {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceSessions, auth.ActionDelete) {
+				return
+			}
+		}
 		// POST /api/sessions/{id}/chat —— 一个 session 内的多轮对话
 		if strings.HasSuffix(path, "/chat") {
 			s.handleSessionChat(w, r)
@@ -433,7 +439,7 @@ func (s *appServer) registerRoutes() {
 			}
 			s.handleListCases(w, r, s.caseService)
 		case http.MethodPost:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceCases, auth.ActionWrite) {
 				return
 			}
 			s.handleCreateCase(w, r, s.caseService)
@@ -475,12 +481,12 @@ func (s *appServer) registerRoutes() {
 			}
 			s.handleGetCase(w, r, id, s.caseService)
 		case http.MethodPut:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceCases, auth.ActionWrite) {
 				return
 			}
 			s.handleUpdateCase(w, r, id, s.caseService)
 		case http.MethodDelete:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceCases, auth.ActionWrite) {
 				return
 			}
 			s.handleDeleteCase(w, r, id, s.caseService)
@@ -507,14 +513,14 @@ func (s *appServer) registerRoutes() {
 	http.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceTools, auth.ActionWrite) {
 				return
 			}
 			s.handleRegisterTool(w, r)
 		case http.MethodGet:
 			s.handleListTools(w, r)
 		case http.MethodDelete:
-			if !auth.RequireRoleFunc(w, r, auth.RoleAdmin) {
+			if !auth.RequirePermissionFunc(w, r, auth.ResourceTools, auth.ActionWrite) {
 				return
 			}
 			s.handleDeleteTool(w, r)

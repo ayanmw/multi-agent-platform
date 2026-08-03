@@ -401,6 +401,11 @@ func (a *AuthAPI) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RBAC：API key 吊销是特权写操作，仅 admin 可执行（viewer/developer 拒绝）。
+	if !RequirePermissionFunc(w, r, ResourceAPIKeys, ActionWrite) {
+		return
+	}
+
 	userID := a.currentUserID(r)
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
@@ -446,6 +451,12 @@ func (a *AuthAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// RBAC：API key 创建是特权写操作，仅 admin 可执行（viewer/developer 拒绝）。
+	// 这是防止普通用户自我提权的关键闸门（见 LEARNINGS E1/E4）。
+	if !RequirePermissionFunc(w, r, ResourceAPIKeys, ActionWrite) {
 		return
 	}
 

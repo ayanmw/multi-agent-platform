@@ -19,8 +19,9 @@ package main
 //
 // GET /api/providers 与 GET /api/models/prices 公开可读。
 // POST /api/providers/{name}/sync 与 PUT /api/models/prices/{provider}/{model}
-// 是写操作，已注册在 auth.DefaultProtectedRoutes 中，REQUIRE_AUTH 启用时
-// 需要 Bearer token。
+// 是写操作：除 REQUIRE_AUTH 启用时的认证外，还经 auth.RequirePermissionFunc
+// 施加 RBAC —— providers/models 属运营类资源，仅 admin 与 developer(=RoleUser)
+// 可写，viewer 被拒绝（403）。
 
 import (
 	"context"
@@ -30,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayanmw/multi-agent-platform/internal/auth"
 	"github.com/ayanmw/multi-agent-platform/internal/llm"
 	"github.com/ayanmw/multi-agent-platform/internal/ws"
 	"github.com/ayanmw/multi-agent-platform/pkg/db"
@@ -87,6 +89,10 @@ func RegisterModelAPIRoutes(mux *http.ServeMux, providerManager *llm.ProviderMan
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
+		// RBAC：Provider 同步是写操作，仅 admin/developer 可触发（viewer 拒绝）。
+		if !auth.RequirePermissionFunc(w, r, auth.ResourceProviders, auth.ActionWrite) {
+			return
+		}
 		handleSyncProvider(w, r, providerManager, name, hub)
 	})
 
@@ -107,6 +113,10 @@ func RegisterModelAPIRoutes(mux *http.ServeMux, providerManager *llm.ProviderMan
 		}
 		if r.Method != http.MethodPut {
 			http.Error(w, "PUT only", http.StatusMethodNotAllowed)
+			return
+		}
+		// RBAC：Model 画像编辑是写操作，仅 admin/developer 可写（viewer 拒绝）。
+		if !auth.RequirePermissionFunc(w, r, auth.ResourceModels, auth.ActionWrite) {
 			return
 		}
 		handleUpdateModelProfile(w, r, modelRegistry, parts[0], parts[1])
