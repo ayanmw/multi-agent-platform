@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 	"github.com/ayanmw/multi-agent-platform/internal/todo"
 )
 
@@ -162,6 +163,19 @@ func handleCreateTodo(w http.ResponseWriter, r *http.Request, todoSvc *todo.Serv
 		return
 	}
 
+	// Phase N1-06：todo 创建的 audit log（scope = todo/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "create_todo",
+		Target: "todo/" + created.ID,
+		After: map[string]any{
+			"title":       created.Title,
+			"session_id":  created.SessionID,
+			"priority":    created.Priority,
+			"parent_id":   created.ParentTodoID,
+		},
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(created)
@@ -273,6 +287,20 @@ func handleUpdateTodo(w http.ResponseWriter, r *http.Request, todoSvc *todo.Serv
 		return
 	}
 
+	// Phase N1-06：todo 更新的 audit log（scope = todo/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "update_todo",
+		Target: "todo/" + id,
+		After: map[string]any{
+			"title":           updated.Title,
+			"description":     updated.Description,
+			"priority":        updated.Priority,
+			"sort_order":      updated.SortOrder,
+			"parent_todo_id":  updated.ParentTodoID,
+		},
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
 }
@@ -309,6 +337,14 @@ func handleUpdateTodoStatus(w http.ResponseWriter, r *http.Request, todoSvc *tod
 		return
 	}
 
+	// Phase N1-06：todo 状态变更的 audit log（scope = todo/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "update_todo_status",
+		Target: "todo/" + id,
+		After:  map[string]any{"status": string(req.Status)},
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
 }
@@ -324,6 +360,14 @@ func handleDeleteTodo(w http.ResponseWriter, r *http.Request, todoSvc *todo.Serv
 		writeJSONError(w, "delete todo: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Phase N1-06：todo 删除的 audit log（scope = todo/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "delete_todo",
+		Target: "todo/" + id,
+		After:  map[string]any{"deleted": true},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -362,6 +406,17 @@ func handleClearTodos(w http.ResponseWriter, r *http.Request, todoSvc *todo.Serv
 		writeJSONError(w, "clear todos: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Phase N1-06：批量清理 todo 的 audit log（scope = todos?session=<sid>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "clear_todos",
+		Target: "todos?session=" + req.SessionID,
+		After: map[string]any{
+			"session_id":     req.SessionID,
+			"only_completed": onlyCompleted,
+		},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{

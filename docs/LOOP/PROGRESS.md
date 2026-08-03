@@ -210,14 +210,37 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 18:53 | 轮次 9 | N1-06 | ✅ 审计日志（全资源 mutation 落地 + 查询接口）
+
+**目标**：把 N1-06 验收标准落地——Provider/Model/Session/Agent/APIKey/Todo/Cron 的全部写操作记录 `actor + timestamp + scope`（scope 编码进 `Target` 前缀如 `agents/<id>`、`model/<provider>/<model>`、`apikey/<id>`、`cron/<id>`、`todo/<id>`），落审计表（`pkg/db.audit_records`，经 `observability.DefaultAuditor`=SQLiteAuditor 持久化），并提供 `GET /api/audit` 查询接口。
+
+**改动**（仅新增审计埋点 + 端点增强，不动既有业务逻辑）：
+- `cmd/server/api.go`：`handleSessions` POST 记 `create_session`；`handleSessionByID` PUT 记 `update_session`；`handleAgents` POST 记 `create_agent`；`handleAgentByID` PUT 记 `update_agent`、DELETE 先取 Before 快照再记 `delete_agent`；重写 `handleAudit`——合并「持久化表 + 内存 ring buffer」两源（按 `id` 去重、按 `timestamp` 倒序、上限 `limit`），使审计既能查本进程最新也能跨重启；新增 `auditRecordToMap`。
+- `cmd/server/model_api.go`：`handleSyncProvider` 记 `sync_provider`；`handleUpdateModelProfile` mutation 前抓 Before 快照、写后记 `update_model_profile`（27 字段 before/after）。
+- `cmd/server/cron_api.go`：`RegisterCronAPI` 五个写 handler 记 `create_cron`/`update_cron`/`delete_cron`/`set_cron_status`/`trigger_cron`。
+- `cmd/server/api_todo.go`：create/update/status/delete/clear 记 `create_todo`/`update_todo`/`update_todo_status`/`delete_todo`/`clear_todos`。
+- `internal/auth/auth_http.go`：APIKey 创建记 `create_apikey`、吊销记 `revoke_apikey`（actor=当前用户，**明文密钥绝不入审计**）；引入 `observability` 依赖（auth→observability→pkg/db 无环，已核实 `pkg/db` 不 import `auth`）。
+
+**测试**：新建 `cmd/server/audit_test.go`（`TestMutationProducesAuditRecord`）——建/改/删 agent 后 `GET /api/audit` 断言出现 `create_agent`/`update_agent`/`delete_agent` 三条且 `target=agents/<id>` 正确。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（全量 short，含 `cmd/server`、`internal/auth` 新增用例）/ `bash scripts/cases-regression.sh` ✅ **21/21** / `bash scripts/smoke-test.sh` ✅ 全部端点通过。**未改动 `internal/runtime/engine.go` 的 `Run()`**，故 N1-01/N1-02 共享临界区无需重跑；但全量 short 已覆盖。
+
+**提交范围说明**：仅暂存 N1-06 相关文件（`cmd/server/api.go`、`api_todo.go`、`cron_api.go`、`model_api.go`、`audit_test.go`、`internal/auth/auth_http.go`）+ `docs/LOOP/PLAN.md`+`PROGRESS.md` 记账；工作区另有与 N1-06 无关的 `internal/llm/provider_manager.go` 小幅改动保持未暂存，不纳入本次提交（遵循「每轮只做一件事」）。
+
+**Commit**：（本轮收尾，见末）
+
+**下一步**：N1 全部 ✅ → 里程碑进入 N2（质量与可观测加固）；下一轮选 N2-01（可观测性补全：/metrics 维度 + tracing 串联）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        8
-phase:             N1 (企业级核心能力)
+loop_round:        9
+phase:             N2 (质量与可观测加固)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N1-06
+next_milestone:    N2-01
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```

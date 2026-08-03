@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/ayanmw/multi-agent-platform/internal/cron"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 	"github.com/ayanmw/multi-agent-platform/pkg/db"
 )
 
@@ -146,6 +147,17 @@ func handleCronCreate(w http.ResponseWriter, r *http.Request, svc *cron.Service)
 		writeCronError(w, err)
 		return
 	}
+	// Phase N1-06：cron 创建的 audit log（scope = cron/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "create_cron",
+		Target: "cron/" + c.ID,
+		After: map[string]any{
+			"name":         c.Name,
+			"schedule_type": string(c.ScheduleType),
+			"action_type":   string(c.ActionType),
+		},
+	})
 	writeJSON(w, c)
 }
 
@@ -204,6 +216,19 @@ func handleCronUpdate(w http.ResponseWriter, r *http.Request, svc *cron.Service,
 		writeCronError(w, err)
 		return
 	}
+	// Phase N1-06：cron 更新的 audit log（scope = cron/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "update_cron",
+		Target: "cron/" + id,
+		After: map[string]any{
+			"name":          c.Name,
+			"schedule_type": string(c.ScheduleType),
+			"cron_expr":     c.CronExpr,
+			"action_type":   string(c.ActionType),
+			"status":        string(c.Status),
+		},
+	})
 	writeJSON(w, c)
 }
 
@@ -213,6 +238,13 @@ func handleCronDelete(w http.ResponseWriter, r *http.Request, svc *cron.Service,
 		writeCronError(w, err)
 		return
 	}
+	// Phase N1-06：cron 删除的 audit log（scope = cron/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "delete_cron",
+		Target: "cron/" + id,
+		After:  map[string]any{"deleted": true},
+	})
 	writeJSON(w, map[string]any{"deleted": id})
 }
 
@@ -227,6 +259,13 @@ func handleCronSetStatus(w http.ResponseWriter, r *http.Request, svc *cron.Servi
 		writeCronError(w, err)
 		return
 	}
+	// Phase N1-06：cron 状态变更的 audit log（scope = cron/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "set_cron_status",
+		Target: "cron/" + id,
+		After:  map[string]any{"status": string(status)},
+	})
 	writeJSON(w, c)
 }
 
@@ -249,6 +288,13 @@ func handleCronTrigger(w http.ResponseWriter, r *http.Request, svc *cron.Service
 		writeCronError(w, err)
 		return
 	}
+	// Phase N1-06：cron 手动触发的 audit log（scope = cron/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "trigger_cron",
+		Target: "cron/" + id,
+		After:  map[string]any{"triggered": true, "override_input": override},
+	})
 	writeJSON(w, exec)
 }
 

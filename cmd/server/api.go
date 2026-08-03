@@ -641,6 +641,18 @@ func (s *appServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Phase N1-06：session 创建的 audit log（合规轨迹：actor + scope + 变更后状态）。
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "create_session",
+			Target: "session/" + sessionID,
+			After: map[string]any{
+				"name":          name,
+				"project_id":    req.ProjectID,
+				"workspace_dir": workspaceDir,
+			},
+		})
+
 		// Phase skill-filesystem-scanner + skill-command-system:
 		// session 创建成功后，为 workdir 加载文件系统 skill 与 commands。
 		if globalSkillLoader != nil && workspaceDir != "" {
@@ -747,6 +759,18 @@ func (s *appServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Phase N1-06：session 更新的 audit log（仅重命名 vs 完整元数据更新都记为一次写操作）。
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "update_session",
+			Target: "session/" + id,
+			After: map[string]any{
+				"name":             req.Name,
+				"workspace_updated": req.WorkspaceDir != nil,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sess)
 
@@ -916,6 +940,19 @@ func (s *appServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Phase N1-06：agent 创建的 audit log（scope = agents/<id>，含关键配置快照）。
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "create_agent",
+			Target: "agents/" + id,
+			After: map[string]any{
+				"name":    req.Name,
+				"model":   req.Model,
+				"enabled": true,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(agent)
@@ -967,14 +1004,43 @@ func (s *appServer) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Phase N1-06：agent 更新的 audit log（scope = agents/<id>）。
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "update_agent",
+			Target: "agents/" + id,
+			After: map[string]any{
+				"name":    req.Name,
+				"model":   req.Model,
+				"enabled": req.Enabled,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(agent)
 
 	case http.MethodDelete:
+		// 删除前先取出 agent，拿到 name/model 等元数据用于审计 Before 快照。
+		agentToDelete, delErr := db.QueryAgentByID(id)
+		if delErr != nil {
+			http.Error(w, "agent not found: "+delErr.Error(), http.StatusNotFound)
+			return
+		}
 		if err := db.DeleteAgent(id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Phase N1-06：agent 删除的 audit log（scope = agents/<id>）。
+		observability.DefaultAuditor.Record(observability.AuditRecord{
+			Actor:  currentActor(r),
+			Action: "delete_agent",
+			Target: "agents/" + id,
+			Before: map[string]any{"name": agentToDelete.Name, "model": agentToDelete.Model},
+			After:  map[string]any{"deleted": true},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":      id,
@@ -2346,8 +2412,12 @@ func (s *appServer) handleContractLimits(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(s.cfg.ContractLimits)
 }
 
-// handleAudit 返回默认 auditor 最近的 audit 记录。
+// handleAudit 返回审计记录。
 // GET /api/audit?limit=N
+//
+// Phase N1-06：审计轨迹同时落内存 ring buffer（observability.DefaultAuditor）
+// 与 SQLite 审计表（pkg/db.audit_records）。这里合并两个来源按 ID 去重，
+// 以持久化表为权威、内存为补充，保证既有「本进程最新」也有「跨重启历史」。
 func (s *appServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if q := r.URL.Query().Get("limit"); q != "" {
@@ -2355,9 +2425,65 @@ func (s *appServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	records := observability.DefaultAuditor.List(limit)
+
+	seen := make(map[string]struct{})
+	merged := make([]map[string]any, 0, limit)
+
+	// 1) 持久化表（跨重启可读）。
+	if dbRecs, err := db.ListAuditRecords(limit); err == nil {
+		for _, rec := range dbRecs {
+			seen[rec.ID] = struct{}{}
+			merged = append(merged, map[string]any{
+				"id":        rec.ID,
+				"timestamp": rec.Timestamp,
+				"actor":     rec.Actor,
+				"action":    rec.Action,
+				"target":    rec.Target,
+				"before":    rec.Before,
+				"after":     rec.After,
+				"reason":    rec.Reason,
+				"ip":        rec.IP,
+			})
+		}
+	} else {
+		log.Warnf("server", "[audit] db.ListAuditRecords failed, memory-only: %v", err)
+	}
+
+	// 2) 内存 ring buffer（本进程最新，补 DB 未覆盖的部分）。
+	for _, rec := range observability.DefaultAuditor.List(limit) {
+		if _, ok := seen[rec.ID]; ok {
+			continue
+		}
+		merged = append(merged, auditRecordToMap(rec))
+	}
+
+	// 按时间戳倒序（最新在前）；相同时间戳保持插入顺序。
+	sort.SliceStable(merged, func(i, j int) bool {
+		ti, _ := merged[i]["timestamp"].(time.Time)
+		tj, _ := merged[j]["timestamp"].(time.Time)
+		return ti.After(tj)
+	})
+	if limit > 0 && len(merged) > limit {
+		merged = merged[:limit]
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(records)
+	json.NewEncoder(w).Encode(merged)
+}
+
+// auditRecordToMap 把内存审计记录转为与 DB 记录一致的 JSON 形状。
+func auditRecordToMap(rec observability.AuditRecord) map[string]any {
+	return map[string]any{
+		"id":        rec.ID,
+		"timestamp": rec.Timestamp,
+		"actor":     rec.Actor,
+		"action":    rec.Action,
+		"target":    rec.Target,
+		"before":    rec.Before,
+		"after":     rec.After,
+		"reason":    rec.Reason,
+		"ip":        rec.IP,
+	}
 }
 
 // handleTraces 返回进程级 tracer 中所有缓存的 trace span。

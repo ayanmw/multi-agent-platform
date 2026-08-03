@@ -33,6 +33,7 @@ import (
 
 	"github.com/ayanmw/multi-agent-platform/internal/auth"
 	"github.com/ayanmw/multi-agent-platform/internal/llm"
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 	"github.com/ayanmw/multi-agent-platform/internal/ws"
 	"github.com/ayanmw/multi-agent-platform/pkg/db"
 	"github.com/ayanmw/multi-agent-platform/pkg/event"
@@ -176,6 +177,14 @@ func handleSyncProvider(w http.ResponseWriter, r *http.Request, providerManager 
 	// 成功后广播 completed 事件。
 	emitProviderSyncEvent(hub, event.EventProviderSyncCompleted, name, nil)
 
+	// Phase N1-06：Provider 同步（写操作）的 audit log（scope = provider/<name>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "sync_provider",
+		Target: "provider/" + name,
+		After:  map[string]any{"status": "synced"},
+	})
+
 	models, err := db.ListModelsByProvider(name)
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -246,6 +255,20 @@ func handleUpdateModelProfile(w http.ResponseWriter, r *http.Request, registry *
 	if !found {
 		respondJSON(w, http.StatusNotFound, map[string]any{"error": fmt.Sprintf("model not found: %s/%s", providerName, modelID)})
 		return
+	}
+
+	// Phase N1-06：在 mutation 前抓取 Before 快照，供审计轨迹对比。
+	beforeModel := map[string]any{
+		"display_name":        existing.DisplayName,
+		"tier":                existing.Tier,
+		"input_price":         existing.InputPrice,
+		"output_price":        existing.OutputPrice,
+		"max_context_window":  existing.MaxContextWindow,
+		"max_output_tokens":   existing.MaxOutputTokens,
+		"fallback_model":      existing.FallbackModel,
+		"rate_limit_rpm":      existing.RateLimitRPM,
+		"avg_latency_ms":      existing.AvgLatencyMs,
+		"missing":             existing.Missing,
 	}
 
 	var req struct {
@@ -325,6 +348,26 @@ func handleUpdateModelProfile(w http.ResponseWriter, r *http.Request, registry *
 		return
 	}
 
+	// Phase N1-06：model 画像编辑（写操作）的 audit log（scope = model/<provider>/<model>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  currentActor(r),
+		Action: "update_model_profile",
+		Target: "model/" + providerName + "/" + modelID,
+		Before: beforeModel,
+		After: map[string]any{
+			"display_name":        existing.DisplayName,
+			"tier":                existing.Tier,
+			"input_price":         existing.InputPrice,
+			"output_price":        existing.OutputPrice,
+			"max_context_window":  existing.MaxContextWindow,
+			"max_output_tokens":   existing.MaxOutputTokens,
+			"fallback_model":      existing.FallbackModel,
+			"rate_limit_rpm":      existing.RateLimitRPM,
+			"avg_latency_ms":      existing.AvgLatencyMs,
+			"missing":             existing.Missing,
+		},
+	})
+
 	// 同步更新内存 ModelRegistry，使后续路由/成本计算立即生效。
 	if registry != nil {
 		registry.Register(profileFromRecord(*existing))
@@ -342,9 +385,21 @@ func profileToItem(p *llm.ModelProfile) ModelProfileItem {
 	for _, c := range p.Capabilities {
 		caps = append(caps, string(c))
 	}
-	// Name 在 registry 中可能是全名 "provider/model_id"；拆分。
-	providerName, modelID := p.Provider, p.Name
-	if idx := strings.LastIndex(p.Name, "/"); idx >= 0 {
+	// Name 在 registry 中形如 "provider/model_id"（可能含多级前缀，例如
+	// 网关返回 "default/cbcn/deepseek-v4-flash"）。provider 以 p.Provider 为准，
+	// model_id 为 Name 去掉 "provider/" 前缀后的剩余部分；仅当 p.Provider 为空
+	// 时才退化为按最后一个 "/" 拆分，避免把多级前缀误并入 provider 字段
+	// （否则会出现 provider="default/cbcn" 这种非法值，破坏编辑接口与分组）。
+	providerName := p.Provider
+	modelID := p.Name
+	if providerName != "" {
+		if stripped := strings.TrimPrefix(p.Name, providerName+"/"); stripped != p.Name {
+			modelID = stripped
+		} else if idx := strings.LastIndex(p.Name, "/"); idx >= 0 {
+			providerName = p.Name[:idx]
+			modelID = p.Name[idx+1:]
+		}
+	} else if idx := strings.LastIndex(p.Name, "/"); idx >= 0 {
 		providerName = p.Name[:idx]
 		modelID = p.Name[idx+1:]
 	}

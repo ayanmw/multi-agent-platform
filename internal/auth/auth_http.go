@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ayanmw/multi-agent-platform/internal/observability"
 )
 
 // contextKey 是用于 context value key 的私有类型,以避免 key 冲突。
@@ -439,6 +441,14 @@ func (a *AuthAPI) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase N1-06：API key 吊销的 audit log（scope = apikey/<id>）。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  userID,
+		Action: "revoke_apikey",
+		Target: "apikey/" + id,
+		After:  map[string]any{"revoked": true, "user_id": userID},
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"id":      id,
@@ -476,6 +486,19 @@ func (a *AuthAPI) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Phase N1-06：API key 创建的 audit log（scope = apikey/<id>）。
+	// 注意：rawKey 是明文密钥，绝不写入审计轨迹，仅记录非敏感元数据。
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  userID,
+		Action: "create_apikey",
+		Target: "apikey/" + key.ID,
+		After: map[string]any{
+			"name":    key.Name,
+			"user_id": key.UserID,
+			"prefix":  key.Prefix,
+		},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
