@@ -284,14 +284,33 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 02:05 | 轮次 12 | N2-03 | ✅ 文档一致性校正（版本统一 v0.16.0 + 三子系统与状态表描述对齐代码现状）
+
+**目标**：消除文档与代码现状的多处不一致——① 四处版本号（运行时 `internal/version/version.txt`=v0.11.3、根 `version.txt`=v0.12.1、README=v0.13.0、ROADMAP=v0.15.1，且 ROADMAP 历史已到 v0.15.3）互不一致；② ROADMAP「未做清单」仍把 N1 已完成的 5 项（Shell 沙箱降级 / Agent CRUD 前端 / 多轮历史 / AgentBus 闭环 / RBAC）列为未完成；③ README「当前状态」表的工具沙箱 / DB 表数·迁移版本 / 多 Agent / Auth / 可观测性描述滞后。
+
+**改动**（仅文档 + 嵌入版本文本，无逻辑变更）：
+- `internal/version/version.txt`、`version.txt`：v0.11.3/v0.12.1 → **v0.16.0 Alpha**（ROADMAP 已记录 v0.15.3 之后，反映 N0/N1/N2 企业级加固里程碑；以运行时版本文件为权威）。
+- `README.md`：头部与「当前状态」版本 → v0.16.0；Phase 状态概述补全 N0/N1/N2；项目结构 `db/` 表数 26+→28、迁移 v26+→v35；「当前状态」表 5 行校正（工具沙箱含 N1-04 无 Docker 安全降级 / DB 28 表·v35 / 多 Agent 双向闭环 N1-02 / Auth RBAC 三角色 N1-03 / 可观测性维度化 metrics + 事件校验 + tracing N2-01）。
+- `roadmaps/ROADMAP.md`：「最近更新」2026-08-02→2026-08-04、「当前版本」v0.15.1→v0.16.0；历史版本表追加 v0.16.0 行；「未做清单」改为「核心能力现状」，N1 已完成的 Shell 沙箱 / Agent CRUD 前端 / 多轮历史 / AgentBus 闭环 / RBAC 五项由 `[ ]` 改 `[x]` 并标注 N1-01/02/03/04/05 真实落点；仍待做项（Anthropic/Gemini 真实 Chat=N2-04、动态模型热加载、部署文档、Baidu 反爬等）保留。
+- `docs/LOOP/LEARNINGS.md`：标记「三子系统描述不符」「文档版本不一致」两条已解决；「smoke 4 处 API↔文档差异」注明留后续 API 文档校正（N2-03 未覆盖）。
+- `docs/LOOP/PLAN.md`：头部版本说明对齐 v0.16.0；N2-03 标记 ⏳→✅。
+
+**验证**：`go build ./...` ✅ / `go vet ./internal/version/...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（全量短测，嵌入版本文本无影响）；CLAUDE.md 经 grep 确认无版本/表数残留表述（E10 文档准确性）。未改任何逻辑，cases-regression/smoke 基线（21/21、63/63）不受影响。
+
+**Commit**：`1221695`（已 push origin main `7193e32..1221695`）；选择性暂存仅 N2-03 的 6 个文件（`internal/llm/provider_manager.go` 遗留 WIP 与 `tmp/` 保持未暂存）。
+
+**下一步**：N2-04 —— 真实 Provider 通道（Anthropic / Gemini 的 Chat 通道从 stub 落地为真实 SSE 流式实现，复用 `internal/llm/client.go`）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        11
+loop_round:        12
 phase:             N2 (质量与可观测加固)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N2-03
-budget_validuntil: 2026-08-03T22:31:06+08:00
+next_milestone:    N2-04
+budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍被调度，继续推进)
 ```
