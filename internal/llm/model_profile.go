@@ -251,6 +251,22 @@ func (r *ModelRegistry) GetByTier(tier ModelTier) []*ModelProfile {
 	return profiles
 }
 
+// sortProfilesByTier 按层级升序（最便宜的在前）对 profile 切片原地排序，
+// 同层级时以 Name 字典序作为次级键。
+//
+// 次级键不可省略：所有调用方都从 ModelRegistry.profiles（map）遍历收集结果，
+// 而 map 迭代顺序是随机的。若只按 Tier 排序，同层级模型之间的相对顺序在每次
+// 调用时都可能不同，会导致 Router 候选池顺序抖动、前端模型列表闪烁以及测试
+// 随机失败。加上 Name 次级键后，同一份 registry 的输出保持稳定可复现。
+func sortProfilesByTier(profiles []*ModelProfile) {
+	sort.Slice(profiles, func(i, j int) bool {
+		if profiles[i].Tier != profiles[j].Tier {
+			return profiles[i].Tier < profiles[j].Tier
+		}
+		return profiles[i].Name < profiles[j].Name
+	})
+}
+
 // FilterByCapability 返回支持指定能力的所有 model，
 // 按层级排序（最便宜的在前）。
 func (r *ModelRegistry) FilterByCapability(cap ModelCapability) []*ModelProfile {
@@ -263,9 +279,7 @@ func (r *ModelRegistry) FilterByCapability(cap ModelCapability) []*ModelProfile 
 			result = append(result, p)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Tier < result[j].Tier
-	})
+	sortProfilesByTier(result)
 	return result
 }
 
@@ -281,9 +295,7 @@ func (r *ModelRegistry) FilterByContextLen(minTokens int) []*ModelProfile {
 			result = append(result, p)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Tier < result[j].Tier
-	})
+	sortProfilesByTier(result)
 	return result
 }
 
@@ -343,9 +355,7 @@ func (r *ModelRegistry) AvailableProfiles(configuredProviders map[string]bool, a
 		}
 		result = append(result, p)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Tier < result[j].Tier
-	})
+	sortProfilesByTier(result)
 	return result
 }
 
@@ -370,9 +380,7 @@ func (r *ModelRegistry) List() []*ModelProfile {
 	for _, p := range r.profiles {
 		result = append(result, p)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Tier < result[j].Tier
-	})
+	sortProfilesByTier(result)
 	return result
 }
 
