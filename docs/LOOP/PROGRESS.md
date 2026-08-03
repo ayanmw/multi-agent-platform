@@ -107,10 +107,32 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 11:12 | 轮次 4 | N1-01 | ✅ 多轮对话历史回读下沉为原生 message 数组
+
+**目标**：把 session 多轮历史从「压扁成 system prompt 文本」下沉为「原生 `[]llm.Message` 数组」注入 Engine ReAct Loop，修复「接错层」（历史与指令混在同一条 system 消息、击穿 prompt cache、丢失 tool_call 配对）。
+
+**改动**：
+- `cmd/server/session_history.go`（**新建**）：读侧子系统 `buildHistoryMessages(msgs, limits)`。流水线 = ① 过滤历史 system 基线（保留 `TurnIndex==-1` 压缩摘要）② 按轮数窗口裁剪（摘要不占配额、恒排最前）③ 还原 assistant.tool_calls / tool.tool_call_id ④ `sanitizeToolCallPairs` 剔除悬空一侧（无结果的 tool_call、无发起方的 tool、空 assistant）⑤ `truncateHistoryContent` 按 **rune** 截断（避免多字节 UTF-8 被劈开产生非法码点，区别于 api.go 字节级 `truncateContent`）。`historyMessageCount` 供日志可观测。
+- `internal/runtime/engine.go`：`EngineConfig.HistoryMessages []llm.Message`；`NewEngine` 构造 `initialMessages = [system, <历史...>]`，**拷贝切片**避免与调用方共享底层数组；历史天然落在 system 之后、本轮 user input 之前。
+- `cmd/server/runner.go`：`AgentRunSpec.HistoryMessages` 透传到 `EngineConfig`。
+- `cmd/server/api.go`：`handleSessionChat` 删除 `buildHistoryContext` 文本拼接，改为 `buildHistoryMessages` 还原原生数组后注入 `HistoryMessages`；system prompt 不再携带历史文本；注释指向 session_history.go。
+- `internal/config/config.go`：`SessionHistoryLimits`（`SESSION_HISTORY_MAX_TURNS` 默认 20 对齐 compressor `turnThreshold`、`SESSION_HISTORY_MAX_MESSAGE_CHARS` 默认 4000）+ `LoadSessionHistoryLimits()`。
+- **测试**：`cmd/server/session_history_test.go` 重写（9 例：跳过 system 基线 / 保留压缩摘要 / 无对话返 nil / 多轮无膨胀 / 还原 tool_call 配对 / 清洗悬空 / 空 assistant 丢弃 / 轮数窗口 / rune 安全截断）；`internal/runtime/session_history_test.go` 新增 `TestRun_HistoryMessagesInjected`（断言注入顺序 system→历史 user→历史 assistant→本轮 user，且历史不出现在 system 文本）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok）/ `go test ./internal/runtime/... ./internal/orchestrator/...` ✅（N1-01/N1-02 并发重跑，engine.go 共享 `messagesMu`）。
+
+**过程发现**：引擎最终答案经 `saveConversation`/`writeSessionMessage` 持久化但**不**追加进 `e.messages`（下一轮从 session_messages 表重读），故 `TestRun_HistoryMessagesInjected` 断言 `e.messages` 到本轮 user input 共 4 条而非 5 条——首版误判「至少 5 条」导致 FAIL，改为断言 ≥4 + 注入位置 + 不在 system 文本后通过。
+
+**Commit**：`1bb60aa`（已 push origin main）。
+
+**下一步**：N1-02 —— AgentBus ↔ ReAct Loop 闭环（`send_agent_message` 工具 + Engine 被 AgentBus 驱动/回调接口）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        3
+loop_round:        4
 phase:             N1 (企业级核心能力)
 quality_gate_pass: false
 done:              false
