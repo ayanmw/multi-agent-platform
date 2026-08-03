@@ -198,9 +198,7 @@ func TestSelectWebSearchProviderGeminiPriority(t *testing.T) {
 // TestRealGeminiSearch 使用 .env 中的 GEMINI_API_KEY 对真实 Gemini generateContent
 // 端点做一次搜索冒烟测试。默认 Skip，手动运行时加 -run TestRealGeminiSearch。
 func TestRealGeminiSearch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real network test")
-	}
+	requireRealNetwork(t)
 	key := dotenv.Getenv("GEMINI_API_KEY")
 	if key == "" {
 		t.Skip("GEMINI_API_KEY not set")

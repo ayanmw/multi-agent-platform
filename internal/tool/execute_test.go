@@ -47,6 +47,15 @@ func TestExecuteProgramUnsupported(t *testing.T) {
 }
 
 func TestExecuteProgramTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash 不可用，跳过超时测试")
+	}
+	// `sleep` 是外部命令（Git Bash / Linux 均自带）。某些受限沙箱会把 PATH
+	// 收窄成白名单 shim，此时 `sleep` 缺失会让脚本以 exit 127 立即退出，
+	// 超时逻辑得不到验证 —— 那种环境下直接跳过，而不是弱化测试本身。
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep 不可用（PATH 受限环境），跳过超时测试")
+	}
 	r := NewRegistry()
 	RegisterBuiltins(r)
 	res, err := r.Execute("core/execute_program", map[string]any{"language": "bash", "code": "sleep 5", "timeout_ms": 100})
