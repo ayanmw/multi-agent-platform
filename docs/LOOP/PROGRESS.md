@@ -101,7 +101,7 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 3. `AgentRunSpec` 的 `Role/CanDispatchSubAgents/...` 是死配置（runner 只按 `isRoot` 推导，从不读 `spec.*`）→ 建议 N2 清理。
 4. smoke 记录的 4 处「API 与文档差异」（`POST /api/projects` 返 201、`POST /api/tools` 必填 type 子字段、Memory 路由与文档不符、`/ws` 需专项测）→ 归入 N2-03 文档一致性。
 
-**Commit**：见下方回填
+**Commit**：`7458e5c`
 
 **下一步**：N1-01 —— 多轮对话历史回读（原生 message 数组下沉到 Engine ReAct Loop）。
 
