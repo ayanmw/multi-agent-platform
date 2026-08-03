@@ -72,13 +72,13 @@ func TestProfileResolver_ResolveProviderForModel_ShortNameUsesModelConfig(t *tes
 
 func TestProfileResolver_ResolveProviderForModel_FallbackToLegacy(t *testing.T) {
 	cfg := &config.Config{
-		LLMEndpoint: "https://aicoding.dobest.com/v1",
+		LLMEndpoint: "https://api.deepseek.com/v1",
 		LLMAPIKey:   "sk-fallback",
 	}
 	r := NewProfileResolver(cfg)
 	pc := r.ResolveProviderForModel("unknown-model")
 
-	if pc.Endpoint != "https://aicoding.dobest.com/v1" {
+	if pc.Endpoint != "https://api.deepseek.com/v1" {
 		t.Fatalf("expected legacy endpoint, got %q", pc.Endpoint)
 	}
 	if pc.APIKey != "sk-fallback" {

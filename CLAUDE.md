@@ -25,7 +25,7 @@
 | 数据库 | modernc.org/sqlite | 纯 Go SQLite，单文件部署 |
 | 通信 | gorilla/websocket | Phase 0-4，Phase 6 迁 gRPC |
 | 前端 | Vue 3 + Vite + TypeScript | `web/`(v1) + `web/v2/`(控制室，默认根路径)，按 URL 路径 `/ui/v{N}/` 分发 |
-| LLM | OpenAI-compatible API | `aicoding.dobest.com/v1`，deepseek-v4-flash |
+| LLM | OpenAI-compatible API | `api.deepseek.com/v1`，deepseek-v4-flash |
 | Mock | MockProvider | 22 个内置脚本，回归脚本确定性评测 |
 | 配置 | .env + 环境变量 | 优先级：系统环境变量 > .env > 默认值 |
 
@@ -520,14 +520,14 @@ Why: 多 Agent / 长任务场景下，上下文断掉=进度丢失。让 LLM 自
 ## API 配置
 
 ```
-Endpoint:  https://aicoding.dobest.com/v1
+Endpoint:  https://api.deepseek.com/v1
 Model:     deepseek-v4-flash
 API Key:   写在 .env (gitignore)
 ```
 
 .env 文件格式：
 ```
-LLM_ENDPOINT=https://aicoding.dobest.com/v1
+LLM_ENDPOINT=https://api.deepseek.com/v1
 LLM_API_KEY=sk-xxx
 LLM_MODEL=deepseek-v4-flash
 ```

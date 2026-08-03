@@ -69,6 +69,14 @@ type Config struct {
 	EnableSandbox bool   // SANDBOX_ENABLE
 	SandboxImage  string // SANDBOX_IMAGE
 
+	// ShellSandbox 是无 Docker 环境下 run_shell / execute_program 的本地安全
+	// 降级策略（N1-04）。当 Docker 不可用时，这两条本地执行路径按策略枚举
+	// 对危险命令前缀黑名单做拦截，命中且策略为 deny/ask（无人值守）时拒绝并
+	// 写审计；allow 策略放行但写审计告警。默认 deny（fail-closed）。
+	ShellSandboxPolicy   string // SHELL_SANDBOX_POLICY (allow|ask|deny, 默认 deny)
+	ShellSandboxBlacklist string // SHELL_SANDBOX_BLACKLIST (逗号分隔正则, 空=用内置默认黑名单)
+	ShellSandboxAllowlist string // SHELL_SANDBOX_ALLOWLIST (逗号分隔正则, 空=无豁免)
+
 	// Cron 子系统配置。
 	// CronEnabled 总开关，false 时 scheduler 不启动（仍可通过 REST/API 创建 cron，只是不会自动触发）。
 	// CronAllowedTools 限制 script action 可调用的 tool 名白名单，复用现有 run_shell 等 tool 的 sandbox/policy。
@@ -214,7 +222,7 @@ type MCPMarketConfig struct {
 // 注意：dotenv 包 init 时已自动加载默认 .env，此处不再需要显式 Reload。
 func Load() (*Config, error) {
 	cfg := &Config{
-		LLMEndpoint:  "https://aicoding.dobest.com/v1",
+		LLMEndpoint:  "https://api.deepseek.com/v1",
 		LLMModel:     "deepseek-v4-flash",
 		DBPath:       "data/app.db",
 		ServerPort:   "8080",
@@ -284,6 +292,15 @@ func Load() (*Config, error) {
 	if v := Getenv("SANDBOX_IMAGE"); v != "" {
 		cfg.SandboxImage = v
 	}
+
+	// ShellSandbox 本地安全降级策略（N1-04）：默认 deny，黑名单可用内置默认，
+	// 也可经 SHELL_SANDBOX_BLACKLIST / SHELL_SANDBOX_ALLOWLIST 覆盖。
+	cfg.ShellSandboxPolicy = "deny"
+	if v := Getenv("SHELL_SANDBOX_POLICY"); v != "" {
+		cfg.ShellSandboxPolicy = v
+	}
+	cfg.ShellSandboxBlacklist = Getenv("SHELL_SANDBOX_BLACKLIST")
+	cfg.ShellSandboxAllowlist = Getenv("SHELL_SANDBOX_ALLOWLIST")
 
 	// Cron 子系统配置：默认启用，白名单含常用只读/执行 tool。
 	cfg.CronEnabled = true
@@ -699,13 +716,13 @@ type AgentConfig struct {
 //
 // LLM_MODELS 示例:
 //  LLM_MODELS=[
-//    {"name":"deepseek-v4-flash","provider":"deepseek","endpoint":"https://aicoding.dobest.com/v1","api_key":"sk-xxx"},
+//    {"name":"deepseek-v4-flash","provider":"deepseek","endpoint":"https://api.deepseek.com/v1","api_key":"sk-xxx"},
 //    {"name":"gpt-4o","provider":"openai","endpoint":"https://api.openai.com/v1","api_key":"sk-yyy"}
 //  ]
 //
 // 带索引变量示例:
 //  LLM_MODEL_0_PROVIDER=deepseek
-//  LLM_MODEL_0_ENDPOINT=https://aicoding.dobest.com/v1
+//  LLM_MODEL_0_ENDPOINT=https://api.deepseek.com/v1
 //  LLM_MODEL_0_API_KEY=sk-xxx
 //  LLM_MODEL_0_NAME=deepseek-v4-flash
 //

@@ -319,7 +319,7 @@ type Provider interface {
 
 ```env
 # Default / DeepSeek
-LLM_ENDPOINT=https://aicoding.dobest.com/v1
+LLM_ENDPOINT=https://api.deepseek.com/v1
 LLM_API_KEY=sk-xxx
 LLM_MODEL=deepseek-v4-flash
 

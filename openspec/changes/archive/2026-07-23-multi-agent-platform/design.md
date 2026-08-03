@@ -178,7 +178,7 @@ func (r *ToolRegistry) List() []Tool
 **配置**:
 ```go
 type LLMConfig struct {
-    Endpoint  string  // https://aicoding.dobest.com/v1
+    Endpoint  string  // https://api.deepseek.com/v1
     APIKey    string
     Model     string  // deepseek-v4-flash
     MaxTokens int

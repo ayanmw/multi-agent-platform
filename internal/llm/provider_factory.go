@@ -27,7 +27,7 @@
 //
 //	provider, err := llm.NewProvider(llm.ProviderConfig{
 //	    Name:     "deepseek",
-//	    Endpoint: "https://aicoding.dobest.com/v1",
+//	    Endpoint: "https://api.deepseek.com/v1",
 //	    APIKey:   "sk-xxx",
 //	    Model:    "deepseek-v4-flash",
 //	})

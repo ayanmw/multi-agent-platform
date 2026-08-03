@@ -31,7 +31,7 @@
 
 ### 1. Provider 配置格式：JSON 数组 `LLM_PROVIDERS`
 
-- **选择**: 与 `MCP_SERVERS` 保持一致，使用 JSON 数组声明 Provider：`{"name":"deepseek","type":"openai","endpoint":"https://aicoding.dobest.com/v1","api_key":"..."}`。
+- **选择**: 与 `MCP_SERVERS` 保持一致，使用 JSON 数组声明 Provider：`{"name":"deepseek","type":"openai","endpoint":"https://api.deepseek.com/v1","api_key":"..."}`。
 - **理由**: 项目已有 JSON 数组配置先例，便于前后端解析；单 Provider 场景可配一个元素，兼容现有单模型 `.env`。
 - **未选**: 索引环境变量（`LLM_PROVIDER_0_NAME`）。虽然对不擅手写 JSON 的用户更友好，但会引入额外解析逻辑，与现有 `LLM_MODELS` 风格重复；本次先保持统一。
 

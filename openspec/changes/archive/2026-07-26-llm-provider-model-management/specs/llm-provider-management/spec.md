@@ -4,7 +4,7 @@
 The system SHALL parse `LLM_PROVIDERS` (JSON array) from `.env` / environment variables into a list of provider records containing `name`, `type`, `endpoint`, and `api_key`.
 
 #### Scenario: Single provider declared via JSON
-- **WHEN** `.env` contains `LLM_PROVIDERS=[{"name":"deepseek","type":"openai","endpoint":"https://aicoding.dobest.com/v1","api_key":"sk-xxx"}]`
+- **WHEN** `.env` contains `LLM_PROVIDERS=[{"name":"deepseek","type":"openai","endpoint":"https://api.deepseek.com/v1","api_key":"sk-xxx"}]`
 - **THEN** the system loads exactly one provider named `deepseek` with type `openai`
 
 #### Scenario: Backward compatibility when LLM_PROVIDERS is absent

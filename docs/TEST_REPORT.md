@@ -346,7 +346,7 @@ D3 验证结论：
 *真实 LLM 第一轮报告更新：2026-07-13*  
 *真实 LLM 修复批次合并+D1/D3 状态同步：2026-07-15*  
 *评测执行：1 个子 agent 创建+运行（leader 调度，串行控费）*  
-*真实 LLM endpoint：`deepseek-v4-flash-local`（aicoding.dobest.com 代理，后端 Step-3.7-Flash）*
+*真实 LLM endpoint：`deepseek-v4-flash-local`（api.deepseek.com 代理，后端 Step-3.7-Flash）*
 
 ---
 
@@ -356,7 +356,7 @@ D3 验证结论：
 > 运行方式：本地完整运行 Part A（22 个白盒场景） + Part B（21 个内置 Case 回归）
 > 断言哲学：真实 LLM 行为不可控项（具体内容、选哪个 tool、是否调用 tool）只检查结构/事件/状态；硬失败（终态/usage/cost/panic）计 FAIL，其余 soft mark 计 SKIP
 > 后端版本：commit `64ec57c` + `12f5b36`（Phase 7-llm 修复与 OpenSpec 归档）
-> 测试模型：`deepseek-v4-flash`（OpenAI-compatible endpoint `aicoding.dobest.com/v1`）
+> 测试模型：`deepseek-v4-flash`（OpenAI-compatible endpoint `api.deepseek.com/v1`）
 
 ### 11.0 结果总览
 

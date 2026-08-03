@@ -11,7 +11,7 @@ import (
 func TestNewProvider_OpenAI(t *testing.T) {
 	p, err := NewProvider(ProviderConfig{
 		Name:     "openai",
-		Endpoint: "https://api.openai.com/v1",
+		Endpoint: "https://api.deepseek.com/v1",
 		APIKey:   "sk-test",
 		Model:    "gpt-4o",
 	})
@@ -134,7 +134,7 @@ func TestCreateProviderFromConfig_RealModeUsesModelConfig(t *testing.T) {
 func TestCreateProviderFromConfig_FallbackToDefaultFields(t *testing.T) {
 	cfg := &config.Config{
 		LLMUseMock:  false,
-		LLMEndpoint: "https://aicoding.dobest.com/v1",
+		LLMEndpoint: "https://api.deepseek.com/v1",
 		LLMAPIKey:   "sk-test",
 		LLMModel:    "deepseek-v4-flash",
 	}
@@ -152,7 +152,7 @@ func TestProviderRegistry_RegisterAndGet(t *testing.T) {
 	reg := NewProviderRegistry()
 	cfg := ProviderConfig{
 		Name:     "openai",
-		Endpoint: "https://api.openai.com/v1",
+		Endpoint: "https://api.deepseek.com/v1",
 		APIKey:   "sk-test",
 		Model:    "gpt-4o",
 	}

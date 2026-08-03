@@ -230,7 +230,7 @@ type EngineConfig struct {
 	Model string
 
 	// Endpoint 是 OpenAI-compatible API 的 base URL（例如
-	// "https://aicoding.dobest.com/v1"）。Engine 会在其后追加
+	// "https://api.deepseek.com/v1"）。Engine 会在其后追加
 	// "/chat/completions" 用于 chat 请求。
 	Endpoint string
 

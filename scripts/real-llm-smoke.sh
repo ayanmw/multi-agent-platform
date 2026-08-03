@@ -826,7 +826,7 @@ b_poll() {
 }
 
 # 单个 case 评测：b_run_case <case_id>
-# 注意：real LLM 有速率限制（aicoding 30 req/min、5 并发），全量 21 case 串行
+# 注意：real LLM 有速率限制（默认 LLM 网关 30 req/min、5 并发），全量 21 case 串行
 # 跑会触发 429。每个 case 之间 sleep CASE_COOLDOWN 秒（默认 8s）让速率窗口恢复。
 b_run_case() {
   local cid="$1"

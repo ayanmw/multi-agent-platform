@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoadLLMProviderConfigFromJSON(t *testing.T) {
-	t.Setenv("LLM_PROVIDERS", `[{"name":"deepseek","type":"openai","endpoint":"https://aicoding.dobest.com/v1","api_key":"sk-xxx"}]`)
+	t.Setenv("LLM_PROVIDERS", `[{"name":"deepseek","type":"openai","endpoint":"https://api.deepseek.com/v1","api_key":"sk-xxx"}]`)
 	cfg := &Config{}
 	cfg.LoadLLMProviderConfig()
 
@@ -14,7 +14,7 @@ func TestLoadLLMProviderConfigFromJSON(t *testing.T) {
 		t.Fatalf("expected 1 provider, got %d", len(cfg.LLMProviders))
 	}
 	p := cfg.LLMProviders[0]
-	if p.Name != "deepseek" || p.Type != "openai" || p.Endpoint != "https://aicoding.dobest.com/v1" || p.APIKey != "sk-xxx" {
+	if p.Name != "deepseek" || p.Type != "openai" || p.Endpoint != "https://api.deepseek.com/v1" || p.APIKey != "sk-xxx" {
 		t.Fatalf("unexpected provider: %+v", p)
 	}
 }
@@ -23,7 +23,7 @@ func TestLoadLLMProviderConfigFallbackDefault(t *testing.T) {
 	// 确保 LLM_PROVIDERS 未设置
 	os.Unsetenv("LLM_PROVIDERS")
 	cfg := &Config{
-		LLMEndpoint: "https://api.openai.com/v1",
+		LLMEndpoint: "https://api.deepseek.com/v1",
 		LLMAPIKey:   "sk-default",
 	}
 	cfg.LoadLLMProviderConfig()
@@ -32,7 +32,7 @@ func TestLoadLLMProviderConfigFallbackDefault(t *testing.T) {
 		t.Fatalf("expected 1 fallback provider, got %d", len(cfg.LLMProviders))
 	}
 	p := cfg.LLMProviders[0]
-	if p.Name != "default" || p.Type != "openai" || p.Endpoint != "https://api.openai.com/v1" || p.APIKey != "sk-default" {
+	if p.Name != "default" || p.Type != "openai" || p.Endpoint != "https://api.deepseek.com/v1" || p.APIKey != "sk-default" {
 		t.Fatalf("unexpected fallback provider: %+v", p)
 	}
 }

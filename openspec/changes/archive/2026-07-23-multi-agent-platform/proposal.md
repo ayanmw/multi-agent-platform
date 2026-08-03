@@ -2,7 +2,7 @@
 
 需要构建一个可本地训练、调试和观察 AI Agent 行为的多 Agent 系统。作为学习工具时，需要能实时看到每一步的思考过程、工具调用、token 流；作为产品使用时，需要可配置、可扩展、可持久化。
 
-基于用户已有内部 API (`aicoding.dobest.com/v1`, deepseek-v4-flash)，用 Go 做后端 (高并发/强类型/部署简单)，Vue 3 做前端 (实时渲染/状态可视化)，在单仓库内快速迭代出一套可工作的 MVP。
+基于用户已有内部 API (`api.deepseek.com/v1`, deepseek-v4-flash)，用 Go 做后端 (高并发/强类型/部署简单)，Vue 3 做前端 (实时渲染/状态可视化)，在单仓库内快速迭代出一套可工作的 MVP。
 
 ## What Changes
 
@@ -39,5 +39,5 @@ _(无，此为全新系统)_
 - **新依赖**: Go 1.23+, modernc.org/sqlite (纯Go SQLite), gorilla/websocket, protobuf (预留 gRPC), Vue 3 + Vite + TypeScript
 - **API**: 后端暴露 WebSocket endpoint (`/ws`)，REST API 用于 Agent 配置 CRUD、Task 历史查询
 - **数据**: local SQLite 文件 (`data/app.db`)，Markdown 文件存储于 `storage/`
-- **外部服务**: 内部 LLM API (`https://aicoding.dobest.com/v1`, deepseek-v4-flash)
+- **外部服务**: 内部 LLM API (`https://api.deepseek.com/v1`, deepseek-v4-flash)
 - **架构**: 单仓库 monorepo，go/ 和 web/ 子目录
