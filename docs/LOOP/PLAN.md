@@ -42,7 +42,7 @@
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
 | N2-01 | **可观测性补全**：结构化 tracing、事件完整性校验、/metrics 维度补全（按 agent/session/step 维度），确保「白盒」闭合 | ✅ | /metrics 暴露关键维度；tracing 串联一次 run；`go vet/test` 绿 | N1 |
-| N2-02 | **测试覆盖**：扩展 E2E 覆盖多轮记忆 / RBAC 403 / 审计；`bash scripts/cases-regression.sh` 稳定 21/21；`bash scripts/multi-agent-smoke.sh` 通过 | ○ | 全部测试绿且稳定（可重复运行不抖）；新增 E2E 落盘 | N1 |
+| N2-02 | **测试覆盖**：扩展 E2E 覆盖多轮记忆 / RBAC 403 / 审计；`bash scripts/cases-regression.sh` 稳定 21/21；`bash scripts/multi-agent-smoke.sh` 通过 | ✅ | 全部测试绿且稳定（可重复运行不抖）；新增 E2E 落盘 | N1 |
 | N2-03 | **文档一致性**：校正 README（v0.13→v0.15.1）、ROADMAP、AGENTS.md 版本号对齐；修正三子系统（Agent CRUD / 多轮历史 / AgentBus）描述与代码真实现状的偏差 | ○ | README/ROADMAP/AGENTS 版本与 git 最新一致；三子系统描述准确 | N1 |
 | N2-04 | **真实 Provider 通道**：Anthropic / Gemini 的 Chat 通道从 stub 落地为真实 SSE 流式实现（复用 `internal/llm/client.go`），非 OpenAI-compatible 也可跑 | ○ | 配置 Anthropic/Gemini endpoint 后能真实流式对话；`go test ./internal/llm/...` 绿 | N1 |
 

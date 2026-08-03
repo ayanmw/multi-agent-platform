@@ -59,6 +59,65 @@ func (p *fakeJudgeProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, er
 	return []llm.ModelInfo{}, nil
 }
 
+// slowFinalProvider 用于稳定化 AgentBus 消息注入测试：ChatStream 先休眠 delay
+// 再返回最终答案（不含 tool call），使 ReAct loop 在消息注入后仍有充足时间
+// 存活，确保 AgentBus listener 在 engine.Run 返回前处理完注入的消息。这消除了
+// 原测试依赖「固定 sleep 缓冲」带来的并发竞态偶发失败（N2-02 测试加固）。
+type slowFinalProvider struct {
+	resp  string
+	delay time.Duration
+}
+
+func (p *slowFinalProvider) Name() string { return "slow-final" }
+
+func (p *slowFinalProvider) Chat(req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{
+		Choices: []llm.Choice{
+			{Index: 0, Message: llm.Message{Role: "assistant", Content: p.resp}},
+		},
+		Usage: llm.Usage{TotalTokens: 10},
+	}, nil
+}
+
+func (p *slowFinalProvider) ChatStream(req llm.ChatRequest, onChunk func(llm.StreamChunk) error) (string, llm.Usage, []llm.ToolCall, error) {
+	if p.delay > 0 {
+		time.Sleep(p.delay)
+	}
+	return p.resp, llm.Usage{TotalTokens: 10}, nil, nil
+}
+
+func (p *slowFinalProvider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
+	_ = ctx
+	return []llm.ModelInfo{}, nil
+}
+
+// waitForAgentMessageEvents 轮询 recordingBus，直到注入的 AgentBus 消息被
+// listener 处理成 step 事件（确定性等待，取代脆弱的固定 sleep）。超时返回 false。
+func waitForAgentMessageEvents(b *recordingBus, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		var startCount, completeCount, receivedCount int
+		for _, evt := range b.events {
+			if evt.Type == "step_started" && evt.Data["type"] == "agent_message_input" {
+				startCount++
+			}
+			if evt.Type == "step_complete" && evt.Data["type"] == "agent_message_input" {
+				completeCount++
+			}
+			if evt.Type == "system_info" && evt.Data["type"] == "agent_message_received" {
+				receivedCount++
+			}
+		}
+		b.mu.Unlock()
+		if startCount > 0 && completeCount > 0 && receivedCount > 0 {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return false
+}
+
 // memoryEvalRepository 记录已保存的评估。
 type memoryEvalRepository struct {
 	evals []cases.CaseEvaluation
@@ -381,7 +440,7 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 		AgentID:      "leader",
 		SystemPrompt: "You are a leader.",
 		Model:        "fake-model",
-		Provider:     &fakeJudgeProvider{resp: "ack"},
+		Provider:     &slowFinalProvider{resp: "ack", delay: 300 * time.Millisecond},
 		Contract:     harness.TaskContract{Goal: "test", Scope: "."},
 		AgentBus:     agentBus,
 		Role:         AgentRoleLeader,
@@ -419,9 +478,13 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 		t.Fatalf("engine.Run returned unexpected error: %v", err)
 	}
 
-	// AgentBus listener 与 engine Run 并发。消息注入后可能需要等 listener
-	// 处理完并发出 step 事件，再读取 recordingBus。给点缓冲时间避免竞态。
-	time.Sleep(100 * time.Millisecond)
+	// AgentBus listener 与 engine.Run 并发。由于 Provider 的 ChatStream 休眠
+	// 300ms，ReAct loop 在消息注入后仍有充足时间存活，listener 必在 Run 返回
+	// 前处理完注入的消息（Run 会在 engineRunDone 关闭后等待 listener 退出）。
+	// 这里用确定性轮询取代固定 sleep，彻底消除并发竞态导致的偶发失败。
+	if !waitForAgentMessageEvents(bus, 2*time.Second) {
+		t.Fatalf("timed out waiting for AgentBus message to be processed into step events")
+	}
 
 	var startCount, completeCount, receivedCount int
 	for _, evt := range bus.events {

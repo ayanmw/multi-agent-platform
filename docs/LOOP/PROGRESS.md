@@ -255,14 +255,43 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 01:05 | 轮次 11 | N2-02 | ✅ 测试覆盖扩展（flaky 确定性修复 + agents/sessions RBAC 403 HTTP E2E）
+
+**目标**：完成 N2-02 测试加固——消除已知 flaky 测试（`TestAgentBusMessageCreatesInputStep`）的并发竞态，并补齐 agents/sessions 路由在 HTTP 层的 RBAC 403 覆盖（skills/cases/mcp 已有，agents/sessions 缺）。
+
+**改动**（仅测试代码，未动生产逻辑）：
+- `internal/runtime/engine_test.go`：新增 `slowFinalProvider`（ChatStream 先 `time.Sleep(300ms)` 再返回最终答案），使 ReAct loop 在 AgentBus 消息注入后仍有充足存活时间，listener 必在 `engine.Run` 返回前处理完注入消息；新增 `waitForAgentMessageEvents` 确定性轮询（取代原 `time.Sleep(100ms)` 固定缓冲）。`TestAgentBusMessageCreatesInputStep` 改用该 provider + 轮询，**彻底消除对 sleep 竞态的依赖**。
+- `cmd/server/rbac_http_test.go`（**新建**）：`TestAgentAndSessionWriteRoutesRBAC` 复刻 `server.go registerRoutes` 的守卫闭包（agents 写 + session 删除），经 `auth.WithRole` 注入角色中间件驱动真实 `RequirePermissionFunc` + 真实 handler。精确校验 RBAC 矩阵：**agents 写（POST/PUT/DELETE）属特权类→仅 admin 放行，viewer/developer 均 403**；**session 删除属运营类→admin/developer 放行，viewer 403**。复用既有 `setupAgentConfigTestDB` 与 `readBodyString`。
+
+**验证**：
+- `go build ./...` ✅ / `go vet ./internal/runtime/... ./cmd/server/...` ✅。
+- `go test -count=20 -run TestAgentBusMessageCreatesInputStep ./internal/runtime/` ✅ **20/20 全过**（原 flaky 已确定性化）。
+- `go test -run TestAgentAndSessionWriteRoutesRBAC ./cmd/server/` ✅。
+- `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok）。
+- `bash scripts/cases-regression.sh` ✅ **21/21 (100%)**（仓库外只读副本 + 路径重写，未改生产脚本）。
+- `bash scripts/multi-agent-smoke.sh` ✅ **PASS=12 / FAIL=0 / SKIP=0**。
+- 未改动 `internal/runtime/engine.go` 的 `Run()`，N1-01/N1-02 共享临界区无回归。
+
+**覆盖说明（N2-02 三命名领域）**：
+- 多轮记忆 E2E：已由 `internal/runtime/engine_test.go::TestRun_HistoryMessagesInjected` + `cmd/server/session_history_test.go`（9 例读侧防线）扎实覆盖，本轮未重复造轮。
+- RBAC 403 E2E：本轮补齐 **agents/sessions 的 HTTP 层**（此前仅 skills/cases/mcp 有 `TestSkillWriteRoutesRequireAdmin` 等）。
+- 审计 E2E：已由 `cmd/server/audit_test.go::TestMutationProducesAuditRecord` 覆盖。
+- 稳定性：「可重复运行不抖」由 flaky 确定性修复达成。
+
+**Commit**：（本轮收尾，见末）
+
+**下一步**：N2-03 —— 文档一致性（README v0.13→v0.15.1、ROADMAP、AGENTS.md 版本对齐；三子系统描述校正）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        10
+loop_round:        11
 phase:             N2 (质量与可观测加固)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N2-02
+next_milestone:    N2-03
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```
