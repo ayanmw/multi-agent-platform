@@ -1939,10 +1939,19 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 		historyMessages = nil
 	}
 
-	// 构建历史上下文文本
-	var historyContext string
+	// N1-01：把历史还原成**原生消息数组**交给 Engine，而不是压扁成
+	// system prompt 文本。role 边界与 tool_call 配对得以保留，system prompt
+	// 也恢复为跨轮稳定的前缀（可命中 provider 的 prompt cache）。
+	var historyLLMMessages []llm.Message
 	if len(historyMessages) > 0 {
-		historyContext = buildHistoryContext(historyMessages)
+		historyLLMMessages = buildHistoryMessages(historyMessages, historyLimits{
+			MaxTurns:        s.cfg.SessionHistory.MaxTurns,
+			MaxMessageChars: s.cfg.SessionHistory.MaxMessageChars,
+		})
+	}
+	if len(historyLLMMessages) > 0 {
+		// 白盒：历史注入会实质改变 LLM 看到的上下文，必须留痕可查。
+		log.Infof("server", "[SessionChat] session=%s 回读历史消息 %s", id, historyMessageCount(historyLLMMessages))
 	}
 
 	// 加载 Memory Recall
@@ -1995,21 +2004,17 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		// 构建运行时 system prompt = 历史上下文 + 原始 system prompt。
+		// N1-01：system prompt 不再携带历史文本——历史改由
+		// AgentRunSpec.HistoryMessages 以原生消息数组下沉到 Engine。
 		//
-		// N0-02（多轮历史自复制）：这里必须区分两份 prompt——
-		//   - fullSystemPrompt：交给 LLM 的运行时 prompt，携带历史文本；
-		//   - systemPrompt：写回 session_messages 的干净基线，不含历史。
-		// 若把携带历史的那份写回库，下一轮读历史时会再套一层，导致上下文
-		// 随轮次递归膨胀、语义失真。
+		// 因此运行时 prompt 与持久化基线（N0-02 引入的 BaseSystemPrompt）
+		// 此刻天然等价；但 BaseSystemPrompt 仍显式传递，作为「持久化的必须
+		// 是不含历史的干净基线」这一契约的载体——将来若有任何调用方重新
+		// 往 SystemPrompt 里塞入运行时上下文，N0-02 的自复制不会复发。
 		//
-		// 注意：working memory **不在此处拼接**。runtime.NewEngine 已经会把
-		// EngineConfig.WorkingMemory 前置到 system prompt；此处再拼一次会让
+		// 注意：working memory 同样**不在此处拼接**。runtime.NewEngine 已经会
+		// 把 EngineConfig.WorkingMemory 前置到 system prompt；此处再拼一次会让
 		// 同一段 Working Memory 在 prompt 里出现两遍（另一处 prompt 膨胀源）。
-		fullSystemPrompt := systemPrompt
-		if historyContext != "" {
-			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
-		}
 
 		// Phase 8-A：session-chat 改走 AgentRunner.Run(spec)。
 		// turnIndex>0 → IsRoot=false（非首轮），parentTaskID=sess.RootTaskID，
@@ -2018,8 +2023,9 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 		runner.Run(context.Background(), AgentRunSpec{
 			TaskID:             taskID,
 			AgentID:            agentID,
-			SystemPrompt:       fullSystemPrompt,
-			BaseSystemPrompt:   systemPrompt, // N0-02: 持久化用的干净基线（不含历史）
+			SystemPrompt:       systemPrompt,
+			BaseSystemPrompt:   systemPrompt,       // N0-02: 持久化用的干净基线（不含历史）
+			HistoryMessages:    historyLLMMessages, // N1-01: 原生多轮历史（nil = 首轮）
 			UserInput:          req.Input,
 			SessionID:          id,
 			ParentTaskID:       sess.RootTaskID,
@@ -2060,48 +2066,9 @@ func (s *appServer) handleSessionMessages(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(msgs)
 }
 
-// buildHistoryContext 将历史消息格式化为上下文文本，按轮次分组。
-//
-// N0-02（多轮历史自复制）：**每轮持久化的 system prompt 必须被排除**。
-// 它是该轮 agent 的指令基线，不是对话内容；一旦被当作历史回灌，就会与
-// 「历史前置进 system prompt」的机制叠加成递归套娃（第 N 轮的 prompt 里
-// 嵌着第 N-1 轮的 prompt，而后者又嵌着第 N-2 轮……），导致上下文随轮次
-// 膨胀且语义失真。
-//
-// 唯一例外是 ContextCompressor 写入的压缩摘要：它同样以 role="system"
-// 落库，但用 TurnIndex == -1 标记（见 internal/harness/compressor.go）。
-// 摘要是被压缩掉的历史的唯一载体，必须保留，否则压缩后旧上下文彻底丢失。
-//
-// 返回空字符串表示「无可回灌的历史」，调用方据此跳过整段前置，避免向
-// system prompt 注入一个只有标题、没有内容的空壳。
-func buildHistoryContext(msgs []db.SessionMessageRecord) string {
-	// 先过滤，再判断是否还有内容——否则全是 system 行时会输出空壳标题。
-	kept := make([]db.SessionMessageRecord, 0, len(msgs))
-	for _, m := range msgs {
-		if m.Role == "system" && m.TurnIndex >= 0 {
-			continue // 历史轮次的 system prompt 基线：跳过，防止自复制
-		}
-		kept = append(kept, m)
-	}
-	if len(kept) == 0 {
-		return ""
-	}
-
-	// 分组逻辑与历史行为保持一致：currentTurn 初值 -1，因此 TurnIndex == -1
-	// 的压缩摘要不会被冠上 "### Turn 0" 这种误导性标题，直接以正文出现。
-	var sb strings.Builder
-	sb.WriteString("## Previous Conversation History\n\n")
-	currentTurn := -1
-	for _, m := range kept {
-		if m.TurnIndex != currentTurn {
-			currentTurn = m.TurnIndex
-			sb.WriteString(fmt.Sprintf("### Turn %d\n\n", currentTurn+1))
-		}
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n\n", m.Role, truncateContent(m.Content, 500)))
-	}
-	sb.WriteString("## Current Task\n\n")
-	return sb.String()
-}
+// 历史回读（buildHistoryContext → buildHistoryMessages）已于 N1-01 迁出本文件，
+// 见 cmd/server/session_history.go：历史不再压扁成 system prompt 文本，而是
+// 还原为原生 []llm.Message 下沉到 Engine 的 ReAct loop。
 
 // handleCostQuery 处理 GET /api/costs，支持按维度过滤。
 // 支持的查询参数：task_id、session_id、project_id、days。

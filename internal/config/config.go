@@ -148,6 +148,29 @@ type Config struct {
 	// 从 CONTRACT_LIMIT_* 环境变量加载,并通过 /api/contract-limits 端点暴露,
 	// 以便前端可以据此约束用户输入。
 	ContractLimits ContractLimits
+
+	// SessionHistory 定义多轮会话历史回读（N1-01）的边界。
+	// 从 SESSION_HISTORY_* 环境变量加载,由 cmd/server 在把 session_messages
+	// 还原成原生 []llm.Message 时消费。
+	SessionHistory SessionHistoryLimits
+}
+
+// SessionHistoryLimits 存储多轮会话历史回读的边界（N1-01）。
+//
+// 为什么需要显式上限：历史下沉为原生 message 数组后，不再经过「压扁成
+// system prompt 文本 + 截断 500 字符」这条隐式瘦身路径，若不设边界，长
+// session 会把整个 session_messages 全量塞进每一次 LLM 请求，导致上下文
+// 线性膨胀与成本失控。这两个值即是取代旧隐式截断的**显式**护栏。
+type SessionHistoryLimits struct {
+	// MaxTurns 是回读的最近对话轮数上限（按 turn_index 计）。
+	// <=0 表示不限轮数（仅受 ContextCompressor 约束）。
+	// ContextCompressor 写入的压缩摘要（turn_index == -1）不占轮数配额，
+	// 始终保留——它是被压缩掉的旧上下文的唯一载体。
+	MaxTurns int `json:"max_turns"`
+
+	// MaxMessageChars 是单条历史消息回读时的字符上限，超出部分被截断
+	// 并标注省略号。<=0 表示不截断。
+	MaxMessageChars int `json:"max_message_chars"`
 }
 
 // ContractLimits 存储 server 端强制执行的任务合约上限。
@@ -441,6 +464,9 @@ func Load() (*Config, error) {
 	// 从环境变量加载 server 端强制执行的合约上限。
 	cfg.LoadContractLimits()
 
+	// 从环境变量加载多轮会话历史回读边界（N1-01）。
+	cfg.LoadSessionHistoryLimits()
+
 	return cfg, nil
 }
 
@@ -575,6 +601,20 @@ func (cfg *Config) LoadContractLimits() {
 		MaxSubAgents:      parseEnvIntDefault("CONTRACT_LIMIT_MAX_SUB_AGENTS", 10),
 		MaxInputLength:    parseEnvIntDefault("CONTRACT_LIMIT_MAX_INPUT_LENGTH", 10000),
 		Scopes:            []string{"read_only", "standard", "unrestricted"},
+	}
+}
+
+// LoadSessionHistoryLimits 从 SESSION_HISTORY_* 环境变量加载多轮历史回读
+// 边界（N1-01）。缺失或非法值回退到安全默认：最近 20 轮、单条 4000 字符。
+//
+// 默认 20 轮与 harness.ContextCompressor 的 turnThreshold(20) 对齐——超过
+// 该阈值的旧轮次本就会被压缩成摘要，回读窗口没有必要比它更长。
+// 单条 4000 字符（约 1000 token）足以容纳一次完整的 tool 结果，同时避免
+// 单条超长输出（例如整个文件内容）独占上下文。
+func (cfg *Config) LoadSessionHistoryLimits() {
+	cfg.SessionHistory = SessionHistoryLimits{
+		MaxTurns:        parseEnvIntDefault("SESSION_HISTORY_MAX_TURNS", 20),
+		MaxMessageChars: parseEnvIntDefault("SESSION_HISTORY_MAX_MESSAGE_CHARS", 4000),
 	}
 }
 

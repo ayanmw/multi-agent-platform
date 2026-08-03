@@ -204,6 +204,27 @@ type EngineConfig struct {
 	// 为空时回退到运行时 system prompt（单轮/非 session 场景两者等价）。
 	BaseSystemPrompt string
 
+	// HistoryMessages 是本 session 之前轮次的对话历史，以**原生消息数组**
+	// 形式回读（N1-01）。NewEngine 会把它插在 system prompt 之后、本轮
+	// user input 之前，从而让历史进入 ReAct loop 的正确层。
+	//
+	// 为什么必须是原生数组而不是 prompt 文本（N1-01 修复的「接错层」）：
+	//   - 压扁成文本会丢失 role 边界、tool_calls 与 tool_call_id 的配对关系，
+	//     LLM 只能靠 "[assistant]: ..." 这类标记去猜谁说了什么；
+	//   - system prompt 随轮次变长会击穿 provider 的 prompt cache（前缀不再
+	//     稳定），每轮都按全价重新计费；
+	//   - 历史与指令混在同一条 system 消息里，模型难以区分「过去发生的事」
+	//     与「现在必须遵守的规则」，长会话下指令遵从度显著下降。
+	//
+	// 契约（由调用方保证，Engine 不再做二次清洗）：
+	//   - 不含 system 角色的历史指令基线（那是每轮的 prompt，不是对话内容）；
+	//   - assistant.ToolCalls 与后续 tool 消息的 ToolCallID 必须严格配对，
+	//     悬空的一侧必须在构造时剔除，否则 OpenAI 兼容接口会直接 400；
+	//   - 已按调用方的轮数/长度上限裁剪（见 config.SessionHistoryLimits）。
+	//
+	// 为 nil 时（单轮、子 agent、非 session 场景）行为与历史版本完全一致。
+	HistoryMessages []llm.Message
+
 	// Model 是 LLM 模型名（例如 "deepseek-v4-flash"）。它被直接传给 API，
 	// 必须是配置 endpoint 所支持的模型。
 	Model string
@@ -718,6 +739,14 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		baseSystemPrompt = buildSystemPrompt(cfg.BaseSystemPrompt)
 	}
 
+	// N1-01：初始对话 = system prompt + 历史消息（原生数组）。
+	// 本轮 user input 由 Run() 追加在最后，因此历史天然落在正确位置。
+	// 这里对调用方切片做拷贝，避免 Engine 后续 append 与调用方共享底层
+	// 数组（多个 Engine 复用同一份历史切片时会互相覆盖）。
+	initialMessages := make([]llm.Message, 0, 1+len(cfg.HistoryMessages))
+	initialMessages = append(initialMessages, llm.Message{Role: "system", Content: systemPrompt})
+	initialMessages = append(initialMessages, cfg.HistoryMessages...)
+
 	return &Engine{
 		cfg:              cfg,
 		llm:              provider,
@@ -734,9 +763,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		caseID:           cfg.CaseID,               // mock 脚本匹配用的 case ID 提示
 		taskID:           taskID,
 		rootTraceCtx:     cfg.RootTraceCtx, // 该 task 的 root span context
-		messages: []llm.Message{
-			{Role: "system", Content: systemPrompt},
-		},
+		messages:         initialMessages,  // N1-01: system prompt + 原生历史消息
 		stepIdx:           0,
 		totalTokens:       0,
 		tokenUsage:        llm.Usage{},

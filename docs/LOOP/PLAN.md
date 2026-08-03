@@ -28,7 +28,7 @@
 
 | # | 任务 | 状态 | 验证标准 | 依赖 |
 |---|------|------|----------|------|
-| N1-01 | **多轮对话历史回读（原生 message 数组）**：将历史正确接入 Engine ReAct Loop，而非压扁成 system prompt 文本。构造 `[]model.Message` 多轮传入，session 级多轮记忆生效 | ○ | 连续两轮对话，第二轮正确引用第一轮实体；上下文不二次膨胀（回归 N0-02 断言）；新增/扩展多轮 E2E 测试 | N0 |
+| N1-01 | **多轮对话历史回读（原生 message 数组）**：将历史正确接入 Engine ReAct Loop，而非压扁成 system prompt 文本。构造 `[]model.Message` 多轮传入，session 级多轮记忆生效 | ⏳ | 连续两轮对话，第二轮正确引用第一轮实体；上下文不二次膨胀（回归 N0-02 断言）；新增/扩展多轮 E2E 测试 | N0 |
 | N1-02 | **AgentBus ↔ ReAct Loop 闭环**：新增 `send_agent_message` 工具，使 LLM 能主动向其它 agent 收发消息；补全 Engine 可被 AgentBus 驱动/回调的接口（注入消息、恢复），形成双向协议 | ○ | LLM 经工具主动发送 agent message 被目标收到；编排事件经 WS 可达；`go test ./internal/orchestrator/... ./internal/runtime/...` 全绿 | N1-01 |
 | N1-03 | **RBAC 落地**：`middleware.RequirePermission(resource, action)` 接入所有敏感路由——Provider/Model 创建更新删除、Session 删除、APIKey 管理、Agent 配置写；角色 viewer/developer/admin；`main.go` 路由注册成链 | ○ | viewer 调 `DELETE /api/providers/:id` → 403；developer/admin 正常；新增权限测试 | N0 |
 | N1-04 | **Shell 沙箱安全降级**：无 Docker 环境下 `run_shell`/`execute_program` 的安全策略——危险命令前缀黑名单（rm -rf /、git push --force 等）+ 策略枚举 allow/ask/deny，无人值守默认 deny 并写审计；保留 Docker 路径 | ○ | 命中黑名单命令被拒并写审计；正常命令在约束 cwd 内执行；单测覆盖 | N0 |

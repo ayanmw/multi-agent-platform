@@ -62,6 +62,12 @@ type AgentRunSpec struct {
 	// 见 runtime.EngineConfig.BaseSystemPrompt —— N0-02 多轮历史自复制修复。
 	BaseSystemPrompt string
 
+	// HistoryMessages 是本 session 之前轮次的对话历史（原生消息数组）。
+	// 由 buildHistoryMessages 从 session_messages 还原并清洗，透传给
+	// runtime.EngineConfig.HistoryMessages —— N1-01 多轮历史下沉。
+	// 为 nil 表示首轮或非 session 场景。
+	HistoryMessages []llm.Message
+
 	UserInput     string // 本轮用户输入
 	SessionID     string // 所属 session（可空，如纯 task 无 session）
 	ParentTaskID  string // 父任务 ID（多轮对话首轮为空）
@@ -930,6 +936,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 		AgentID:           agentID,
 		SystemPrompt:      systemPrompt,
 		BaseSystemPrompt:  spec.BaseSystemPrompt, // N0-02: 持久化用的干净基线（空 = 回退 SystemPrompt）
+		HistoryMessages:   spec.HistoryMessages,  // N1-01: 原生多轮历史（nil = 首轮/非 session）
 		Model:             effectiveModel, // Phase fix-agent-model: 使用解析后的 effectiveModel
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,

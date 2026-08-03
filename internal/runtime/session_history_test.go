@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ayanmw/multi-agent-platform/internal/harness"
+	"github.com/ayanmw/multi-agent-platform/internal/llm"
 	"github.com/ayanmw/multi-agent-platform/internal/tool"
 )
 
@@ -177,5 +178,60 @@ func TestRun_PersistedSystemPromptStableAcrossTurns(t *testing.T) {
 		if size != len(baseline) {
 			t.Fatalf("turn %d 持久化 system prompt 长度 = %d，期望恒为基线长度 %d（发生膨胀）", i, size, len(baseline))
 		}
+	}
+}
+
+// TestRun_HistoryMessagesInjected 是 N1-01 的核心回归：EngineConfig.HistoryMessages
+// 必须以原生消息数组形式注入 ReAct loop——插在 system prompt 之后、本轮 user
+// input 之前。只有这样历史才进入正确的「对话层」，而非被压扁进 system prompt
+// 文本（N1-01 修复的「接错层」问题）。
+func TestRun_HistoryMessagesInjected(t *testing.T) {
+	w := &recordingSessionWriter{}
+	e := newSessionHistoryEngine(t, EngineConfig{
+		AgentID:          "agent_default",
+		SessionID:        "sess-hist-inject",
+		TurnIndex:        1,
+		SystemPrompt:     "You are a helpful assistant.",
+		BaseSystemPrompt: "You are a helpful assistant.",
+		HistoryMessages: []llm.Message{
+			{Role: "user", Content: "上一轮问题"},
+			{Role: "assistant", Content: "上一轮回答"},
+		},
+	}, w)
+
+	const currentInput = "这一轮问题"
+	if _, _, err := e.Run(context.Background(), currentInput); err != nil {
+		t.Fatalf("Run 失败: %v", err)
+	}
+
+	e.msgMu.Lock()
+	msgs := append([]llm.Message(nil), e.messages...)
+	e.msgMu.Unlock()
+
+	// system + 2 条历史 + 本轮 user input = 4 条。注意：最终 assistant 回答
+	// 由 Run 以返回值形式给出并经 saveConversation/writeSessionMessage 持久化，
+	// 但**不**追加进 e.messages（e.messages 是本轮对话窗口，下一轮从历史表重读），
+	// 因此这里只断言到本轮 user input 为止。
+	if len(msgs) < 4 {
+		t.Fatalf("期望至少 4 条消息（system + 2 历史 + 本轮输入），实际 %d 条: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "system" {
+		t.Fatalf("首条应为 system prompt，实际 %q", msgs[0].Role)
+	}
+	// 历史必须紧跟 system，且角色顺序与传入严格一致。
+	if msgs[1].Role != "user" || msgs[1].Content != "上一轮问题" {
+		t.Fatalf("第 1 条历史应为 user/上一轮问题，实际: %+v", msgs[1])
+	}
+	if msgs[2].Role != "assistant" || msgs[2].Content != "上一轮回答" {
+		t.Fatalf("第 2 条历史应为 assistant/上一轮回答，实际: %+v", msgs[2])
+	}
+	// 本轮 user input 必须落在历史之后（正确对话层）。
+	if msgs[3].Role != "user" || msgs[3].Content != currentInput {
+		t.Fatalf("第 3 条应为本轮 user input=%q，实际: %+v", currentInput, msgs[3])
+	}
+	// 关键不变量：历史不得出现在 system prompt 文本里——接错层已修复。
+	// 否则每次轮次变长都会击穿 prompt cache，且指令与历史混淆。
+	if strings.Contains(msgs[0].Content, "上一轮问题") {
+		t.Fatalf("历史被错误压扁进 system prompt（接错层未修复）:\n%s", msgs[0].Content)
 	}
 }
