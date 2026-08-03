@@ -33,10 +33,34 @@
 
 ---
 
+### 2026-08-03 09:15 | 轮次 2 | N0-02 | ✅ 修复多轮历史自复制（P1）
+
+**根因**：链路是「读侧回灌 + 写侧回写」共同构成的递归套娃。
+1. `cmd/server/api.go handleSessionChat` 读出全部 `session_messages`，用 `buildHistoryContext` 压成文本前置进 system prompt；
+2. `internal/runtime/engine.go Run()` 又把这份**带历史的运行时 prompt** 原样写回 `session_messages`（role="system"）；
+3. 下一轮第 1 步再把它当历史读出来 → 第 N 轮的 prompt 里嵌着第 N-1 轮的 prompt，后者又嵌着第 N-2 轮……上下文随轮次膨胀且语义失真。
+
+**改动**：
+- `internal/runtime/engine.go`：新增 `EngineConfig.BaseSystemPrompt`（不含历史回灌的干净内核）与 `Engine.baseSystemPrompt`；把 `NewEngine` 中散落的 prompt 拼接重构为 `promptPrefix`/`promptSuffix` + `buildSystemPrompt(core)` 闭包，使**运行时 prompt 与持久化基线共享同一套增强**（WorkingMemory 前缀 / WorkspaceDir / Skill / Todo 后缀，skill 事件仍只广播一次）；新增 `persistedSystemPrompt()`，`Run()` 改为持久化基线而非 `e.messages[0]`。
+- `cmd/server/api.go`：`buildHistoryContext` 过滤 `Role=="system" && TurnIndex>=0`（历史轮次的指令基线），保留 `TurnIndex==-1` 的压缩摘要；过滤后为空返回空串。`handleSessionChat` 传 `BaseSystemPrompt: systemPrompt`，并**移除 workingMemory 的重复拼接**（NewEngine 已前置 `cfg.WorkingMemory`，此前一段 Working Memory 会在 prompt 中出现两遍）。
+- `cmd/server/runner.go`：`AgentRunSpec.BaseSystemPrompt` 透传到 `EngineConfig`。
+
+**测试**：新增 `internal/runtime/session_history_test.go`（3 例：基线优先级 / Run 持久化不含历史且运行时仍含历史 / 3 轮持久化长度恒定）＋ `cmd/server/session_history_test.go`（4 例：跳过历史 system 行含污染遗留行 / 保留压缩摘要且不误标 Turn 0 / 全 system 行返回空串 / 5 轮无套娃）。
+
+**过程发现**：首版把「未增强的裸基线」写库，导致 `TestSkillPromptInjectedE2E` 变红——持久化记录丢了 skill 注入段。据此改为两份 prompt 共享增强，既修 bug 又不损可观测性。已沉淀为 LEARNINGS 硬规则。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -count=1 ./...` ✅ 全绿（无失败包）；N0-01 回归 `go test ./internal/runtime/... ./internal/orchestrator/...` ✅；`gofmt` 经 LF 归一后干净（CRLF 伪影已记入 LEARNINGS）。
+
+**Commit**：`5c681ff`
+
+**下一步**：N0-03 —— N0 回归验证与结项（cases-regression 21/21 + smoke-test + 结项报告）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        1
+loop_round:        2
 phase:             N0 (缺陷修复)
 quality_gate_pass: false
 done:              false

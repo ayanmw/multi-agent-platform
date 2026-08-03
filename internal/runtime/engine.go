@@ -186,6 +186,24 @@ type EngineConfig struct {
 	// 它作为每次对话的第一条消息发出，且永远不会从 context 中裁剪。
 	SystemPrompt string
 
+	// BaseSystemPrompt 是**不含会话历史回灌文本**的 system prompt 基线，
+	// 仅用于持久化到 session_messages（role="system"）。
+	//
+	// 为什么需要它（N0-02 多轮历史自复制）：多轮对话场景下调用方
+	// （cmd/server handleSessionChat）会把上一轮历史格式化成文本前置到
+	// SystemPrompt 里再交给 LLM。如果把这份「带历史的」运行时 prompt 原样
+	// 写回 session_messages，下一轮读历史时就会把历史再套一层历史，形成
+	// 自复制：上下文随轮次不断膨胀且语义失真。
+	//
+	// 因此运行时 prompt（SystemPrompt）与持久化 prompt（BaseSystemPrompt）
+	// 被显式分离：前者可以携带历史，后者必须是干净基线。
+	//
+	// 只需给出「内核」文本：WorkingMemory 前缀与 WorkspaceDir / Skill / Todo
+	// 后缀由 NewEngine 对两者施加**同一套**增强，因此持久化记录依然忠实反映
+	// agent 真实收到的指令（可观测性不打折），差异仅限历史回灌那一段。
+	// 为空时回退到运行时 system prompt（单轮/非 session 场景两者等价）。
+	BaseSystemPrompt string
+
 	// Model 是 LLM 模型名（例如 "deepseek-v4-flash"）。它被直接传给 API，
 	// 必须是配置 endpoint 所支持的模型。
 	Model string
@@ -532,6 +550,7 @@ type Engine struct {
 	checkpoint        *CheckpointManager               // 可选的崩溃恢复 checkpoint 管理器（nil = 禁用）
 	sessionMsgWriter  func(SessionMessageRecord) error // 可选的 session message writer（nil = 跳过）
 	turnIndex         int                              // session 内的当前 turn 序号（0-based）
+	baseSystemPrompt  string                           // 持久化用的 system prompt 基线（不含历史回灌；空 = 回退 messages[0]）
 	caseID            string                           // 可选的 case ID 提示，供 MockProvider 脚本匹配
 	providers         map[string]llm.Provider          // Router 决策用的 provider 查找 map（空 = 未启用 Router）
 	selectedModel     string                           // Router 为当前 think step 选中的模型（空 = e.cfg.Model）
@@ -598,12 +617,19 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		provider = llm.NewOpenAIProvider("openai", cfg.Endpoint, cfg.APIKey, cfg.Model)
 	}
 
-	// 解析 system prompt。如果提供了 WorkingMemory（由 MemoryRecall 在
-	// engine 创建前构建），就前置到 system prompt 中，使 agent 能访问过往
-	// 经验和稳定的语义规则。
-	systemPrompt := cfg.SystemPrompt
+	// 解析 system prompt。
+	//
+	// N0-02：这里把「增强」与「内核」分离——增强部分（工作记忆前缀 + 工作目录
+	// / skill / todo 后缀）对运行时 prompt 与持久化基线**完全一致**，只有内核
+	// 不同（运行时内核携带历史回灌文本，基线内核不携带）。因此增强只计算一次
+	// （skill 渲染事件也只广播一次），再分别拼到两个内核上。
+	var promptPrefix, promptSuffix strings.Builder
+
+	// 如果提供了 WorkingMemory（由 MemoryRecall 在 engine 创建前构建），
+	// 就前置到 system prompt 中，使 agent 能访问过往经验和稳定的语义规则。
 	if cfg.WorkingMemory != "" {
-		systemPrompt = cfg.WorkingMemory + "\n\n" + cfg.SystemPrompt
+		promptPrefix.WriteString(cfg.WorkingMemory)
+		promptPrefix.WriteString("\n\n")
 	}
 
 	// 当 session 绑定了 workspace 时，向 system prompt 注入工作目录指引。
@@ -612,11 +638,11 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	// tool 机制，仅是 prompt 层面的提示。WorkspaceDir 为空（旧行为）时
 	// 不追加任何内容。
 	if cfg.WorkspaceDir != "" {
-		systemPrompt += "\n\n## Working Directory\n"
-		systemPrompt += "Your working directory for all file operations is: " + cfg.WorkspaceDir + "\n"
-		systemPrompt += "IMPORTANT: When using `write_file` or `read_file`, always use relative paths only "
-		systemPrompt += "(e.g. \"snake_game.html\", \"src/main.go\"). Do NOT prepend directory segments or use "
-		systemPrompt += "absolute paths — the system resolves all relative paths against this working directory.\n"
+		promptSuffix.WriteString("\n\n## Working Directory\n")
+		promptSuffix.WriteString("Your working directory for all file operations is: " + cfg.WorkspaceDir + "\n")
+		promptSuffix.WriteString("IMPORTANT: When using `write_file` or `read_file`, always use relative paths only ")
+		promptSuffix.WriteString("(e.g. \"snake_game.html\", \"src/main.go\"). Do NOT prepend directory segments or use ")
+		promptSuffix.WriteString("absolute paths — the system resolves all relative paths against this working directory.\n")
 	}
 
 	// 当配置了 skill 注册表和激活的 skill 时，把渲染后的 skill prompt
@@ -649,7 +675,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 			}
 		}
 		if len(rendered) > 0 {
-			systemPrompt += "\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n")
+			promptSuffix.WriteString("\n\n## Skill Instructions\n\n" + strings.Join(rendered, "\n\n"))
 		}
 
 		// 仅当实际注入了 skill 模板块时才广播 skill_rendered 事件。
@@ -674,8 +700,22 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 	// ActiveTodos 由 cmd/server/runner.go 在构造 EngineConfig 时从 todoSvc 加载并格式化；
 	// 空字符串表示无 active todo，不追加任何内容，避免污染 prompt。
 	if cfg.ActiveTodos != "" {
-		systemPrompt += "\n\n" + cfg.ActiveTodos + "\n"
-		systemPrompt += "You can use the todo/* tools to manage these todos (create, update status, list, delete, etc.).\n"
+		promptSuffix.WriteString("\n\n" + cfg.ActiveTodos + "\n")
+		promptSuffix.WriteString("You can use the todo/* tools to manage these todos (create, update status, list, delete, etc.).\n")
+	}
+
+	// buildSystemPrompt 用同一套增强包裹给定内核，保证运行时 prompt 与持久化
+	// 基线除「历史回灌」之外逐字节一致。
+	buildSystemPrompt := func(core string) string {
+		return promptPrefix.String() + core + promptSuffix.String()
+	}
+	systemPrompt := buildSystemPrompt(cfg.SystemPrompt)
+
+	// N0-02：持久化基线只有在调用方显式给出「不含历史的内核」时才单独构建；
+	// 否则留空，由 Engine.persistedSystemPrompt() 回退到运行时 prompt。
+	baseSystemPrompt := ""
+	if cfg.BaseSystemPrompt != "" {
+		baseSystemPrompt = buildSystemPrompt(cfg.BaseSystemPrompt)
 	}
 
 	return &Engine{
@@ -690,6 +730,7 @@ func NewEngine(cfg EngineConfig, tools *tool.Registry, bus EventBus, taskID stri
 		checkpoint:       cfg.CheckpointManager,    // nil = 无 checkpoint/recovery
 		sessionMsgWriter: cfg.SessionMessageWriter, // nil = 跳过 session message 持久化
 		turnIndex:        cfg.TurnIndex,            // session 内的 turn 序号
+		baseSystemPrompt: baseSystemPrompt,         // N0-02: 持久化用的干净 prompt 基线（已含同样的增强）
 		caseID:           cfg.CaseID,               // mock 脚本匹配用的 case ID 提示
 		taskID:           taskID,
 		rootTraceCtx:     cfg.RootTraceCtx, // 该 task 的 root span context
@@ -845,9 +886,11 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 	e.saveConversation("user", userInput)
 
 	// 把 system prompt 和 user message 写入 session_messages 以支持多轮
-	// 对话历史。system prompt 总是 e.messages 中的第一条消息。
-	// 这些写入是 best-effort 的——失败只会被记录，不会中断 engine。
-	e.writeSessionMessage("system", e.messages[0].Content, "", "", 0)
+	// 对话历史。这些写入是 best-effort 的——失败只会被记录，不会中断 engine。
+	//
+	// N0-02：写入的 system prompt 必须是**不含历史回灌文本**的基线
+	// （persistedSystemPrompt），否则下一轮读历史时会把历史再套一层历史。
+	e.writeSessionMessage("system", e.persistedSystemPrompt(), "", "", 0)
 	e.writeSessionMessage("user", userInput, "", "", 0)
 
 	// 若配置了 Harness progress 跟踪则初始化
@@ -1383,6 +1426,27 @@ func (e *Engine) saveConversation(role, content string) {
 	}); err != nil {
 		log.Errorf("engine", "Failed to save conversation: %v", err)
 	}
+}
+
+// persistedSystemPrompt 返回应写入 session_messages 的 system prompt 文本。
+//
+// 它优先返回 EngineConfig.BaseSystemPrompt（调用方给出的、不含会话历史
+// 回灌文本的干净基线）；未配置时回退到运行时 system prompt
+// （e.messages[0].Content）——单轮或非 session 场景下两者本就等价。
+//
+// 这条区分是 N0-02「多轮历史自复制」的修复核心：运行时 prompt 可以为了
+// 让 LLM 看到上下文而携带历史文本，但**持久化的那份绝不能携带**，否则
+// 历史会在每一轮里递归套娃。
+func (e *Engine) persistedSystemPrompt() string {
+	if e.baseSystemPrompt != "" {
+		return e.baseSystemPrompt
+	}
+	e.msgMu.Lock()
+	defer e.msgMu.Unlock()
+	if len(e.messages) == 0 {
+		return ""
+	}
+	return e.messages[0].Content
 }
 
 // writeSessionMessage 通过 SessionMessageWriter 回调把一条消息写入

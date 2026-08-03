@@ -56,6 +56,12 @@ type AgentRunSpec struct {
 	TaskID        string // 任务 ID（root 或 child）
 	AgentID       string // 执行该任务的 agent ID
 	SystemPrompt  string // 完整 system prompt（已含 working memory / history）
+
+	// BaseSystemPrompt 是不含会话历史回灌文本的 system prompt 基线，仅用于
+	// 持久化到 session_messages。空字符串表示与 SystemPrompt 等价（单轮场景）。
+	// 见 runtime.EngineConfig.BaseSystemPrompt —— N0-02 多轮历史自复制修复。
+	BaseSystemPrompt string
+
 	UserInput     string // 本轮用户输入
 	SessionID     string // 所属 session（可空，如纯 task 无 session）
 	ParentTaskID  string // 父任务 ID（多轮对话首轮为空）
@@ -923,6 +929,7 @@ func (r *AgentRunner) runAgentLoopWithTurn(spec AgentRunSpec) {
 	engine := runtime.NewEngine(runtime.EngineConfig{
 		AgentID:           agentID,
 		SystemPrompt:      systemPrompt,
+		BaseSystemPrompt:  spec.BaseSystemPrompt, // N0-02: 持久化用的干净基线（空 = 回退 SystemPrompt）
 		Model:             effectiveModel, // Phase fix-agent-model: 使用解析后的 effectiveModel
 		Endpoint:          cfg.LLMEndpoint,
 		APIKey:            cfg.LLMAPIKey,

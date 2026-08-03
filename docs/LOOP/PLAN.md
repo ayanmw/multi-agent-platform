@@ -17,7 +17,7 @@
 | # | 严重度 | 任务 | 状态 | 验证标准 | 依赖 |
 |---|--------|------|------|----------|------|
 | N0-01 | **P0** | **修复 AgentBus 路由 bug**：`internal/runtime/engine.go:2628` 处 `ToAgentID: ""` 导致 LLM 回复经 AgentBus 投递时目标为空，消息永远无法送达，在 `maxQueue=100` 队列中滞留并污染共享空间（当前靠 `runner.go:445` 重复发同样内容兜底）。改为正确设置目标 agent 或显式广播语义 | ✅ | 多 Agent 编排场景下子 agent 能收到 leader 的消息；AgentBus 队列不再出现目标为空的滞留消息；`go test ./internal/runtime/... ./internal/orchestrator/...` 全绿 | 无 |
-| N0-02 | **P1** | **修复多轮历史自复制**：`internal/runtime/engine.go:823` 把含上一轮 history 的 system prompt 文本写回 `session_messages`，下一轮再读出 → 上下文二次膨胀、语义失真。改为：历史以原生 message 数组存储/读取，system prompt 不携带历史文本 | ○ | 连续两轮对话，第二轮上下文长度稳定（不随轮次线性膨胀）；历史实体引用正确；`go test ./internal/runtime/...` 全绿 | 无 |
+| N0-02 | **P1** | **修复多轮历史自复制**：`internal/runtime/engine.go:823` 把含上一轮 history 的 system prompt 文本写回 `session_messages`，下一轮再读出 → 上下文二次膨胀、语义失真。改为：历史以原生 message 数组存储/读取，system prompt 不携带历史文本 | ✅ | 连续两轮对话，第二轮上下文长度稳定（不随轮次线性膨胀）；历史实体引用正确；`go test ./internal/runtime/...` 全绿 | 无 |
 | N0-03 | — | **N0 回归验证与结项**：`go build ./...` + `go vet ./...` + `go test -count=1 ./...` 全绿；`bash scripts/cases-regression.sh`（目标 21/21）+ `bash scripts/smoke-test.sh` 通过；在 PROGRESS.md 写「N0 结项报告」 | ○ | 全部验证绿；结项报告落盘；此后方可进入 N1 | N0-01, N0-02 |
 
 ---

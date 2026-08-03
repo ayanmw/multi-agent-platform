@@ -46,8 +46,13 @@ curl http://localhost:8080/healthz
   - root/leader Engine 统一以 `AgentID="leader"` + `SubTaskID=rootTaskID` 注册 handler（`cmd/server/tasks_api.go` 与 orchestrator OutputTo 转发均按此约定）。worker → supervisor 必须以这对键为目标；常量为 `runtime.DefaultSupervisorAgentID`。
   - 新增消息通道时，**发送函数应返回是否真正投递**，供上层决定是否走兜底通道；否则「修好主通道 + 保留兜底」= 重复投递。审批委托即以 `DelegatedApprovalRequest.BusNotified` 保证恰好一次。
 - **AgentRunSpec 的角色字段是死配置**：`cmd/server/runner.go` 的 `Role/CanDispatchSubAgents/CanDefineWorkflow/ApproverMode/SupervisorSubTaskID` 注释称「可显式覆盖」，但 runner 实际只按 `isRoot` 推导，从不读 `spec.*`。改这块前先确认；建议在 N2 阶段清理（要么实现覆盖，要么删字段+改注释）。
-- **N0-02 历史自复制**：`internal/runtime/engine.go:823` 把含上一轮 history 的 system prompt 写回 `session_messages` → 下一轮再读出二次膨胀。回归断言见 N0-02/N1-01。
-- **多轮历史接错层**：`cmd/server/api.go:1838` `handleSessionChat` 把历史压扁成 system prompt 文本塞入（而非原生 message 数组）。N1-01 应下沉到 Engine 用原生数组。
+- ~~**N0-02 历史自复制**~~ **（已修复，轮次 2）**：原 `Run()` 把含上一轮 history 的 system prompt 写回 `session_messages` → 下一轮再读出二次膨胀。**沉淀的硬规则**：
+  - **运行时 prompt 与持久化 prompt 必须分离**：`EngineConfig.SystemPrompt` 可携带历史回灌文本（LLM 需要看到），`EngineConfig.BaseSystemPrompt` 是写回 `session_messages` 的干净基线。二者由 `NewEngine` 的 `buildSystemPrompt(core)` 施加**同一套增强**（WorkingMemory 前缀 + WorkspaceDir/Skill/Todo 后缀），差异仅限历史那一段——否则持久化记录会丢失 skill 注入，破坏可观测性（`TestSkillPromptInjectedE2E` 会红）。
+  - **`buildHistoryContext` 必须跳过 `Role=="system" && TurnIndex>=0`**：那是每轮的指令基线不是对话内容。唯一例外是 ContextCompressor 的压缩摘要——它也是 `role="system"` 但用 `TurnIndex == -1` 标记，**必须保留**，否则压缩后旧上下文彻底丢失。
+  - 过滤后若无内容须返回**空串**，让调用方跳过整段前置，避免注入只有标题没有内容的空壳。
+  - **顺带修复的同类缺陷**：`handleSessionChat` 既把 workingMemory 拼进 `fullSystemPrompt`，又通过 `spec.WorkingMemory` 传给 Engine，而 `NewEngine` 会再前置一次 → Working Memory 在 prompt 中出现两遍。**约定：working memory 只经 `EngineConfig.WorkingMemory` 注入，调用方不得自行拼接。**
+- **gofmt 在本仓库的正确用法**：工作区是 CRLF，新插入的 LF 行会造成混合行尾，`gofmt -d` 会报出**看似真实但实为伪影**的对齐差异。判定方法：`tr -d '\r' < file.go > /tmp/x.go && gofmt -d /tmp/x.go`，输出为空即真正干净。不要据 `gofmt -l` 直接 `gofmt -w` 既有文件。
+- **多轮历史接错层（N0-02 后仍在）**：`handleSessionChat` 依然把历史压扁成 system prompt 文本塞入（而非原生 message 数组）。N0-02 只止住了「自复制」这个 bug，**接错层本身留给 N1-01** 下沉到 Engine 用原生 `[]llm.Message`。届时 `BaseSystemPrompt` 可退化为与 `SystemPrompt` 等价（历史不再进 prompt），但该字段应保留作为契约。
 - **Agent CRUD 页面已存在但被低估**：v1/v2 已有 `AgentConfig.vue`（v2 是 Manage 面板一级 tab），ROADMAP 称「缺管理页面」不准确；真实缺口是分页/搜索/role 列等增量（N1-05）。
 - **三子系统 ROADMAP 描述与代码不符**：Agent CRUD 页面其实存在；多轮历史已「能跑」但接错层且有自复制 bug；AgentBus 收已闭环、发是半双工。校正见 N2-03。
 - **文档版本不一致**：README 写 v0.13.0、ROADMAP 写 v0.15.1、git 最新提交可能更晚。统一见 N2-03。

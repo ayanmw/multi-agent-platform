@@ -1995,11 +1995,18 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		// 构建完整的 system prompt（Working Memory + 历史上下文 + 原始 system prompt）
+		// 构建运行时 system prompt = 历史上下文 + 原始 system prompt。
+		//
+		// N0-02（多轮历史自复制）：这里必须区分两份 prompt——
+		//   - fullSystemPrompt：交给 LLM 的运行时 prompt，携带历史文本；
+		//   - systemPrompt：写回 session_messages 的干净基线，不含历史。
+		// 若把携带历史的那份写回库，下一轮读历史时会再套一层，导致上下文
+		// 随轮次递归膨胀、语义失真。
+		//
+		// 注意：working memory **不在此处拼接**。runtime.NewEngine 已经会把
+		// EngineConfig.WorkingMemory 前置到 system prompt；此处再拼一次会让
+		// 同一段 Working Memory 在 prompt 里出现两遍（另一处 prompt 膨胀源）。
 		fullSystemPrompt := systemPrompt
-		if workingMemory != "" {
-			fullSystemPrompt = workingMemory + "\n\n" + fullSystemPrompt
-		}
 		if historyContext != "" {
 			fullSystemPrompt = historyContext + "\n\n" + fullSystemPrompt
 		}
@@ -2012,6 +2019,7 @@ func (s *appServer) handleSessionChat(w http.ResponseWriter, r *http.Request) {
 			TaskID:             taskID,
 			AgentID:            agentID,
 			SystemPrompt:       fullSystemPrompt,
+			BaseSystemPrompt:   systemPrompt, // N0-02: 持久化用的干净基线（不含历史）
 			UserInput:          req.Input,
 			SessionID:          id,
 			ParentTaskID:       sess.RootTaskID,
@@ -2052,12 +2060,39 @@ func (s *appServer) handleSessionMessages(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(msgs)
 }
 
-// buildHistoryContext 将历史消息格式化为上下文文本，按轮次分组
+// buildHistoryContext 将历史消息格式化为上下文文本，按轮次分组。
+//
+// N0-02（多轮历史自复制）：**每轮持久化的 system prompt 必须被排除**。
+// 它是该轮 agent 的指令基线，不是对话内容；一旦被当作历史回灌，就会与
+// 「历史前置进 system prompt」的机制叠加成递归套娃（第 N 轮的 prompt 里
+// 嵌着第 N-1 轮的 prompt，而后者又嵌着第 N-2 轮……），导致上下文随轮次
+// 膨胀且语义失真。
+//
+// 唯一例外是 ContextCompressor 写入的压缩摘要：它同样以 role="system"
+// 落库，但用 TurnIndex == -1 标记（见 internal/harness/compressor.go）。
+// 摘要是被压缩掉的历史的唯一载体，必须保留，否则压缩后旧上下文彻底丢失。
+//
+// 返回空字符串表示「无可回灌的历史」，调用方据此跳过整段前置，避免向
+// system prompt 注入一个只有标题、没有内容的空壳。
 func buildHistoryContext(msgs []db.SessionMessageRecord) string {
+	// 先过滤，再判断是否还有内容——否则全是 system 行时会输出空壳标题。
+	kept := make([]db.SessionMessageRecord, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "system" && m.TurnIndex >= 0 {
+			continue // 历史轮次的 system prompt 基线：跳过，防止自复制
+		}
+		kept = append(kept, m)
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+
+	// 分组逻辑与历史行为保持一致：currentTurn 初值 -1，因此 TurnIndex == -1
+	// 的压缩摘要不会被冠上 "### Turn 0" 这种误导性标题，直接以正文出现。
 	var sb strings.Builder
 	sb.WriteString("## Previous Conversation History\n\n")
 	currentTurn := -1
-	for _, m := range msgs {
+	for _, m := range kept {
 		if m.TurnIndex != currentTurn {
 			currentTurn = m.TurnIndex
 			sb.WriteString(fmt.Sprintf("### Turn %d\n\n", currentTurn+1))
