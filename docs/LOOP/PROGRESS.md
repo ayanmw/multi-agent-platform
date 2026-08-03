@@ -323,14 +323,43 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 07:54 | 轮次 14 | Phase R | ✅ 全量验证全绿 + 企业级 10 维度评审 + 质量门未过 → 生成 N3 里程碑
+
+**目标**：PLAN.md 无 ○（N0/N1/N2 全 ✅）→ 触发 Phase R。执行全量验证 + 企业级 10 维度验收，按质量门判定是否结项。
+
+**全量验证（全部实测）**：
+| 项 | 命令 | 结果 |
+|----|------|------|
+| 编译 | `go build ./...` | ✅ exit 0 |
+| 静态 | `go vet ./...` | ✅ exit 0 |
+| 单测 | `go test -short -count=1 ./...` | ✅ 0 FAIL（24 包全 ok） |
+| Mock 回归 | `bash scripts/cases-regression.sh` | ✅ **21/21 (100%)** |
+| REST 冒烟 | `bash scripts/smoke-test.sh` | ✅ **63 PASS / 0 FAIL / 1 SKIP**（SKIP=/ws 握手） |
+
+**企业级 10 维度评分**：
+- **Pass（5）**：E2 审计（覆盖 sessions/agents/memories/projects/todos/crons/models/providers/tools/apikey，明文密钥不入审计）、E5 可观测（维度 /metrics + /healthz + WS + tracing + event.Validate 哨兵）、E6 可靠（checkpoint/resume + MaxSteps 0–200 + 可配超时 + mock 降级）、E8 可测试（21/21 + 63/0/1 + E2E + vet 干净）、E9 配置稳定（配置化、无硬编码魔法值）。
+- **Partial（5）**：E1 认证（`REQUIRE_AUTH` 默认关闭，opt-in，无强制生产姿态）、E3 隔离（session/worktree/workdir 隔离扎实，但无多租户/org 抽象）、E4 安全（agent→agent 消息注入无信任边界，C1-2 权限矩阵未做）、E7 可扩展（SQLite 单写限制横向扩展，无 `-race` CI 门禁）、E10 文档（smoke 4 处 API↔文档差异未校正）。
+
+**质量门判定**：全部 10 维度 = Pass？否（5 Partial）；mock 21/21 是；go 全绿 是；评审结论「完美」？否 → **质量门不通过，`done: false`**。
+
+**N3 里程碑生成**（追加到 PLAN.md，5 个 ○ 任务，对应 5 个 Partial 维度）：N3-01 认证生产加固（E1）、N3-02 隔离边界增强（E3）、N3-03 AgentBus 通信信任边界（E4）、N3-04 并发安全与可扩展（E7）、N3-05 API 契约文档校正（E10）。LEARNINGS.md 新增 ⑤ Phase R 评审记录（含过时认知修正：engine.go:73 90s 超时早已配置化，E9 不再视作魔法值缺口）。
+
+**验证（本轮仅改 docs/LOOP 控制文件，无生产代码）**：`git diff --stat docs/LOOP` 三文件变更；不参与 go 验证。
+
+**Commit**：`git add docs/LOOP/PLAN.md docs/LOOP/LEARNINGS.md docs/LOOP/PROGRESS.md && git commit -m "chore(Phase R): 企业级 10 维度评审 + 生成 N3 纵深加固里程碑"`（已 push origin main）。
+
+**下一步**：N3 起点 → N3-01（E1 认证生产加固：REQUIRE_AUTH=false 强告警 + 敏感写路由最小暴露 + README 生产部署章节）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        13
-phase:             N2 (质量与可观测加固) — N2-04 完成
+loop_round:        14
+phase:             N3 (企业级纵深加固) — Phase R 生成
 quality_gate_pass: false
 done:              false
-last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    Phase R (评审-重规划)
-budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍被调度，继续推进)
+last_review:       2026-08-04T07:54+08:00
+next_milestone:    N3-01 (E1 认证生产加固)
+budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```

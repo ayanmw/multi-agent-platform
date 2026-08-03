@@ -90,3 +90,45 @@ curl http://localhost:8080/healthz
 | E10 | **文档准确性 (Docs)** | CLAUDE.md/AGENTS.md/README/ROADMAP 与代码一致；版本号对齐；三子系统描述真实 |
 
 > 任一维度 = Fail 或 Partial → Phase R 生成对应改进里程碑（新 section，○ 任务），下一轮继续。
+
+---
+
+## ⑤ Phase R 评审记录（轮次 14 | 2026-08-04）
+
+> 触发条件：PLAN.md 无 ○（N0/N1/N2 全 ✅）。本轮执行全量验证 + 10 维度验收，质量门未过 → 生成 N3 里程碑（见 PLAN.md）。
+
+### 全量验证结果（实测）
+
+| 验证项 | 命令 | 结果 |
+|--------|------|------|
+| 编译 | `go build ./...` | ✅ PASS（exit 0） |
+| 静态检查 | `go vet ./...` | ✅ PASS（exit 0） |
+| 单测 | `go test -short -count=1 ./...` | ✅ 0 FAIL（24 个有测试包全 ok） |
+| Mock 回归 | `bash scripts/cases-regression.sh` | ✅ **21/21 (100%)** |
+| REST 冒烟 | `bash scripts/smoke-test.sh` | ✅ **63 PASS / 0 FAIL / 1 SKIP**（SKIP=/ws 握手，curl 限制非缺陷） |
+
+### 企业级 10 维度评分
+
+| # | 维度 | 评分 | 证据 / 缺口 |
+|---|------|------|------------|
+| E1 | 认证与鉴权 | **Partial** | RBAC 矩阵（viewer/developer/admin）正确且 fail-closed（缺 role→viewer）；API key+bcrypt 齐全；敏感路由全守卫。缺口：`REQUIRE_AUTH` 默认 `== "true"` 才启用 → **默认关闭（opt-in）**，无「生产必须开启」的强制姿态，特权默认暴露面依赖部署者自觉。 |
+| E2 | 审计与合规 | **Pass** | 覆盖 sessions/agents/memories/projects/todos/crons/models/providers/tools/apikey 的 mutation（actor+timestamp+scope）；`GET /api/audit` 合并持久化表+ring buffer；明文密钥不入审计；shell-sandbox 违规亦审计。 |
+| E3 | 多租户与隔离 | **Partial** | session / workspace git-worktree 隔离 + `WorkdirHolder` workdir 不可越界（LLM 无法逃逸）扎实。缺口：**无真正多租户/org 抽象**（grep 无 tenant 引用），单部署共享 DB，跨 org 隔离缺失。 |
+| E4 | 安全 | **Partial** | `.gitignore` 覆盖密钥；shell 沙箱默认 deny+审计（N1-04）；工具 schema 输入校验。缺口：**agent→agent 消息注入无信任边界** —— 子 agent 经 AgentBus 发来的消息作为 `user` 消息注入父 ReAct loop，C1-2 通信权限矩阵未做（N1-02 遗留），存在 child→parent prompt-injection 敞口。 |
+| E5 | 可观测性 | **Pass** | 结构化 slog；维度化 /metrics（agent/session/step + per-agent LLM/Tool 延迟）；/healthz；WS 事件流；tracing 过滤接口；`event.Validate` 哨兵保证白盒闭合。 |
+| E6 | 可靠性 | **Pass** | checkpoint/resume（case 通过）；MaxSteps 0–200 钳制 + context 超时（`CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS` 默认 7200，可配）；mock provider 优雅降级；超时/超限 → task_failed。 |
+| E7 | 可扩展性 | **Partial** | worker pool（internal/pool）+ 互斥锁守卫共享态（messagesMu）。缺口：**SQLite 单文件单写**限制横向扩展/多节点；无 `-race` CI 硬性门禁；WS 广播无显式背压。 |
+| E8 | 可测试性 | **Pass** | mock 回归 21/21 稳定；smoke 63/0/1；关键流程 E2E（RBAC 403 / 审计 / 多轮历史）；`go vet` 干净；CI 跑 `go test -short ./...`。 |
+| E9 | API/配置稳定性 | **Pass** | 配置经 .env，优先级 系统>env>默认；超时/MaxSteps 全配置化（`CONTRACT_LIMIT_*`）；未发现硬编码魔法值。**微小偏差**：`engine.go:607` 注释称「MaxSteps 默认 10」但代码为 30 —— 仅文档漂移，非缺陷。 |
+| E10 | 文档准确性 | **Partial** | 版本号对齐 v0.16.0 + 三子系统描述校正（N2-03）。缺口：**smoke 4 处 API↔文档差异未校正**（POST /api/projects 返 201、/api/tools 必填 type 子字段、Memory 路由无顶层 POST/PUT、/ws 握手）—— CLAUDE.md/API_CHANGELOG 滞后代码。 |
+
+### 质量门判定
+
+- 全部 10 维度 = Pass？**否**（E1/E3/E4/E7/E10 = Partial）。
+- mock 回归 21/21？是。go 全绿？是。
+- 评审结论 = 「完美」？**否**。
+- → **质量门不通过**，`done: false`，生成 N3 里程碑（E1/E3/E4/E7/E10 各一个 ○ 任务），下一轮实现 N3-01。
+
+### 本轮修正的过时认知
+
+- ~~「engine.go:73 90s 硬编码超时」~~：当前 `engine.go:73` 已是注释（行漂移）；超时与 MaxSteps 早已配置化（`CONTRACT_LIMIT_MAX_TIMEOUT_SECONDS` / `MaxSteps` 默认 30 钳 0–200）。E9 不再视为魔法值缺口，仅保留 engine.go:607 注释漂移这一微小项。
