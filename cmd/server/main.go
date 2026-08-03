@@ -218,6 +218,46 @@ func removeEngine(taskID, agentID string) {
 	}
 }
 
+// shellSandboxAuditAdapter 把 tool 包的最小审计接口适配到统一审计轨迹
+// （observability.DefaultAuditor：内存 + SQLite）。读取 DefaultAuditor 全局
+// 在调用时发生，因此 main.go 后续将 DefaultAuditor 替换为 SQLiteAuditor 后
+// 仍能正确落库。
+type shellSandboxAuditAdapter struct{}
+
+func (shellSandboxAuditAdapter) Record(action, actor, target, reason string) {
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  actor,
+		Action: action,
+		Target: target,
+		Reason: reason,
+	})
+}
+
+// buildShellSandboxConfig 把配置中的 Shell 沙箱策略字段装配成
+// tool.ShellSandboxConfig（N1-04）。黑名单缺省时使用工具内置的灾难性命令默认
+// 黑名单；allowlist/blacklist 均可用逗号分隔的正则覆盖。
+func buildShellSandboxConfig(cfg *config.Config) tool.ShellSandboxConfig {
+	policy := tool.ParseShellSandboxPolicy(cfg.ShellSandboxPolicy)
+	blacklist := tool.DefaultShellSandboxConfig().Blacklist
+	if strings.TrimSpace(cfg.ShellSandboxBlacklist) != "" {
+		blacklist = nil
+		for _, p := range strings.Split(cfg.ShellSandboxBlacklist, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				blacklist = append(blacklist, p)
+			}
+		}
+	}
+	var allowlist []string
+	if strings.TrimSpace(cfg.ShellSandboxAllowlist) != "" {
+		for _, p := range strings.Split(cfg.ShellSandboxAllowlist, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				allowlist = append(allowlist, p)
+			}
+		}
+	}
+	return tool.NewShellSandboxConfig(policy, blacklist, allowlist)
+}
+
 func main() {
 	port := flag.String("port", "", "HTTP server port (overrides SERVER_PORT/.env)")
 	flag.Parse()
@@ -918,6 +958,12 @@ func main() {
 	// Phase 5: run_shell tool 的 Docker sandbox。
 	// 启动时检查 Docker 可用性。若可用，把 run_shell tool 包装成
 	// SandboxedShellTool。若不可用，记录 warning 并使用直接执行。
+	//
+	// N1-04: 无 Docker 的本地回退路径叠加 Shell 沙箱安全降级策略
+	// （危险命令前缀黑名单 + allow/ask/deny，默认 deny 并写审计）。
+	// 先把工具包的审计接收器接入统一审计轨迹（observability.DefaultAuditor）。
+	tool.SetShellSandboxAuditSink(shellSandboxAuditAdapter{})
+	shellCfg := buildShellSandboxConfig(cfg)
 	sandboxCfg := tool.DefaultSandboxConfig()
 	sandbox := tool.NewSandboxExecutor(sandboxCfg)
 	if sandbox.IsAvailable() {
@@ -925,11 +971,15 @@ func main() {
 		// 用沙箱版本替换内置 run_shell。
 		// 先反注册原始 run_shell tool。
 		toolRegistry.Unregister("run_shell")
-		// 注册沙箱版本，并以原始版本作为兜底。
-		sandboxedShell := tool.NewSandboxedShellTool(sandbox, tool.NewRunShellTool())
+		// 注册沙箱版本，并以带本地安全策略的原始版本作为兜底
+		// （Docker 不可用时回退到本地执行仍受策略约束）。
+		sandboxedShell := tool.NewSandboxedShellTool(sandbox, tool.NewRunShellTool().WithShellSandbox(shellCfg))
 		toolRegistry.Register(sandboxedShell)
 	} else {
-		log.Infof("server", "%v", "Docker sandbox: disabled — Docker not available, using direct execution")
+		log.Infof("server", "Docker sandbox: disabled — applying local shell sandbox policy (policy=%s)", shellCfg.Policy.String())
+		// 无 Docker：用带安全策略的 run_shell 替换默认（默认 deny）。
+		toolRegistry.Unregister("run_shell")
+		toolRegistry.Register(tool.NewRunShellTool().WithShellSandbox(shellCfg))
 	}
 	// Phase 5 预览：按配置为 execute_program 启用沙箱执行。
 	// 默认仍是本地执行，以免影响既有部署。
@@ -937,7 +987,10 @@ func main() {
 		tool.SetDefaultRunner(tool.NewDockerRunner(cfg.SandboxImage))
 		log.Infof("server", "execute_program: sandbox enabled (image=%s)", cfg.SandboxImage)
 	} else {
-		log.Infof("server", "%v", "execute_program: local execution")
+		// 无 Docker：本地执行叠加 Shell 沙箱安全降级策略（N1-04）。
+		toolRegistry.Unregister("core/execute_program")
+		toolRegistry.Register(tool.NewExecuteProgramTool().WithShellSandbox(shellCfg))
+		log.Infof("server", "execute_program: local execution with shell sandbox policy (policy=%s)", shellCfg.Policy.String())
 	}
 
 	log.Infof("server", "Registered %d built-in tools (dispatch_sub_agent enabled per-leader)", len(toolRegistry.List()))

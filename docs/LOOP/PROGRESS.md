@@ -149,14 +149,59 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-03 13:45 | 轮次 6 | N1-03 | ✅ RBAC 落地（统一资源-动作守卫）
+
+**目标**：把分散的 `auth.RequireRoleFunc(w, r, RoleAdmin)` 内联守卫收敛为统一的资源-动作矩阵 `auth.RequirePermissionFunc(w, r, resource, action)`，并接入全部敏感写路由；角色 viewer(只读) / developer(=RoleUser，运营类写) / admin(全部含特权类)，fail-closed（缺 role 按 viewer）。
+
+**改动**：
+- `internal/auth/rbac.go`（**新建**）：定义 `Action`(read/create/update/delete/write) 与 `Resource`(providers/models/sessions/agents/cases/tools/mcp_servers/api_keys/memories/projects/cron/todos/skills/observability/checkpoints/tasks) 枚举；`privilegedResources` 集合（agents/cases/tools/mcp_servers/api_keys/observability 仅 admin 可写）；`allowedRolesFor(resource,action)` 矩阵（read 全员；特权仅 admin；运营类 admin+developer）；`RequirePermissionFunc`（闭包守卫，拒绝写 403）/ `RequirePermission`（http.Handler 链式）。缺 role 按 `RoleViewer` 处理，fail-closed。
+- `cmd/server/server.go`：Agent CRUD、Cases（POST/PUT/DELETE）、Tools（POST/DELETE）由 `RequireRoleFunc(Admin)` 改为 `RequirePermissionFunc(...Write)`；新增 Session DELETE 守卫（`ResourceSessions/ActionDelete`，viewer 拒绝）。
+- `cmd/server/model_api.go`：Provider 同步(POST) 与 Model 画像编辑(PUT) 加 `RequirePermissionFunc(ResourceProviders/ResourceModels, ActionWrite)`（运营类，viewer 拒绝）；GET /api/providers 与 GET /api/models/prices 保持公开可读（read 全员开放）。
+- `internal/auth/auth_http.go`：API key 创建与吊销加 `RequirePermissionFunc(ResourceAPIKeys, ActionWrite)`（特权类，仅 admin——防普通用户自我提权）。
+- `internal/auth/rbac_test.go`（**新建**）：`TestAllowedRolesFor`（矩阵全量校验）+ `TestRequirePermissionFunc`（8 例：viewer 读放行/写拒、developer 运营类写放行/特权写拒、admin 全放行、空 role fail-closed）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（全量 short 重跑绿）/ `go test ./internal/runtime/... ./internal/orchestrator/...` ✅（N1-01/N1-02 共享 `Run()` 临界区并发重跑绿，无回归）/ `internal/auth` 单测 + 新增 rbac 单测全绿。
+
+**已知噪声（非本任务引入，已记录）**：`internal/runtime/engine_test.go::TestAgentBusMessageCreatesInputStep` 为并发竞态敏感测试（依赖 goroutine 调度 + 100ms 缓冲 sleep），全量并行跑时偶发 `expected step_started... got 0`。隔离单跑 5/5 全过、全量重跑即绿，判定为**预存 flaky 测试**，与本轮 RBAC 改动（仅触及 HTTP 路由层，不碰 engine.go）无关。建议后续（N2-02 测试覆盖）将其改为基于 channel/event 同步的确定性等待，消除 sleep 竞态——本轮严守「只做一件事」未扩大范围。
+
+**Commit**：`d64d06c`（未 push，待用户授权或按约定门控）
+
+**下一步**：N1-04 —— Shell 沙箱安全降级（无 Docker 环境 `run_shell`/`execute_program` 危险命令黑名单 + allow/ask/deny 策略，无人值守默认 deny 并写审计）。
+
+---
+
+### 2026-08-03 15:09 | 轮次 7 | N1-04 | ✅ Shell 沙箱安全降级（无 Docker 环境安全策略 + allow/ask/deny）
+
+**目标**：给无 Docker 环境下 `run_shell` / `execute_program` 的本地执行路径加一层「安全降级」策略——危险命令前缀黑名单（rm -rf /、git push --force、curl|sh、fork bomb、mkfs、dd of=/dev、shutdown/reboot、> /dev、tee /dev、chmod -R 777 / 等）+ 策略枚举 allow/ask/deny，无人值守默认 **deny** 并写审计；保留既有 Docker sandbox 路径（防御纵深，本地策略不替代 Docker）。
+
+**改动**：
+- `internal/tool/shell_policy.go`（**新建**）：核心策略引擎。`ShellSandboxPolicy`(Deny=0/Ask/Allow)+`String()`+`ParseShellSandboxPolicy(s)`（空/非法值 fail-closed 回退 deny）；`ShellSandboxDecision`(Allow/Ask/Deny)；`ShellSandboxConfig{Policy, Blacklist, Allowlist, compiledBlacklist []*regexp.Regexp}`；内置 `defaultShellBlacklist`（灾难性命令正则）；`DefaultShellSandboxConfig()` / `NewShellSandboxConfig(policy, blacklist, allowlist)`（预编译正则）；`Evaluate(command) (Decision, rule, dangerous)`（allowlist 优先 → 黑名单按策略裁决 → 未命中放行）。为避免与 `observability` 形成 import cycle（tool→observability→pkg/db→cron→tool），定义最小 `ShellSandboxAuditSink` 接口 + 进程内 ring buffer 默认实现 + `SetShellSandboxAuditSink`，由 `cmd/server/main.go` 注入真实审计器。
+- `internal/tool/builtin.go`：`BuiltinTool` 新增 `shellSandbox ShellSandboxConfig` 字段 + `WithShellSandbox(cfg)` 方法；`NewRunShellTool()` 改为构造后挂 `DefaultShellSandboxConfig()`，`executeShell(ctx, input, cfg)` 入口先 `cfg.Evaluate`：非 Allow 即返回 `blocked:true / exit_code:-1 / matched_rule` 并写审计；命中但策略 allow 则放行并标记 dangerous 写审计。
+- `internal/tool/execute.go`：`NewExecuteProgramTool()` 同构挂策略；`executeProgramExecutor(input, cfg)` 在既有 `checkDangerousCode` 之上叠加 `cfg.Evaluate` 覆盖整段 code（含 git push --force 等），allow 策略放开既有静态检查并写审计。
+- `internal/config/config.go`：新增 `ShellSandboxPolicy`(默认 "deny") / `ShellSandboxBlacklist` / `ShellSandboxAllowlist`，`Load()` 读 `SHELL_SANDBOX_POLICY` / `SHELL_SANDBOX_BLACKLIST` / `SHELL_SANDBOX_ALLOWLIST`（优先级 系统环境变量 > .env > 默认）。
+- `cmd/server/main.go`：新增 `shellSandboxAuditAdapter`（委托 `observability.DefaultAuditor.Record`，适配 `tool.ShellSandboxAuditSink`）+ `buildShellSandboxConfig(cfg)`（解析策略、装配黑白名单）；sandbox 装配段先 `tool.SetShellSandboxAuditSink(adapter)`，`shellCfg := buildShellSandboxConfig(cfg)`；Docker 可用时 `tool.NewSandboxedShellTool(sandbox, tool.NewRunShellTool().WithShellSandbox(shellCfg))`；不可用时 `tool.NewRunShellTool().WithShellSandbox(shellCfg)`；execute_program 本地路径 `tool.NewExecuteProgramTool().WithShellSandbox(shellCfg)`。
+- **测试**：`internal/tool/shell_policy_test.go`（4 例：默认配置、deny 命中 rm -rf / / git push --force / curl|sh / fork bomb / mkfs / dd / shutdown 且**不误伤** `rm -rf /tmp/build`、`rm -rf ./node_modules`、allowlist 优先生效、ask 策略、Parse 解析）；`internal/tool/shell_sandbox_builtin_test.go`（4 例：run_shell 被拒断言 blocked/exit_code=-1/policy、良性命令放行、execute_program 被拒、allow 覆盖既有风险检查）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL**（全量 short，含 `internal/tool` 并发重跑）/ `go test ./internal/runtime/... ./internal/orchestrator/...` ✅（N1-01/N1-02 共享 `Run()` 临界区并发重跑绿）/ `bash scripts/cases-regression.sh` ✅ **21/21** / `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**（SKIP=/ws 握手）。
+
+**过程发现**：① 初版 `shell_policy.go` 直接 `import .../internal/observability` 写审计，触发 `tool→observability→pkg/db→cron→tool` import cycle——改为最小 `ShellSandboxAuditSink` 接口 + 进程内 ring buffer 默认实现，由 main.go 注入 `observability.DefaultAuditor`，消除循环。② Go 短变量声明作用域导致闭包先于变量引用 `bt`（`undefined: bt`）——改为 `var bt *BuiltinTool; bt = NewBuiltinTool(...)` 先声明后赋值。③ `go vet` 格式串误写（`log.Infof("server", "%v", "...policy=%s", shellCfg.Policy.String())`）——删多余 `%v`。以上均已在实现中修正并复验全绿。
+
+**提交范围说明**：本轮 `git add` 仅暂存 N1-04 相关文件（`cmd/server/main.go`、`internal/config/config.go`、`internal/tool/builtin.go`、`internal/tool/execute.go`、新建 `internal/tool/shell_policy*.go`、以及 `docs/LOOP/PLAN.md`+`PROGRESS.md` 的 LOOP 记账）。工作区另有若干与 N1-04 无关、且未在本轮改动的小幅文档/注释/测试文件（CLAUDE.md、doc/chapters/*、docs/TEST_REPORT.md、internal/llm/*、internal/runtime/engine.go 仅注释、openspec/*、scripts/real-llm-smoke.sh 等）保持未暂存，不予纳入本次提交，遵循「每轮只做一件事」。
+
+**Commit**：（本轮收尾提交，见末）
+
+**下一步**：N1-05 —— Agent CRUD 前端管理页面（web/v2 Manage 面板新增独立 Agent 管理 tab：分页 / 搜索 / role 列 / 启停）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        5
+loop_round:        7
 phase:             N1 (企业级核心能力)
 quality_gate_pass: false
 done:              false
 last_review:       (未执行 — Phase R 待 PLAN 无 ○ 时触发)
-next_milestone:    N1
+next_milestone:    N1-05
 budget_validuntil: 2026-08-03T22:31:06+08:00
 ```

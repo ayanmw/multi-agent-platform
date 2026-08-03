@@ -63,6 +63,10 @@ type BuiltinTool struct {
 	tags        []string
 	aliases     []string
 	executor    func(ctx ExecuteContext, input map[string]any) (any, error)
+
+	// shellSandbox 持有本地（无 Docker）Shell 执行的安全降级策略（N1-04）。
+	// 仅 run_shell / execute_program 使用；其它工具保持零值（默认值即 deny）。
+	shellSandbox ShellSandboxConfig
 }
 
 // Namespace 返回工具的 namespace。空字符串表示工具位于全局 namespace；
@@ -161,6 +165,15 @@ func NewBuiltinToolFromFunc(name, namespace, description string, parameters map[
 // WithTags 为 BuiltinTool 附加 tags，并返回自身以便链式调用。
 func (t *BuiltinTool) WithTags(tags ...string) *BuiltinTool {
 	t.tags = append(t.tags, tags...)
+	return t
+}
+
+// WithShellSandbox 为 BuiltinTool 注入本地 Shell 执行的安全降级策略
+// （N1-04），并返回自身以便链式调用。仅 run_shell / execute_program 在
+// 执行时会读取该策略；其余工具忽略。未注入时默认使用
+// DefaultShellSandboxConfig()（deny 策略），保证零配置也安全。
+func (t *BuiltinTool) WithShellSandbox(cfg ShellSandboxConfig) *BuiltinTool {
+	t.shellSandbox = cfg
 	return t
 }
 
@@ -276,10 +289,15 @@ var _ = resolvePath // 防止 go vet 报 unused（兼容入口，刻意保留）
 //
 // 执行由 context.WithTimeout 守护；若命令在超时内未完成，将被终止并返回错误。
 func NewRunShellTool() *BuiltinTool {
-	return &BuiltinTool{
-		name:        "run_shell",
-		description: "Execute a shell command and return its output. The command runs in the session's working directory (see system prompt for current directory). Use relative paths for file references (e.g. 'python script.py' not 'cd workspace && python script.py').",
-		parameters: map[string]any{
+	// bt 先声明再赋值，使闭包能在调用时读取 bt.shellSandbox（Go 的短变量声明
+	// 作用域规则要求变量先于闭包定义可见）。WithShellSandbox 的覆盖在构造后
+	// 生效；默认 deny 策略由 DefaultShellSandboxConfig 提供。
+	var bt *BuiltinTool
+	bt = NewBuiltinTool(
+		"run_shell",
+		"",
+		"Execute a shell command and return its output. The command runs in the session's working directory (see system prompt for current directory). Use relative paths for file references (e.g. 'python script.py' not 'cd workspace && python script.py').",
+		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{
@@ -297,8 +315,10 @@ func NewRunShellTool() *BuiltinTool {
 			},
 			"required": []string{"command"},
 		},
-		executor: func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(ctx, input) },
-	}
+		func(ctx ExecuteContext, input map[string]any) (any, error) { return executeShell(ctx, input, bt.shellSandbox) },
+	)
+	bt.shellSandbox = DefaultShellSandboxConfig()
+	return bt
 }
 
 // executeShell 是 run_shell 工具的 executor 函数。
@@ -307,10 +327,32 @@ func NewRunShellTool() *BuiltinTool {
 // CWD 优先取 ExecuteContext.Workdir（worktree 隔离注入），回退 input["workdir"]。
 // 当 ExecuteContext.Workdir 非空时，会校验它必须落在允许的 scope（session
 // WorkspaceDir 或 active worktree path）内，防止 LLM 伪造 workdir 逃逸。
-func executeShell(ctx ExecuteContext, input map[string]any) (any, error) {
+//
+// 本地（无 Docker）安全降级（N1-04）：命令在真正执行前先经 cfg.Evaluate 做
+// 危险命令前缀黑名单检查。命中且策略为 deny/ask（无人值守）时拒绝并写审计；
+// allow 策略下命中则放行但写审计告警（风险被显式放开）。
+func executeShell(ctx ExecuteContext, input map[string]any, cfg ShellSandboxConfig) (any, error) {
 	cmdStr, ok := input["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command must be a string")
+	}
+
+	// 本地 Shell 安全降级：危险命令前缀黑名单 + 策略枚举。
+	if decision, rule, dangerous := cfg.Evaluate(cmdStr); decision != DecisionAllow {
+		// 拒绝路径（deny 或无人值守的 ask）：写审计并直接返回 blocked 结果，
+		// 不真正执行命令。exit_code=-1 让上层明确区分「被安全策略拦截」。
+		recordShellSandboxAudit(ctx, "shell_sandbox_denied", cmdStr, rule, cfg.Policy)
+		return map[string]any{
+			"stdout":       "",
+			"stderr":       fmt.Sprintf("command blocked by shell sandbox policy (matched rule: %s)", rule),
+			"exit_code":    -1,
+			"blocked":      true,
+			"policy":       cfg.Policy.String(),
+			"matched_rule": rule,
+		}, nil
+	} else if dangerous {
+		// 命中黑名单但被 allow 策略放开：写审计告警（风险被接受，可追溯）。
+		recordShellSandboxAudit(ctx, "shell_sandbox_allowed_risk", cmdStr, rule, cfg.Policy)
 	}
 
 	// 确定实际使用的工作目录。

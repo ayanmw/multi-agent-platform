@@ -20,7 +20,10 @@ import (
 // 也会对常见破坏性模式（rm、curl|bash 等）做轻量静态检查，作为额外的
 // 纵深防御。
 func NewExecuteProgramTool() *BuiltinTool {
-	return NewBuiltinTool(
+	// bt 先声明再赋值，使闭包能在调用时读取 bt.shellSandbox。
+	// 默认 deny 策略由 DefaultShellSandboxConfig 提供（与 run_shell 一致）。
+	var bt *BuiltinTool
+	bt = NewBuiltinTool(
 		"execute_program",
 		"core",
 		"Execute a short program in a supported interpreter (python, node, bash). Runs with a timeout and returns stdout/exit_code.",
@@ -42,14 +45,20 @@ func NewExecuteProgramTool() *BuiltinTool {
 			},
 			"required": []string{"language", "code"},
 		},
-		func(_ ExecuteContext, input map[string]any) (any, error) { return executeProgramExecutor(input) },
+		func(_ ExecuteContext, input map[string]any) (any, error) { return executeProgramExecutor(input, bt.shellSandbox) },
 	).WithTags("exec", "exec:dangerous")
+	bt.shellSandbox = DefaultShellSandboxConfig()
+	return bt
 }
 
 // executeProgramExecutor 通过所配置的 ProgramRunner 在受支持的解释器中
 // 运行代码。默认是本地 host runner；启动时可通过 SetDefaultRunner 替换为
 // DockerRunner。
-func executeProgramExecutor(input map[string]any) (any, error) {
+//
+// 本地（无 Docker）安全降级（N1-04）：在既有 checkDangerousCode 静态拦截之上，
+// 结合 ShellSandboxConfig 策略枚举裁决——deny/ask（无人值守）仍拒绝危险代码，
+// allow 策略则放行但写审计告警。
+func executeProgramExecutor(input map[string]any, cfg ShellSandboxConfig) (any, error) {
 	language := strings.ToLower(getString(input, "language", ""))
 	code := getString(input, "code", "")
 	if language == "" || code == "" {
@@ -58,7 +67,21 @@ func executeProgramExecutor(input map[string]any) (any, error) {
 	timeout := time.Duration(getInt(input, "timeout_ms", 30000)) * time.Millisecond
 
 	if risk := checkDangerousCode(language, code); risk != "" {
-		return nil, fmt.Errorf("risk pattern detected: %s", risk)
+		// 既有静态危险检查命中。默认（deny/ask）仍拒绝；仅 allow 策略放开。
+		if cfg.Policy == PolicyAllow {
+			recordShellSandboxAudit(ExecuteContext{}, "shell_sandbox_allowed_risk", code, risk, cfg.Policy)
+		} else {
+			recordShellSandboxAudit(ExecuteContext{}, "shell_sandbox_denied", code, risk, cfg.Policy)
+			return nil, fmt.Errorf("risk pattern detected: %s", risk)
+		}
+	}
+
+	// 额外：对整段代码跑 Shell 沙箱黑名单，覆盖 git push --force 等
+	// checkDangerousCode 未覆盖的危险写法。deny/ask 拒绝；allow 放行（已在上
+	// 一步处理危险静态检查，这里命中黑名单同样按策略裁决）。
+	if decision, rule, _ := cfg.Evaluate(code); decision != DecisionAllow {
+		recordShellSandboxAudit(ExecuteContext{}, "shell_sandbox_denied", code, rule, cfg.Policy)
+		return nil, fmt.Errorf("blocked by shell sandbox policy: %s", rule)
 	}
 
 	if language == "go" {
