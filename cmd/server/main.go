@@ -233,6 +233,21 @@ func (shellSandboxAuditAdapter) Record(action, actor, target, reason string) {
 	})
 }
 
+// agentBusAuditAdapter 把 runtime 包的最小审计接口适配到统一审计轨迹
+// （observability.DefaultAuditor：内存 + SQLite）。用于记录 AgentBus 越权
+// 发送被拒事件（N3-03，E4 通信信任边界）。读取 DefaultAuditor 全局在调用时
+// 发生，因此 main.go 后续将 DefaultAuditor 替换为 SQLiteAuditor 后仍能正确落库。
+type agentBusAuditAdapter struct{}
+
+func (agentBusAuditAdapter) Record(action, actor, target, reason string) {
+	observability.DefaultAuditor.Record(observability.AuditRecord{
+		Actor:  actor,
+		Action: action,
+		Target: target,
+		Reason: reason,
+	})
+}
+
 // buildShellSandboxConfig 把配置中的 Shell 沙箱策略字段装配成
 // tool.ShellSandboxConfig（N1-04）。黑名单缺省时使用工具内置的灾难性命令默认
 // 黑名单；allowlist/blacklist 均可用逗号分隔的正则覆盖。
@@ -963,6 +978,8 @@ func main() {
 	// （危险命令前缀黑名单 + allow/ask/deny，默认 deny 并写审计）。
 	// 先把工具包的审计接收器接入统一审计轨迹（observability.DefaultAuditor）。
 	tool.SetShellSandboxAuditSink(shellSandboxAuditAdapter{})
+	// N3-03（E4 通信信任边界）：把 AgentBus 越权发送被拒事件接入统一审计轨迹。
+	runtime.SetAgentBusAuditSink(agentBusAuditAdapter{})
 	shellCfg := buildShellSandboxConfig(cfg)
 	sandboxCfg := tool.DefaultSandboxConfig()
 	sandbox := tool.NewSandboxExecutor(sandboxCfg)

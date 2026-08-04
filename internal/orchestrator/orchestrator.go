@@ -1122,6 +1122,12 @@ func (o *Orchestrator) runAgent(ctx context.Context, rootTaskID string, spec Age
 		CanDispatchSubAgents: false,
 		CanDefineWorkflow:    false,
 		SupervisorSubTaskID:  rootTaskID,
+		// N3-03（E4 通信信任边界）：把工作流声明的 child→child 数据流
+		// （OutputTo）透传为 AgentBus 发送白名单。worker 默认只能向监督者
+		// （leader）上报，向其它 child 发送必须经 OutputTo 显式授权，防止
+		// 任意 agent 间横向注入（配合 runtime.Engine.canSendToBus 的 C1-2
+		// 通信权限矩阵）。
+		AllowedSendTargets: spec.OutputTo,
 		// N0-01：显式指明监督 agent 的 ID。root/leader Engine 以
 		// (leader, rootTaskID) 注册 AgentBus handler（见 AgentMessage 的
 		// Phase 7-J 注释与 OutputTo 转发逻辑），worker 必须以同一对键为目标，

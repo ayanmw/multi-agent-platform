@@ -515,8 +515,11 @@ func TestAgentBusMessageCreatesInputStep(t *testing.T) {
 	}
 
 	// 注入的消息应已作为 user message 被追加到对话中。
+	// N3-03（E4 通信信任边界）：注入格式携带来源可信度标记与显式数据边界
+	// （[Agent X]: + <<<AGENT_MSG_BEGIN/END>>> 分隔符），降低 child→parent
+	// prompt-injection 敞口。接收方为 leader（Role=Leader），故 trust=controlled。
 	found := false
-	wantContent := "[Agent agent_child]: child result"
+	wantContent := "[Agent agent_child]:\n<<<AGENT_MSG_BEGIN source=agent_bus trust=controlled from=agent_child>>>\nchild result\n<<<AGENT_MSG_END>>>"
 	for _, m := range engine.messages {
 		if m.Role == "user" && m.Content == wantContent {
 			found = true

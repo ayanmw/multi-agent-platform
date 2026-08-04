@@ -348,6 +348,23 @@ type EngineConfig struct {
 	// 于 Phase 5 引入。
 	AgentBus AgentBus
 
+	// AllowedSendTargets 是经 AgentBus 主动向其它 agent 发送消息时，
+	// 本 Engine 被授权寻址的目标 agent ID 白名单（N3-03，E4 通信信任边界）。
+	//
+	// 它与 AgentSpec.OutputTo（工作流/编排声明的数据流路由）同源：orchestrator
+	// 在构造 worker Engine 时把 spec.OutputTo 透传进来，使「child → child」
+	// 通信必须显式声明授权，而非任意可达。配合 canSendToBus 实现 C1-2
+	// 通信权限矩阵：
+	//   - 发给自身 / 发给监督者（leader，见 supervisorAgentID）始终允许；
+	//   - 发往 AllowedSendTargets 中的 agent 允许（声明过的对等体）；
+	//   - 领导者（Role=Leader 或 CanDispatchSubAgents）可寻址其派发的任意 child；
+	//   - 其余 worker → 其它 child 的请求被拒绝并写审计（prompt-injection 缓解）。
+	//
+	// 为空且非领导者时，worker 仅能向监督者上报；领导者（含未配置白名单的
+	// 旧路径）保持 permissive，向后兼容单 agent / 早期多 agent 行为。
+	// 于 N3-03 引入。
+	AllowedSendTargets []string
+
 	// CheckpointManager 是可选的 checkpoint/recovery 管理器。设置后，
 	// engine 在每次 ReAct loop 迭代结束（tool 执行后）保存一个 checkpoint，
 	// 支持崩溃后恢复任务。为 nil 时跳过 checkpointing。
@@ -982,36 +999,52 @@ func (e *Engine) Run(ctx context.Context, userInput string) (content string, tot
 					if !ok {
 						return
 					}
-					// Phase 7-J：把 AgentBus 输入当作一个独立 step，让前端时间线
-					// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
-					// 最后发射 step_complete 并持久化该 step。
-					e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-						"type":             "agent_message_input",
-						"from_agent":       msg.FromAgentID,
-						"from_sub_task_id": msg.SubTaskID, // 对旧消息可能为空
-						"to_agent":         e.cfg.AgentID,
-						"to_sub_task_id":   e.cfg.SubTaskID,
-						"msg_type":         msg.Type,
-						"content":          msg.Content,
-					}))
+				// Phase 7-J：把 AgentBus 输入当作一个独立 step，让前端时间线
+				// 能展示跨 agent 通信。先发射 step_started，随后按用户消息处理，
+				// 最后发射 step_complete 并持久化该 step。
+				//
+				// N3-03（E4 通信信任边界）：标注消息来源与可信度，使前端 / 审计
+				// 能区分「受控的 agent 间通信」与「未经声明授权的注入」。
+				trust := e.classifyAgentMessageTrust(msg.FromAgentID)
+				e.bus.SendEvent(event.NewEventWithSubTask("step_started", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"type":             "agent_message_input",
+					"from_agent":       msg.FromAgentID,
+					"from_sub_task_id": msg.SubTaskID, // 对旧消息可能为空
+					"to_agent":         e.cfg.AgentID,
+					"to_sub_task_id":   e.cfg.SubTaskID,
+					"msg_type":         msg.Type,
+					"content":          msg.Content,
+					"source":           "agent_bus",
+					"trust":            trust,
+				}))
 
-					// 把到达消息作为 user message 追加到对话。LLM 会把它视为
-					// 来自其他 agent 的新输入。
-					formatted := fmt.Sprintf("[Agent %s]: %s", msg.FromAgentID, msg.Content)
-					e.appendMessage(llm.Message{Role: "user", Content: formatted})
-					e.saveConversation("user", formatted)
-					e.writeSessionMessage("user", formatted, "", "", 0)
+				// 把到达消息作为 user message 追加到对话。LLM 会把它视为
+				// 来自其他 agent 的新输入。
+				//
+				// N3-03（E4 通信信任边界）：用显式分隔符把 agent 注入内容包裹成
+				// 「数据边界」，明确标识这是「外部 agent 注入的数据」而非用户 /
+				// 系统指令，降低 child→parent prompt-injection 敞口——嵌套在其中的
+				// 指令不会被 LLM 当作可执行的命令。保留 "[Agent <from>]: " 前缀以
+				// 兼容前端时间线与历史回读（N1-01 buildHistoryMessages）。
+				header := fmt.Sprintf("[Agent %s]:", msg.FromAgentID)
+				formatted := header + fmt.Sprintf("\n<<<AGENT_MSG_BEGIN source=agent_bus trust=%s from=%s>>>\n%s\n<<<AGENT_MSG_END>>>",
+					trust, msg.FromAgentID, msg.Content)
+				e.appendMessage(llm.Message{Role: "user", Content: formatted})
+				e.saveConversation("user", formatted)
+				e.writeSessionMessage("user", formatted, "", "", 0)
 
-					// 发出 system_info 事件，让前端可以在 UI 中展示 agent 间通信。
-					// Phase 7-J 注：保留此事件以兼容旧前端监听器，但 step 事件才是
-					// 推荐的白盒展示方式（system_info 已标记为 deprecated）。
-					e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
-						"type":       "agent_message_received",
-						"from_agent": msg.FromAgentID,
-						"to_agent":   e.cfg.AgentID,
-						"msg_type":   msg.Type,
-						"content":    msg.Content,
-					}))
+				// 发出 system_info 事件，让前端可以在 UI 中展示 agent 间通信。
+				// Phase 7-J 注：保留此事件以兼容旧前端监听器，但 step 事件才是
+				// 推荐的白盒展示方式（system_info 已标记为 deprecated）。
+				e.bus.SendEvent(event.NewEventWithSubTask("system_info", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
+					"type":       "agent_message_received",
+					"from_agent": msg.FromAgentID,
+					"to_agent":   e.cfg.AgentID,
+					"msg_type":   msg.Type,
+					"content":    msg.Content,
+					"source":     "agent_bus",
+					"trust":      trust,
+				}))
 
 					e.bus.SendEvent(event.NewEventWithSubTask("step_complete", e.taskID, e.cfg.SubTaskID, e.cfg.AgentID, e.stepIdx, map[string]any{
 						"type": "agent_message_input",
@@ -2725,6 +2758,136 @@ func (e *Engine) supervisorAgentID() string {
 	return DefaultSupervisorAgentID
 }
 
+// AgentBusAuditSink 接收 AgentBus 通信权限裁决（拒绝越权发送）的审计记录
+// （N3-03，E4 通信信任边界）。
+//
+// 接口刻意保持最小，使 runtime 包不依赖 observability 包——否则会形成
+// observability → pkg/db → cron → tool → observability 的 import cycle
+// （参见 internal/tool/shell_policy.go 的同名设计）。
+// 生产环境由 cmd/server 注入 observability.DefaultAuditor 的适配实现
+// （cmd/server/main.go 的 agentBusAuditAdapter），使审计进入统一审计轨迹
+// （内存 + SQLite）。
+type AgentBusAuditSink interface {
+	Record(action, actor, target, reason string)
+}
+
+// defaultAgentBusAuditSink 是 AgentBusAuditSink 的进程内默认实现：一个
+// 有界 ring buffer，保证在不注入真实审计器时也能自包含地记录裁决。
+type defaultAgentBusAuditSink struct {
+	mu    sync.Mutex
+	recs  []map[string]any
+	limit int
+}
+
+func newDefaultAgentBusAuditSink() *defaultAgentBusAuditSink {
+	return &defaultAgentBusAuditSink{limit: 1000}
+}
+
+func (s *defaultAgentBusAuditSink) Record(action, actor, target, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recs = append(s.recs, map[string]any{
+		"action": action,
+		"actor":  actor,
+		"target": target,
+		"reason": reason,
+	})
+}
+
+// agentBusAuditSink 是全局的 AgentBus 审计接收器。cmd/server 启动时替换为
+// 真实审计器（observability.DefaultAuditor 适配）；未注入时回退到进程内
+// ring buffer，不影响引擎运行。
+var agentBusAuditSink AgentBusAuditSink = newDefaultAgentBusAuditSink()
+
+// SetAgentBusAuditSink 替换全局 AgentBus 审计接收器。cmd/server 在启动时
+// 调用它以注入 observability.DefaultAuditor 的适配实现（nil 参数被忽略，
+// 保留现有接收器）。于 N3-03 引入。
+func SetAgentBusAuditSink(s AgentBusAuditSink) {
+	if s != nil {
+		agentBusAuditSink = s
+	}
+}
+
+// recordAgentBusSendDenied 把一次越权的 AgentBus 发送被拒事件写入审计轨迹。
+// actor 取当前 agent ID，target 编码为目标 agent，reason 为拒绝原因。
+// 于 N3-03 引入（E4 通信信任边界：越权通信可审计）。
+func (e *Engine) recordAgentBusSendDenied(toAgentID, reason string) {
+	agentBusAuditSink.Record(
+		"agentbus_send_denied",
+		e.cfg.AgentID,
+		"agent/"+toAgentID,
+		reason,
+	)
+}
+
+// canSendToBus 实现 C1-2 通信权限矩阵（N3-03，E4 通信信任边界），判断本
+// Engine 是否有权向 toAgentID 经 AgentBus 主动发送消息。
+//
+// 矩阵（与 AgentSpec.OutputTo / Role 一致）：
+//   - 发给自身：始终允许（自投递 / 自我路由兜底）。
+//   - 发给监督者（leader，见 supervisorAgentID）：始终允许——worker 必须能
+//     向其 supervisor 上报或委托审批（N0-01 审批委托依赖此路径）。
+//   - 发往 AllowedSendTargets 中的 agent：允许——即工作流显式声明的 child→child
+//     数据流（OutputTo），无需 supervisor 中转。
+//   - 领导者（Role=Leader 或 CanDispatchSubAgents）：可寻址其派发的任意 child。
+//   - 其余 worker → 其它 child：拒绝（返回 false + 原因），防止任意 agent
+//     间横向注入（child→parent / child→child prompt-injection 缓解）。
+//
+// 返回值：(allowed, reason)。allowed=false 时 reason 解释拒绝原因，
+// 供审计与 LLM 反馈使用。该函数只读 e.cfg，无副作用，可在测试中直接调用。
+func (e *Engine) canSendToBus(toAgentID string) (bool, string) {
+	if toAgentID == "" {
+		return false, "empty target agent ID"
+	}
+	if toAgentID == e.cfg.AgentID {
+		return true, ""
+	}
+	// 监督者（leader）始终可达——worker 上报 / 委托审批的刚需路径。
+	if toAgentID == e.supervisorAgentID() {
+		return true, ""
+	}
+	// 显式白名单（由 OutputTo / 工作流配置注入）：worker→child 仅当声明。
+	for _, t := range e.cfg.AllowedSendTargets {
+		if t == toAgentID {
+			return true, ""
+		}
+	}
+	// 领导者可寻址其派发的任意 child；worker 默认禁止向其它 child 发送。
+	if e.cfg.Role == AgentRoleLeader || e.cfg.CanDispatchSubAgents {
+		return true, ""
+	}
+	return false, "recipient not in allowed send targets (OutputTo); worker→worker messaging requires explicit OutputTo authorization"
+}
+
+// classifyAgentMessageTrust 对经 AgentBus 注入本 ReAct loop 的消息标记来源
+// 可信度（N3-03，E4 通信信任边界）。
+//
+// 信任分级（与 canSendToBus 授权口径一致，作为接收侧防御纵深）：
+//   - "self"：来自自身（自投递）；
+//   - "controlled"：来自监督者、白名单对等体（OutputTo），或本引擎为领导者
+//     时来自其派发的任意 child；
+//   - "untrusted"：其它来源——理论上应已被发送侧 canSendToBus 拒绝，但作为
+//     接收侧最后一道标记，明确提示 LLM 该消息未经声明授权。
+//
+// 该分级仅用于标签与审计展示，不改变消息投递（投递由发送侧权限保证）。
+func (e *Engine) classifyAgentMessageTrust(fromAgentID string) string {
+	if fromAgentID == e.cfg.AgentID {
+		return "self"
+	}
+	if fromAgentID == e.supervisorAgentID() {
+		return "controlled"
+	}
+	for _, t := range e.cfg.AllowedSendTargets {
+		if t == fromAgentID {
+			return "controlled"
+		}
+	}
+	if e.cfg.Role == AgentRoleLeader || e.cfg.CanDispatchSubAgents {
+		return "controlled"
+	}
+	return "untrusted"
+}
+
 // sendAgentMessage 通过 AgentBus 向另一个 agent 的默认 handler 发送消息
 // （不指定目标 subTaskID）。
 //
@@ -2789,6 +2952,15 @@ func (e *Engine) sendAgentMessageTo(toAgentID, toSubTaskID, msgType, content str
 	if toAgentID == "" {
 		// 防御性拒绝：宁可不发，也不让空目标消息污染 AgentBus 队列。
 		log.Warnf("engine", "拒绝发送目标为空的 AgentBus 消息: type=%s from=%s sub_task=%s", msgType, e.cfg.AgentID, toSubTaskID)
+		return false
+	}
+
+	// N3-03（E4 通信信任边界）：C1-2 通信权限矩阵门控。
+	// 越权发送（worker 向未声明 OutputTo 的其它 child）在发送侧即被拒，
+	// 不进入 AgentBus 队列，也不发 agent_message_sent 事件，并写审计。
+	if allowed, reason := e.canSendToBus(toAgentID); !allowed {
+		log.Warnf("engine", "拒绝越权 AgentBus 发送: from=%s to=%s type=%s reason=%s", e.cfg.AgentID, toAgentID, msgType, reason)
+		e.recordAgentBusSendDenied(toAgentID, reason)
 		return false
 	}
 

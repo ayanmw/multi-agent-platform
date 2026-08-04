@@ -21,7 +21,10 @@
 //
 // 当一个 Engine 持有 AgentBus 时，它会在 Run() 中启动一个 goroutine 监听
 // 到达的消息。消息到达后会被作为 user message 追加到对话中，格式为：
-// "[Agent {from}]: {content}"。LLM 会将其视为新的 user input 并据此响应。
+// "[Agent {from}]:\n<<<AGENT_MSG_BEGIN source=agent_bus trust=<level> from=<from>>>\n{content}\n<<<AGENT_MSG_END>>>"。
+// 显式分隔符把注入内容包裹成「数据边界」，明确标识这是外部 agent 注入的数据
+// 而非用户/系统指令，降低 child→parent prompt-injection 敞口（N3-03，E4）。
+// LLM 会将其视为新的 user input 并据此响应。
 //
 // # 感知 SubTask 的路由（Phase 7-I）
 //

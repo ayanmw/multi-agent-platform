@@ -392,14 +392,33 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 12:20 | 轮次 17 | N3-03 | ✅ E4 通信信任边界（C1-2 通信权限矩阵 + 注入消息来源标记/沙箱化）
+
+**目标**：消除 N1-02 遗留的 E4 缺口——agent→agent 经 AgentBus 注入父 ReAct loop 的消息此前无任何信任边界（任意持有 AgentBus 的 agent 可向任意已注册 agent 发消息），存在 child→parent / child→child prompt-injection 敞口。
+
+**改动**（严守「白盒注释即规则」）：
+- `internal/runtime/engine.go`：`EngineConfig` 新增 `AllowedSendTargets []string`（N3-03，由 orchestrator 透传 `spec.OutputTo`）；新增 `canSendToBus(toAgentID)` 实现 **C1-2 通信权限矩阵**——自身/监督者(leader) 始终允许；白名单(OutputTo)内允许；领导者可寻址任意 child；**worker 向未声明 OutputTo 的其它 child 拒绝**；`sendAgentMessageTo` 在发送侧即按矩阵门控，越权则 `Warn` + 写审计（`auditbus_send_denied@agent/<id>`），不进入 AgentBus 队列、不发射 `agent_message_sent` 事件；新增 `classifyAgentMessageTrust(from)`（self/controlled/untrusted）+ 最小 `AgentBusAuditSink` 接口与 `SetAgentBusAuditSink`（沿用 shell_policy 的 cycle-free 适配模式，避免 runtime→observability 循环引用）；监听 goroutine 注入 AgentBus 消息时**带来源标记与显式数据边界**——`[Agent X]:\n<<<AGENT_MSG_BEGIN source=agent_bus trust=<level> from=<from>>>\n{content}\n<<<AGENT_MSG_END>>>`，明确标识「外部 agent 注入的数据」而非用户/系统指令，降低 child→parent prompt-injection 敞口；`step_started`/`system_info` 事件新增 `source`/`trust` 字段。
+- `internal/runtime/agentbus.go`：更新注入格式文档注释（与 engine.go 实现一致）。
+- `internal/orchestrator/orchestrator.go`：worker EngineConfig 透传 `AllowedSendTargets: spec.OutputTo`（child→child 数据流须经声明授权）。
+- `cmd/server/main.go`：新增 `agentBusAuditAdapter`（同 `shellSandboxAuditAdapter` 适配 `observability.DefaultAuditor`）+ `runtime.SetAgentBusAuditSink(...)` 注入（N3-03 越权发送审计落统一审计轨迹）。
+- `internal/runtime/engine_test.go`：更新 `TestAgentBusMessageCreatesInputStep` 的注入格式断言（接收方为 leader → trust=controlled）。
+
+**测试**：新建 `internal/runtime/agentbus_security_test.go`（`TestCanSendToBusMatrix` 9 例覆盖矩阵全分支 / `TestSendAgentMessageToDeniedWhenUnauthorized` 断言越权拒发+不进 bus+不发射 sent 事件+写审计+声明目标与监督者放行 / `TestClassifyAgentMessageTrust` 5 例）。既有 `agentbus_routing_test.go`（N0-01/N1-02）保持全绿——N1-02 测试发往 `leader`（默认 supervisor）仍被矩阵允许，delivering 测试断言原始 `AgentMessage.Content` 不受注入格式改动影响。
+
+**验证**：`go build/vet/test -short ./...` 全绿（0 FAIL，24 个有测试包全 ok）；`cases-regression.sh` **21/21**；`smoke-test.sh` **63 PASS / 0 FAIL / 1 SKIP**。向后兼容：单 agent 场景 AgentBus=nil（send_agent_message 工具不注入）、领导者保持 permissive、worker→leader 上报通道（N0-01 审批委托）不受影响。
+
+**下一步**：N3-04（E7 并发安全与可扩展：`go test -race` CI 门禁修复 data race；DB 后端可插拔抽象；WS 广播背压/限流）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        16
-phase:             N3 (企业级纵深加固) — N3-02 完成
+loop_round:        17
+phase:             N3 (企业级纵深加固) — N3-03 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-03 (E4 通信信任边界)
+next_milestone:    N3-04 (E7 并发安全与可扩展)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
