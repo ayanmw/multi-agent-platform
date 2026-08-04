@@ -1239,6 +1239,16 @@ func main() {
 		fallbackUserID = authAPI.SeedUserID()
 	}
 
+	// N3-01 认证生产加固:即便在 REQUIRE_AUTH=false(默认无鉴权)模式下,
+	// 特权写路由(agents/cases/tools/mcp/...)与敏感读端点(audit/traces)仍
+	// 要求有效 API key,消除「默认无鉴权暴露面」。设 PRIVILEGED_ROUTES_REQUIRE_KEY=false
+	// 可退回旧行为(仅用于兼容历史 dev 脚本)。生产部署应始终保持默认(true)。
+	privilegedKeyRequired := config.Getenv("PRIVILEGED_ROUTES_REQUIRE_KEY") != "false"
+	privilegedRoutes := []string{}
+	if privilegedKeyRequired {
+		privilegedRoutes = auth.DefaultPrivilegedWriteRoutes()
+	}
+
 	log.Infof("server", "========================================")
 	log.Infof("server", "Multi-Agent Platform %s", version.Version)
 	log.Infof("server", "========================================")
@@ -1248,14 +1258,22 @@ func main() {
 	log.Infof("server", "Health:      http://localhost:%s/health", cfg.ServerPort)
 	log.Infof("server", "LLM:         %s (global mock=%t, model=%s)", cfg.LLMEndpoint, cfg.LLMUseMock, cfg.LLMModel)
 	log.Infof("server", "Auth:        %s", map[bool]string{true: "enabled", false: "disabled"}[requireAuth])
+	if !requireAuth {
+		// 默认无鉴权模式:强告警,提醒生产必须开启鉴权;特权路由仍受 API key 保护。
+		log.Warnf("server", "AUTH DISABLED (REQUIRE_AUTH=false): platform is running WITHOUT authentication. "+
+			"Privileged mutation routes (%d: agents/cases/tools/mcp/...) and sensitive reads (audit/traces) "+
+			"STILL require a valid API key. For production, set REQUIRE_AUTH=true and protect this service behind a network boundary.",
+			len(privilegedRoutes))
+	}
 	log.Infof("server", "Tools:       %d built-in", len(toolRegistry.List()))
 	log.Infof("server", "========================================")
 
 	// 用 auth middleware 包装默认 mux。REQUIRE_AUTH 为 true 时，它保护
 	// 改状态的路由和敏感读 endpoint，而公开路由 (/healthz、/metrics、
-	// /health) 仍然开放。REQUIRE_AUTH 为 false 时，所有路由都放行，
-	// 但会注入 seed user ID。
-	handler := auth.NewAuthMiddleware(authStore, fallbackUserID, requireAuth, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
+	// /health) 仍然开放。REQUIRE_AUTH 为 false 时，非特权路由都放行并注入
+	// seed user ID；但 privilegedRoutes 中的特权写路由与敏感读端点仍要求
+	// 有效 API key（N3-01 认证生产加固，消除默认无鉴权暴露面）。
+	handler := auth.NewAuthMiddleware(authStore, fallbackUserID, requireAuth, privilegedRoutes, auth.DefaultProtectedRoutes(), auth.DefaultPublicRoutes(), http.DefaultServeMux)
 
 	// 捕获终止信号，统一驱动优雅关闭。
 	signal.Notify(serverShutdown, os.Interrupt, syscall.SIGTERM)

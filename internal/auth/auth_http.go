@@ -88,6 +88,41 @@ func DefaultAdminRoutes() []string {
 	}
 }
 
+// DefaultPrivilegedWriteRoutes 返回即便 REQUIRE_AUTH=false(关闭鉴权)时也
+// 必须持有有效 API key 才能访问的 METHOD + path 前缀组合列表。
+//
+// 这是 N3-01「认证生产加固」的核心:默认无鉴权模式(REQUIRE_AUTH=false)下,
+// 平台仅靠注入 seed admin 用户放行一切请求,导致网络上任意调用方都能无凭证
+// 篡改 agents/cases/tools 等特权资源 —— 即「默认无鉴权暴露面」。为消除该敞口,
+// 这些特权写路由 + 敏感读端点(audit/traces)在关闭鉴权时仍要求 API key。
+//
+// 注意:`POST /api/auth/api-keys`(创建首个 key 的引导端点)刻意不在本列表中,
+// 否则在关闭鉴权模式下将永远无法创建第一个 key(死锁)。引导 key 创建保持开放,
+// 但其后的特权 mutation 必须携带该 key。
+func DefaultPrivilegedWriteRoutes() []string {
+	return []string{
+		// 特权写路由
+		"POST /api/agents",
+		"PUT /api/agents/",
+		"DELETE /api/agents/",
+		"PUT /api/models/prices/",
+		"POST /api/cases",
+		"PUT /api/cases/",
+		"DELETE /api/cases/",
+		"POST /api/tools",
+		"PUT /api/tools",
+		"DELETE /api/tools",
+		"POST /api/mcp/servers",
+		"POST /api/mcp/servers/",
+		"DELETE /api/mcp/servers/",
+		"POST /api/mcp/markets/",
+		"DELETE /api/auth/api-keys/",
+		// 敏感读端点:含内部关联信息,关闭鉴权时亦不可匿名可见
+		"GET /api/audit",
+		"GET /api/traces",
+	}
+}
+
 // DefaultProtectedRoutes 返回当 REQUIRE_AUTH 启用时需要认证的
 // METHOD + path 前缀组合列表。
 // 格式:"METHOD /path/prefix" — 例如 "DELETE /api/sessions/"
@@ -149,16 +184,38 @@ func DefaultProtectedRoutes() []string {
 }
 
 // NewAuthMiddleware 创建一个在受保护路由上强制认证的 HTTP middleware。
-// 当 requireAuth 为 false 时,所有请求都会放行并注入兜底用户 ID,
-// 因此 auth 管理端点仍能正常工作。
+// 当 requireAuth 为 false 时,非特权路由会放行并注入兜底用户 ID,因此
+// auth 管理端点与只读端点仍能正常工作;但 privilegedRoutes 中的特权写路由
+// 与敏感读端点即便在关闭鉴权模式下,仍要求携带有效 API key(N3-01 认证加固)。
 //
 // 受保护路由通过 METHOD + path 前缀进行匹配。例如,
 // "DELETE /api/sessions/" 匹配所有对 /api/sessions/anything 的 DELETE 请求。
 // publicRoutes 中列出的公开路由始终豁免认证。
-func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth bool, protectedRoutes, publicRoutes []string, next http.Handler) http.Handler {
+//
+// privilegedRoutes 仅在 requireAuth == false 时生效:它定义了「即使在无鉴权
+// 模式下也必须凭 API key 才能访问」的路由集合,用于消除默认无鉴权暴露面。
+// 当 requireAuth == true 时,所有 protectedRoutes 都已要求认证,该参数无意义。
+func NewAuthMiddleware(store APIKeyStore, fallbackUserID string, requireAuth bool, privilegedRoutes, protectedRoutes, publicRoutes []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 当认证关闭时,注入兜底用户并放行。
 		if !requireAuth {
+			// N3-01:特权写路由 + 敏感读端点即便在关闭鉴权模式下仍需有效 API key,
+			// 避免任何网络调用方无凭证篡改 agents/cases/tools/keys 等特权资源。
+			if len(privilegedRoutes) > 0 && isProtectedRoute(r.Method, r.URL.Path, privilegedRoutes) {
+				userID, err := authenticateRequest(r, store)
+				if err != nil {
+					log.Warnf("auth", "[Auth] privileged route requires API key even with REQUIRE_AUTH=false (path=%s, method=%s): %v", r.URL.Path, r.Method, err)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized: privileged route requires a valid API key"})
+					return
+				}
+				ctx := WithUserID(r.Context(), userID)
+				ctx = injectRole(ctx, store, userID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			ctx := WithUserID(r.Context(), fallbackUserID)
 			ctx = injectRole(ctx, store, fallbackUserID)
 			// REQUIRE_AUTH 关闭时,如果 seed user 角色是 viewer,则仍然要阻止写操作;

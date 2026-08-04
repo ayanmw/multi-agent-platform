@@ -42,18 +42,22 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- 辅助函数 ---------------------------------------------------------------
-# req <METHOD> <path> [data_json]  -> 打印 PASS/FAIL 行，返回 status
+# req <METHOD> <path> [data_json] [api_key]  -> 打印 PASS/FAIL 行，返回 status
+# 第 4 个参数传 API key 时,自动附带 Authorization: Bearer 头。
+# 用于 N3-01 认证加固后,特权写路由(agents/tools/...)在 REQUIRE_AUTH=false
+# 模式下仍需有效 API key 才能访问。
 req() {
-  local method="$1" path="$2" data="${3:-}"
-  local code body
+  local method="$1" path="$2" data="${3:-}" token="${4:-}"
+  local code body auth_args=()
+  if [[ -n "${token}" ]]; then auth_args=(-H "Authorization: Bearer ${token}"); fi
   if [[ -n "${data}" ]]; then
     code=$(curl -s -o /tmp/smoke-res-$$ -w '%{http_code}' \
             -X "${method}" "${BASE}${path}" \
-            -H 'Content-Type: application/json' \
+            -H 'Content-Type: application/json' "${auth_args[@]}" \
             --data "${data}" 2>/dev/null)
   else
     code=$(curl -s -o /tmp/smoke-res-$$ -w '%{http_code}' \
-            -X "${method}" "${BASE}${path}" 2>/dev/null)
+            -X "${method}" "${BASE}${path}" "${auth_args[@]}" 2>/dev/null)
   fi
   body=$(cat /tmp/smoke-res-$$ 2>/dev/null | head -c 200)
   rm -f /tmp/smoke-res-$$
@@ -151,13 +155,12 @@ print_section "2. Auth (REQUIRE_AUTH=false)"
 AUTH_RAW=$(curl -s -X POST "${BASE}/api/auth/api-keys" -H 'Content-Type: application/json' \
            --data '{"name":"smoke-key"}' 2>/dev/null)
 echo "    create resp: $(echo "${AUTH_RAW}" | head -c 160)"
+# N3-01:后续特权写路由(agents/tools/...)在 REQUIRE_AUTH=false 下仍需该 key。
+AUTH_KEY=$(jget "${AUTH_RAW}" "key")
 req GET /api/auth/api-keys
 AUTH_ID=$(jget "${AUTH_RAW}" "id")
-if [[ -n "${AUTH_ID}" ]]; then
-  req DELETE "/api/auth/api-keys/${AUTH_ID}"
-else
-  FAIL=$((FAIL+1)); echo "[FAIL] DELETE /api/auth/api-keys/{id} — 未拿到创建返回的 id"; PROBLEMS+=("POST /api/auth/api-keys 未返回 id 字段，无法串联 DELETE")
-fi
+# 注意:该 key 不在此处吊销 —— N3-01 加固后 agents/tools 等特权写路由仍需它,
+# 若提前吊销,后续请求会 401。统一在脚本末尾(所有特权写之后)吊销。
 
 # =============================================================================
 # 3. Project
@@ -207,13 +210,14 @@ fi
 print_section "5. Agent"
 req GET /api/agents
 AGENT_RAW=$(curl -s -X POST "${BASE}/api/agents" -H 'Content-Type: application/json' \
-            --data '{"id":"agent_smoke","name":"Smoke Agent","system_prompt":"test"}' 2>/dev/null)
+            --data '{"id":"agent_smoke","name":"Smoke Agent","system_prompt":"test"}' \
+            -H "Authorization: Bearer ${AUTH_KEY}" 2>/dev/null)
 echo "    create resp: $(echo "${AGENT_RAW}" | head -c 160)"
 AGENT_ID=$(jget "${AGENT_RAW}" "id")
 [[ -z "${AGENT_ID}" ]] && AGENT_ID="agent_smoke"
 req GET "/api/agents/${AGENT_ID}"
-req PUT "/api/agents/${AGENT_ID}" '{"name":"Smoke Renamed","system_prompt":"updated"}'
-req DELETE "/api/agents/${AGENT_ID}"
+req PUT "/api/agents/${AGENT_ID}" '{"name":"Smoke Renamed","system_prompt":"updated"}' "${AUTH_KEY}"
+req DELETE "/api/agents/${AGENT_ID}" "" "${AUTH_KEY}"
 
 # =============================================================================
 # 6. Task（含 chat / multi-agent action）
@@ -243,8 +247,10 @@ req GET /api/tools
 req GET /api/cases
 # POST /api/tools 需 type=shell|http|inline，shell 需 command；返回 201
 # 先清理可能残留的同名动态工具（旧 DB artifacts 会导致 409 冲突）
-curl -s -o /dev/null -X DELETE "${BASE}/api/tools?name=echo_smoke" 2>/dev/null || true
+curl -s -o /dev/null -X DELETE "${BASE}/api/tools?name=echo_smoke" \
+  -H "Authorization: Bearer ${AUTH_KEY}" 2>/dev/null || true
 TOOL_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/tools" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${AUTH_KEY}" \
   --data '{"name":"echo_smoke","type":"shell","command":"echo hi","description":"smoke echo"}' 2>/dev/null)
 if [[ "${TOOL_CODE}" =~ ^2 ]]; then
   PASS=$((PASS+1)); printf '%-5s %-6s %-45s -> %s\n' "[PASS]" "POST" "/api/tools (type=shell)" "${TOOL_CODE}"
@@ -252,7 +258,8 @@ else
   FAIL=$((FAIL+1)); printf '%-5s %-6s %-45s -> %s\n' "[FAIL]" "POST" "/api/tools (type=shell)" "${TOOL_CODE}"
   PROBLEMS+=("POST /api/tools 用合法 shell payload 仍返回 ${TOOL_CODE}")
 fi
-DEL_TOOL_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE}/api/tools?name=echo_smoke" 2>/dev/null)
+DEL_TOOL_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "${BASE}/api/tools?name=echo_smoke" \
+  -H "Authorization: Bearer ${AUTH_KEY}" 2>/dev/null)
 if [[ "${DEL_TOOL_CODE}" =~ ^2 ]]; then
   PASS=$((PASS+1)); printf '%-5s %-6s %-45s -> %s\n' "[PASS]" "DELETE" "/api/tools?name=echo_smoke" "${DEL_TOOL_CODE}"
 else
@@ -409,6 +416,14 @@ else
   # curl 默认不发 Upgrade 时可能拿到 200(SPA fallback) 也算可接受
   SKIP=$((SKIP+1)); printf '%-5s %-6s %-45s -> %s (curl 限制，留待 WS 专项测试)\n' "[SKIP]" "WS" "/ws" "${WS_CODE}"
   PROBLEMS+=("WebSocket /ws 用 curl 验证握手受限(状态码 ${WS_CODE})，建议后续用 wscat/Go 客户端专项测")
+fi
+
+# =============================================================================
+# 11. 清理：吊销临时 API key（N3-01 后特权写路由需其鉴权，故留到最后）
+# =============================================================================
+print_section "11. 清理临时 API key"
+if [[ -n "${AUTH_ID}" && -n "${AUTH_KEY}" ]]; then
+  req DELETE "/api/auth/api-keys/${AUTH_ID}" "" "${AUTH_KEY}"
 fi
 
 # =============================================================================

@@ -220,7 +220,34 @@ npm install
 npm run dev
 ```
 
-### 5. curl 手动验证
+### 5. 生产部署（认证加固）
+
+> ⚠️ **生产环境必须开启鉴权。** 默认 `REQUIRE_AUTH=false` 仅用于本地开发，服务启动时会打印强告警（`AUTH DISABLED`）。任何以默认配置暴露到网络的部署都是不安全的。
+
+```bash
+# .env —— 生产最小安全配置
+REQUIRE_AUTH=true                 # 强制所有受保护路由校验 API key
+# PRIVILEGED_ROUTES_REQUIRE_KEY=true  # 默认即 true：即便 REQUIRE_AUTH=false 时，
+                                      # 特权写路由(agents/cases/tools/mcp/...)与
+                                      # 敏感读(audit/traces)仍要求 API key
+```
+
+**认证模型（API key + RBAC）：**
+
+- 平台使用 **API key 认证**（非密码）。每个用户可拥有多个 key，以 bcrypt 哈希存储，明文 key 仅创建时返回一次。
+- 三角色：`admin` / `developer`(=user) / `viewer`。缺 role 按 `viewer` **fail-closed**（只读）。
+- 敏感写路由（agents / cases / tools / mcp / model 价格 / api-keys）仅 `admin` 可操作；运营类写（sessions 删除、provider/model 同步）`admin`+`developer` 可操作。
+- **引导流程**：`REQUIRE_AUTH=false` 时，先 `POST /api/auth/api-keys` 创建首个 key（该端点刻意保持开放，否则无法建第一个 key），此后特权 mutation 必须携带 `Authorization: Bearer <key>`。
+
+**生产部署清单：**
+
+1. 设置 `REQUIRE_AUTH=true`。
+2. 将服务置于反向代理 / 防火墙之后，仅暴露必要端口；不要在公网直接暴露 `/api/*`。
+3. 通过 `POST /api/auth/api-keys` 为管理员创建 key，并妥善保管（明文仅返回一次）。
+4. 保持 `PRIVILEGED_ROUTES_REQUIRE_KEY=true`（默认），不要让特权写路由在无 key 下可达。
+5. 密钥/凭证不入 VCS（`.gitignore` 已覆盖 `*.txt` 凭证与 `.env`）；`.env` 与 key 文件单独管理。
+
+### 6. curl 手动验证
 
 ```bash
 # 健康检查
@@ -311,7 +338,7 @@ examples/mcp/              # MCP Server 示例（time / calc）
 | Session / Project | ✅ | multi-turn chat，Project 分组，Session 历史 |
 | 多 Agent 并发 | ✅ | 并行派发，前端多树渲染；leader-driven dispatch_sub_agent 主链路（Phase 7-H2）+ AgentBus 双向闭环（LLM 经 send_agent_message 工具主动收发 agent message，N1-02） |
 | Memory | ✅ | scope=session/project/global，向量召回，上下文压缩 |
-| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH；RBAC 资源-动作矩阵（viewer / developer / admin 三角色，fail-closed，N1-03） |
+| Auth | ✅ | API key + bcrypt，可配置 REQUIRE_AUTH（默认 false，启动强告警）；RBAC 资源-动作矩阵（viewer / developer / admin 三角色，fail-closed，N1-03）；N3-01 认证加固：即便 REQUIRE_AUTH=false，特权写路由（agents/cases/tools/mcp/...）与敏感读（audit/traces）仍要求有效 API key，消除默认无鉴权暴露面 |
 | RAG | ✅ | LocalEmbeddingProvider + InMemoryVectorStore + `/api/memories/recall` |
 | 成本 / 可观测性 | ✅ | CostTracker、维度化 /metrics（agent/session/step + per-agent LLM/Tool 延迟直方图）、/healthz、结构化日志、tracing 串联（?task_id/agent_id/limit 过滤）、事件完整性校验（非法事件计入 malformed 不丢数据，N2-01） |
 | Checkpoint / Recovery | ✅ | 任务检查点 + 崩溃恢复 |
