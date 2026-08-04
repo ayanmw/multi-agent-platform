@@ -491,9 +491,13 @@ func (h *Hub) ReplayEvents(sinceEventID string, limit int) ([]event.Event, error
 	return h.eventBuf.eventsAfter(sinceEventID, limit)
 }
 
-// SetControlHandler 注册一个用于处理客户端 control message 的 handler
+// SetControlHandler 注册一个用于处理客户端 control message 的 handler。
+// N3-04b (E7 并发安全)：handler 在 readPump goroutine 中被读取，而本方法在
+// 启动期写入，二者无同步会触发 data race，故经 h.mu 保护读写。
 func (h *Hub) SetControlHandler(handler ControlHandler) {
+	h.mu.Lock()
 	h.controlHandler = handler
+	h.mu.Unlock()
 }
 
 // RegisterTestClient 注册一个 client 用于接收广播事件，返回该 client。
@@ -650,9 +654,12 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// 若已注册 control handler 则路由给它
-		if c.Hub.controlHandler != nil {
-			go c.Hub.controlHandler(msg)
+		// 若已注册 control handler 则路由给它（经 c.Hub.mu 读取，N3-04b）
+		c.Hub.mu.RLock()
+		handler := c.Hub.controlHandler
+		c.Hub.mu.RUnlock()
+		if handler != nil {
+			go handler(msg)
 		}
 	}
 }

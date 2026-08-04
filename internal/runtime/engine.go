@@ -2797,22 +2797,39 @@ func (s *defaultAgentBusAuditSink) Record(action, actor, target, reason string) 
 // agentBusAuditSink 是全局的 AgentBus 审计接收器。cmd/server 启动时替换为
 // 真实审计器（observability.DefaultAuditor 适配）；未注入时回退到进程内
 // ring buffer，不影响引擎运行。
-var agentBusAuditSink AgentBusAuditSink = newDefaultAgentBusAuditSink()
+//
+// N3-04b (E7 并发安全)：该接收器被引擎 send 路径、AgentBus listener、审批路径等
+// 多个 goroutine 并发读取，而 SetAgentBusAuditSink 在启动期写入，二者无同步会
+// 触发 data race。故用 agentBusAuditSinkMu 保护读写，保证 go test -race 干净。
+var (
+	agentBusAuditSinkMu sync.Mutex
+	agentBusAuditSink   AgentBusAuditSink = newDefaultAgentBusAuditSink()
+)
 
 // SetAgentBusAuditSink 替换全局 AgentBus 审计接收器。cmd/server 在启动时
 // 调用它以注入 observability.DefaultAuditor 的适配实现（nil 参数被忽略，
-// 保留现有接收器）。于 N3-03 引入。
+// 保留现有接收器）。于 N3-03 引入；N3-04b 起经 agentBusAuditSinkMu 同步。
 func SetAgentBusAuditSink(s AgentBusAuditSink) {
-	if s != nil {
-		agentBusAuditSink = s
+	if s == nil {
+		return
 	}
+	agentBusAuditSinkMu.Lock()
+	agentBusAuditSink = s
+	agentBusAuditSinkMu.Unlock()
+}
+
+// agentBusAuditSinkGet 在并发读路径上安全获取当前接收器（N3-04b）。
+func agentBusAuditSinkGet() AgentBusAuditSink {
+	agentBusAuditSinkMu.Lock()
+	defer agentBusAuditSinkMu.Unlock()
+	return agentBusAuditSink
 }
 
 // recordAgentBusSendDenied 把一次越权的 AgentBus 发送被拒事件写入审计轨迹。
 // actor 取当前 agent ID，target 编码为目标 agent，reason 为拒绝原因。
 // 于 N3-03 引入（E4 通信信任边界：越权通信可审计）。
 func (e *Engine) recordAgentBusSendDenied(toAgentID, reason string) {
-	agentBusAuditSink.Record(
+	agentBusAuditSinkGet().Record(
 		"agentbus_send_denied",
 		e.cfg.AgentID,
 		"agent/"+toAgentID,

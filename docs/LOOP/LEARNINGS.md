@@ -83,6 +83,11 @@ curl http://localhost:8080/healthz
   - **配置化（E9）**：`HubConfig` 经 `HubConfigFromEnv()` 读 `WS_BROADCAST_BUFFER` / `WS_CLIENT_SEND_BUFFER` / `WS_RATE_LIMIT_PER_SEC` / `WS_RATE_LIMIT_BURST` / `WS_SLOW_CLIENT_THRESHOLD`，缺失回退 `DefaultHubConfig()`；`main.go` 用 `ws.NewHubWithConfig(ws.HubConfigFromEnv())`。令牌桶自实现（互斥锁），不引 `golang.org/x/time/rate`。
   - **`-race` 本地不可跑**：WorkBuddy 沙箱无 gcc，cgo 不可用，`go test -race` 在此报错；ws 包代码按构造 race-safe，但 N3-04b 必须在**有 gcc 的 Linux CI runner** 落地 `go test -race ./...` 门禁并验证共享临界区（runtime/orchestrator 的 `messagesMu`、hub 的 `mu`）。
 
+- ~~**N3-04b E7 并发安全 CI 门禁**~~ **（已于轮次 19 落地）**：原 ws/runtime/orchestrator 共享临界区无 `-race` CI 门禁（本地沙箱无 gcc 无法跑 `-race`，真实 race 检测交由 Linux CI）。**沉淀的硬规则**：
+  - **全局审计接收器必须加锁**：`runtime.agentBusAuditSink` 与 `tool.shellSandboxAuditSink` 是 package 级全局变量，被引擎 send 路径 / AgentBus listener / 审批路径 / run_shell·execute_program 工具执行路径（多 goroutine）并发读取，而 `Set*AuditSink` 在启动期写入——无同步即 data race。统一改为 `sync.Mutex` 保护的 `xxxGet()` 访问器（`agentBusAuditSinkMu` / `shellSandboxAuditSinkMu`），`Set*` 经锁写、`Record` 经锁读。
+  - **Hub.controlHandler 经 h.mu 保护**：`SetControlHandler` 写入、`readPump`（`*Client` 方法，经 `c.Hub.mu`）goroutine 读取，改为 `h.mu.Lock()` 写 / `h.mu.RLock()` 读。注意 readPump 作用域是 `*Client`，不可用 `h`（那是 `*Hub` 方法里的惯用名）。
+  - **CI 门禁**：`.github/workflows/ci.yml` 新增 `race` job（ubuntu-latest，含 gcc），跑 `go test -race -short ./...` 覆盖各包并发路径 + 用 `-race` 编译 server 跑 21 case mock 回归（真实多 Agent 负载下再捕一轮）。`scripts/cases-regression.sh` 的 build 命令加 `${BUILD_FLAGS:-}` 透传（默认空，行为不变），使 CI 可注入 `-race` 而不改默认回归。本地仍无法跑 `-race`，真实 race 检测由该 CI job 完成。
+
 ## ④ 企业级多 Agent 协作平台验收清单（Phase R 打分用）
 
 > 每维度评分：Pass / Partial / Fail。质量门要求全部 = Pass。

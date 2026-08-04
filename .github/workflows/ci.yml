@@ -89,3 +89,35 @@ jobs:
       - name: Build web/v2 (default UI)
         run: |
           cd web/v2 && npm ci && npm run build
+
+  # 并发安全门禁（N3-04b，E7）：在具备 gcc 的 Linux runner 上跑 race detector，
+  # 捕获 ws / runtime / orchestrator / tool 等共享临界区的 data race。
+  # ① 单元/集成测试 go test -race（覆盖各包并发路径）；
+  # ② 用 -race 编译 server 并跑 21 case mock 回归，在真实多 Agent 负载下再捕一轮。
+  # -short 跳过依赖真实外网/API key 的测试，保持 CI 确定性。
+  race:
+    runs-on: ubuntu-latest
+    needs: go-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: go test -race (unit/integration)
+        run: go test -race -short ./...
+
+      - name: case regression under -race
+        env:
+          BUILD_FLAGS: '-race'
+        run: |
+          PYTHONUTF8=1 LLM_USE_MOCK=true bash scripts/cases-regression.sh

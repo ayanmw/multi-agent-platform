@@ -174,7 +174,7 @@ except Exception as e:
 
 # ---- 编译后端 ----------------------------------------------------------------
 echo "[setup] 编译后端服务..."
-if ! go build -o "${SERVER_BIN}" ./cmd/server 2>"${SERVER_LOG}"; then
+if ! go build ${BUILD_FLAGS:-} -o "${SERVER_BIN}" ./cmd/server 2>"${SERVER_LOG}"; then
   echo "[FATAL] 编译失败，日志见 ${SERVER_LOG}"
   cat "${SERVER_LOG}"
   exit 2

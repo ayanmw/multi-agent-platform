@@ -236,14 +236,32 @@ func (s *defaultShellSandboxAuditSink) Record(action, actor, target, reason stri
 }
 
 // shellSandboxAuditSink 是全局审计接收器，默认使用内存 ring buffer。
-var shellSandboxAuditSink ShellSandboxAuditSink = newDefaultShellSandboxAuditSink()
+//
+// N3-04b (E7 并发安全)：该接收器被 run_shell / execute_program 等工具执行路径
+// （多 goroutine）并发读取，而 SetShellSandboxAuditSink 在启动期写入，二者无同步
+// 会触发 data race。故用 shellSandboxAuditSinkMu 保护读写，保证 go test -race 干净。
+var (
+	shellSandboxAuditSinkMu sync.Mutex
+	shellSandboxAuditSink   ShellSandboxAuditSink = newDefaultShellSandboxAuditSink()
+)
 
 // SetShellSandboxAuditSink 替换全局审计接收器。cmd/server 在启动时调用它以
 // 注入 observability.DefaultAuditor 的适配实现（nil 参数被忽略，保留现有接收器）。
+// N3-04b 起经 shellSandboxAuditSinkMu 同步。
 func SetShellSandboxAuditSink(s ShellSandboxAuditSink) {
-	if s != nil {
-		shellSandboxAuditSink = s
+	if s == nil {
+		return
 	}
+	shellSandboxAuditSinkMu.Lock()
+	shellSandboxAuditSink = s
+	shellSandboxAuditSinkMu.Unlock()
+}
+
+// shellSandboxAuditSinkGet 在并发工具执行路径上安全获取当前接收器（N3-04b）。
+func shellSandboxAuditSinkGet() ShellSandboxAuditSink {
+	shellSandboxAuditSinkMu.Lock()
+	defer shellSandboxAuditSinkMu.Unlock()
+	return shellSandboxAuditSink
 }
 
 // recordShellSandboxAudit 把一次 Shell 沙箱裁决写入当前审计接收器。
@@ -253,6 +271,6 @@ func recordShellSandboxAudit(ctx ExecuteContext, action, command, rule string, p
 	if actor == "" {
 		actor = "system"
 	}
-	shellSandboxAuditSink.Record(action, actor, command,
+	shellSandboxAuditSinkGet().Record(action, actor, command,
 		fmt.Sprintf("shell_sandbox policy=%s matched_rule=%q session=%s", policy.String(), rule, ctx.SessionID))
 }

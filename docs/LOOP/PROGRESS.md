@@ -440,14 +440,36 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 13:46 | 轮次 19 | N3-04b | ✅ E7 并发安全 CI 门禁（-race 门禁 + 三处全局共享态 data race 修复）
+
+**目标**：消除 N3-04 的 E7 Partial 缺口——ws/runtime/orchestrator 共享临界区此前无 `-race` CI 门禁（本地沙箱无 gcc 无法跑 `-race`），且存在若干无锁全局共享态（并发写/读的 data race 隐患）。
+
+**改动**（严守「白盒注释即规则」+ 最小 blast radius）：
+- `internal/runtime/engine.go`：`agentBusAuditSink`（全局 AgentBus 审计接收器）由裸全局变量改为 `sync.Mutex` 保护的 `agentBusAuditSinkMu` + `agentBusAuditSinkGet()` 访问器；`SetAgentBusAuditSink` 经锁写入，`recordAgentBusSendDenied`（引擎 send / AgentBus listener / 审批路径多 goroutine 并发读）经锁读取，消除启动期写入 vs 并发读取的 data race。
+- `internal/tool/shell_policy.go`：`shellSandboxAuditSink` 同样改为 `sync.Mutex` 保护（`shellSandboxAuditSinkMu` + `shellSandboxAuditSinkGet()`）；`recordShellSandboxAudit`（run_shell / execute_program 工具执行路径并发读）经锁读取。
+- `internal/ws/hub.go`：`Hub.controlHandler` 由 `SetControlHandler` 无锁写入、`readPump` goroutine 无锁读取，改为 `h.mu.Lock()` 写 / `h.mu.RLock()` 读（readPump 是 `*Client` 方法，Hub 经 `c.Hub.mu` 访问）。
+- `.github/workflows/ci.yml`：新增 `race` job（ubuntu-latest，含 gcc），跑 `go test -race -short ./...` 覆盖各包并发路径；并用 `BUILD_FLAGS='-race'` 编译 server 跑 21 case mock 回归，在真实多 Agent 负载下再捕一轮。该 job 是 N3-04b 的核心交付（并发安全 CI 门禁）。
+- `scripts/cases-regression.sh`：build 命令加 `${BUILD_FLAGS:-}` 透传（默认空，行为不变），使 CI race job 可注入 `-race` 而不改默认回归行为。
+
+**验证**（本地全绿，无 gcc 故 `-race` 交由 Linux CI 验证）：
+- `go build ./...` ✅ / `go vet ./...` ✅（首版 readPump 误用 `h.mu` 未编译，修正为 `c.Hub.mu` 后通过）。
+- `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok，含 internal/ws / internal/runtime / internal/orchestrator / internal/tool）。
+- `bash scripts/cases-regression.sh` ✅ **21/21 (100%)**（仓库外只读副本 + `/tmp/`→`C:/Users/Joker/.workbuddy/loop-tmp/` 路径重写 + `.exe` 补丁；未改生产脚本）。
+- `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**。
+- 本地沙箱无 gcc（`go test -race` 在此报错，与 LEARNINGS 记录一致）：N3-04b 的三处 race 修复经静态审查确认，真实 `-race` 校验由 Linux CI `race` job 完成。
+
+**下一步**：N3-04c（E7 DB 后端可插拔抽象：将 `pkg/db` 抽象为接口，SQLite 默认实现 + 预留 Postgres 外部实现）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        18
-phase:             N3 (企业级纵深加固) — N3-04a 完成
+loop_round:        19
+phase:             N3 (企业级纵深加固) — N3-04b 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-04b (E7 并发安全 — go test -race CI 门禁与 data race 修复)
+next_milestone:    N3-04c (E7 并发安全 — DB 后端可插拔抽象)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
