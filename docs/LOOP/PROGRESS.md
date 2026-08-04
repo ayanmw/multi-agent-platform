@@ -352,14 +352,33 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 09:35 | 轮次 15 | N3-01 | ✅ 认证生产加固（E1）
+
+**目标**：消除「默认无鉴权暴露面」——`REQUIRE_AUTH=false`（默认）时，特权写路由（agents/cases/tools/mcp/模型价格）与敏感读（audit/traces）仍要求有效 API key；启动强告警；README 新增「生产部署」章节。
+
+**改动**：
+- `internal/auth/auth_http.go`：新增 `DefaultPrivilegedWriteRoutes()`（特权写 + 敏感读，含 audit/traces；刻意排除引导端点 `POST /api/auth/api-keys` 以免死锁）；`NewAuthMiddleware` 新增 `privilegedRoutes []string` 参数，仅在 `!requireAuth` 时生效——命中则 `authenticateRequest` 校验 API key（无/无效→401 + Warn），未命中走原兜底注入放行（dev 友好）。
+- `cmd/server/main.go`：新增 `PRIVILEGED_ROUTES_REQUIRE_KEY`（默认 true，设 `false` 退回旧行为）；`REQUIRE_AUTH=false` 时打印强告警 `AUTH DISABLED (REQUIRE_AUTH=false): ... Privileged mutation routes (N) ... STILL require a valid API key. For production, set REQUIRE_AUTH=true ...`；middleware 注入 `privilegedRoutes`。
+- `scripts/smoke-test.sh`：创建 API key 后捕获 `AUTH_KEY`，用于 agents/tools 特权写（`req` 第 4 参 token / 裸 curl `-H Authorization: Bearer`）；**关键修复**：原脚本在 Section 2 即吊销该 key，导致后续特权写 401——改为脚本末尾（所有特权写之后）统一吊销。
+- `README.md` / `.env.example`：新增「生产部署（认证加固）」章节（强制 `REQUIRE_AUTH=true` + 生产部署清单 + 引导流程）+ `PRIVILEGED_ROUTES_REQUIRE_KEY` 注释；Auth 状态行补全 N3-01 说明。
+- `internal/auth/auth_http_test.go`：新增 `TestAuthMiddlewarePrivilegedRouteRequiresKeyWhenAuthDisabled`（12 子用例：特权写/敏感读无 key→401、带 key→200、引导端点与 GET 非特权开放）与 `TestAuthMiddlewarePrivilegedOptOut`（privilegedRoutes 为空退回旧行为）；既有 5 处 `NewAuthMiddleware` 调用补 `nil` 位置参。
+
+**验证**：`go build/vet/test -short ./...` 全绿（0 FAIL）；`cases-regression.sh` **21/21**；`smoke-test.sh` **63 PASS / 0 FAIL / 1 SKIP**（修复提前吊销 key 的回归后恢复基线）；auth 单测覆盖默认姿态（关鉴权下特权路由需 key + 显式退出路径）。
+
+**Commit**：`0bd47b4`（已 push origin main `a435777..0bd47b4`）；仅暂存 N3-01 文件 + docs/LOOP，无关 WIP（`internal/llm/provider_manager.go`）、`tmp/` 保持未暂存。
+
+**下一步**：N3-02（E3 隔离边界增强：审计 Target / 事件路由 / Memory recall 增加 workspace/session scope 键贯穿校验 + 隔离白皮书）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        14
-phase:             N3 (企业级纵深加固) — Phase R 生成
+loop_round:        15
+phase:             N3 (企业级纵深加固) — N3-01 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-01 (E1 认证生产加固)
+next_milestone:    N3-02 (E3 隔离边界增强)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
