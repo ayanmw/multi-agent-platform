@@ -169,19 +169,23 @@ func TestHubShutdown(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	// Shutdown 后向 broadcast 发事件不应再被处理（Run 已退出）。
-	// 由于 broadcast 是无缓冲 channel，SendEvent 会阻塞；这里用 select 验证。
-	deadline := time.After(50 * time.Millisecond)
+	// N3-04 (E7) 关机安全：Shutdown 后 Run 已退出，broadcast 无人消费。
+	// 新背压语义下 SendEvent 必须「立即返回」（缓冲满后丢弃 + 计数），
+	// 而非像旧版（无缓冲 channel）那样无限阻塞引擎 goroutine。
 	done := make(chan struct{})
+	start := time.Now()
 	go func() {
 		h.SendEvent(newTestEvent("e2", "step_started"))
 		close(done)
 	}()
 	select {
 	case <-done:
-		t.Fatal("SendEvent should block after shutdown")
-	case <-deadline:
-		// expected: Run 已退出， broadcast channel 无人接收。
+		// expected: SendEvent 不再阻塞，立即返回（关机安全）。
+		if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+			t.Fatalf("SendEvent took too long after shutdown: %v", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendEvent should not block after shutdown (backpressure must make it return promptly)")
 	}
 }
 

@@ -656,6 +656,10 @@ type MetricsCollector struct {
 	toolLatByAgent map[string]*HistogramCollector // agent -> Tool 延迟 histogram
 	eventsTotal     uint64 // 经事件总线广播的事件总数
 	malformedEvents uint64 // 事件完整性校验未通过的事件数
+	// N3-04 (E7) WS 广播背压指标：分别量化「摄入缓冲满丢弃」「摄入限流丢弃」「慢客户端投递丢弃」。
+	wsBroadcastDrops       uint64 // hub.broadcast 缓冲满导致的丢弃
+	wsBroadcastRateLimited uint64 // 全局摄入令牌桶限流导致的丢弃
+	wsClientSendDrops      uint64 // 单客户端 Send 缓冲满（慢客户端）导致的丢弃
 }
 
 // llmLatencyBuckets / toolLatencyBuckets 是 LLM / Tool 延迟 histogram 的 bucket 上界。
@@ -851,6 +855,27 @@ func (m *MetricsCollector) IncrMalformedEvents() {
 	m.mu.Unlock()
 }
 
+// IncrWSBroadcastDrops 递增因 hub.broadcast 摄入缓冲满而被丢弃的事件数（N3-04 背压）。
+func (m *MetricsCollector) IncrWSBroadcastDrops() {
+	m.mu.Lock()
+	m.wsBroadcastDrops++
+	m.mu.Unlock()
+}
+
+// IncrWSBroadcastRateLimited 递增因全局摄入令牌桶限流而被丢弃的事件数（N3-04 限流）。
+func (m *MetricsCollector) IncrWSBroadcastRateLimited() {
+	m.mu.Lock()
+	m.wsBroadcastRateLimited++
+	m.mu.Unlock()
+}
+
+// IncrWSClientSendDrops 递增因单客户端 Send 缓冲满（慢客户端）而被丢弃的事件数（N3-04 背压）。
+func (m *MetricsCollector) IncrWSClientSendDrops() {
+	m.mu.Lock()
+	m.wsClientSendDrops++
+	m.mu.Unlock()
+}
+
 // SeedTaskCounts 设置 counter 初值（用于启动时从 DB 回填，P7）。
 func (m *MetricsCollector) SeedTaskCounts(started, completed, failed uint64) {
 	m.mu.Lock()
@@ -897,6 +922,9 @@ type metricSnapshot struct {
 	toolLatByAgent  map[string]labeledHistSnapshot
 	eventsTotal     uint64
 	malformedEvents uint64
+	wsBroadcastDrops       uint64
+	wsBroadcastRateLimited uint64
+	wsClientSendDrops      uint64
 }
 
 // PrometheusText 以 Prometheus exposition 格式返回当前 metric。
@@ -921,6 +949,9 @@ func (m *MetricsCollector) PrometheusText() string {
 		toolLatByAgent:  copyLabeledHists(m.toolLatByAgent),
 		eventsTotal:     m.eventsTotal,
 		malformedEvents: m.malformedEvents,
+		wsBroadcastDrops:       m.wsBroadcastDrops,
+		wsBroadcastRateLimited: m.wsBroadcastRateLimited,
+		wsClientSendDrops:      m.wsClientSendDrops,
 	}
 	llmHistBuckets, llmHistCounts, llmHistTotal, llmHistSum := m.llmLatencyHist.snapshot()
 	toolHistBuckets, toolHistCounts, toolHistTotal, toolHistSum := m.toolLatencyHist.snapshot()
@@ -974,9 +1005,21 @@ events_total %d %d
 # HELP malformed_events_total Total number of events that failed integrity validation.
 # TYPE malformed_events_total counter
 malformed_events_total %d %d
+# HELP ws_broadcast_drops_total Total events dropped because the WS broadcast ingest buffer was full (backpressure).
+# TYPE ws_broadcast_drops_total counter
+ws_broadcast_drops_total %d %d
+# HELP ws_broadcast_rate_limited_total Total events dropped because the global WS ingest rate limit was exceeded.
+# TYPE ws_broadcast_rate_limited_total counter
+ws_broadcast_rate_limited_total %d %d
+# HELP ws_client_send_drops_total Total events dropped to a single client because its send buffer was full (slow client).
+# TYPE ws_client_send_drops_total counter
+ws_client_send_drops_total %d %d
 `,
 		snap.eventsTotal, ts,
 		snap.malformedEvents, ts,
+		snap.wsBroadcastDrops, ts,
+		snap.wsBroadcastRateLimited, ts,
+		snap.wsClientSendDrops, ts,
 	)
 	out += formatHistogram("llm_latency_ms", "LLM call latency in milliseconds.",
 		llmHistBuckets, llmHistCounts, llmHistTotal, llmHistSum)

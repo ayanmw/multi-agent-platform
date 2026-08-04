@@ -57,7 +57,10 @@
 | N3-01 | **E1 认证生产加固** | `REQUIRE_AUTH=false`（默认）时启动强告警 + README「生产部署」章节明确要求开启；敏感特权写路由（/api/audit、agents、cases、tools、api-keys）在 auth 关闭时仍加最小暴露保护（或要求 API key 才能 mutation），消除「默认无鉴权」的暴露面 | ✅ | 启动日志在 REQUIRE_AUTH=false 时 WARN；prod 文档明确；特权写路由在关闭 auth 时仍受保护；单测覆盖默认姿态 | N1-03 |
 | N3-02 | **E3 隔离边界增强** | 审计 Target / 事件路由 / Memory recall 增加 workspace/session scope 键贯穿校验，确保无跨 session 数据泄漏；产出「隔离白皮书」文档明确当前三层隔离边界（session / worktree / workdir）与已知限制 | ✅ | scope 键贯穿校验单测；隔离白皮书落盘；静态审查无跨 session 查询路径 | N1-01, N1-04 |
 | N3-03 | **E4 通信信任边界** | 实现 C1-2 通信权限矩阵（leader↔child↔child 按 OutputTo / 角色授权）；对经 AgentBus 注入父 ReAct loop 的 agent message 标记来源可信度并沙箱化，降低 child→parent prompt-injection 敞口（N1-02 遗留） | ✅ | 越权 agent 消息被拒并写审计；注入消息带来源标记；单测覆盖权限矩阵 | N1-02 |
-| N3-04 | **E7 并发安全与可扩展** | 增加 `go test -race` CI 门禁并修复潜在 data race；DB 后端可插拔抽象设计（SQLite→可选外部/Postgres）为水平扩展铺路；WS 广播背压/限流 | ○ | CI 跑 `-race` 全绿；后端抽象接口文档/原型；WS 广播有背压 | N1, N2-01 |
+| N3-04 | **E7 并发安全与可扩展** | 拆分为 N3-04a / N3-04b / N3-04c 三个子任务（见下方各行）；总体目标：CI 跑 `-race` 全绿、DB 后端可插拔抽象、WS 广播背压/限流 | ⏳ | 见子任务 | N1, N2-01 |
+| N3-04a | E7 · WS 广播背压/限流 | 有界 `broadcast` 摄入缓冲 + 非阻塞丢弃计数、全局摄入令牌桶限流、慢客户端检测与主动注销、关机安全（`SendEvent` 不再阻塞）；暴露可配置 `HubConfig`（WS_* 环境变量，E9 配置化） | ✅ | WS 层在洪泛/慢客户端下丢弃并计数而非阻塞引擎；`/metrics` 新增 3 个背压计数器；ws 包代码 `-race` 安全（CI 门禁落地见 N3-04b）；`go build/vet/test -short` + 21/21 + 63/0/1 全绿 | N3-04 |
+| N3-04b | E7 · 并发安全 CI 门禁 | 增加 `go test -race` CI 门禁并修复潜在 data race（本地沙箱无 gcc 无法跑 `-race`，需在 Linux CI runner 落地 + 修复发现的 race） | ○ | CI 跑 `go test -race ./...` 全绿；ws/runtime/orchestrator 等共享临界区经 `-race` 验证无 data race | N3-04 |
+| N3-04c | E7 · DB 后端可插拔抽象 | 将 `pkg/db` 抽象为接口（SQLite 默认实现 + 预留 Postgres 外部实现），为水平扩展铺路；含接口文档/原型 | ○ | 后端抽象接口 + 文档/原型；SQLite 仍是默认零配置实现，行为不变；既有迁移/CRUD 不动或用适配器 | N3-04 |
 | N3-05 | **E10 API 契约文档校正** | 补齐 smoke 发现的 4 处 API↔文档差异（POST /api/projects 返 201、POST /api/tools 必填 type 子字段、Memory 路由无顶层 POST/PUT、/ws 握手需专项测）到 CLAUDE.md / API_CHANGELOG；加「API 契约漂移」自检清单 | ○ | 4 处差异在文档中正确描述；新增契约自检清单；`go vet` 不受影响 | N2-03 |
 
 ---

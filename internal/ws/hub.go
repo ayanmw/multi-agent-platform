@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,119 @@ import (
 
 // log 是 observability.DefaultLogger 的包级别别名，便于结构化日志埋点调用。
 var log = observability.DefaultLogger
+
+// ===========================================================================
+// N3-04 (E7 并发安全与可扩展)：WS 广播背压与限流配置
+// ===========================================================================
+//
+// 设计目标：WS 广播层在过载（事件洪泛 / 慢客户端）下必须优雅降级——
+// 丢弃并计数，而非阻塞引擎关键路径或 OOM；同时保护广播循环不被单个
+// 病态慢客户端无限拖累。所有阈值经 HubConfig 注入，避免硬编码魔法值（E9）。
+
+// HubConfig 持有 WS Hub 的背压与限流参数（N3-04）。
+// 每个字段都有安全默认值；NewHub 使用默认配置，NewHubWithConfig 用于从
+// 环境变量 / 调用方注入生产调优值。
+type HubConfig struct {
+	// BroadcastBufferSize 是 hub.broadcast 入站通道的缓冲容量。
+	// 作为全局摄入背压缓冲：生产者（SendEvent）在缓冲满时非阻塞丢弃并计数，
+	// 而非无限阻塞 Run 消费 goroutine，避免引擎在 WS 拥塞时饿死。
+	BroadcastBufferSize int
+	// ClientSendBuffer 是每个 client.Send 通道的缓冲容量。
+	// 吸收单个客户端的网络抖动，满后触发慢客户端丢弃 + 计数。
+	ClientSendBuffer int
+	// RateLimitPerSec 是全局摄入令牌桶的 refill 速率（事件/秒）。
+	// 超过即限流丢弃 + 计数（ws_broadcast_rate_limited_total），防止单一生产者洪泛。
+	RateLimitPerSec float64
+	// RateLimitBurst 是全局摄入令牌桶的突发容量（允许瞬时峰值）。
+	RateLimitBurst float64
+	// SlowClientDropThreshold 是单个 client 连续投递失败（Send 缓冲满）达到该次数后
+	// 被判定为慢客户端并主动注销，回收其资源、保护广播循环。
+	SlowClientDropThreshold int
+}
+
+// DefaultHubConfig 返回生产安全的默认背压/限流参数。
+// 默认值刻意宽松：正常负载远低于阈值，不会误伤；仅在真实洪泛/慢客户端时介入。
+func DefaultHubConfig() HubConfig {
+	return HubConfig{
+		BroadcastBufferSize:     8192,
+		ClientSendBuffer:        256,
+		RateLimitPerSec:         10000,
+		RateLimitBurst:          20000,
+		SlowClientDropThreshold: 256,
+	}
+}
+
+// HubConfigFromEnv 从环境变量读取背压/限流调优值，缺失或非法时回退默认值。
+// 这样生产部署可在不重编译的情况下调整 WS 层容量（E9 配置化）。
+func HubConfigFromEnv() HubConfig {
+	c := DefaultHubConfig()
+	if v := os.Getenv("WS_BROADCAST_BUFFER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.BroadcastBufferSize = n
+		}
+	}
+	if v := os.Getenv("WS_CLIENT_SEND_BUFFER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.ClientSendBuffer = n
+		}
+	}
+	if v := os.Getenv("WS_RATE_LIMIT_PER_SEC"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			c.RateLimitPerSec = f
+		}
+	}
+	if v := os.Getenv("WS_RATE_LIMIT_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			c.RateLimitBurst = f
+		}
+	}
+	if v := os.Getenv("WS_SLOW_CLIENT_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.SlowClientDropThreshold = n
+		}
+	}
+	return c
+}
+
+// tokenBucket 是一个基于互斥锁保护的简单令牌桶限流器（N3-04 摄入限流）。
+// 与 golang.org/x/time/rate 不同，这里仅需极简语义（allow / 非阻塞），自实现
+// 避免引入额外依赖；allow 不等待，调用方据此决定是否丢弃事件。
+type tokenBucket struct {
+	mu       sync.Mutex
+	tokens   float64
+	capacity float64
+	rate     float64 // 令牌 refill 速率（个/秒）
+	last     time.Time
+}
+
+// newTokenBucket 构造一个容量为 burst、refill 速率为 rate 个/秒的令牌桶。
+func newTokenBucket(rate, burst float64) *tokenBucket {
+	return &tokenBucket{
+		tokens:   burst,
+		capacity: burst,
+		rate:     rate,
+		last:     time.Now(),
+	}
+}
+
+// allow 尝试消费一个令牌；成功返回 true，令牌不足返回 false（调用方应丢弃）。
+// 基于经过的时间补充令牌，上限为容量；线程安全（互斥锁保护）。
+func (b *tokenBucket) allow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	elapsed := now.Sub(b.last).Seconds()
+	b.last = now
+	b.tokens += elapsed * b.rate
+	if b.tokens > b.capacity {
+		b.tokens = b.capacity
+	}
+	if b.tokens >= 1 {
+		b.tokens--
+		return true
+	}
+	return false
+}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -38,6 +153,10 @@ type Client struct {
 	// 非空时仅投递 session_id 命中该集的事件，实现服务端会话级事件隔离，
 	// 杜绝任意 WS 连接收到其它 session 的实时事件（跨 session 数据泄漏）。
 	sessionIDs []string
+	// dropCount 是慢客户端连续投递失败（client.Send 缓冲满）的累计计数，
+	// 仅在 Hub.Run 广播循环内、持有 h.mu 时访问（单 goroutine 写），用于判断是否
+	// 达到 SlowClientDropThreshold 触发主动注销。成功投递时由 resetDropCount 清零。
+	dropCount int
 }
 
 // ClientControlMsg 表示从客户端发来的 control message
@@ -187,17 +306,46 @@ type Hub struct {
 	done chan struct{}
 	// runLoopDone 在 Run 退出时关闭；Shutdown 用它等待 Run 结束。
 	runLoopDone chan struct{}
+	// cfg 是背压/限流配置（N3-04），由 NewHubWithConfig 注入。
+	cfg HubConfig
+	// limiter 是全局摄入令牌桶（N3-04），用于 WS 广播摄入限流。
+	limiter *tokenBucket
 }
 
+// NewHub 返回一个使用默认背压/限流配置的 Hub（N3-04）。
+// 默认配置宽松，正常负载不会触发丢弃；仅在真实洪泛/慢客户端时介入。
 func NewHub() *Hub {
+	return NewHubWithConfig(DefaultHubConfig())
+}
+
+// NewHubWithConfig 返回使用指定背压/限流配置的 Hub（N3-04）。
+// 零值或非法字段回退为 DefaultHubConfig 的安全默认值。
+func NewHubWithConfig(cfg HubConfig) *Hub {
+	if cfg.BroadcastBufferSize <= 0 {
+		cfg.BroadcastBufferSize = 8192
+	}
+	if cfg.ClientSendBuffer <= 0 {
+		cfg.ClientSendBuffer = 256
+	}
+	if cfg.RateLimitPerSec <= 0 {
+		cfg.RateLimitPerSec = 10000
+	}
+	if cfg.RateLimitBurst <= 0 {
+		cfg.RateLimitBurst = 20000
+	}
+	if cfg.SlowClientDropThreshold <= 0 {
+		cfg.SlowClientDropThreshold = 256
+	}
 	return &Hub{
 		clients:       make(map[*Client]bool),
-		register:      make(chan *Client),
-		unregister:    make(chan *Client),
-		broadcast:     make(chan event.Event),
+		register:      make(chan *Client, 64),
+		unregister:    make(chan *Client, 64),
+		broadcast:     make(chan event.Event, cfg.BroadcastBufferSize),
 		eventBuf:      newEventBuffer(defaultEventBufferSize),
 		done:          make(chan struct{}),
 		runLoopDone:   make(chan struct{}),
+		cfg:           cfg,
+		limiter:       newTokenBucket(cfg.RateLimitPerSec, cfg.RateLimitBurst),
 	}
 }
 
@@ -253,9 +401,16 @@ func (h *Hub) Run() {
 				if !client.clientAcceptsEvent(evt) {
 					continue
 				}
+				// N3-04 (E7) 背压 · 慢客户端：非阻塞投递，Send 缓冲满即丢弃并计数；
+				// 连续丢弃累计达阈值则判定为慢客户端，主动注销回收资源、保护广播循环。
 				select {
 				case client.Send <- evt:
+					client.resetDropCount()
 				default:
+					observability.DefaultMetrics.IncrWSClientSendDrops()
+					if client.incrDropCount() >= h.cfg.SlowClientDropThreshold {
+						client.evictSlow()
+					}
 				}
 			}
 			h.mu.RUnlock()
@@ -275,7 +430,26 @@ func (h *Hub) SendEvent(evt event.Event) {
 	}
 	// N2-01：按 agent / session / step 维度累加指标（单一漏斗，覆盖全部事件源）。
 	recordEventMetrics(evt)
-	h.broadcast <- evt
+
+	// N3-04 (E7) 背压 · 摄入限流：全局令牌桶防止单一生产者洪泛 WS 层。
+	// 超过速率即限流丢弃并计数（ws_broadcast_rate_limited_total），而非阻塞引擎关键路径；
+	// 正常负载远低于阈值，不会误伤。
+	if !h.limiter.allow() {
+		observability.DefaultMetrics.IncrWSBroadcastRateLimited()
+		log.Warnf("ws", "broadcast rate limit exceeded, dropping event type=%s event_id=%s", evt.Type, evt.EventID)
+		return
+	}
+
+	// N3-04 (E7) 背压 · 摄入缓冲：broadcast 入站通道有界；缓冲满时非阻塞丢弃 + 计数
+	// （ws_broadcast_drops_total），避免 SendEvent 调用方（引擎/编排等 goroutine）在
+	// WS 拥塞时无限阻塞或 OOM。即便 Hub 已 Shutdown（Run 退出、无人消费），本分支也
+	// 仅会填满缓冲后丢弃，SendEvent 绝不阻塞——这是相较于「无缓冲阻塞」的关机安全性改进。
+	select {
+	case h.broadcast <- evt:
+	default:
+		observability.DefaultMetrics.IncrWSBroadcastDrops()
+		log.Warnf("ws", "broadcast buffer full, dropping event type=%s event_id=%s", evt.Type, evt.EventID)
+	}
 }
 
 // recordEventMetrics 从事件中抽取 agent / session / step 维度并累加到指标收集器。
@@ -329,7 +503,7 @@ func (h *Hub) RegisterTestClient(id string) *Client {
 	c := &Client{
 		ID:   id,
 		Hub:  h,
-		Send: make(chan event.Event, 256),
+		Send: make(chan event.Event, h.cfg.ClientSendBuffer),
 	}
 	h.register <- c
 	return c
@@ -342,7 +516,7 @@ func (h *Hub) RegisterTestClientWithSessions(id string, sessions []string) *Clie
 	c := &Client{
 		ID:         id,
 		Hub:        h,
-		Send:       make(chan event.Event, 256),
+		Send:       make(chan event.Event, h.cfg.ClientSendBuffer),
 		sessionIDs: sessions,
 	}
 	h.register <- c
@@ -352,6 +526,32 @@ func (h *Hub) RegisterTestClientWithSessions(id string, sessions []string) *Clie
 // UnregisterTestClient 注销一个测试 client。仅用于测试。
 func (h *Hub) UnregisterTestClient(c *Client) {
 	h.unregister <- c
+}
+
+// clientCount 返回当前已注册客户端数量（仅测试断言用，受 h.mu 保护）。
+func (h *Hub) clientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
+// incrDropCount 累加该 client 的连续投递失败计数并返回新值（仅广播循环内调用）。
+func (c *Client) incrDropCount() int {
+	c.dropCount++
+	return c.dropCount
+}
+
+// resetDropCount 在成功投递后清零连续失败计数（仅广播循环内调用）。
+func (c *Client) resetDropCount() {
+	c.dropCount = 0
+}
+
+// evictSlow 标记该 client 为慢客户端并请求 Hub 注销回收资源。
+// unregister 通道已缓冲，此处发送绝不阻塞广播循环（避免控制通道死锁）。
+func (c *Client) evictSlow() {
+	log.Warnf("ws", "slow client evicted after sustained send drops client=%s drops=%d", c.ID, c.dropCount)
+	c.Hub.unregister <- c
+	c.dropCount = 0
 }
 
 func ServeWS(hub *Hub) http.HandlerFunc {
@@ -368,7 +568,7 @@ func ServeWS(hub *Hub) http.HandlerFunc {
 		client := &Client{
 			ID:         generateID(),
 			Hub:        hub,
-			Send:       make(chan event.Event, 256),
+			Send:       make(chan event.Event, hub.cfg.ClientSendBuffer),
 			Conn:       conn,
 			sessionIDs: parseSessionFilter(r.URL.Query().Get("session_id")),
 		}

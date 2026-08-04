@@ -302,8 +302,8 @@ func main() {
 	// 两个 sink 级别独立，全部由 LOG_* 环境变量驱动（见 logging.go）。
 	appLogger := initLogging()
 
-	// 初始化 WebSocket Hub
-	hub := ws.NewHub()
+	// 初始化 WebSocket Hub（N3-04：背压/限流参数由 WS_* 环境变量注入，缺失则用安全默认值）
+	hub := ws.NewHubWithConfig(ws.HubConfigFromEnv())
 	hubInstance = hub
 	go hub.Run()
 	// 初始化全局关闭管理器。

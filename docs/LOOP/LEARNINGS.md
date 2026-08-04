@@ -76,6 +76,12 @@ curl http://localhost:8080/healthz
   - **注入消息沙箱化**：监听 goroutine 注入格式为 `[Agent X]:\n<<<AGENT_MSG_BEGIN source=agent_bus trust=<level> from=<from>>>\n{content}\n<<<AGENT_MSG_END>>>`，显式数据边界 + `trust`(self/controlled/untrusted) 标记，降低 child→parent prompt-injection；`engine_test.go:TestAgentBusMessageCreatesInputStep` 的注入断言需与该格式同步（接收方为 leader → trust=controlled）。
   - **audit sink 模式**：runtime 包用最小 `AgentBusAuditSink` 接口 + `SetAgentBusAuditSink`（同 shell_policy 的 cycle-free 适配），cmd/server 注入 `agentBusAuditAdapter` 适配 `observability.DefaultAuditor`，避免 runtime→observability→pkg/db→cron→tool→observability 循环引用。
 - **smoke 记录的 4 处 API↔文档差异（N2-03 未覆盖，留后续 API 文档校正）**：① `POST /api/projects` 返 201 而非 200；② `POST /api/tools` 必填 `type`(shell/http/inline) 及各 type 子字段(command/url/code)，文档 4.5 节未写；③ Memory 路由无顶层 `POST /api/memories`、无 `PUT /api/memories/{id}`，实际是 `/scope` 子路径 + `/promote` + `/recall`；④ `/ws` 握手需 wscat/Go 客户端专项测。N2-03 仅覆盖版本号 + 三子系统描述，未改动 API 契约文档（CLAUDE.md / API_CHANGELOG）。
+- ~~**N3-04a E7 WS 广播背压与限流**~~ **（已于轮次 18 落地）**：原 WS 广播无显式背压（E7 Partial 缺口；隔离白皮书已知限制）。**沉淀的硬规则**：
+  - **摄入背压双层**：`Hub.broadcast` 由无缓冲改为有界缓冲（默认 8192，`HubConfig.BroadcastBufferSize`）；`SendEvent` 改为「令牌桶限流（`RateLimitPerSec`/`RateLimitBurst`）+ 缓冲满非阻塞丢弃」，**绝不阻塞调用方**。即便 Hub 已 Shutdown（Run 退出），`SendEvent` 仅填满缓冲后丢弃——这是相较旧版「无缓冲 channel 阻塞」的关机安全性改进（原 `TestHubShutdown` 断言「关机后 SendEvent 应阻塞」已改为「必须立即返回」）。
+  - **慢客户端保护**：广播循环对 `client.Send` 非阻塞投递，缓冲满即丢弃 + `ws_client_send_drops_total`；单 client 连续丢弃累计达 `SlowClientDropThreshold`(默认 256) 则 `evictSlow()` 主动注销（`unregister` 通道已缓冲为 64，**绝不能**在广播循环内同步发往无缓冲 `unregister`，否则死锁）。`Client.dropCount` 仅广播循环单 goroutine 访问，无 data race。
+  - **可观测**：`/metrics` 新增 `ws_broadcast_drops_total` / `ws_broadcast_rate_limited_total` / `ws_client_send_drops_total` 三计数器（observability 包）。
+  - **配置化（E9）**：`HubConfig` 经 `HubConfigFromEnv()` 读 `WS_BROADCAST_BUFFER` / `WS_CLIENT_SEND_BUFFER` / `WS_RATE_LIMIT_PER_SEC` / `WS_RATE_LIMIT_BURST` / `WS_SLOW_CLIENT_THRESHOLD`，缺失回退 `DefaultHubConfig()`；`main.go` 用 `ws.NewHubWithConfig(ws.HubConfigFromEnv())`。令牌桶自实现（互斥锁），不引 `golang.org/x/time/rate`。
+  - **`-race` 本地不可跑**：WorkBuddy 沙箱无 gcc，cgo 不可用，`go test -race` 在此报错；ws 包代码按构造 race-safe，但 N3-04b 必须在**有 gcc 的 Linux CI runner** 落地 `go test -race ./...` 门禁并验证共享临界区（runtime/orchestrator 的 `messagesMu`、hub 的 `mu`）。
 
 ## ④ 企业级多 Agent 协作平台验收清单（Phase R 打分用）
 

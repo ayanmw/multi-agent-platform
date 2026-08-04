@@ -411,14 +411,43 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 12:47 | 轮次 18 | N3-04a | ✅ E7 WS 广播背压与限流（N3-04 子任务 a）
+
+**目标**：消除 N3-02 隔离白皮书记录的「WS 广播无显式背压」已知限制（E7 Partial 缺口），让 WS 广播层在过载（事件洪泛 / 慢客户端）下优雅降级——丢弃并计数而非阻塞引擎关键路径或 OOM，并保护广播循环不被单个病态慢客户端无限拖累。
+
+**改动**（严守「白盒注释即规则」+ E9 配置化，不引入新依赖）：
+- `internal/ws/hub.go`：
+  - 新增 `HubConfig`（BroadcastBufferSize / ClientSendBuffer / RateLimitPerSec / RateLimitBurst / SlowClientDropThreshold）+ `DefaultHubConfig()`（宽松安全默认值）+ `HubConfigFromEnv()`（WS_* 环境变量注入，缺失回退默认）；新增 `NewHubWithConfig(cfg)`，原 `NewHub()` 改为委托默认配置（零 blast radius，~10 个调用点含测试不变）。
+  - `Hub.broadcast` 由**无缓冲**改为**有界缓冲**（默认 8192）；`register`/`unregister` 改为带缓冲（64），避免从广播循环内发 `unregister` 触发控制通道死锁。
+  - `SendEvent` 新增两层背压：**摄入限流**（全局令牌桶 `tokenBucket`，超过速率即丢弃 + `ws_broadcast_rate_limited_total`）+ **摄入缓冲丢弃**（缓冲满非阻塞丢弃 + `ws_broadcast_drops_total`）。二者均不阻塞调用方；即便 Hub 已 Shutdown（Run 退出），`SendEvent` 仅填满缓冲后丢弃、**绝不阻塞**——相较旧版无缓冲阻塞是关机安全性改进。
+  - 广播循环新增**慢客户端保护**：`client.Send` 非阻塞投递，缓冲满即丢弃并累加 `ws_client_send_drops_total`；单个 client 连续丢弃累计达 `SlowClientDropThreshold` 则 `evictSlow()` 主动注销回收资源（`unregister` 已缓冲，绝不阻塞广播循环）。`Client` 新增 `dropCount`（仅广播循环单 goroutine 访问，无 race）。
+  - `RegisterTestClient(WithSessions)` / `ServeWS` 的 `client.Send` 缓冲改由 `cfg.ClientSendBuffer` 驱动；新增 `Hub.clientCount()` 供测试断言。令牌桶自实现（互斥锁保护），不引入 `golang.org/x/time/rate`。
+- `cmd/server/main.go`：`hub := ws.NewHub()` → `ws.NewHubWithConfig(ws.HubConfigFromEnv())`（生产可经 WS_* 调优，缺失即默认）。
+- `internal/observability/obs.go`：新增 `ws_broadcast_drops_total` / `ws_broadcast_rate_limited_total` / `ws_client_send_drops_total` 三个计数器（mutex 保护）+ `IncrWS*` 方法 + `PrometheusText` 输出，使 WS 背压可观测。
+- `internal/ws/hub_test.go`：更新 `TestHubShutdown` 的关机后断言——由「SendEvent 应阻塞」改为「SendEvent 必须立即返回（关机安全）」，与新的非阻塞背压语义一致。
+- `internal/ws/hub_backpressure_test.go`（**新建**）：`TestWSBroadcastBufferBackpressure`（缓冲满→丢弃计数且不阻塞）、`TestWSRateLimitDrops`（令牌桶限流丢弃）、`TestWSSlowClientEviction`（不消费缓冲的客户端被主动注销、clientCount 归零）、`TestHubConfigDefaults`（默认值边界）。
+
+**验证**：
+- `go build ./...` ✅ / `go vet` ✅（无告警）。
+- `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok，含 `internal/ws` 新测试）。
+- `go test -race ./internal/ws/...`：**本地沙箱无 gcc（cgo 不可用）无法跑 `-race`**；ws 包代码按构造 race-safe（dropCount 仅广播循环单 goroutine 访问、channel 所有权未变、互斥锁覆盖共享态）。`-race` CI 门禁落地归入 N3-04b（需 Linux CI runner）。
+- `bash scripts/cases-regression.sh` ✅ **21/21 (100%)**（仓库外只读副本 + `/tmp/`→`C:/Users/Joker/.workbuddy/loop-tmp/` 路径重写 + `.exe` 补丁；未改生产脚本）。
+- `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**。
+
+**说明**：N3-04 原为一个 ○ 大任务（限流/背压 + -race CI + DB 可插拔），超出「一轮一件事」粒度，本轮仅完成子任务 a（WS 背压/限流）。PLAN.md 已将其拆为 N3-04a✅ / N3-04b○（-race CI）/ N3-04c○（DB 抽象），下一轮实现 N3-04b。
+
+**下一步**：N3-04b（E7 并发安全：在 Linux CI 落地 `go test -race ./...` 门禁并修复发现的 data race；ws/runtime/orchestrator 等共享临界区经 `-race` 验证）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        17
-phase:             N3 (企业级纵深加固) — N3-03 完成
+loop_round:        18
+phase:             N3 (企业级纵深加固) — N3-04a 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-04 (E7 并发安全与可扩展)
+next_milestone:    N3-04b (E7 并发安全 — go test -race CI 门禁与 data race 修复)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
