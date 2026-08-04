@@ -209,12 +209,15 @@ echo "[setup] 服务就绪 ✓"
 # 必须在服务就绪后启动：orchestrator 的 decompose_done / agent_dispatched /
 # agent_completed 事件只经 hub.SendEvent 做 WS 广播，不写 task steps，因此
 # HTTP fallback 拿不到，只能靠 WS 订阅捕获。脚本带重连，避免单次握手失败。
+# 注意：本 harness 必须「全局订阅」(不带 ?session_id= 过滤) —— orchestrator 事件
+# 的 session_id 是真实 session UUID，并非字面量 "cases-regression"；若带不匹配的
+# session 过滤会丢事件。会话级订阅的隔离语义由 internal/ws 的单元测试单独覆盖。
 : > "${WS_EVENTS}"
 node -e "
   const out = process.argv[1], base = process.argv[2], fs = require('fs');
   let fd, ws, connectedOnce = false;
   function connect() {
-    ws = new WebSocket(base + '/ws?session_id=cases-regression');
+    ws = new WebSocket(base + '/ws');
     ws.addEventListener('open',  () => {
       if (fd === undefined) fd = fs.openSync(out, 'a');
       fs.writeSync(fd, JSON.stringify({type:'__ws_open__'}) + '\n');

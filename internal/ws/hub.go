@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,11 @@ type Client struct {
 	Conn   *websocket.Conn
 	mu     sync.Mutex
 	closed bool
+	// sessionIDs 是该 client 订阅的 session 过滤集（E3 隔离增强，N3-02）。
+	// 为空表示「接收全部」—— 向后兼容旧前端全局连接（不过滤）；
+	// 非空时仅投递 session_id 命中该集的事件，实现服务端会话级事件隔离，
+	// 杜绝任意 WS 连接收到其它 session 的实时事件（跨 session 数据泄漏）。
+	sessionIDs []string
 }
 
 // ClientControlMsg 表示从客户端发来的 control message
@@ -242,6 +248,11 @@ func (h *Hub) Run() {
 			h.eventBuf.append(evt)
 			h.mu.RLock()
 			for client := range h.clients {
+				// E3 隔离增强（N3-02）：按 client 订阅的 session 集过滤，
+				// 未订阅者（legacy）接收全部，已订阅者仅收命中事件。
+				if !client.clientAcceptsEvent(evt) {
+					continue
+				}
 				select {
 				case client.Send <- evt:
 				default:
@@ -324,6 +335,20 @@ func (h *Hub) RegisterTestClient(id string) *Client {
 	return c
 }
 
+// RegisterTestClientWithSessions 注册一个带 session 订阅过滤的测试 client
+// （E3 隔离增强，N3-02）。sessions 非空时该 client 仅接收 session_id 命中
+// 的事件；为空时接收全部（legacy 行为）。仅用于测试。
+func (h *Hub) RegisterTestClientWithSessions(id string, sessions []string) *Client {
+	c := &Client{
+		ID:         id,
+		Hub:        h,
+		Send:       make(chan event.Event, 256),
+		sessionIDs: sessions,
+	}
+	h.register <- c
+	return c
+}
+
 // UnregisterTestClient 注销一个测试 client。仅用于测试。
 func (h *Hub) UnregisterTestClient(c *Client) {
 	h.unregister <- c
@@ -337,17 +362,73 @@ func ServeWS(hub *Hub) http.HandlerFunc {
 			return
 		}
 
+		// E3 隔离增强（N3-02）：从 ?session_id= 读取订阅集（逗号分隔）。
+		// 不传则 sessionIDs 为空 → 接收全部（legacy 行为，兼容旧前端全局连接）。
+		// 传参后该连接仅收到命中 session 的事件，实现服务端会话级事件隔离。
 		client := &Client{
-			ID:    generateID(),
-			Hub:   hub,
-			Send: make(chan event.Event, 256),
-			Conn: conn,
+			ID:         generateID(),
+			Hub:        hub,
+			Send:       make(chan event.Event, 256),
+			Conn:       conn,
+			sessionIDs: parseSessionFilter(r.URL.Query().Get("session_id")),
 		}
 
 		hub.register <- client
 		go client.writePump()
 		go client.readPump()
 	}
+}
+
+// parseSessionFilter 将逗号分隔的 session_id 查询参数解析为订阅集。
+// 空值或仅空白返回 nil（表示接收全部，legacy 行为）。
+func parseSessionFilter(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// eventSessionID 从事件 Data 中提取 session_id（用于服务端按会话过滤广播）。
+// 事件未携带 Data 或 session_id 时返回空串。
+func eventSessionID(evt event.Event) string {
+	if evt.Data == nil {
+		return ""
+	}
+	if sid, ok := evt.Data["session_id"].(string); ok {
+		return sid
+	}
+	return ""
+}
+
+// clientAcceptsEvent 判断 client 是否应接收该事件：
+//   - 未订阅任何 session（空 filter）→ 接收全部（legacy 行为）。
+//   - 已订阅 → 仅当事件携带非空 session_id 且命中订阅集时接收；
+//     无 session_id 的系统事件只投递给未订阅的 legacy client。
+func (c *Client) clientAcceptsEvent(evt event.Event) bool {
+	if len(c.sessionIDs) == 0 {
+		return true
+	}
+	sid := eventSessionID(evt)
+	if sid == "" {
+		return false
+	}
+	for _, s := range c.sessionIDs {
+		if s == sid {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) readPump() {
