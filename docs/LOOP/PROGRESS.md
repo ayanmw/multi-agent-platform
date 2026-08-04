@@ -371,14 +371,35 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-04 10:30 | 轮次 16 | N3-02 | ✅ E3 隔离边界增强（WS 会话订阅 + 审计/记忆 scope 校验 + 隔离白皮书）
+
+**目标**：消除真实 E3 缺口——WS Hub 此前把每个事件广播给每个连接客户端（前端 `web/v2` 用单一全局 `/ws` 连接、仅在客户端过滤），存在跨 session 暴露面；同时把审计 Target / 记忆 recall 的 workspace/session scope 键贯穿校验固化，并产出隔离白皮书明确三层隔离边界与已知限制。
+
+**改动**：
+- `internal/ws/hub.go`（**核心加固**）：`Client` 新增 `sessionIDs []string`（空 = 未订阅，接收全部，向后兼容 web/v2 全局连接）；广播主循环改为 `if !client.clientAcceptsEvent(evt) { continue }`；`ServeWS` 解析 `?session_id=`（逗号分隔多 session）经 `parseSessionFilter`；新增 `eventSessionID` / `clientAcceptsEvent`（未订阅→全收；已订阅→仅放行 `session_id` 命中集合且非空的事件）/ `RegisterTestClientWithSessions`。**opt-in 服务端会话订阅**，默认零行为变化。
+- `docs/ISOLATION_WHITEPAPER.md`（**新建，验收交付物**）：三层隔离（session / worktree / workdir）、审计 Target `<resource>/<id>` 与事件 `session_id` / 记忆 `scope+session_id` 的 scope-key 约定；§4 记录 N3-02 的 WS 会话订阅修复与向后兼容说明；§5 静态审查结论（无未加 scope 的跨 session 查询路径）；已知限制（审计表暂无 session 列、web UI 仍 client-side 过滤、广播无背压 → 后续 N3-04）。
+- **scope 贯穿校验单测（断言既有结构，未改生产逻辑）**：`internal/ws/hub_session_scope_test.go`（`TestHubBroadcastSessionScope`——订阅 sess-A 的客户端收到 sess-A 事件、收不到 sess-B / 无 session 事件；legacy 客户端全收）、`internal/observability/audit_scope_test.go`（`TestAuditTargetCarriesScopeKey`——审计 `Target` 遵循 `<resource>/<id>` 约定）、`internal/harness/recall_isolation_test.go`（`TestBuildWorkingMemorySessionIsolation`——`BuildWorkingMemory("default","sess-A",...)` 仅回 1 条 sess-A 记忆、永不泄漏 sess-B）。
+
+**验证期发现并修复的 2 个阻断项（否则无法全绿）**：
+1. **预存 flaky 测试 `TestMetricsDimensionCounterStable`**：首轮误判为「map 迭代非确定性」，实测根因是断言耦合了 `time.Now().UnixMilli()` 抓取时间戳——两次相邻 `PrometheusText()` 跨毫秒边界即不一致（`first != second`）。所有 map 迭代早已经 `sortedKeys` 排序，确与 map 无关。改为比较前用正则剥离行尾 13 位时间戳（`stripScrapeTimestamp`），只断言「指标值 + label 排序」的确定性（本就是该测试的真实语义），抓取时间戳属 Prometheus 正常语义不应冻结。`-count=20` 已稳定（此前必抖）。
+2. **N3-02 的 hub.go 会话过滤误伤回归 harness**：`scripts/cases-regression.sh` 以 `?session_id=cases-regression` 订阅 WS，但 orchestrator 的 `decompose_done/agent_dispatched/agent_completed` 事件携带的是**真实 session UUID**（非字面量 `cases-regression`，见 `pkg/event` 注释「TaskID 字段填 session_id」），被新过滤直接丢弃 → 7 个 multi-agent case 全部 `no_decompose_done`（14/21）。修正 harness 为**全局订阅**（其职责本就是捕获所有编排事件，且它在建任务前就一次性连接、无法预知各 session id）；会话级订阅隔离语义改由新建的 `hub_session_scope_test.go` 单元测试单独覆盖。修正后回归恢复 **21/21**。
+
+**验证矩阵（全部实测）**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -short -count=1 ./...` ✅ **0 FAIL** / `TestMetricsDimensionCounterStable -count=20` ✅ 20/20 / `bash scripts/cases-regression.sh` ✅ **21/21 (100%)** / `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**。N3-02 未改动 `internal/runtime/engine.go` 的 `Run()`，跨包并发临界区无回归。
+
+**Commit**：（本轮收尾，见末：fix 时间戳竞态 + feat(N3-02) 含 hub.go/白皮书/3 单测/回归 harness 修正 + docs(LOOP) 记账）
+
+**下一步**：N3-03（E4 通信信任边界：C1-2 通信权限矩阵 + AgentBus 注入消息来源标记/沙箱化，降低 child→parent prompt-injection 敞口）。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        15
-phase:             N3 (企业级纵深加固) — N3-01 完成
+loop_round:        16
+phase:             N3 (企业级纵深加固) — N3-02 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-02 (E3 隔离边界增强)
+next_milestone:    N3-03 (E4 通信信任边界)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
