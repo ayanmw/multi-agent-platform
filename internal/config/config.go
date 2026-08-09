@@ -22,6 +22,14 @@ type Config struct {
 	LLMModel      string
 	DBPath        string
 	ServerPort    string
+
+	// DBBackend 选择数据库后端实现（N3-04c / E7 可插拔抽象）。
+	// 取值为 pkg/db 中已注册的后端名："sqlite"（默认，零配置单文件）或
+	// "postgres"（横向扩展原型，需宿主程序注册 pgx 驱动 + 外部迁移工具）。
+	// DBPath 在 sqlite 下是文件路径，在其它后端下作为 DSN 使用。
+	DBBackend string // DB_BACKEND
+	// DBSkipBootstrap 跳过内建建表与迁移，适用于 schema 由外部迁移工具管理的部署。
+	DBSkipBootstrap bool // DB_SKIP_BOOTSTRAP
 	ProviderDefault string           // 多 model 路由的默认 provider 名称
 	Models        []ModelConfig     // 多 model 配置列表
 
@@ -225,6 +233,7 @@ func Load() (*Config, error) {
 		LLMEndpoint:  "https://api.deepseek.com/v1",
 		LLMModel:     "deepseek-v4-flash",
 		DBPath:       "data/app.db",
+		DBBackend:    "sqlite",
 		ServerPort:   "8080",
 		LLMUseMock:   true,
 		SandboxImage: "python:3.11-slim",
@@ -242,6 +251,13 @@ func Load() (*Config, error) {
 	}
 	if v := Getenv("DB_PATH"); v != "" {
 		cfg.DBPath = v
+	}
+	// N3-04c：后端选择与 schema 引导开关。名字大小写不敏感（pkg/db 侧同样归一）。
+	if v := Getenv("DB_BACKEND"); v != "" {
+		cfg.DBBackend = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v := Getenv("DB_SKIP_BOOTSTRAP"); v != "" {
+		cfg.DBSkipBootstrap = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := Getenv("SERVER_PORT"); v != "" {
 		cfg.ServerPort = v

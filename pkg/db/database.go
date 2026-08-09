@@ -3,59 +3,94 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	_ "modernc.org/sqlite"
 	"log/slog"
 )
 
+// DB 是全局共享的数据库句柄，所有 CRUD（persistence.go / memory.go / cron.go ...）
+// 都直接使用它。N3-04c 引入 Backend 抽象后，它的**赋值路径**收敛到
+// InitWithBackend 一处，但类型与使用方式保持不变（零 blast radius）。
 var DB *sql.DB
 
+// Init 使用默认后端（SQLite）初始化数据库。
+//
+// 保留原签名与原语义：dataPath 是 SQLite 数据文件路径（或 `:memory:`）。
+// 全仓 25+ 个调用点（含所有单测）无需改动。想选择其它后端时用 InitWithBackend。
 func Init(dataPath string) error {
-	// 确保父目录存在
-	dir := filepath.Dir(dataPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
-	}
-	var err error
-	DB, err = sql.Open("sqlite", dataPath)
+	return InitWithBackend(DefaultBackendName, dataPath)
+}
+
+// InitWithBackend 按指定后端名初始化数据库（N3-04c / E7）。
+//
+// 统一的初始化流水线，各后端只负责填充自己的差异：
+//
+//	NormalizeDSN → Open → Ping → Configure → Bootstrap(建表+迁移)
+//
+// 关于 Bootstrap 的容错：若后端声明不支持内建 schema 引导
+// （errors.Is(err, ErrSchemaBootstrapUnsupported)），这里**不静默跳过**——
+// 直接返回错误并附带修复指引。原因是「连上了但没有表」的半初始化状态会在
+// 首个请求处以难以定位的方式炸掉，远不如启动即失败清晰。
+// 外部迁移已就绪的部署可通过 InitWithBackendOptions 显式跳过。
+func InitWithBackend(backendName, dsn string) error {
+	return InitWithBackendOptions(backendName, dsn, InitOptions{})
+}
+
+// InitOptions 控制初始化流水线中的可选行为。
+type InitOptions struct {
+	// SkipBootstrap 跳过建表与迁移步骤。
+	// 适用于「schema 已由外部迁移工具（golang-migrate / atlas）管理」的部署，
+	// 也是非 SQLite 后端目前唯一可用的启动方式。
+	SkipBootstrap bool
+}
+
+// InitWithBackendOptions 是 InitWithBackend 的完整形式。
+func InitWithBackendOptions(backendName, dsn string, opts InitOptions) error {
+	backend, err := LookupBackend(backendName)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
 
-	if err := DB.Ping(); err != nil {
+	normalizedDSN, err := backend.NormalizeDSN(dsn)
+	if err != nil {
+		return err
+	}
+
+	sqlDB, err := backend.Open(normalizedDSN)
+	if err != nil {
+		return err
+	}
+
+	if err := sqlDB.Ping(); err != nil {
+		// Open 是惰性的，Ping 才真正建连；失败时必须关闭句柄，避免泄漏。
+		_ = sqlDB.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// modernc.org/sqlite推荐使用单一连接模型，避免并发写导致的BUSY/LOCKED错误。
-	// 设置MaxOpenConns(1)让所有数据库操作串行化，配合WAL和busy_timeout进一步提升并发容忍度。
-	DB.SetMaxOpenConns(1)
-
-	// 配置SQLite并发写行为：5秒busy_timeout + WAL日志
-	// 注意：foreign_keys 不在此处全局开启，因为历史代码（包括 tests 和 orchestrator）
-	// 在插入 task 前并不总是保证 session 已存在，开启 FK 会导致这些路径失败。
-	// 外键一致性由应用层保证；如需强制 FK，应在已知 session 存在的特定事务内开启。
-	pragmas := []string{
-		"PRAGMA busy_timeout = 5000",
-		"PRAGMA journal_mode = WAL",
+	if err := backend.Configure(sqlDB); err != nil {
+		_ = sqlDB.Close()
+		return err
 	}
-	for _, pragma := range pragmas {
-		if _, err := DB.Exec(pragma); err != nil {
-			return fmt.Errorf("failed to execute %s: %w", pragma, err)
+
+	// Bootstrap 之前先赋值全局句柄：既有的 createTables/RunMigrations 以及全部
+	// CRUD 都依赖 `DB`，这是当前架构的既定契约（sqliteBackend.Bootstrap 会断言一致性）。
+	DB = sqlDB
+	setActiveBackend(backend)
+
+	if !opts.SkipBootstrap {
+		if err := backend.Bootstrap(sqlDB); err != nil {
+			return err
 		}
 	}
 
-	if err := createTables(); err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
+	// 横向扩展能力如实告知：单写后端在多副本部署下会成为一致性隐患，
+	// 启动期就要让运维看见，而不是等到线上出现写冲突。
+	if !backend.Dialect().SupportsConcurrentWriters() {
+		slog.Debug("Database backend is single-writer; horizontal scaling requires a concurrent-writer backend",
+			"backend", backend.Name())
 	}
 
-	// 为已存在的数据库运行自动 schema migration
-	if err := RunMigrations(); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
-	}
-
-	slog.Info("Database initialized successfully")
+	slog.Info("Database initialized successfully",
+		"backend", backend.Name(),
+		"bootstrap", !opts.SkipBootstrap)
 	return nil
 }
 

@@ -432,10 +432,24 @@ func main() {
 
 	// 初始化数据库
 	var caseService *cases.Service
-	if err := db.Init(cfg.DBPath); err != nil {
-		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{"error": err.Error()})
+	// N3-04c：经 Backend 抽象初始化。DB_BACKEND 缺省为 "sqlite"，行为与既往完全一致；
+	// 选择其它后端时 DBPath 作为 DSN 使用，schema 引导可经 DB_SKIP_BOOTSTRAP 交给外部迁移工具。
+	if err := db.InitWithBackendOptions(cfg.DBBackend, cfg.DBPath, db.InitOptions{SkipBootstrap: cfg.DBSkipBootstrap}); err != nil {
+		observability.DefaultLogger.Warn("database", "db init failed, continuing without persistence", map[string]any{
+			"error":   err.Error(),
+			"backend": cfg.DBBackend,
+		})
 	} else {
-		observability.DefaultLogger.Info("database", "initialized", map[string]any{"path": cfg.DBPath})
+		observability.DefaultLogger.Info("database", "initialized", map[string]any{
+			"path":    cfg.DBPath,
+			"backend": cfg.DBBackend,
+		})
+		// 单写后端（SQLite）在多副本部署下会成为一致性隐患，启动期如实告警（E7）。
+		if d := db.ActiveDialect(); d != nil && !d.SupportsConcurrentWriters() {
+			observability.DefaultLogger.Warn("database", "backend is single-writer: horizontal scaling (multi-replica) is NOT supported; switch DB_BACKEND to a concurrent-writer backend before scaling out", map[string]any{
+				"backend": d.Name(),
+			})
+		}
 		// Phase 7-C: DB 就绪后，把默认 auditor 切换为 SQLite 持久化实现。
 		// Phase 8-1: 内存镜像缓冲上限由 AUDIT_BUFFER_LIMIT 控制。
 		observability.DefaultAuditor = observability.NewSQLiteAuditor(
