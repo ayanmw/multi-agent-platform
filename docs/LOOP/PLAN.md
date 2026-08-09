@@ -3,6 +3,7 @@
 > 状态：○ 待做 | ⏳ 进行中 | ✅ 已完成 | ❌ 阻塞
 > 自动化每轮读取本文件，选第一个 ○ 任务实现 → 验证 → commit → 标记 ✅ → STOP。
 > **评审-重规划（Phase R）**：当本文件无任何 ○ 任务时，每轮执行一次全项目评审 + 企业级验收 + 重新规划，追加新一轮里程碑（见文末）。
+> **终止安全闸门（Stop Gate）**：当确认无事可做（Phase R 复评无新缺口）准备终止自动化时，必须先经 **review + mock 测试（cases-regression 21/21）** 全部通过，否则必须把未达标项转成 PLAN 新 ○ 任务（更新计划）并继续下一轮（见文末「终止安全闸门」小节）。
 > **里程碑门槛**：N0（缺陷）全部 ✅ 后，才允许开始 N1；N1 全部 ✅ 后，才允许开始 N2。
 
 本项目 = `github.com/ayanmw/multi-agent-platform`，Go 1.25 后端 + Vue3/Vite/TS 前端，白盒可观测哲学。
@@ -57,10 +58,10 @@
 | N3-01 | **E1 认证生产加固** | `REQUIRE_AUTH=false`（默认）时启动强告警 + README「生产部署」章节明确要求开启；敏感特权写路由（/api/audit、agents、cases、tools、api-keys）在 auth 关闭时仍加最小暴露保护（或要求 API key 才能 mutation），消除「默认无鉴权」的暴露面 | ✅ | 启动日志在 REQUIRE_AUTH=false 时 WARN；prod 文档明确；特权写路由在关闭 auth 时仍受保护；单测覆盖默认姿态 | N1-03 |
 | N3-02 | **E3 隔离边界增强** | 审计 Target / 事件路由 / Memory recall 增加 workspace/session scope 键贯穿校验，确保无跨 session 数据泄漏；产出「隔离白皮书」文档明确当前三层隔离边界（session / worktree / workdir）与已知限制 | ✅ | scope 键贯穿校验单测；隔离白皮书落盘；静态审查无跨 session 查询路径 | N1-01, N1-04 |
 | N3-03 | **E4 通信信任边界** | 实现 C1-2 通信权限矩阵（leader↔child↔child 按 OutputTo / 角色授权）；对经 AgentBus 注入父 ReAct loop 的 agent message 标记来源可信度并沙箱化，降低 child→parent prompt-injection 敞口（N1-02 遗留） | ✅ | 越权 agent 消息被拒并写审计；注入消息带来源标记；单测覆盖权限矩阵 | N1-02 |
-| N3-04 | **E7 并发安全与可扩展** | 拆分为 N3-04a / N3-04b / N3-04c 三个子任务（见下方各行）；总体目标：CI 跑 `-race` 全绿、DB 后端可插拔抽象、WS 广播背压/限流 | ⏳ | 见子任务 | N1, N2-01 |
+| N3-04 | **E7 并发安全与可扩展** | 拆分为 N3-04a / N3-04b / N3-04c 三个子任务（见下方各行）；总体目标：CI 跑 `-race` 全绿、DB 后端可插拔抽象、WS 广播背压/限流 | ✅ | 三个子任务均完成（CI `-race` 门禁 / WS 背压限流 / DB 后端可插拔抽象 + Postgres 原型）；E7 横向扩展路径清晰（单写后端启动期告警 + 并发写后端方言就绪） | N1, N2-01 |
 | N3-04a | E7 · WS 广播背压/限流 | 有界 `broadcast` 摄入缓冲 + 非阻塞丢弃计数、全局摄入令牌桶限流、慢客户端检测与主动注销、关机安全（`SendEvent` 不再阻塞）；暴露可配置 `HubConfig`（WS_* 环境变量，E9 配置化） | ✅ | WS 层在洪泛/慢客户端下丢弃并计数而非阻塞引擎；`/metrics` 新增 3 个背压计数器；ws 包代码 `-race` 安全（CI 门禁落地见 N3-04b）；`go build/vet/test -short` + 21/21 + 63/0/1 全绿 | N3-04 |
 | N3-04b | E7 · 并发安全 CI 门禁 | 增加 `go test -race` CI 门禁并修复潜在 data race（本地沙箱无 gcc 无法跑 `-race`，需在 Linux CI runner 落地 + 修复发现的 race） | ✅ | CI 跑 `go test -race ./...` 全绿；ws/runtime/orchestrator 等共享临界区经 `-race` 验证无 data race | N3-04 |
-| N3-04c | E7 · DB 后端可插拔抽象 | 将 `pkg/db` 抽象为接口（SQLite 默认实现 + 预留 Postgres 外部实现），为水平扩展铺路；含接口文档/原型 | ○ | 后端抽象接口 + 文档/原型；SQLite 仍是默认零配置实现，行为不变；既有迁移/CRUD 不动或用适配器 | N3-04 |
+| N3-04c | E7 · DB 后端可插拔抽象 | 将 `pkg/db` 抽象为接口（SQLite 默认实现 + 预留 Postgres 外部实现），为水平扩展铺路；含接口文档/原型 | ✅ | 后端抽象接口（Backend/Dialect + 注册表 + Rebind）落地，SQLite 仍是默认零配置实现且行为不变；Postgres 原型（方言完整、诚实声明驱动/迁移缺口）；既有迁移/CRUD 不动；接口文档见 docs/DB_BACKEND_ABSTRACTION.md | N3-04 |
 | N3-05 | **E10 API 契约文档校正** | 补齐 smoke 发现的 4 处 API↔文档差异（POST /api/projects 返 201、POST /api/tools 必填 type 子字段、Memory 路由无顶层 POST/PUT、/ws 握手需专项测）到 CLAUDE.md / API_CHANGELOG；加「API 契约漂移」自检清单 | ○ | 4 处差异在文档中正确描述；新增契约自检清单；`go vet` 不受影响 | N2-03 |
 
 ---
@@ -81,9 +82,20 @@
 
 1. **全量验证**：`go build/vet/test ./...` + `bash scripts/cases-regression.sh`（21/21）+ `bash scripts/smoke-test.sh` + 前端 build。
 2. **企业级评审**：按 LEARNINGS.md「企业级多 Agent 协作平台验收清单」10 维度逐项打分 Pass/Partial/Fail，输出评审报告。
-3. **质量门判定**：
-   - 全部 10 维度 = Pass **且** mock 回归 21/21 **且** go 全绿 **且** 评审结论 = 「完美」→ 在 PROGRESS.md `[LOOP STATE]` 设 `DONE=true`，输出验收结论，LOOP 永久终止。
-   - 否则 → 基于评审缺口生成**新一轮里程碑**（如 N3 弹性/多租户/国际化/性能），追加为新 section（任务标 ○），记录本轮评审要点到 LEARNINGS；下一轮 LOOP 继续实现。
+3. **质量门判定与终止**：
+   - Phase R 复评**发现新缺口** → 基于缺口生成**新一轮里程碑**（如 N4 弹性/多租户/国际化/性能），追加为新 section（任务标 ○），记录本轮评审要点到 LEARNINGS；下一轮 LOOP 继续实现。
+   - Phase R 复评**无新缺口**（考虑终止）→ 进入 **【终止安全闸门】**（见下方），由闸门决定终止或继续；本步骤禁止直接设 `DONE=true`。
 4. STOP。
+
+### 终止安全闸门（Stop Gate）
+
+这是「确认无事可做 → 终止自动化」的**唯一合法前置校验**。在 PROGRESS.md `[LOOP STATE]` 设 `DONE=true` 之前，必须**顺序且全部**满足：
+
+1. **Review 通过**：本轮全项目复审 + 企业级 10 维度复评 = 全部 Pass 且结论「完美」。
+2. **Mock 测试通过**：`bash scripts/cases-regression.sh` = **21/21** 且 `go test -short ./...` = **0 FAIL** 且 `go vet ./...` 无告警。
+
+- 若以上**任一不满足** → **禁止终止**：把未达标项（评审缺口 / 失败的回归或单测）转化为 PLAN.md 的新 ○ 任务（更新 LOOP 计划），本轮**不**设 `DONE`，下一轮 LOOP 继续实现该任务。
+- 仅当**全部满足** → 设 `DONE=true`、`quality_gate_pass=true`、`last_review=<时间>`，输出验收结论，LOOP 永久终止。
+- 设计意图：即便 Phase R 认为「完美」，只要 mock 测试没过，就必须回头补计划并重跑，绝不允许带红终止。
 
 > 设计哲学（loop engineering）：每一轮闭环都让项目更逼近「企业级多 Agent 协作平台」标准；重规划由评审发现驱动，而非固定路线图。

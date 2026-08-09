@@ -462,14 +462,26 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 ---
 
+### 2026-08-09 21:30 | 轮次 20 | N3-04c | ✅ E7 DB 后端可插拔抽象（Backend/Dialect 接口 + SQLite 默认 + Postgres 原型）
+
+**改动**：`pkg/db` 抽象为两个正交接口——`Backend`（连接生命周期：NormalizeDSN/Open/Configure/Bootstrap/Dialect）与 `Dialect`（SQL 方言：Placeholder/QuoteIdentifier/ColumnType/NowExpr/SupportsConcurrentWriters）；注册表模式（`RegisterBackend`/`LookupBackend`/`BackendNames`）；`Rebind(d, query)` 将 `?` 重写为目标方言占位符（跳过字符串/标识符/注释，同构方言零成本）。`database.go::Init` 收敛为 `InitWithBackendOptions(backendName, dsn, InitOptions{SkipBootstrap})` 统一管线。新增 `backend_sqlite.go`（原 `Init` 逻辑逐字节搬迁，行为不变：MaxOpenConns(1)/WAL/busy_timeout）+ `backend_postgres.go`（原型：方言完整、连接装配可用，但刻意保留两缺口——驱动不内置、Bootstrap 返回 `ErrSchemaBootstrapUnsupported`）。`internal/config` 新增 `DB_BACKEND`/`DB_SKIP_BOOTSTRAP`；`cmd/server/main.go` 接线并加单写后端启动告警（E7 横向扩展可见性）。`pkg/db/backend_test.go` ~360 行覆盖注册表/Dialect/Rebind/SQLite 行为不变/Postgres 缺口。
+
+**文档**：`docs/DB_BACKEND_ABSTRACTION.md`（接口说明 + 新增后端步骤 + Postgres 生产化路线 + 诚实能力边界）。
+
+**验证**：`go build ./...` ✅ / `go vet ./...` ✅ / `go test -count=1 ./...` ✅（0 FAIL）；`cases-regression` **21/21**；`smoke-test` **63 PASS / 0 FAIL / 1 SKIP**。
+
+**Commit**：`16104e0`
+
+**下一步**：N3-05（E10 API 契约文档校正）。
+
 ## [LOOP STATE]
 
 ```
-loop_round:        19
-phase:             N3 (企业级纵深加固) — N3-04b 完成
+loop_round:        20
+phase:             N3 (企业级纵深加固) — N3-04c 完成
 quality_gate_pass: false
 done:              false
 last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-04c (E7 并发安全 — DB 后端可插拔抽象)
+next_milestone:    N3-05 (E10 API 契约文档校正)
 budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
 ```
