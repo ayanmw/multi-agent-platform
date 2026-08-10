@@ -171,9 +171,9 @@ PROJ_RAW=$(curl -s -X POST "${BASE}/api/projects" -H 'Content-Type: application/
            --data '{"name":"smoke-proj","description":"smoke test project"}' 2>/dev/null)
 echo "    create resp: $(echo "${PROJ_RAW}" | head -c 160)"
 PROJ_ID=$(jget "${PROJ_RAW}" "id")
-# 文档预期 200，实际 POST 创建返回 201 — 记录差异但端点正常
+# 契约：POST 创建返回 201 + 完整 project 记录（API_CHANGELOG §1.5，N3-05 已校正文档）
 reqExpect POST /api/projects 201 '{"name":"smoke-proj-2","description":"x"}'
-PROBLEMS+=("POST /api/projects 返回 201（文档未明确状态码，REST 语义合理，前端按 2xx 处理即可）")
+# N3-05：201 已在 API_CHANGELOG §1.5 明确记录，不再作为「问题」上报。
 if [[ -n "${PROJ_ID}" ]]; then
   req GET "/api/projects/${PROJ_ID}"
   req PUT "/api/projects/${PROJ_ID}" '{"name":"smoke-proj-renamed","description":"updated"}'
@@ -266,7 +266,7 @@ else
   FAIL=$((FAIL+1)); printf '%-5s %-6s %-45s -> %s\n' "[FAIL]" "DELETE" "/api/tools?name=echo_smoke" "${DEL_TOOL_CODE}"
   PROBLEMS+=("DELETE /api/tools?name=echo_smoke 返回 ${DEL_TOOL_CODE}（动态工具应可删）")
 fi
-PROBLEMS+=("POST /api/tools 需 type 字段(shell/http/inline)及各 type 必填子字段(command/url/code)；文档第 4.5 节未说明")
+# N3-05：type 及子字段契约已在 API_CHANGELOG §2.3 完整记录，不再作为「问题」上报。
 req GET /api/costs
 req GET "/api/costs?task_id=${TASK_ID:-none}"
 req GET /api/costs?session_id=${SESS_ID:-none}
@@ -321,7 +321,7 @@ if [[ "${MEM_DEL_CODE}" =~ ^[245] ]]; then
 else
   FAIL=$((FAIL+1)); printf '%-5s %-6s %-45s -> %s\n' "[FAIL]" "DELETE" "/api/memories/{id}" "${MEM_DEL_CODE}"
 fi
-PROBLEMS+=("Memory 路由与文档差异：无 POST /api/memories 顶层创建、无 PUT /api/memories/{id}（只有 /scope 子路径）、有 /promote 与 /recall")
+# N3-05：Memory 路由全表（含顶层 POST 与 PUT /{id}）已在 API_CHANGELOG §2.2 记录，不再作为「问题」上报。
 
 # =============================================================================
 # 9. Mock 管理
@@ -415,7 +415,7 @@ if [[ "${WS_CODE}" == "101" ]]; then
 else
   # curl 默认不发 Upgrade 时可能拿到 200(SPA fallback) 也算可接受
   SKIP=$((SKIP+1)); printf '%-5s %-6s %-45s -> %s (curl 限制，留待 WS 专项测试)\n' "[SKIP]" "WS" "/ws" "${WS_CODE}"
-  PROBLEMS+=("WebSocket /ws 用 curl 验证握手受限(状态码 ${WS_CODE})，建议后续用 wscat/Go 客户端专项测")
+  PROBLEMS+=("WebSocket /ws 用 curl 验证握手受限(状态码 ${WS_CODE})；握手/事件流/会话订阅已由 internal/ws/hub_handshake_test.go 真实 WS 客户端覆盖(N3-05)")
 fi
 
 # =============================================================================

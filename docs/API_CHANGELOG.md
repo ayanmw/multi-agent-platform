@@ -89,8 +89,22 @@
 - **前端适配**: 多树渲染依据 `agent_ids`。
 
 ### 1.5 `POST /api/projects`
-- **返回**: `201`，body `{ "id": "..." }`。
-- **前端适配**: 注意状态码是 201 不是 200，其余无差异。
+- **端点**: `POST /api/projects`
+- **Body**: `{ "name": "...", "description": "...", "working_directory": "...", "rules": [...] }`；`name` 必填，缺失返回 `400 name is required`。
+- **返回**: `201 Created`，body 是**完整的 project 记录**（不是仅 `{id}`）：
+  ```json
+  {
+    "id": "uuid",
+    "name": "...",
+    "description": "...",
+    "working_directory": "...",
+    "config": { ... },
+    "created_at": "2026-08-10T00:00:00Z",
+    "updated_at": "2026-08-10T00:00:00Z"
+  }
+  ```
+  字段名以 `pkg/db.ProjectRecord` 的 JSON tag 为准（`cmd/server/api.go::handleProjects`）。
+- **前端适配**: 状态码是 **201 不是 200**（`scripts/smoke-test.sh` 已按 201 断言）；创建后可直接用返回体填充列表，无需二次 GET。
 
 ### 1.6 `POST /api/sessions`
 - **返回**: `201`，body `{ "session_id": "..." }`。
@@ -177,41 +191,51 @@
 - **文档来源**: `IMPLEMENTATION_PLAN.md` 第 4.5 节最初标记为"待补实现"，现已交付。
 - **前端适配**: 已在 §6 清单中标记为已完成（§6.1 CaseCard 调用）。
 
-### 2.2 Memory 路由——设计决策，非文档缺口
+### 2.2 Memory 路由全表（**2026-08-10 校正 / N3-05**）
 
-- **状态**: 实际端点设计与原始文档预设一致，属于设计决策而非实现偏差。
-- **文档列出的端点**（不存在或路径不对）:
-  - `POST /api/memories`（顶层创建）—— 设计上不允许直接创建，记忆必须通过 `POST /api/memories/promote` 从 task 提升。
-  - `PUT /api/memories/{id}` —— 设计上只允许修改 scope，路径为 `PUT /api/memories/{id}/scope`。
-- **实际存在的端点**:
-  ```
-  GET    /api/memories
-  POST   /api/memories/promote
-  GET    /api/memories/recall?query=...
-  PUT    /api/memories/{id}/scope
-  DELETE /api/memories/{id}
-  ```
-- **前端适配**: Memory 浏览页按实际路由对接；不存在"直接新建记忆"功能，必须从 task 提升。
+- **状态**: 本节旧版本称「不存在顶层 `POST /api/memories`、不存在 `PUT /api/memories/{id}`，记忆必须从 task 提升」——**该结论已随实现演进失效**，属典型契约漂移。当前实现（`cmd/server/server.go::registerRoutes` + `cmd/server/api.go`）两者**均已存在**。
+- **实际路由全表**（以代码为准）:
 
-### 2.3 `POST /api/tools` 必填字段 `type`——文档说明变更
+  | 方法 | 路径 | 说明 | 成功返回 |
+  |------|------|------|----------|
+  | GET | `/api/memories` | 列表；支持 `scope/tier/type/status/project/limit/offset` | `200` `{items,total,limit,offset}` |
+  | POST | `/api/memories` | **顶层直接创建**；`content` 必填，其余有默认值（`scope=project`、`type=fact`、`tier=consolidated`、`project_id=default`、`status=active`、`confidence=1.0`）；尽力而为写入向量库 | `201` 完整 memory 记录 |
+  | GET | `/api/memories/{id}` | 详情 | `200` / `404` |
+  | PUT | `/api/memories/{id}` | **更新 content / confidence / status**；三者全空返 `400`；写审计 + 广播 `memory_updated` | `200` 更新后记录 |
+  | DELETE | `/api/memories/{id}` | 删除；写审计 + 广播 `memory_deleted` | `200` / `404` |
+  | PUT | `/api/memories/{id}/scope` | 单独调整 scope（session/project/global） | `200` |
+  | POST | `/api/memories/{id}/embed` | 为指定 memory 生成/刷新 embedding | `200` |
+  | POST | `/api/memories/promote` | 从 task 提升记忆（PromotionGate） | `200` |
+  | GET | `/api/memories/recall` | `?task=` 上下文召回 或 `?query=` 纯向量检索，`&project=&max=` | `200` |
+  | GET | `/api/memories/stats` | `?project=` 统计 | `200` |
 
-- **状态**: 后端已要求 `type` 字段，前端注册表单需适配。
-- **Body 必填结构**:
-  - `type`: `shell` / `http` / `inline`
-  - 子字段依 type 必填:
+- **前端适配**: Memory 页面**可以**提供「直接新建记忆」入口（POST 顶层）与「编辑内容/状态/置信度」入口（PUT `{id}`）；「从 task 提升」是并列能力而非唯一路径。
+
+### 2.3 `POST /api/tools` 契约（**2026-08-10 补全 / N3-05**）
+
+- **状态**: 后端要求 `type` 字段及其子字段，旧文档（`IMPLEMENTATION_PLAN.md` 第 4.5 节）未说明，本节即为权威描述。
+- **Body 结构**（`cmd/server/tool_api.go::handleRegisterTool`）:
+  - `type`（**必填**）: `shell` / `http` / `inline`；缺失或非法 → `400 type must be 'shell', 'http', or 'inline', got: <v>`。
+  - 依 type 的必填子字段（缺失 → `400 <field> is required for <type>-type tools`）:
     - `shell` → `command`
-    - `http` → `url`
+    - `http` → `url`（`method` 可选，默认 `GET`）
     - `inline` → `code`
-- **文档位置**: `IMPLEMENTATION_PLAN.md` 第 4.5 节文档需同步补充 type 说明。
-- **前端适配**: 工具注册表单按 type 动态显示对应字段（见 §6）。
+  - 可选字段与默认值: `name`（缺省自动生成 `dynamic_tool_%03d`）、`description`（缺省 `Dynamic tool: <name> (<type>)`）、`parameters`（缺省空 object schema）。
+- **返回**:
+  - `201 Created`，body `{name, description, parameters, type}` + 依 type 的 `command` / `url`+`method` / `code`。
+  - `409 Conflict`：CanonicalName（`name@1.0.0`）已存在。
+  - `500`：持久化失败（此时注册会回滚，不留半注册状态）。
+- **鉴权**: `POST` / `DELETE /api/tools` 受 RBAC `tools:write` 守卫（N1-03）；`REQUIRE_AUTH=false` 时仍属特权写路由，需 API key（N3-01）。
+- **前端适配**: 工具注册表单按 type 动态显示对应字段；按 201 而非 200 判成功；409 需提示改名或升版本。
 
 ---
 
 ## 3. 已知实现风险（risk）
 
-### 3.1 SQLite 连接池未做并发控制
-- **位置**: `pkg/db/database.go`
-- **问题**: 未设置 `SetMaxOpenConns(1)` 和 busy_timeout，多 goroutine 并发写 modernc.org/sqlite 可能 `SQLITE_BUSY`。
+### 3.1 SQLite 连接池未做并发控制 —— **已解决（N3-04c 复核）**
+- **位置**: 原 `pkg/db/database.go`，现 `pkg/db/backend_sqlite.go`
+- **原问题**: 未设置 `SetMaxOpenConns(1)` 和 busy_timeout，多 goroutine 并发写 modernc.org/sqlite 可能 `SQLITE_BUSY`。
+- **现状**: SQLite 后端在 `Configure` 阶段已固定 `SetMaxOpenConns(1)` + WAL + `busy_timeout`；单写语义在启动期以告警形式显式暴露（见 `docs/DB_BACKEND_ABSTRACTION.md`）。本条保留为历史记录，前端无需再做 500 降级。
 - **影响**: 中
 - **前端适配**: 前端无感知，但高并发场景后端可能 500。
 
@@ -225,11 +249,15 @@
 
 ## 4. 当前未实现 / 待后续 Phase（future）
 
-### 4.1 WebSocket 事件流专项测试
+### 4.1 WebSocket 事件流专项测试 —— **已交付（N3-05）**
 - **位置**: `/ws`
-- **状态**: curl 只能做握手，完整的事件序列（`task_started` → `llm_delta` → `tool_call_started` → ... → `task_completed`）需要 wscat/Go 客户端专项测试。
-- **影响**: 中
-- **前端适配**: Phase 2 UI 必须以 WS 事件流为真实数据源，不能仅轮询 HTTP。
+- **原状态**: curl 无法完成 Upgrade 握手，`scripts/smoke-test.sh` 对 `/ws` 恒为 `[SKIP]`，事件流契约无自动化覆盖。
+- **现状**: `internal/ws/hub_handshake_test.go` 用真实 gorilla/websocket 客户端 + `httptest.Server` 覆盖三条契约：
+  - `TestServeWSHandshakeAndEventStream`：握手返回 **101**，广播事件以 JSON 文本帧原样抵达，字段名与 `pkg/event.Event` 的 JSON tag 一致（`event_id/task_id/sub_task_id/agent_id/step_index/type/timestamp/data`）。
+  - `TestServeWSSessionSubscriptionOverWire`：`?session_id=` 订阅在真实连接上生效，跨 session 事件不泄漏（N3-02 隔离语义的线上验证）。
+  - `TestServeWSRejectsPlainHTTPRequest`：非 WS 的普通 GET 被 4xx 拒绝且不注册 client。
+- **仍属 SKIP 的部分**: smoke 脚本里的 `/ws` 行仍是 curl 能力限制导致的 `[SKIP]`（非缺陷）；端到端「完整事件序列」（`task_started → llm_delta → tool_call_started → … → task_completed`）由 `scripts/cases-regression.sh` 经 WS 订阅校验（21 case）。
+- **前端适配**: web/v2 以 WS 事件流为主数据源；连接建议携带 `?session_id=` 以获得服务端级隔离。
 
 ### 4.2 `handleSessionChat` 未透传 `case` query
 - **位置**: `cmd/server/api.go:889`
@@ -263,8 +291,8 @@
 - [ ] 新建会话后读取 `session_id` 字段。
 - [ ] 新建项目后按 201 + `id` 处理。
 - [ ] 成本面板按 `/api/costs` 的聚合结构渲染。
-- [x] Memory 页面只使用实际存在的 5 个端点，不支持直接 `POST /api/memories`。记忆必须从 task 提升。
-- [x] 工具注册表单按 `type` 动态校验必填子字段：`shell`→`command`、`http`→`url`、`inline`→`code`。
+- [x] Memory 页面按 §2.2 路由全表对接（顶层 `POST` 创建与 `PUT /{id}` 编辑**均已可用**，「从 task 提升」为并列能力）。
+- [x] 工具注册表单按 `type` 动态校验必填子字段：`shell`→`command`、`http`→`url`、`inline`→`code`；按 201 判成功、409 提示重名。
 - [ ] Auth 开关为 true 时，所有请求带 `Authorization: Bearer <key>`。
 - [ ] 任务详情/回放依赖 `GET /api/tasks?id=`，并展示返回的 `evaluation` 字段（若无则降级）。
 - [ ] 多 Agent 页面依据 `/api/multi-agent` 返回的 `agent_ids`。
@@ -272,7 +300,37 @@
 
 ---
 
-## 7. 附录：测试覆盖文件清单
+## 7. API 契约漂移自检清单（N3-05 新增）
+
+> **为什么需要它**：本文件历史上出现过三类漂移——① 状态码写错（`POST /api/projects` 曾记为 body `{id}`）；② 能力已实现但文档仍写「不支持」（Memory 顶层 `POST` / `PUT {id}`）；③ 缺陷已修复但风险条目未撤（SQLite 并发控制）。漂移的文档比没有文档更危险：前端会据此写死降级逻辑。
+>
+> **执行时机**：任何 PR 只要改动了 `cmd/server/**`、`internal/ws/hub.go`（路由/握手）或 `pkg/db` 的对外记录结构，合并前逐条过一遍；Phase R 评审时整表复核一次（对应 E10 维度）。
+
+| # | 检查项 | 判定方法 | 漂移信号 |
+|---|--------|----------|----------|
+| C1 | **路由存在性**：文档列出的每个端点在 `registerRoutes` 中都能找到 | `grep -n "api/<资源>" cmd/server/server.go` | 文档有、代码无（或反之） |
+| C2 | **方法集完整**：每个路径支持的 HTTP 方法与 handler 的 `switch r.Method` 一致 | 读 handler 的 method 分支 + `default` 分支的 405 文案 | 文档漏写某个方法（Memory 漂移即此类） |
+| C3 | **状态码精确**：创建类返回 `201`、更新/查询 `200`、缺参 `400`、重名 `409`、不存在 `404` | 搜 handler 内的 `w.WriteHeader(` 与 `http.Error(` | 文档写 200 实际 201（Projects 漂移即此类） |
+| C4 | **响应体形状**：文档示例字段名 == 结构体 JSON tag | 定位返回的 struct，比对 tag | 手写示例与 tag 不符 |
+| C5 | **必填字段与默认值**：必填项、缺省填充值在文档中显式列出 | 读 handler 开头的校验段与 `if x == "" { x = ... }` | 前端漏传导致 400（Tools `type` 漂移即此类） |
+| C6 | **鉴权姿态**：写路由是否受 RBAC / 特权路由保护，`REQUIRE_AUTH=false` 下的行为 | 查 `auth.RequirePermissionFunc` 与 `DefaultPrivilegedWriteRoutes()` | 文档未标注鉴权要求 |
+| C7 | **事件契约**：WS 广播字段与 `pkg/event.Event` tag、前端 `web/v2/src/types/events.ts` 三方一致 | `go test ./internal/ws/ -run TestServeWS` | 三方任一不同步 |
+| C8 | **风险条目时效**：§3 的每条 `risk` 是否仍然成立 | 按「位置」字段回代码复核 | 缺陷已修但条目仍在（SQLite 漂移即此类） |
+| C9 | **冒烟脚本自述**：`scripts/smoke-test.sh` 的 `PROBLEMS` 文案是否仍属实 | 跑一次 smoke，逐条比对本文件 | 脚本输出的「问题」已被修复 |
+| C10 | **版本与日期**：文末「最后更新」与本轮改动同步 | 文件末尾 | 长期不动 = 无人复核 |
+
+**自检最小命令组**（全绿方可认为契约无漂移）：
+
+```bash
+go vet ./...
+go test -short -count=1 ./cmd/server/... ./internal/ws/...
+bash scripts/smoke-test.sh          # 关注末尾 PROBLEMS 列表是否与本文件一致
+bash scripts/cases-regression.sh    # 21/21，覆盖 WS 事件序列
+```
+
+---
+
+## 8. 附录：测试覆盖文件清单
 
 | 模块 | 测试文件 | 顶层用例数 | 关键覆盖 |
 |------|---------|-----------|---------|
@@ -290,4 +348,4 @@
 
 ---
 
-*最后更新：2026-07-17*
+*最后更新：2026-08-10（N3-05 API 契约文档校正：Projects 201 响应体 / Tools type 契约 / Memory 路由全表 / WS 握手专项测试 / 新增 §7 漂移自检清单）*

@@ -534,6 +534,21 @@ LLM_MODEL=deepseek-v4-flash
 
 ---
 
+## REST API 契约要点（易漂移项 / N3-05）
+
+> 权威全量描述见 `docs/API_CHANGELOG.md`；此处只固化最容易被写错、且已实际发生过漂移的四条。改动 `cmd/server/**` 或 `internal/ws/hub.go` 的路由后，按 `docs/API_CHANGELOG.md` §7「API 契约漂移自检清单」（C1–C10）逐条复核。
+
+| 端点 | 契约要点 | 常见误写 |
+|------|----------|----------|
+| `POST /api/projects` | 返回 **201 Created**，body 是完整 project 记录（`id/name/description/working_directory/config/created_at/updated_at`） | 写成 200；或以为 body 只有 `{id}` |
+| `POST /api/tools` | **必填 `type`**（`shell`/`http`/`inline`）+ 依 type 的必填子字段（`command`/`url`/`code`）；成功 **201**，重名 **409**，持久化失败回滚注册 | 漏传 `type` → 400；按 200 判成功 |
+| `/api/memories` | 顶层 **`POST` 创建已支持**（201），**`PUT /{id}` 编辑已支持**（content/confidence/status）；另有 `/{id}/scope`、`/{id}/embed`、`/promote`、`/recall`、`/stats` | 沿用旧文档「只能从 task 提升」的结论 |
+| `/ws` | curl 无法完成 Upgrade（smoke 恒为 SKIP，非缺陷）；握手/事件流/会话订阅由 `internal/ws/hub_handshake_test.go` 用真实 WS 客户端覆盖 | 以为 WS 无自动化覆盖；事件字段名与 `pkg/event.Event` 的 JSON tag 不同步 |
+
+**事件字段是三方契约**：`pkg/event.Event` 的 JSON tag ↔ WS 线上帧 ↔ `web/v2/src/types/events.ts`，任一侧改动都要三方同步，回归命令 `go test ./internal/ws/ -run TestServeWS`。
+
+---
+
 ## 待定问题
 
 - `run_shell` 沙箱方案 (Docker / Firecracker) → Phase 5
