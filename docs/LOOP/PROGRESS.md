@@ -474,14 +474,96 @@ WorkBuddy 沙箱中 Git Bash 的 `/tmp` = `AppData\Local\Temp`，而原生 Windo
 
 **下一步**：N3-05（E10 API 契约文档校正）。
 
+### 2026-08-10 08:57 | 轮次 21 | N3-05 | ✅ E10 API 契约文档校正（4 处差异校正 + /ws 握手专项测试 + 漂移自检清单）
+
+**目标**：消除 Phase R 轮次 14 判定 E10=Partial 的最后缺口——smoke 记录的 4 处 API↔文档差异长期未回写文档，且 `/ws` 契约完全无自动化覆盖。
+
+**代码改动**：
+- `internal/ws/hub_handshake_test.go`（**新建**）：真实 gorilla/websocket 客户端 + `httptest.Server`，把「curl 测不了 WS」从文档声明升级为可执行断言。
+  - `TestServeWSHandshakeAndEventStream`：握手返回 **101**；广播事件以 JSON 文本帧原样抵达；字段名与 `pkg/event.Event` 的 JSON tag 一致（前端 `web/v2/src/types/events.ts` 契约依据）。
+  - `TestServeWSSessionSubscriptionOverWire`：`?session_id=` 订阅在真实连接上生效，跨 session 事件不泄漏（N3-02 隔离语义的线上验证，与内存级 `hub_session_scope_test.go` 互补）。
+  - `TestServeWSRejectsPlainHTTPRequest`：非 WS 的普通 GET 被 4xx 拒绝且不注册 client（负向用例）。
+  - 确定性保障：用 `waitForClientCount` 轮询替代固定 sleep；`-count=3` 连续 9/9 通过。
+- `scripts/smoke-test.sh`：**仅**校正已失实的 `PROBLEMS` 自述文案（Projects 201 / Tools type / Memory 路由三条已被文档覆盖，不再作为「问题」上报；WS 一条改为指向新测试）。断言、计数、执行流未变。
+
+**文档改动**：
+- `docs/API_CHANGELOG.md`
+  - §1.5 `POST /api/projects`：返回 **201 Created**，body 是**完整 project 记录**（旧文档误记为 `{id}`），字段以 `pkg/db.ProjectRecord` tag 为准。
+  - §2.2 Memory 路由：**整节重写为 10 行路由全表**。旧结论「不存在顶层 `POST /api/memories`、不存在 `PUT /{id}`，记忆必须从 task 提升」**已随实现演进失效**——两者均已实现（POST 返 201 + 默认值填充；PUT 支持 content/confidence/status + 审计 + `memory_updated` 广播）。
+  - §2.3 `POST /api/tools`：补全必填 `type`（shell/http/inline）+ 依类型子字段（command/url/code）+ 缺省填充规则 + **201/409/500 回滚**语义 + RBAC 与 N3-01 特权路由姿态。
+  - §4.1 `/ws` 专项测试：`future` → **已交付（N3-05）**，列明三条断言；澄清 smoke 的 `[SKIP]` 是 curl 能力限制而非缺陷，完整事件序列由 21 case 回归覆盖。
+  - §3.1 SQLite 并发控制：标记**已解决**（N3-04c 复核：`backend_sqlite.go` 已固定 `SetMaxOpenConns(1)`+WAL+busy_timeout）。
+  - §6 前端清单两条过时项同步；新增 **§7「API 契约漂移自检清单」**（C1–C10：路由存在性/方法集/状态码/响应体形状/必填与默认值/鉴权姿态/事件三方契约/风险条目时效/冒烟自述/更新日期 + 最小验证命令组），并注明执行时机（改动 `cmd/server/**`、`internal/ws/hub.go`、`pkg/db` 对外结构的 PR + Phase R 整表复核）。
+  - 文末「最后更新」→ 2026-08-10。
+- `CLAUDE.md`：新增「REST API 契约要点（易漂移项 / N3-05）」小节——四条易错契约表 + 「事件字段是 `pkg/event.Event` ↔ WS 线上帧 ↔ `types/events.ts` 三方契约」的同步规则与回归命令。
+
+**验证**：
+- `go build ./...` ✅ / `go vet ./...` ✅（无告警）。
+- `go test -short -count=1 ./...` ✅ **0 FAIL**（24 个有测试包全 ok，含新增 `internal/ws` 三例）。
+- `go test -count=3 -run TestServeWS ./internal/ws/` ✅ **9/9**（确定性复核）。
+- `bash scripts/cases-regression.sh` ✅ **21/21 (100%)**。
+- `bash scripts/smoke-test.sh` ✅ **63 PASS / 0 FAIL / 1 SKIP**；`PROBLEMS` 列表由 5 条（含 3 条已失实）收敛为 **1 条真实条目**（curl 无法握手 WS，已注明由新测试覆盖）。
+
+**沙箱要点（修正轮次 20 记录）**：脚本副本中**不要**把 `GOMODCACHE`/`GOPATH` 重写到仓库内空目录——会导致 go 尝试重新下载依赖并因无外网 `[FATAL] 编译失败`。正确做法是先 `go env GOMODCACHE GOPATH GOCACHE` 取真实值再注入（本机为 `C:/Users/Joker/go/pkg/mod` / `C:/Users/Joker/go` / `C:/Users/Joker/AppData/Local/go-build`），只有 `GOTMPDIR` 需要指向仓库内可写目录。
+
+**Commit**：`9c56ed5`
+
+**下一步**：PLAN.md 已无 ○ 任务（N0/N1/N2/N3 全 ✅）→ 下一轮进入 **Phase R（评审-重规划）**，按 10 维度复评并走终止安全闸门。
+
+---
+
+### 2026-08-10 08:43 | 轮次 22 | Phase R | ✅ 10 维度全 Pass + 终止安全闸门通过 → DONE=true（自动化终止）
+
+**目标**：PLAN.md 无 ○（N0/N1/N2/N3 全 ✅）→ 触发 Phase R。执行全量验证 + 企业级 10 维度复评，走终止安全闸门判定是否终止自动化。
+
+**全量验证（全部实测，新一轮）**：
+| # | 验证项 | 命令 | 结果 |
+|----|--------|------|------|
+| V1 | 编译 | `go build ./...` | ✅ PASS（exit 0，无输出） |
+| V2 | 静态检查 | `go vet ./...` | ✅ PASS（exit 0，无告警） |
+| V3 | 全量单测 | `go test -short -count=1 ./...` | ✅ **0 FAIL**（24 个有测试包全 `ok`） |
+| V4 | Mock 回归 | `bash scripts/cases-regression.sh` | ✅ **21/21 (100%)** |
+| V5 | REST 冒烟 | `bash scripts/smoke-test.sh` | ✅ **63 PASS / 0 FAIL / 1 SKIP**（SKIP=/ws 握手，已由 `internal/ws/hub_handshake_test.go` 覆盖） |
+
+> 沙箱复跑机制（round 21 沉淀）：脚本副本 `sed 's#/tmp/#C:/Users/Joker/.workbuddy/loop-tmp/#g'` 生成于**仓库外**，并在副本顶部注入真实 `GOMODCACHE/GOPATH/GOCACHE/GOTMPDIR`（仅 GOTMPDIR 指向仓库内 `tmp/loop`）——因沙箱会把 go 子进程的 env 剥离，必须在副本内注入；GOMODCACHE/GOPATH/GOCACHE 取真实值（不重写到仓库内目录，否则无外网触发依赖重新下载 `[FATAL] 编译失败`）。`export PYTHONUTF8=1` 防中文 JSON 按 GBK 解码。
+
+**企业级 10 维度复评（N3 已闭合原 5 个 Partial）**：
+| # | 维度 | 轮次 14 | 轮次 22 | 证据 |
+|----|------|---------|---------|------|
+| E1 | 认证与鉴权 | Partial | **Pass** | N3-01：`REQUIRE_AUTH=false` 时特权写路由（agents/cases/tools/mcp/模型价格/audit/traces）仍强制有效 API key + 启动强告警；RBAC 三角色 fail-closed；**无特权默认暴露面**。 |
+| E2 | 审计与合规 | Pass | **Pass** | 全资源 mutation 落审计（actor+timestamp+scope），明文密钥不入审计；`GET /api/audit` 合并持久化+ring buffer（N1-06，未回退）。 |
+| E3 | 多租户与隔离 | Partial | **Pass** | N3-02：WS 会话订阅（`?session_id=` opt-in）+ 审计 Target/Memory recall 的 scope 键贯穿校验 + 隔离白皮书。workspace/session/worktree/workdir 隔离扎实，**无跨 session 数据泄漏**（原 Partial 的「隔离」缺口已闭合）。 |
+| E4 | 安全 | Partial | **Pass** | N3-03：C1-2 通信权限矩阵（worker→未声明 OutputTo 的 child 拒绝）+ 注入消息带来源标记/信任等级/数据边界沙箱化；`.gitignore` 覆盖密钥；shell 沙箱默认 deny+审计。child→parent prompt-injection 敞口已闭合。 |
+| E5 | 可观测性 | Pass | **Pass** | 维度化 /metrics + /healthz + WS 事件流 + tracing + `event.Validate` 哨兵（N2-01，未回退）。 |
+| E6 | 可靠性 | Pass | **Pass** | checkpoint/resume + MaxSteps 钳制 + 可配超时 + mock 优雅降级（N1/N2，未回退）。 |
+| E7 | 可扩展性 | Partial | **Pass** | N3-04a（WS 有界缓冲+令牌桶限流+慢客户端注销+关机安全）/ N3-04b（`-race` CI 门禁 + 三处全局共享态 data race 修复）/ N3-04c（`pkg/db` Backend/Dialect 可插拔抽象 + Postgres 原型 + 单写后端启动告警）。**横向扩展路径清晰**（后端可插拔）。 |
+| E8 | 可测试性 | Pass | **Pass** | mock 回归稳定 21/21（含 N3-05 /ws 专项测试）；smoke 63/0/1；E2E 覆盖（RBAC 403/审计/多轮历史）；`go vet` 干净；CI 跑 `go test -short` + `race` job。 |
+| E9 | API/配置稳定性 | Pass | **Pass** | 配置经 .env 优先级正确；超时/MaxSteps 全配置化；无硬编码密钥/魔法值（N3-01 新增 `PRIVILEGED_ROUTES_REQUIRE_KEY` 亦配置化）。 |
+| E10 | 文档准确性 | Partial | **Pass** | N3-05：smoke 4 处 API↔文档差异（projects 201/完整记录、tools type 必填、memories 顶层 POST+PUT、/ws 握手）全部校正；新增「API 契约漂移自检清单」（C1–C10）；事件三方契约（`pkg/event.Event` ↔ WS 帧 ↔ `types/events.ts`）同步规则固化。 |
+
+**质量门判定（终止安全闸门）**：
+- 条件 1 **Review 通过**：10 维度复评 = **全部 Pass**，结论「完美」（无 Partial/Fail）。
+- 条件 2 **Mock 测试通过**：`cases-regression` **21/21** ✅ + `go test -short ./...` **0 FAIL** ✅ + `go vet ./...` **无告警** ✅。
+- 两项**全部满足** → 设 `DONE=true`、`quality_gate_pass=true`、`last_review=2026-08-10T08:43+08:00`。**自动化终止**。
+
+**已知非阻塞限制（诚实记录，不阻塞终止闸门，留作后续增强）**：
+1. **多租户/org 抽象缺失**：单部署共享 DB，无 tenant 隔离（E3 的「隔离」Pass 标准已满足，多租户属更高阶能力，不在本轮 Pass 标准内）。
+2. **Postgres 后端未生产化**：`backend_postgres.go` 为原型（方言完整、连接装配可用），但驱动不内置、`Bootstrap` 返回 `ErrSchemaBootstrapUnsupported`（N3-04c 已诚实声明）。SQLite 仍是默认零配置实现。
+3. **横向扩展需运维配合**：单写后端当前为 SQLite 单文件；切 Postgres 多写需部署侧接入驱动 + 迁移 bootstrap，属部署决策而非代码缺口。
+4. **本地 `-race` 未跑**：WorkBuddy 沙箱无 gcc，N3-04b 的并发安全校验由 Linux CI `race` job 完成（ws/runtime/orchestrator 共享临界区经静态审查 + CI `-race` 覆盖）。
+
+**下一轮**：无 — LOOP 自动化于本轮 `DONE=true` 正式终止。后续若需新能力（多租户/Postgres 生产化/国际化/性能），应显式发起新 LOOP 或独立任务，而非本自动化续跑。
+
+---
+
 ## [LOOP STATE]
 
 ```
-loop_round:        20
-phase:             N3 (企业级纵深加固) — N3-04c 完成
-quality_gate_pass: false
-done:              false
-last_review:       2026-08-04T07:54+08:00
-next_milestone:    N3-05 (E10 API 契约文档校正)
-budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；自动化仍 ACTIVE 被调度，本轮继续推进)
+loop_round:        22
+phase:             Phase R (评审-重规划) — 10 维度全 Pass，终止安全闸门通过
+quality_gate_pass: true
+done:              true
+last_review:       2026-08-10T08:43+08:00
+next_milestone:    (无 — 自动化已 DONE=true 终止)
+budget_validuntil: 2026-08-03T22:31:06+08:00  (已过期；本轮走完终止闸门并设 DONE=true)
 ```

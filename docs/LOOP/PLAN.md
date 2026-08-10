@@ -62,7 +62,7 @@
 | N3-04a | E7 · WS 广播背压/限流 | 有界 `broadcast` 摄入缓冲 + 非阻塞丢弃计数、全局摄入令牌桶限流、慢客户端检测与主动注销、关机安全（`SendEvent` 不再阻塞）；暴露可配置 `HubConfig`（WS_* 环境变量，E9 配置化） | ✅ | WS 层在洪泛/慢客户端下丢弃并计数而非阻塞引擎；`/metrics` 新增 3 个背压计数器；ws 包代码 `-race` 安全（CI 门禁落地见 N3-04b）；`go build/vet/test -short` + 21/21 + 63/0/1 全绿 | N3-04 |
 | N3-04b | E7 · 并发安全 CI 门禁 | 增加 `go test -race` CI 门禁并修复潜在 data race（本地沙箱无 gcc 无法跑 `-race`，需在 Linux CI runner 落地 + 修复发现的 race） | ✅ | CI 跑 `go test -race ./...` 全绿；ws/runtime/orchestrator 等共享临界区经 `-race` 验证无 data race | N3-04 |
 | N3-04c | E7 · DB 后端可插拔抽象 | 将 `pkg/db` 抽象为接口（SQLite 默认实现 + 预留 Postgres 外部实现），为水平扩展铺路；含接口文档/原型 | ✅ | 后端抽象接口（Backend/Dialect + 注册表 + Rebind）落地，SQLite 仍是默认零配置实现且行为不变；Postgres 原型（方言完整、诚实声明驱动/迁移缺口）；既有迁移/CRUD 不动；接口文档见 docs/DB_BACKEND_ABSTRACTION.md | N3-04 |
-| N3-05 | **E10 API 契约文档校正** | 补齐 smoke 发现的 4 处 API↔文档差异（POST /api/projects 返 201、POST /api/tools 必填 type 子字段、Memory 路由无顶层 POST/PUT、/ws 握手需专项测）到 CLAUDE.md / API_CHANGELOG；加「API 契约漂移」自检清单 | ○ | 4 处差异在文档中正确描述；新增契约自检清单；`go vet` 不受影响 | N2-03 |
+| N3-05 | **E10 API 契约文档校正** | 补齐 smoke 发现的 4 处 API↔文档差异（POST /api/projects 返 201、POST /api/tools 必填 type 子字段、Memory 路由无顶层 POST/PUT、/ws 握手需专项测）到 CLAUDE.md / API_CHANGELOG；加「API 契约漂移」自检清单 | ✅ | 4 处差异在文档中正确描述；新增契约自检清单；`go vet` 不受影响 | N2-03 |
 
 ---
 
