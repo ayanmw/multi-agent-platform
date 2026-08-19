@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: multi-agent-platform-data
+  namespace: multi-agent-platform
+  labels:
+    app.kubernetes.io/part-of: multi-agent-platform
+spec:
+  # SQLite 是单写者（single-writer），且本平台尚未做多副本共享存储，
+  # 因此必须使用 ReadWriteOnce + 单副本（见 deployment.yaml 的 replicas: 1）。
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # 留空使用集群默认 StorageClass；如集群无默认，请显式指定（如 standard / gp3 / nfs-client）。
+  # storageClassName: standard

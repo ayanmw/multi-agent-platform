@@ -1,6 +1,6 @@
 # 多 Agent 平台 — 产品路线图
 
-> **最近更新**: 2026-08-04
+> **最近更新**: 2026-08-19
 > **当前版本**: v0.16.0 Alpha
 > **更新规则**: 每个 Phase 任务完成后，更新本文件并提交 Git。
 
@@ -96,7 +96,7 @@ multi-model-routing ✅ → llm-provider-model-management ✅ → gemini-search-
 
 - [ ] Token 治理与 context 压缩：长任务上下文截断/摘要策略。
 - [x] RBAC：用户/角色/权限体系（N1-03 ✅ 已完成 —— API key + bcrypt + 资源-动作矩阵 viewer/developer/admin，fail-closed，接入所有敏感写路由）。
-- [ ] 部署文档与 K8s/容器化交付物。
+- [x] 部署文档与 K8s/容器化交付物（`deploy/k8s/` 清单 + `Dockerfile` + GHCR 自动构建 + 发布流水线，详见 `deploy/k8s/README.md`）。
 - [ ] Baidu 移动搜索反爬适配：验证码页 fallback（headless/API/cookie 池）。
 
 **已知缺陷（详见 `docs/KNOWN_ISSUES.md`）**

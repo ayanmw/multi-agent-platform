@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-agent-platform
+  namespace: multi-agent-platform
+  labels:
+    app.kubernetes.io/name: multi-agent-platform
+    app.kubernetes.io/part-of: multi-agent-platform
+spec:
+  # ⚠️ SQLite 单写者 + 无共享存储：只能 1 副本。
+  # 横向扩展前，请先把 DB_BACKEND 切到支持并发写的后端（见 N3-04c：Postgres 原型）。
+  replicas: 1
+  # 单副本 + 有状态 PVC，用 Recreate 避免两个 Pod 同时挂载 RWO 卷。
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: multi-agent-platform
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: multi-agent-platform
+        app.kubernetes.io/part-of: multi-agent-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: server
+          image: ghcr.io/ayanmw/multi-agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # 环境变量：configmap 覆盖默认值，secret 注入凭证。
+          envFrom:
+            - configMapRef:
+                name: multi-agent-platform
+            - secretRef:
+                name: multi-agent-platform
+          # 就绪/存活探针都打 /healthz（见 cmd/server/server.go）。
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # 资源配额（按实际负载调整）。
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # 受限安全上下文：禁止提权、丢弃全部 Linux capabilities、根文件系统只读。
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # 只读根文件系统下，/tmp 必须是可写空卷。
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: multi-agent-platform-data
+        - name: tmp
+          emptyDir: {}

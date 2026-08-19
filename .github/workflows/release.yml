@@ -1,0 +1,117 @@
+name: Release
+
+# 推送 tag v* 时自动发布 GitHub Release：
+#   1. 构建两个前端（go:embed 依赖），产物作为 artifact；
+#   2. 跨平台交叉编译 server 二进制（linux/darwin/windows × amd64/arm64，CGO_ENABLED=0）；
+#   3. 汇总二进制，创建 Release 并自动生成 release notes + 上传 asset。
+#
+# 镜像构建由 docker.yml 在同一 tag 事件下并行完成（推送到 GHCR）。
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 前端构建（仅一次，供矩阵复用）
+  # ---------------------------------------------------------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build web (v1)
+        run: |
+          cd web && npm ci && npm run build
+
+      - name: Build web/v2 (default UI)
+        run: |
+          cd web/v2 && npm ci && npm run build
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: |
+            web/dist
+            web/v2/dist
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 跨平台编译 server 二进制
+  # ---------------------------------------------------------------------------
+  build:
+    needs: frontend
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, ext: "" }
+          - { goos: linux,   goarch: arm64, ext: "" }
+          - { goos: darwin,  goarch: amd64, ext: "" }
+          - { goos: darwin,  goarch: arm64, ext: "" }
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: .
+
+      - name: Build server binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUT="bin/server-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/server
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/server-*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 汇总并发布 GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 基于 conventional commits / 提交历史自动生成 Release Notes
+          generate_release_notes: true
+          files: dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

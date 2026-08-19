@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: multi-agent-platform
+  namespace: multi-agent-platform
+  labels:
+    app.kubernetes.io/part-of: multi-agent-platform
+data:
+  # --- Server ---
+  SERVER_PORT: "8080"
+  DB_PATH: "/data/app.db"
+
+  # --- Auth ---
+  # ⚠️ 生产环境务必设为 "true" 并为用户/服务账号下发 API key。
+  # 当前为便于评估/试用默认关闭；关闭时特权写路由与敏感读仍要求有效 key（N3-01 加固）。
+  REQUIRE_AUTH: "false"
+
+  # --- Features ---
+  WORKTREE_ENABLED: "false"   # 容器内通常关闭 git worktree 隔离
+  CRON_ENABLED: "true"
+
+  # --- Observability / logging ---
+  LOG_LEVEL: "info"
+  LOG_CONSOLE_LEVEL: "info"
+  # 容器内只读根文件系统：日志仅写控制台，不落盘（如需落盘，将 LOG_FILE 指向 /data 并挂卷）。
+  LOG_FILE: ""

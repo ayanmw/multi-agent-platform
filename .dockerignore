@@ -1,0 +1,42 @@
+# --- Build output / binaries ---
+bin/
+dist/
+*.exe
+server
+server.exe
+server_models.exe
+
+# --- Data & runtime ---
+data/
+storage/
+logs/
+output/
+tmp/
+task_progress.json
+
+# --- Node (rebuilt inside the image) ---
+node_modules/
+web/node_modules/
+web/v2/node_modules/
+web/dist/
+web/v2/dist/
+web/.vite/
+web/v2/.vite/
+*.tsbuildinfo
+
+# --- VCS / CI / docs noise ---
+.git/
+.github/
+docs/
+openspec/
+.claude/
+.codebuddy/
+.workbuddy/
+*.md
+LICENSE
+
+# --- Secrets / env ---
+.env
+.env.local
+*.key
+curl-bailian-aliyun.txt

@@ -64,8 +64,10 @@ func NewProviderManager(cfg *config.Config) (*ProviderManager, error) {
 		}
 
 		// 创建真正的 Provider 实例；mock 不用于发现。
+		// 注意：Name 必须是配置里的 provider 名（pc.Name），而不是类型（pc.Type），
+		// 否则实例名与配置键不一致，发现到的模型会被错误命名。
 		provider, err := NewProvider(ProviderConfig{
-			Name:     pc.Type,
+			Name:     pc.Name,
 			Endpoint: pc.Endpoint,
 			APIKey:   pc.APIKey,
 			Model:    "",

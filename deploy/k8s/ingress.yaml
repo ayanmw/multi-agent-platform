@@ -1,0 +1,30 @@
+# 可选 Ingress 示例（nginx-ingress + cert-manager 自动签发 TLS）。
+# 部署前取消注释并按你的域名 / 证书方案调整。
+#
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: multi-agent-platform
+#   namespace: multi-agent-platform
+#   annotations:
+#     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+#     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+#     # cert-manager 自动签发（如已安装）：
+#     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts:
+#         - agent.example.com
+#       secretName: multi-agent-platform-tls
+#   rules:
+#     - host: agent.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: multi-agent-platform
+#                 port:
+#                   name: http

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-agent-platform
+  namespace: multi-agent-platform
+  labels:
+    app.kubernetes.io/part-of: multi-agent-platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: multi-agent-platform
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  # 如需从集群外直接暴露，可将 type 改为 LoadBalancer（或由下方 Ingress 暴露）：
+  # type: LoadBalancer

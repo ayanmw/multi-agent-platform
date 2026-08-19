@@ -78,3 +78,4 @@ Snipaste_*.jpg
 
 # Sensitive: contains cloud account credentials, never commit
 curl-bailian-aliyun.txt
+/tmp
